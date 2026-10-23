@@ -37,6 +37,9 @@ ls vm/ci                      # kernel.development.sweet
 
 The workflow artifact is named `xnu-kernel`; the file is
 `kernel.development.sweet` for the default `DEVELOPMENT` / `SWEET` build.
+The artifact must include patch `0082`; an older kernel boots without the
+virtio-blk/input and ramfb drivers, so check for the `virtio-blk:` lines in
+the boot log.
 
 Build the QEMU device tree and payload (`--qemu` is required: the GIC
 addresses and timebase are QEMU's, not the phone's):
