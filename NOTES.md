@@ -27,7 +27,9 @@
   redefinition warning. `IOKitBSDInit.cpp` cannot be compiled with Zig clang
   (missing Apple `__builtin_xnu_types_compatible`); manual review: the file
   is inside `extern "C"`, the new branch follows the existing UFS branch, and
-  the symbol has C linkage. **No full kernel link or CI build yet.**
+  the symbol has C linkage. `tools/validate-repo.py` passes: 82 patches
+  contiguous/format OK, 15 Python tools and 7 shell scripts syntax OK.
+  **No full kernel link or CI build yet.**
 - **No boot test yet.** Need a Linux QEMU host, a raw HFS+ root **copy**, and
   the CI-built kernel. Intended command:
   `python3 tools/qemu-sweet.py PAYLOAD OUT --disk COPY.img --input --display gtk,zoom-to-fit=on --wait --live-serial`.
