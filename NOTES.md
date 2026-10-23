@@ -2,6 +2,41 @@
 
 ## Agent handoff / active work (2026-10-15, latest)
 
+### >>> UPDATE 2026-10-24 (read first) <<<
+
+**STATE: desktop QEMU VM path implemented locally; not pushed and not booted.**
+
+- `xnu/patches/0082-sweet-qemu-vm.patch` adds an external virtio-blk root
+  (`vblk0` / `rvblk0`), virtio tablet+keyboard input, and QEMU ramfb display.
+  Local commits: **f33c3b4** (patch + docs + runner), **1f897d8** (fix:
+  virtio-input event buffers were at `0x1000`; that is still inside XNU's
+  default 16 KiB page here, but outside a 4 KiB page. Moved to `0x0c00` so
+  the one-page layout is safe with either page size). Both are **local only**;
+  the user explicitly declined push/fork and CI.
+- New files in the patch: `bsd/dev/sweet_virtio_blk.c`,
+  `bsd/dev/sweet_virtio_input.c`, `bsd/dev/sweet_ramfb.c`; `bsd/conf/files`;
+  `bsd_init.c` input/ramfb init; `IOKitBSDInit.cpp` `rd=vblk0` root branch.
+  Phone boot path and `rd=ufsroot0` are unchanged. Boot args are opt-in:
+  `rd=vblk0 rootrw=1 virtio_blk=1 virtio_input=1 ramfb=1 cpus=1`.
+- `tools/qemu-sweet.py` now has `--disk`, `--input`, `--display`, `--wait`,
+  `--accel`, `--extra-cmdline`, `--tb-mb`; docs are in `docs/QEMU_VM.md`
+  and linked from `docs/QEMU_TESTING.md` / `README.md`.
+- **Local validation:** Zig 0.13.0 clang 18.1.6 compiled
+  `sweet_virtio_blk.c`, `sweet_virtio_input.c`, `sweet_ramfb.c` and
+  `bsd_init.c` with the CI `.CFLAGS`, exit 0. Only the existing `NDEBUG`
+  redefinition warning. `IOKitBSDInit.cpp` cannot be compiled with Zig clang
+  (missing Apple `__builtin_xnu_types_compatible`); manual review: the file
+  is inside `extern "C"`, the new branch follows the existing UFS branch, and
+  the symbol has C linkage. **No full kernel link or CI build yet.**
+- **No boot test yet.** Need a Linux QEMU host, a raw HFS+ root **copy**, and
+  the CI-built kernel. Intended command:
+  `python3 tools/qemu-sweet.py PAYLOAD OUT --disk COPY.img --input --display gtk,zoom-to-fit=on --wait --live-serial`.
+  TCG/one CPU: first boot can take tens of minutes. Keep the original image;
+  use `--secs` for a headless run and inspect `serial.txt` / `fb.png`.
+- Nothing on the phone was flashed, deleted or changed in this work. The
+  Android installation and partition backups are untouched. The later Android
+  APK wrapper remains deferred.
+
 ### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<
 
 **STATE at end of 2026-10-18 (evening):**
