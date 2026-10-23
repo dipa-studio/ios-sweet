@@ -140,7 +140,11 @@ The log contains crash reports with backtraces (`CRASH name ...`), IOKit traces 
 
 ### QEMU
 
-`tools/qemu-sweet.py` boots the same kernel on QEMU `virt` with a test RAM-disk root. It is useful for kernel-only changes; see `NOTES.md`.
+`tools/qemu-sweet.py` boots the same kernel on QEMU `virt`. Without `--disk`
+it uses a test RAM-disk root (`rd=md0`), which is enough for kernel-only
+changes. With patch 0082 it can also attach the phone's HFS+ root image as a
+virtio-blk disk and show the panel in a QEMU window: see
+[`docs/QEMU_VM.md`](docs/QEMU_VM.md).
 
 ## Repository layout
 
@@ -186,6 +190,7 @@ Not in git: partition backups, live device trees, recovery images, Apple firmwar
 | 0066–0067 | Fault-region crash info; console mute |
 | 0068 | IOSurface lookup semantics for already-mapped surfaces |
 | 0069 | Batched persistent-log flushes |
+| 0082 | QEMU VM: virtio-blk root image, virtio tablet/keyboard input, ramfb display |
 
 ## Key hardware facts
 

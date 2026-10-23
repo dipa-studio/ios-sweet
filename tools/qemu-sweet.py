@@ -74,13 +74,18 @@ def check_kernel_tools(kernel_path):
     return True
 
 
-def build_image(payload):
+def build_image(payload, extra_cmdline=''):
     """Return (phys_base, ram_image, boot_args_pa, entry_pa)."""
     magic, ver, nsegs = struct.unpack_from('<8sII', payload, 0)
     assert magic == b'SWEETXNU' and ver == 1, 'not a SWEETXNU v1 payload'
     virt_base, entry_va, adt_off, adt_size, kernel_end, phys_base, mem_size = \
         struct.unpack_from('<7Q', payload, 0x10)
     cmdline = payload[0x48:0x48 + BOOT_LINE_LENGTH]
+    if extra_cmdline:
+        base = cmdline.split(b'\0', 1)[0].rstrip()
+        cmdline = (base + b' ' + extra_cmdline.encode()).strip()
+        cmdline = cmdline[:BOOT_LINE_LENGTH - 1] + b'\0'
+        cmdline = cmdline.ljust(BOOT_LINE_LENGTH, b'\0')
     delta = phys_base - virt_base
     adt_pa = kernel_end + delta
     ba_pa = (adt_pa + adt_size + PAGE - 1) & ~(PAGE - 1)
@@ -221,12 +226,19 @@ def main():
     ap.add_argument('payload', nargs='?', help='SWEETXNU payload binary (from mkpayload.py)')
     ap.add_argument('outdir', nargs='?', help='Output directory for fb.png, regs.txt, and logs')
     ap.add_argument('--secs', type=float, default=20, help='Duration to run QEMU in seconds (default: 20)')
+    ap.add_argument('--wait', action='store_true', help='run until QEMU exits (for --display) instead of --secs')
     ap.add_argument('--gdb', action='store_true', help='start halted, gdb stub on :1234, no timeout')
     ap.add_argument('--hmp', action='append', default=[], help='extra monitor command run after stop (repeatable), e.g. "x /8gx 0xfffffe..."')
     ap.add_argument('--cpu', default='cortex-a76', help='QEMU CPU model (default: cortex-a76)')
+    ap.add_argument('--accel', default='tcg', help='QEMU accelerator (default: tcg; hvf on Apple Silicon with --cpu host)')
     ap.add_argument('--kernel', help='matching unstripped kernel, for exact framebuffer text decoding (uses llvm-nm)')
     ap.add_argument('--fail-on-panic', action='store_true', help='exit 2 for a visible panic, 3 for incomplete/blank decoding; requires --kernel')
     ap.add_argument('--live-serial', action='store_true', help='stream serial console output to stdout in real time')
+    ap.add_argument('--disk', metavar='IMAGE', help='raw disk image on QEMU virtio-blk (boot with rd=vblk0)')
+    ap.add_argument('--input', action='store_true', help='attach QEMU virtio tablet and keyboard (boot with virtio_input=1)')
+    ap.add_argument('--display', metavar='BACKEND', help='show a QEMU window (gtk, sdl, cocoa) and the guest ramfb (boot with ramfb=1)')
+    ap.add_argument('--extra-cmdline', default='', help='append this to the payload boot-args')
+    ap.add_argument('--tb-mb', type=int, default=512, help='QEMU TCG translation cache in MB (default: 512)')
     ap.add_argument('--check-env', action='store_true', help='check QEMU installation and dependencies without running a payload')
     a = ap.parse_args()
 
@@ -262,10 +274,26 @@ def main():
     os.makedirs(a.outdir, exist_ok=True)
     out = os.path.abspath(a.outdir)
 
-    phys_base, img, ba_pa, entry_pa = build_image(payload)
+    phys_base, img, ba_pa, entry_pa = build_image(payload, a.extra_cmdline)
     open(f'{out}/ram.bin', 'wb').write(img)
     open(f'{out}/stub.bin', 'wb').write(stub(ba_pa, entry_pa))
     print(f'phys_base={phys_base:#x} boot_args={ba_pa:#x} entry={entry_pa:#x}', file=sys.stderr)
+
+    if a.disk:
+        a.disk = os.path.abspath(a.disk)
+        if not os.path.exists(a.disk):
+            ap.error(f'disk image not found: {a.disk}')
+    bootline = payload[0x48:0x48 + BOOT_LINE_LENGTH].split(b'\0', 1)[0].decode('latin1')
+    bootline += ' ' + a.extra_cmdline
+    if a.disk and 'rd=vblk0' not in bootline.split():
+        print('[!] --disk: the payload boot-args do not say rd=vblk0; '
+              'build it with that (and rootrw=1) or pass --extra-cmdline', file=sys.stderr)
+    if a.input and 'virtio_input=1' not in bootline.split():
+        print('[!] --input: the payload boot-args do not say virtio_input=1; '
+              'build it with that or pass --extra-cmdline', file=sys.stderr)
+    if a.display and 'ramfb=1' not in bootline.split():
+        print('[!] --display: the payload boot-args do not say ramfb=1; '
+              'build it with that or pass --extra-cmdline', file=sys.stderr)
 
     mon = f'{out}/mon.sock'
     if os.path.exists(mon):
@@ -274,11 +302,27 @@ def main():
     mem_size = struct.unpack_from('<Q', payload, 0x40)[0]
     ram_gib = max(4, -(-(phys_base + mem_size - 0x40000000) // (1 << 30)))
     cmd = ['qemu-system-aarch64', '-M', 'virt,gic-version=3', '-cpu', a.cpu, '-smp', '1', '-m', f'{ram_gib}G',
-           '-nographic', '-serial', f'file:{out}/serial.txt', '-qmp', f'unix:{mon},server,nowait',
+           '-serial', f'file:{out}/serial.txt', '-qmp', f'unix:{mon},server,nowait',
            '-d', 'int,guest_errors,unimp', '-D', f'{out}/qemu.log', '-no-reboot',
            '-device', f'loader,file={out}/ram.bin,addr={phys_base:#x},force-raw=on',
            '-device', f'loader,file={out}/stub.bin,addr={STUB_PA:#x},force-raw=on',
            '-device', f'loader,addr={STUB_PA:#x},cpu-num=0']
+    if a.accel == 'tcg':
+        cmd += ['-accel', f'tcg,tb-size={a.tb_mb}']
+    else:
+        cmd += ['-accel', a.accel]
+    if a.display:
+        cmd += ['-display', a.display, '-device', 'ramfb']
+    else:
+        cmd += ['-nographic']
+    if a.disk or a.input:
+        cmd += ['-global', 'virtio-mmio.force-legacy=false']
+    if a.disk:
+        cmd += ['-drive', f'file={a.disk},format=raw,if=none,id=vmdisk,cache=writeback',
+                '-device', 'virtio-blk-device,drive=vmdisk']
+    if a.input:
+        cmd += ['-device', 'virtio-tablet-device',
+                '-device', 'virtio-keyboard-device']
     if a.gdb:
         cmd += ['-S', '-gdb', 'tcp::1234']
 
@@ -294,7 +338,8 @@ def main():
             return 0
 
         t0 = time.time()
-        while p.poll() is None and time.time() - t0 < a.secs:
+        deadline = float('inf') if a.wait else a.secs
+        while p.poll() is None and time.time() - t0 < deadline:
             if a.live_serial:
                 serial_pos = stream_serial_file(serial_file, serial_pos)
             time.sleep(0.2)
