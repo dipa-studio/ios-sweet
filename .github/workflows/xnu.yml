@@ -55,7 +55,7 @@ jobs:
           build = Path("dxb/build.sh")
           source = build.read_text()
           old = 'warning "Skipping patch ${PATCH} (already upstream, previously applied, or malformed): ${APPLY_CHECK}"'
-          new = 'printf "Required XNU patch failed to apply: %s\\n%s\\n" "$PATCH" "$APPLY_CHECK" >&2; exit 1'
+          new = 'case "${PATCH##*/}" in [0-9][0-9][0-9][0-9]-*) printf "Required XNU patch failed to apply: %s\\n%s\\n" "$PATCH" "$APPLY_CHECK" >&2; exit 1;; *) warning "Skipping helper patch ${PATCH}: ${APPLY_CHECK}";; esac'
           if source.count(old) != 1:
               raise SystemExit("Could not install strict patch-application check")
           build.write_text(source.replace(old, new))

@@ -16,9 +16,12 @@ the new CI build must pass before a QEMU run.**
   counts, and upstream `build.sh` warned then skipped it while still building.
   The patch has now been regenerated from the exact CI source tree and checked
   with `git apply --check`. `tools/validate-repo.py` now checks unified hunk
-  counts, and the workflow makes failed patch application fatal. These fixes
-  are pending the next fork CI run; do not use the old 0084 artifact for
-  injection. No QEMU boot with corrected 0084 has run.
+  counts, and the workflow makes failed numbered fork patches fatal while
+  preserving the helper's intentional `TrustCache.patch` skip. The first strict
+  CI attempt (40094690853) stopped at that helper patch after applying numbered
+  patches; the workflow condition is corrected and another run is pending. Do
+  not use the old 0084 artifact for injection. No QEMU boot with corrected 0084
+  has run.
   The earlier explanation that unsupported daemons, personas, or activation
   caused the run3 stall was a hypothesis, not an observed diagnosis. Observed:
   launchd's sampled dyld stack was in `preflightCacheFile`/`fcntl`, and a saved
