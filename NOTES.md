@@ -1,3 +1,12 @@
+### >>> UPDATE 2026-10-25 (UniXNU DarwinBoot ABI compatibility) <<<
+
+**STATE: UniXNU is a plausible UEFI boot manager/loader base, but its current DarwinBoot binary is not ABI-compatible with the existing iOS 16.7.16 (20H392 / Darwin 22) kernel. Inferno `vmapple` is not an installable option for this Windows/Android QEMU path. No guest or device images were modified.**
+
+- Source inspection of the pinned `github-clone/UniXNU/drivers/DarwinBoot` confirms its Mach-O loader accepts ARM64 `MH_EXECUTE` kernels with `LC_UNIXTHREAD`; the 20H392 kernel has that format. This part is compatible.
+- The hard-coded DarwinBoot ABI is Darwin 23: `CommandLine[1024]`, `bootFlags` at `0x470`, `memSizeActual` at `0x478`, total `boot_args` size `0x480`. The 20H392 XNU header uses `BOOT_LINE_LENGTH=608`; offsets are `bootFlags=0x2d0`, `memSizeActual=0x2d8`, total size `0x2e0`. Passing the current DarwinBoot struct would put these fields at the wrong offsets and is unsafe. Implement a Darwin22 ABI variant selected for the 20H392 guest before attempting handoff.
+- The current `research/vm/qemu.adt` and the Sweet runner are Sweet-specific fixtures, not a verified UniXNU QEMU `virt` device tree / ESP. A working boot path still needs an ESP with UniXNU EFI + DarwinBoot + `kernel.macho` and matching `.adt`, plus a Darwin22 handoff; then the current root image must be attached with a storage interface the guest kernel recognizes. This is a bootloader integration task, not installing iOS into the boot manager.
+- Inferno's local `hw/vmapple/Kconfig` requires ARM and HVF. The available Windows QEMU 11.1 lists `virt`, not `vmapple`; Android QEMU also lacks Apple's HVF. It cannot be enabled as-is on this host. Porting the machine model to TCG would be a separate substantial engineering effort.
+- Next: create a Darwin22-selectable DarwinBoot build path, prepare an ESP fixture with the existing 20H392 Mach-O and ADT, and test only through QEMU snapshots. Keep the base IPSW-derived image and all phone partitions untouched. No code change or boot test has yet been made in the clones.
 ### >>> UPDATE 2026-10-25 (Inferno and UniXNU QEMU fit check) <<<
 
 **STATE: These clones do not provide a drop-in runner for the current Windows 20H392 guest. UniXNU does provide relevant design material for the missing writable Data volume; Inferno's Apple machine cannot run on this host or Android.**
