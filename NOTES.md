@@ -4,8 +4,25 @@
 
 ### >>> UPDATE 2026-10-24 (read first) <<<
 
-**STATE: desktop QEMU VM path implemented and CI-built; Windows kernel
-smoke test reaches root selection. Full iOS root boot is still pending.**
+**STATE: iOS HFS+ root built and verified; first Windows QEMU boot with
+the root disk is running. Full iOS GUI boot is not yet verified.**
+
+- **Root image complete / first disk boot (2026-10-24):** base image
+  `research/vm/ios16-root-20H392-base.img` and test copy
+  `research/vm/root.img` are both 17,179,869,184 bytes. Native Windows
+  SHA-256 checks matched before boot:
+  `36e8150e208c1395c090a6b7684f694b4b952f4f5e7ee96c1196aa696c1e04e8`.
+  Checksums saved as base.img.sha256 and root-before-boot.sha256 beside
+  the images. The base remains unbooted; QEMU writes only root.img.
+  Copied Linux build/provision logs to `research/vm/`, then shut down WSL
+  to free memory. Started Windows QEMU via qemu-sweet.py with payload.bin,
+  root.img, --input --display gtk,zoom-to-fit=on --secs 1800 --tb-mb 128.
+  Runner selected 7 GiB guest RAM for the highmem ADT, Cortex-A76, 1 CPU.
+  Boot outputs: `research/vm/run/`. Ignored snapshot helper
+  `research/snapshot-qemu.py OUT` locates only this VM, captures framebuffer
+  and reads XNU msgbuf over QMP, then resumes the VM. No boot result yet.
+  Completed implementation commits: b9913b9 (HFS fsck/WSL milestone),
+  da7f034 (LF attributes), ea144f7 (numeric owner compatibility); unpushed.
 
 - **Root populated and provisioned (2026-10-24):** all three APFS source
   copies and cryptex links completed. Initial build stopped at
