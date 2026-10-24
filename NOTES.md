@@ -18,6 +18,12 @@
 - REA `open_binary` accepted extracted `SpringBoard` (SHA-256 `e27c490ab796b542e5bf8e221c2f2c898658ccea9054fb766dc95127d93ded06`), but REA's Mach-O/deep inspection had no compatible local provider (Ghidra not configured; native macOS provider unavailable). The REA target was closed. The address comparison above is from the already installed `ipsw` CLI and dyld cache, not REA Evidence. No REA/client configuration or analyzer was installed.
 - Next safe work: port the verified 20H392 Objective-C IMP constants, resolve QuartzCore's current C++ vtables and methods, rebuild the Redwood dylibs for arm64, place them only on a disposable HFS+ copy, and run QEMU with `--disk-snapshot`. Recheck HFS+ after QEMU exits. Do not touch the preserved base image or any device partitions.
 
+### >>> UPDATE 2026-10-25 (20H392 Redwood offset overlay prepared) <<<
+
+- Adapted the supplied HackiOS `inject_sb.c` and `inject.c` sources locally for the observed 20H392 root. The SpringBoard/UIKit method IMPs were matched against `research/dsc/`; the QuartzCore vtable symbols and selected entries were read from `dyld_shared_cache_arm64` and checked with `ipsw dyld a2s`. `begin_update` is at vtable offset `0x178` and `finish_update` at `0x180` for 20H392 (one slot later than the old 20F66 values). The shader pointer table address was derived from `GLContext::create_shader` disassembly; Metal's `_deviceArray`, `-[CAWindowServer _detectDisplays]`, `-[BLControl waitForALSArrival]`, and `+[MCMUserIdentityCache personasAreSupported]` were matched to the current cache.
+- Added `userland/patches/20H392-redwood.patch` and workflow `.github/workflows/redwood-userland.yml`, which pins HackiOS userland commit `a79ff0772a3454fd1ef127e181e5b3bce6c9ce18`, applies the overlay, builds the two arm64 dylibs using the runner's iPhoneOS SDK, and publishes artifact `redwood-20H392`. The optional Siri orb hook remains guarded to 20F66 and is intentionally inactive pending its 20H392 IMP.
+- Patch application was checked on a clean detached worktree at the pinned upstream commit; `git diff --check` and `bash -n userland/build-redwood.sh` passed. The macOS compilation and QEMU boot are pending the workflow run. Do not install these dylibs into the preserved base image; next use only the disposable `root-0084h.img` and QEMU `--disk-snapshot`, then check HFS+ integrity.
+
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
 ## Agent handoff / active work (2026-10-15, latest)

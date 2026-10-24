@@ -1,0 +1,219 @@
+diff --git a/userland/src/inject.c b/userland/src/inject.c
+index c5e9d90..e1fa620 100644
+--- a/userland/src/inject.c
++++ b/userland/src/inject.c
+@@ -22,7 +22,7 @@
+  *                everything that needs a container (the window server, for one) waits with
+  *                them. Told that personas are not supported, they do not ask.
+  *
+- * Addresses of things inside the dyld shared cache are those of iOS 16.5 (20F66) for iPhone10,3;
++ * Addresses of things inside the dyld shared cache are those of iOS 16.7.16 (20H392) for iPhone10,3;
+  * every one is checked against what is expected to be there before it is touched.
+  */
+ #include <CoreFoundation/CoreFoundation.h>
+@@ -100,8 +100,8 @@ replace_virtual(const char *what, uintptr_t slot, uintptr_t expected, void *repl
+ 
+ /* ---- backboardd: CA::WindowServer ------------------------------------------------------------ */
+ 
+-#define VT_APPLE_CLCD_DISPLAY   0x1d5b44520UL   /* vtable for CA::WindowServer::AppleCLCDDisplay */
+-#define VT_EAGL_SERVER          0x1d5b45c58UL   /* vtable for CA::WindowServer::EAGLServer */
++#define VT_APPLE_CLCD_DISPLAY   0x1d5b38788UL   /* 20H392 vtable for CA::WindowServer::AppleCLCDDisplay */
++#define VT_EAGL_SERVER          0x1d5b39ed0UL   /* 20H392 vtable for CA::WindowServer::EAGLServer */
+ #define VSLOT(vtable, offset)   ((vtable) + 0x10 + (offset))
+ 
+ #define DISPLAY_FLAGS(display)  (*(uint64_t *)((char *)(display) + 0x9f2))
+@@ -216,7 +216,7 @@ my_render_update(void *server, void *update, unsigned *flags)
+  * (The last of the ninety, "cst", is not asked about: the OpenGL ES renderer draws it with no
+  * program at all. The lock screen's wallpaper goes that way; see plain_draw_begin() in eagl.c.)
+  */
+-#define VT_GLES_CONTEXT         0x1d5b3b540UL   /* vtable for CA::OGL::GLESContext */
++#define VT_GLES_CONTEXT         0x1d5b2f6e8UL   /* 20H392 vtable for CA::OGL::GLESContext */
+ 
+ static int gl_loaded;                           /* CoreAnimation draws with OpenGL ES (opengl_es() below) */
+ static void (*gl_function_refused)(unsigned function);  /* our OpenGL ES library keeps count (eagl.c, the census) */
+@@ -301,8 +301,8 @@ watch_for_faults(void)
+ 
+ /*
+  * CoreAnimation's OpenGL ES renderer keeps the source of one fragment shader per function in a
+- * table of its own -- unslid 0x1d5b54790, indexed by the function's number -- and the functions it
+- * has no shader for are null entries there. That is the whole of "the renderer has no function
++ * table of its own -- unslid 0x1d5b48958 on iOS 20H392, indexed by the function's number -- and
++ * the functions it has no shader for are null entries there. That is the whole of "the renderer has no function
+  * 40": GLContext::create_shader takes the source from that table, and function_supported answers
+  * from the same place. Made to answer yes without the entry, create_shader hands the null to
+  * strdup and the window server dies in strlen, which is what glyes=40 did for a whole afternoon.
+@@ -332,7 +332,7 @@ watch_for_faults(void)
+  * blur. CoreAnimation asks for the single-pass blur exactly when the radius is too small to need
+  * the multi-pass one, so the four samples coincide and the pass copies what it was given.
+  */
+-#define CA_SHADER_TABLE         0x1d5b54790UL
++#define CA_SHADER_TABLE         0x1d5b48958UL   /* 20H392, derived from GLContext::create_shader */
+ 
+ static const char shadow_blur_source[] =
+     "uniform lowp sampler2DRect texture0;\n"
+@@ -507,11 +507,10 @@ my_function_uniform(void *context, unsigned index, size_t components, size_t cou
+ /*
+  * With the Metal properties on the accelerator service (boot-arg metal=1) MTLCreateSystemDefaultDevice()
+  * answers in every process, and the window server is the first to ask. Its road to Metal has no fork
+- * in it: CA::WindowServer::EAGLServer's constructor (0x1883d1544) calls renderer() (0x1882e2548) with a
+- * direct branch -- past the virtual table, so my_renderer() above never sees that first call -- and
+- * renderer() calls CAMetalContextCreate() (0x18837b718), which is nothing but a dispatch_once around
+- * MTLCreateSystemDefaultDevice(). A device that is not nil goes straight into
+- * CA::OGL::new_metal_context() (0x18847efcc), where the renderer asks for its shaders:
++ * in it: CA::WindowServer::EAGLServer's constructor calls renderer() directly, past the virtual table,
++ * so my_renderer() above never sees that first call. In iOS 20H392 renderer() is 0x1882eaf3c,
++ * CAMetalContextCreate() is 0x18838421c, and CA::OGL::new_metal_context() is 0x188487e28. A device that
++ * is not nil goes into new_metal_context(), where the renderer asks for its shaders:
+  *
+  *	quartzcore_bundle = [NSBundle bundleWithIdentifier:@"com.apple.QuartzCore"];
+  *	assert(quartzcore_bundle != nil);				ogl-metal.mm:3305
+@@ -528,7 +527,7 @@ my_function_uniform(void *context, unsigned index, size_t components, size_t cou
+  *
+  * So the device is taken out of this process before CoreAnimation can ask for it. Metal keeps every
+  * device it has made in one static NSMutableArray, and MTLCreateSystemDefaultDevice() is no more than
+- * "if that array holds exactly one object, return it" (its block, 0x181a3442c): an empty array answers
++ * "if that array holds exactly one object, return it" (the 20H392 block at 0x181a37050): an empty array answers
+  * nil without a single instruction of Metal's being touched. The array is built on first use, so it
+  * has to be asked for first -- and that creates the device object, which is exactly what
+  * CoreAnimation's next instruction would have done anyway, so it costs this process nothing it was not
+@@ -539,8 +538,8 @@ my_function_uniform(void *context, unsigned index, size_t components, size_t cou
+  * Metal road deliberately -- which needs QuartzCore's default.metallib in the image first, or this
+  * same assertion comes back.
+  */
+-#define MTL_DEVICE_ARRAY        0x1e1efe9a0UL   /* Metal's static NSMutableArray *_deviceArray */
+-#define CA_DETECT_DISPLAYS      0x1884da264UL   /* -[CAWindowServer _detectDisplays] */
++#define MTL_DEVICE_ARRAY        0x1e1d8a970UL   /* 20H392 Metal global _deviceArray */
++#define CA_DETECT_DISPLAYS      0x1884e3150UL   /* 20H392 -[CAWindowServer _detectDisplays] */
+ 
+ extern id objc_retain(id object);
+ 
+@@ -630,27 +629,27 @@ static void
+ window_server_fixes(void)
+ {
+ 	window_server_keeps_opengl_es();
+-	orig_is_ready = replace_virtual("is_ready", VSLOT(VT_APPLE_CLCD_DISPLAY, 0xb0), 0x1882f0908UL, my_is_ready);
+-	orig_ignore_update_p = replace_virtual("ignore_update_p", VSLOT(VT_APPLE_CLCD_DISPLAY, 0x138), 0x1882e0c90UL,
++	orig_is_ready = replace_virtual("is_ready", VSLOT(VT_APPLE_CLCD_DISPLAY, 0xb0), 0x1882f9318UL, my_is_ready);
++	orig_ignore_update_p = replace_virtual("ignore_update_p", VSLOT(VT_APPLE_CLCD_DISPLAY, 0x138), 0x1882e9684UL,
+ 	    my_ignore_update_p);
+-	orig_begin_update = replace_virtual("begin_update", VSLOT(VT_APPLE_CLCD_DISPLAY, 0x170), 0x1882ddda4UL,
++	orig_begin_update = replace_virtual("begin_update", VSLOT(VT_APPLE_CLCD_DISPLAY, 0x178), 0x1882e6798UL,
+ 	    my_begin_update);
+-	orig_finish_update = replace_virtual("finish_update", VSLOT(VT_APPLE_CLCD_DISPLAY, 0x178), 0x1882c8568UL,
++	orig_finish_update = replace_virtual("finish_update", VSLOT(VT_APPLE_CLCD_DISPLAY, 0x180), 0x1882d0f88UL,
+ 	    my_finish_update);
+-	orig_renderer = replace_virtual("renderer", VSLOT(VT_EAGL_SERVER, 0x1a0), 0x1882e2548UL, my_renderer);
+-	orig_render_update = replace_virtual("render_update", VSLOT(VT_EAGL_SERVER, 0x178), 0x18835770cUL,
++	orig_renderer = replace_virtual("renderer", VSLOT(VT_EAGL_SERVER, 0x1a0), 0x1882eaf3cUL, my_renderer);
++	orig_render_update = replace_virtual("render_update", VSLOT(VT_EAGL_SERVER, 0x178), 0x1883601dcUL,
+ 	    my_render_update);
+ 	if (gl_loaded) {
+-		orig_function_supported = replace_virtual("function_supported", VSLOT(VT_GLES_CONTEXT, 0x378), 0x1884a9308UL,
++		orig_function_supported = replace_virtual("function_supported", VSLOT(VT_GLES_CONTEXT, 0x378), 0x1884b2164UL,
+ 		    my_function_supported);
+ 		if (gl_function_values != NULL) {
+-			orig_function_uniform = replace_virtual("function_uniform", VSLOT(VT_GLES_CONTEXT, 0x388), 0x1884a9350UL,
++			orig_function_uniform = replace_virtual("function_uniform", VSLOT(VT_GLES_CONTEXT, 0x388), 0x1884b21acUL,
+ 			    my_function_uniform);
+ 		}
+ 		/* always, because the boot-args are read in another place than this and the order of the
+ 		   two is not ours to rely on; the hook writes nothing unless glcompile=1 */
+ 		orig_compile_shader = (uintptr_t (*)(void *, const char *))replace_virtual("compile_shader",
+-		    VSLOT(VT_GLES_CONTEXT, 0x060), 0x1883fc808UL, my_compile_shader);
++		    VSLOT(VT_GLES_CONTEXT, 0x060), 0x1884053fcUL, my_compile_shader);
+ 		say("redwood: the shader compiler of CoreAnimation is %s\n", orig_compile_shader ? "watched" : "NOT watched");
+ 		watch_for_faults();
+ 		{
+@@ -697,7 +696,7 @@ brightness_fixes(void)
+ 	Method method = cls ? class_getInstanceMethod(cls, sel_registerName("waitForALSArrival")) : NULL;
+ 	IMP original = method ? method_getImplementation(method) : NULL;
+ 
+-	if (original == NULL || (uintptr_t)original != 0x1af043734UL + slide) {
++	if (original == NULL || (uintptr_t)original != 0x1af0a672cUL + slide) {
+ 		say("redwood: -[BLControl waitForALSArrival]: found %#lx, not what was expected; left alone\n",
+ 		    original ? (uintptr_t)original - slide : 0);
+ 		return;
+@@ -1136,7 +1135,7 @@ container_manager_fixes(void)
+ 	Method method = cls ? class_getClassMethod(cls, sel_registerName("personasAreSupported")) : NULL;
+ 	IMP original = method ? method_getImplementation(method) : NULL;
+ 
+-	if (original == NULL || (uintptr_t)original != 0x1c3ea6298UL + slide) {
++	if (original == NULL || (uintptr_t)original != 0x1c4c699f8UL + slide) {
+ 		say("redwood: +[MCMUserIdentityCache personasAreSupported]: found %#lx, not what was expected; left alone\n",
+ 		    original ? (uintptr_t)original - slide : 0);
+ 		return;
+diff --git a/userland/src/inject_sb.c b/userland/src/inject_sb.c
+index 3773115..9525b95 100644
+--- a/userland/src/inject_sb.c
++++ b/userland/src/inject_sb.c
+@@ -134,7 +134,7 @@ static uintptr_t slide;
+ 
+ /*
+  * Replace -[CLASS SELECTOR] (or +[CLASS SELECTOR]: `kind` is that first character), whose code must now
+- * be at the unslid address `expected` (iOS 16.5, 20F66: what a replacement does depends on what the
++ * be at the unslid address `expected` (iOS 16.7.16, 20H392: what a replacement does depends on what the
+  * original did). Returns the original.
+  * (dyld interposing of the C functions underneath does not reach calls made from inside the
+  * shared cache: there one library branches straight into the other.)
+@@ -675,6 +675,7 @@ image_added(__unused const struct mach_header *header, __unused intptr_t image_s
+ {
+ 	static bool told;
+ 
++	/* The optional Siri orb hook still has its guarded 20F66 IMP; it is left inactive on 20H392. */
+ 	if (original_prewarm_orb_view_shaders != NULL || objc_getClass("SiriPresentationViewController") == NULL) {
+ 		return;
+ 	}
+@@ -1125,38 +1126,38 @@ redwood_springboard_init(void)
+ 	 */
+ 	setvbuf(stdout, NULL, _IONBF, 0);
+ 	slide = (uintptr_t)_dyld_get_shared_cache_range(&length) - CACHE_BASE;
+-	activation = replace_method("SBLockdownManager", "_setupActivationState", 0x1c4bc8dfcUL, (IMP)setup_activation_state);
++	activation = replace_method("SBLockdownManager", "_setupActivationState", 0x1c5991a78UL, (IMP)setup_activation_state);
+ 	_dyld_register_func_for_add_image(image_added);         /* Siri's orb, whose framework comes late */
+ 	original_set_setup_required_reason = (void (*)(id, SEL, long))replace_method("SBSetupManager",
+-	    "_setSetupRequiredReason:", 0x1c4cdd3a4UL, (IMP)set_setup_required_reason);
++	    "_setSetupRequiredReason:", 0x1c5aa608cUL, (IMP)set_setup_required_reason);
+ 	snapshot_format = replace_method_of_kind('+', "XBApplicationSnapshotManifestImpl", "_outputFormatForSnapshot:",
+-	    0x1f1c91480UL, (IMP)snapshot_output_format);
++	    0x1f287f320UL, (IMP)snapshot_output_format);
+ 	plain_vibrancy();
+-	original_lock_long_press = (void (*)(id, SEL, id))replace_method("SBLockHardwareButton", "longPress:", 0x1c4f6ab44UL,
++	original_lock_long_press = (void (*)(id, SEL, id))replace_method("SBLockHardwareButton", "longPress:", 0x1c5d339b0UL,
+ 	    (IMP)lock_long_press);
+ 	poster_switcher = replace_method("SBMainDisplayPolicyAggregator", "_allowsCapabilityPosterSwitcherWithExplanation:",
+-	    0x1c507e0fcUL, (IMP)poster_switcher_allowed);
++	    0x1c5e46f8cUL, (IMP)poster_switcher_allowed);
+ 	original_switcher_wallpaper_overlay = (void (*)(id, SEL))replace_method("SBAppSwitcherPageView",
+-	    "_createOrDestroyWallpaperOverlayView", 0x1c4af7860UL, (IMP)switcher_wallpaper_overlay);
++	    "_createOrDestroyWallpaperOverlayView", 0x1c58c0460UL, (IMP)switcher_wallpaper_overlay);
+ 	/*
+ 	 * Battery hooks on UIDevice: these are the methods every app and SpringBoard itself calls, so
+ 	 * hooking them here in the SpringBoard process covers both the status bar and any app that
+-	 * reads [UIDevice currentDevice].batteryLevel. The addresses are for iOS 16.5 (20F66).
++	 * reads [UIDevice currentDevice].batteryLevel. The addresses are for iOS 16.7.16 (20H392).
+ 	 */
+-	original_battery_level = (float (*)(id, SEL))replace_method("UIDevice", "batteryLevel", 0x1897021b0UL, (IMP)battery_level);
+-	original_battery_state = (long (*)(id, SEL))replace_method("UIDevice", "batteryState", 0x189209794UL, (IMP)battery_state);
++	original_battery_level = (float (*)(id, SEL))replace_method("UIDevice", "batteryLevel", 0x18970b8bcUL, (IMP)battery_level);
++	original_battery_state = (long (*)(id, SEL))replace_method("UIDevice", "batteryState", 0x189212b64UL, (IMP)battery_state);
+ 	original_battery_view_shows_percentage = (BOOL (*)(id, SEL))replace_method("_UIBatteryView", "showsPercentage",
+-	    0x189a9370cUL, (IMP)battery_view_shows_percentage);
++	    0x189a9d1c8UL, (IMP)battery_view_shows_percentage);
+ 	original_battery_view_set_shows_percentage = (void (*)(id, SEL, BOOL))replace_method("_UIBatteryView", "setShowsPercentage:",
+-	    0x18926e150UL, (IMP)battery_view_set_shows_percentage);
++	    0x189277520UL, (IMP)battery_view_set_shows_percentage);
+ 	original_battery_view_should_show_bolt = (BOOL (*)(id, SEL))replace_method("_UIBatteryView", "_shouldShowBolt",
+-	    0x189203e28UL, (IMP)battery_view_should_show_bolt);
++	    0x18920d1f8UL, (IMP)battery_view_should_show_bolt);
+ 	original_battery_view_charge_percent = (double (*)(id, SEL))replace_method("_UIBatteryView", "chargePercent",
+-	    0x189a935d8UL, (IMP)battery_view_charge_percent);
++	    0x189a9d094UL, (IMP)battery_view_charge_percent);
+ 	original_battery_view_set_charge_percent = (void (*)(id, SEL, double))replace_method("_UIBatteryView", "setChargePercent:",
+-	    0x18928d310UL, (IMP)battery_view_set_charge_percent);
++	    0x1892966e0UL, (IMP)battery_view_set_charge_percent);
+ 	original_ring_charging_level = (double (*)(id, SEL))replace_method("CSBatteryChargingRingView", "batteryChargingLevel",
+-	    0x1c48c2cf4UL, (IMP)ring_charging_level);
++	    0x1c568bd24UL, (IMP)ring_charging_level);
+ 	battery_lvl = (IMP)original_battery_level;
+ 	battery_st  = (IMP)original_battery_state;
+ 	say("redwood: SpringBoard: activation %s, setup assistant %s, application snapshots %s, the side button's long press %s, "
