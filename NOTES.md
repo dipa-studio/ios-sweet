@@ -6,6 +6,20 @@
 
 **STATE: desktop QEMU VM path implemented and CI-built; not booted.**
 
+- **Windows host recheck (2026-10-24):** working tree was clean at
+  `55f9da1`, `main` tracks `fork/main`; fork and upstream URLs match the
+  handoff. `gh run view 40022572169` reports completed/success with head
+  `1a76371c5d6342051f419e0ca42317cb1808ec18`. Local kernel is 17,207,128
+  bytes, SHA-256
+  `490b69c01bdf092d9401bc0f676a01b38c445994501ad7dfa7a78f15664df3fe`.
+  `wsl --list --verbose` reports WSL is not installed;
+  `qemu-system-aarch64` is not on PATH. A repo file search (including
+  ignored files, excluding `backup/` and `.git/`) found no `.img` or `.adt`
+  files. This does not establish whether images exist elsewhere on the host.
+  Boot test remains pending: obtain access to a Linux/macOS QEMU host and
+  a raw HFS+ root copy, generate the QEMU ADT/payload per `docs/QEMU_VM.md`,
+  then capture serial output and framebuffer. No phone commands were run.
+
 - `xnu/patches/0082-sweet-qemu-vm.patch` adds an external virtio-blk root
   (`vblk0` / `rvblk0`), virtio tablet+keyboard input, and QEMU ramfb display.
   Local commits: **f33c3b4** (patch + docs + runner), **1f897d8** (fix:
