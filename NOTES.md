@@ -1,3 +1,12 @@
+### >>> UPDATE 2026-10-25 (one-hour QEMU soak reached About screen) <<<
+
+**STATE: The requested one-hour QEMU test completed at its 3,600-second host timeout. iOS 16.7.16 is visibly running: QMP touch opened Settings, General, and About; the final framebuffer shows the About page with iOS 16.7.16 / iPhone X. QEMU was still alive at timeout and was stopped only after the final capture.**
+
+- Run directory `research/vm/run20h-hour/`; process PID 13408 started at 04:00:36 and the runner captured final `fb.png`/`regs.txt` at 05:00:36. `result.json: not_decoded` means the guest remained running at timeout and the helper did not do text decode; it is not a failure/exit status. The final screen is the Settings > General > About page, showing version 16.7.16, model iPhone X, 17 GB capacity, and 4.09 GB available.
+- UI milestones: Home Screen at `snap010`, full-color screen after a touch wake at `snap011`, Settings at `snap015`, General at `snap018`, and About in the final `fb.png`. QMP input logs include `SWEET HID: touch` down/up coordinates; one hour elapsed without an observed kernel panic/reset. This establishes a usable rendered menu and navigation during the run.
+- Limit: the UI dimmed while idle, multiple unsupported widget/daemon processes timed out or restarted, and the one-hour soak does not prove every service is stable. Input launches and Settings navigation worked; the About page was visible at shutdown. The disk was attached with `--disk-snapshot`, so guest writes were discarded. `root-0084i.img` stayed 17,179,869,184 bytes with its original 03:54 timestamp; preserved base image stayed 17,179,869,184 bytes with its 16:48 timestamp. No phone/Android partition was touched.
+- Next test: use CI kernel 0088 (SHA-256 `c60afe065a1ef70a0cab2f2a333b762e1383204c919168f94328accf86aae8d8`) with `payload-0088-smp4.bin` and `--smp 4` for a short separate boot on baseline `root-0084i.img`, always with `--disk-snapshot`. Verify all four CPU bring-up messages and no panic; then compare one-vCPU root-0084i versus root-0084j only if useful.
+
 ### >>> UPDATE 2026-10-25 (Home Screen visible; touch wakes display) <<<
 
 **STATE: The current 0086 one-vCPU guest reached an actual iOS Home Screen at guest ~2,528 seconds during the one-hour QEMU soak. The display had dimmed to near-black; one QMP absolute-pointer/left-button event woke it and produced a bright Home Screen. No kernel panic has been observed.**
