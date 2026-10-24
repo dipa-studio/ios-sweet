@@ -1,13 +1,21 @@
+### >>> UPDATE 2026-10-25 (QEMU PSCI conduit correction) <<<
+
+**STATE: QEMU SMP requires a second kernel change beyond MPIDR matching: QEMU 11.1's generated `/psci` DTB says `method = hvc`, but SWEET's phone path issues `smc #0`. Patch 0088 selects HVC only with the QEMU `virtio_blk=1` boot argument; the phone retains SMC.**
+
+- The `research/vm/qemu-smp4.dtb` generated with the installed QEMU 11.1.2 executable confirms both CPU `reg` IDs `0..3` and PSCI `method = hvc`. Patch `0088-sweet-qemu-psci-hvc.patch` adds the QEMU-specific conduit selection in `sweet_psci_cpu_on()`.
+- Patch 0088 applies cleanly to the staged XNU source after patch 0087. Both patches must be in the CI-built kernel before any SMP test. Run `40134194926` is building commit `9d50467` without the HVC change; the next push will supersede it under the workflow's cancel-in-progress rule and build the complete patch series.
+- The one-hour QEMU soak is still the existing one-vCPU run and is unaffected by these code changes.
+
 ### >>> UPDATE 2026-10-25 (QEMU SMP topology identified during 20H392 soak) <<<
 
 **STATE: The one-hour single-vCPU QEMU soak remains active. QEMU 11.1's generated `virt` DTB assigns MPIDR Aff0 values 0, 1, 2, 3 to four vCPUs, while SWEET's phone topology uses Aff1 (`core << 8`). A matching ADT and opt-in kernel path are now prepared locally; the SMP kernel still needs CI and a separate boot test.**
 
 - At host 04:23, sampler snapshot `research/vm/run20h-hour/snap006` captured guest ~1,345 seconds. It shows Apple logo pixels, `SpringBoard`, `backboardd`, and `lsd` still running, and no panic text in the msgbuf. Earlier captures were black; this is intermittent framebuffer state, not yet a usable menu.
 - Confirmed CPU IDs empirically from QEMU 11.1 by dumping `virt,gic-version=3 -smp 4` DTB to `research/vm/qemu-smp4.dtb`: `/cpus/cpu@0..3` have `reg` values 0..3. The default one-vCPU ADT is unchanged; phone ADT nodes retain `core << 8`.
-- Added local `tools/mkadt.py --qemu-cpus N` support and patch `0087-sweet-qemu-smp-mpidr.patch`. The patch accepts Aff0 only when `virtio_blk=1` is present; the phone keeps the Aff1 validation. `git apply --check` passes against the staged 0084 SweetCPU source. SMP requires this patch, a new CI kernel, a matching ADT, and a separate QEMU run; do not use the current 0086 kernel with an SMP ADT.
+- Added `tools/mkadt.py --qemu-cpus N` support and patch `0087-sweet-qemu-smp-mpidr.patch`. The patch accepts Aff0 only when `virtio_blk=1` is present; the phone keeps the Aff1 validation. `git apply --check` passes against the staged 0084 SweetCPU source. SMP requires patches 0087 and 0088, a new CI kernel, a matching ADT, and a separate QEMU run; do not use the current 0086 kernel with an SMP ADT.
 - `wsl -d Ubuntu` is available with the HFS+-capable WSL kernel. `fsck.hfsplus -fn` on the disposable Data-directory candidate reports the known “Volume header needs minor repair” read-only finding; the earlier repairing check returned volume OK. No mount/write was performed in this check.
 - WSL `python3 -X utf8 tools/validate-repo.py` passes 87 contiguous patches, 15 Python tools, and 7 shell scripts. The equivalent native Windows validator needs UTF-8 and a POSIX path; its first invocation failed for environment reasons, not a source or syntax failure.
-- Next: commit/push patch 0087 and the generator/docs changes to the fork, dispatch `xnu.yml`, then use the resulting kernel and `--qemu-cpus 4` ADT for an isolated SMP experiment after the current one-hour soak. Keep all QEMU disk use on disposable copies with `--disk-snapshot`.
+- Next: push patch 0088 so CI builds the complete SMP path, then use the resulting kernel and `--qemu-cpus 4` ADT for an isolated SMP experiment after the current one-hour soak. Keep all QEMU disk use on disposable copies with `--disk-snapshot`.
 
 ### >>> UPDATE 2026-10-25 (20H392 QEMU one-hour soak and Data-directory A/B) <<<
 
