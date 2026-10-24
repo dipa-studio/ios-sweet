@@ -1,6 +1,6 @@
 ### >>> UPDATE 2026-10-25 (QEMU injection trace and dyld policy) <<<
 
-**STATE: CI 40118085548 built 0085 successfully; safe QEMU run `run0085b` loaded policy `AMFI` and launched SpringBoard without panic, but showed boot text only. Patch 0086 adds bounded opt-in tracing for dyld AMFI calls; CI 40119764250 is running.**
+**STATE: CI 40118085548 built 0085 successfully; safe QEMU run `run0085b` loaded policy `AMFI` and launched SpringBoard without panic, but showed boot text only. Initial CI 40119764250 for AMFI tracing failed to compile because `struct proc` is incomplete in this file; patch 0086 is corrected to log a request counter without dereferencing `proc`.**
 
 - CI **40115670775** succeeded at commit `4e7586c0c2145cc792f2858c7f4f81f352d2bff1`. The diagnostic kernel is 17,208,400 bytes, SHA-256 `d4eff8d79b475ecad919d3ad2041a4aa72912503ee000e2b83bd493f6ed236c0`, matching its artifact manifest. It adds opt-in boot arg `exec_inject_trace=1` and logs each matched process/library pair.
 - QMP read of the guest kernel buffer confirmed `/etc/inject.conf` was written intact to `kern.exec_inject`: `/redwood/lib/libredwood.dylib backboardd containermanagerd containermanagerd_system; /redwood/lib/libredwood-sb.dylib SpringBoard; /redwood/lib/libredwood-media.dylib mediaserverd`.

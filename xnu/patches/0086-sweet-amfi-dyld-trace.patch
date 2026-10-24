@@ -16,8 +16,7 @@
 +static unsigned int sweet_amfi_trace_count;
 +
  static int
--sweet_amfi_policy_syscall(__unused struct proc *p, int call, user_addr_t arg)
-+sweet_amfi_policy_syscall(struct proc *p, int call, user_addr_t arg)
+ sweet_amfi_policy_syscall(__unused struct proc *p, int call, user_addr_t arg)
  {
  	struct {
  		uint64_t input_flags;
@@ -39,8 +38,8 @@
 -		return copyout(&flags, args.output_flags, sizeof(flags));
 +		if (sweet_amfi_trace_enabled && sweet_amfi_trace_count < 16) {
 +			sweet_amfi_trace_count++;
-+			printf("SWEET AMFI DYLD POLICY: pid %d input %#llx output %#llx error %d\n",
-+			    p->p_pid, (unsigned long long)args.input_flags,
++			printf("SWEET AMFI DYLD POLICY: request %u input %#llx output %#llx error %d\n",
++			    sweet_amfi_trace_count, (unsigned long long)args.input_flags,
 +			    (unsigned long long)flags, error);
 +		}
 +		return error;
