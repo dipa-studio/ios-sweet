@@ -7,6 +7,21 @@
 **STATE: desktop QEMU VM path implemented and CI-built; Windows kernel
 smoke test reaches root selection. Full iOS root boot is still pending.**
 
+- **Source availability clarified / pushed-content audit (2026-10-24):**
+  user confirmed they do not have the historical Linux/WSL image. Treat
+  old `/run/media/dipa/...` paths as upstream handoff history, not evidence
+  of artifacts available to this user. `git fetch fork` leaves `fork/main`
+  at `55f9da1`. Pushed content includes patches 0001-0082, shim sources,
+  tools (including `mkiosroot.sh`, `sweet-root-tweaks.py`, `remotezip.py`),
+  docs/site and the kernel CI workflow. No Apple root image is tracked.
+  Before this note, HEAD had 6 unpushed commits through `4f3e77e`; their
+  changed files are NOTES.md, docs/QEMU_VM.md and tools/qemu-sweet.py.
+  Next concrete route: download iPhone X iOS 16.7.16 (20H392) IPSW from
+  Apple's CDN, extract OS/SystemOS/AppOS and D22AP device tree, provision
+  a Linux build environment for `mkiosroot.sh` + root tweaks, then boot
+  a copy of the resulting HFS+ image in the existing Windows QEMU.
+  No IPSW download or Linux installation has started yet.
+
 - **WSL source recheck (2026-10-24):** `wsl --list --verbose` still
   reports WSL is not installed. No distro entries were returned from the
   current user's Lxss registry key, matching distro Appx packages, or
