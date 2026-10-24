@@ -2,8 +2,8 @@
 
 This is the VirtualBox-shaped path: the iOS root filesystem is a raw HFS+
 image on the host, and QEMU attaches it to the guest as a virtio-blk disk.
-The emulator does not embed, rebuild or modify the image; the phone's boot
-path (`rd=ufsroot0`) is unchanged.
+The runner loads the kernel separately and attaches the image as a writable
+disk. Use a copy of the root image for guest writes.
 
 Status: patch `0082-sweet-qemu-vm.patch` adds the disk, input and display
 devices. This is desktop QEMU first. It does **not** produce an Android APK
@@ -35,7 +35,23 @@ captured CPU/framebuffer/IOKit initialization. A 60-second run with
 `IOFindBSDRoot: SWEET virtio-blk root vblk0 unavailable: 6`, because no disk
 was attached. QMP register and framebuffer capture worked; `serial.txt`
 was empty. These runs verify initial kernel execution, not an iOS boot
-or working input/display interaction. Full root boot is still pending.
+or working input/display interaction. Those smoke tests had no root disk.
+
+A subsequent Windows test with a 16 GiB root built from the iPhone X
+20H392 IPSW mounted `/dev/vblk0` read-write, ran Apple launchd and the boot
+tasks, and displayed the Apple boot logo through backboardd/ramfb. The
+first 30-minute TCG run did not reach the lock screen. A boot logo is not
+evidence of a completed GUI boot; keep the framebuffer and kernel log.
+
+For building the image in WSL, check `grep hfsplus /proc/filesystems`
+before running `mkiosroot.sh`. The stock WSL 6.18.54.1 kernel lacks HFS+;
+this test used the matching Microsoft kernel source with
+`CONFIG_HFSPLUS_FS=y`. Follow Microsoft's
+[custom WSL kernel instructions](https://github.com/microsoft/WSL2-Linux-Kernel)
+if your kernel lacks the driver. apfs-fuse reads the IPSW components;
+hfsprogs and the HFS+ driver create and populate the destination image.
+The repository keeps shell scripts in LF format so WSL can execute a
+Windows checkout. No phone flashing is needed for this VM workflow.
 
 ## What the virtual machine uses
 

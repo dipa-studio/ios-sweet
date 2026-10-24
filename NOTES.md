@@ -7,6 +7,29 @@
 **STATE: Windows QEMU mounts the iOS HFS+ root read/write and runs Apple
 launchd. Full iOS GUI boot is not yet verified.**
 
+- **0083 CI passed / diagnostic boot running (2026-10-24):** run
+  **40086195783** succeeded for head `e0d5c16`; full kernel compile/link
+  passed. Artifact downloaded to `xnu/out-0083/`. Kernel = 17,207,128 bytes,
+  SHA-256 `59079144dda9ffb00540897503c02060329b66ac13417cc53d70d90d4accdc93`,
+  matching the artifact SHA256SUMS. Cancelled stale run 40086122663 ended
+  cancelled. Second 0082 boot was stopped deliberately with QMP quit at
+  guest ~708 s, still tracing IOAcceleratorES lookups, before a GUI appeared;
+  QEMU exited 0, runner exit 1 reflects its generic qemu_exited handling.
+  Final pre-stop evidence at `research/vm/run2/snap005/`.
+  Built `research/vm/payload-0083.bin` with one clean set of boot args:
+  no kprintf spam flag, sweetfb_noconsole=1, sweetfb_hz=10,
+  sweetsample=SpringBoard,backboardd and sweetiolog=-, plus normal virtio
+  root/input/ramfb args. Third boot is running in `research/vm/run3/`,
+  --secs 1800 --tb-mb 512. Use snapshot-qemu.py OUT
+  xnu/out-0083/kernel.development.sweet so symbols match this kernel.
+- **Symbolication ready:** ipsw Windows CLI v3.1.739 at
+  `research/ipsw-tools/bin/ipsw.exe`, release archive checksum verified.
+  Shared cache extracted from the SystemOS DMG: `research/dsc/`, 44 files,
+  3,330,359,296 bytes. Lookup of unslid 0x1c2611d98 resolves `_read + 8` in
+  libsystem_kernel.dylib, consistent with driverkitd's captured PC/slide.
+  A temporary duplicate exists in WSL `/research/dsc` from inline shell
+  argument expansion; neither cache is in git. WSL shut down after copy.
+
 - **First 30-minute VM test ended; diagnosing GUI wait (2026-10-24):**
   Windows QEMU 0082 finished the --secs 1800 test (runner exit 0,
   result.json `not_decoded`, not a GUI success signal). `run/snap005/`
