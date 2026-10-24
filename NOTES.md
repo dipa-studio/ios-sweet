@@ -5,19 +5,20 @@
 ### >>> UPDATE 2026-10-24 (read first) <<<
 
 **STATE: Windows QEMU mounts the iOS HFS+ root read/write and runs Apple
-launchd. Full iOS GUI boot is not yet verified. Kernel 0084 CI passed, but
-the exec injection part of its patch is not yet verified in the binary.**
+launchd. Full iOS GUI boot is not yet verified. Corrected patch 0084 is pushed;
+the new CI build must pass before a QEMU run.**
 
-- **0084 CI / injection verification and HackiOS integration (2026-10-24):**
+- **0084 patch correction / HackiOS integration (2026-10-24):**
   Run **40090859596** completed successfully for commit `4139e142f201e8d7984c8b9f67d7d8cbf76049ff`;
   the artifact kernel is 17,207,128 bytes. `4139e14` is pushed to fork/main.
-  The binary contains `systrace` and `spawn_persona_adopt`, but those strings
-  alone do not prove every 0084 hunk was applied. A binary string scan did not
-  find `exec_inject`, `DYLD_INSERT_LIBRARIES`, or `applog_name`; therefore the
-  `kern.exec_inject` implementation is **not verified**, despite the green CI.
-  Retrieve/inspect the CI build-tree patched `bsd/kern/kern_exec.c` or patch
-  application log before using this kernel for injection. Do not claim 0084
-  injects libraries until that check passes. No QEMU boot with 0084 has run.
+  Inspection of its build-tree artifact showed `bsd/kern/kern_exec.c` lacked
+  `exec_inject_env` and `DYLD_INSERT_LIBRARIES`: the patch had malformed hunk
+  counts, and upstream `build.sh` warned then skipped it while still building.
+  The patch has now been regenerated from the exact CI source tree and checked
+  with `git apply --check`. `tools/validate-repo.py` now checks unified hunk
+  counts, and the workflow makes failed patch application fatal. These fixes
+  are pending the next fork CI run; do not use the old 0084 artifact for
+  injection. No QEMU boot with corrected 0084 has run.
   The earlier explanation that unsupported daemons, personas, or activation
   caused the run3 stall was a hypothesis, not an observed diagnosis. Observed:
   launchd's sampled dyld stack was in `preflightCacheFile`/`fcntl`, and a saved

@@ -48,6 +48,18 @@ jobs:
           git -C dxb checkout -q FETCH_HEAD
           # 12.5-14.3 use the top-level patches dir; ours go next to blacktop's
           cp xnu/patches/*.patch xnu/patches/*.sh dxb/patches/
+          # The upstream helper only warns and continues when a patch fails to apply.
+          # Make CI fail instead, so a green kernel build proves the patches were used.
+          python3 - <<'PY'
+          from pathlib import Path
+          build = Path("dxb/build.sh")
+          source = build.read_text()
+          old = 'warning "Skipping patch ${PATCH} (already upstream, previously applied, or malformed): ${APPLY_CHECK}"'
+          new = 'printf "Required XNU patch failed to apply: %s\\n%s\\n" "$PATCH" "$APPLY_CHECK" >&2; exit 1'
+          if source.count(old) != 1:
+              raise SystemExit("Could not install strict patch-application check")
+          build.write_text(source.replace(old, new))
+          PY
           # libfirehose_kernel is built arm64e-only; the SWEET kernel is plain arm64
           sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
           grep -c 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh

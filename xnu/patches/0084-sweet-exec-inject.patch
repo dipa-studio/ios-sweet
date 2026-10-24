@@ -1,6 +1,6 @@
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -1157,6 +1157,9 @@ SYSCTL_PROC(_vm, OID_AUTO, shared_region_control,
+@@ -1157,6 +1157,9 @@
   *		activators should not be given the opportunity to attempt
   *		to activate the image.
   */
@@ -10,7 +10,7 @@
  static int
  exec_mach_imgact(struct image_params *imgp)
  {
-@@ -1315,6 +1318,9 @@ grade:
+@@ -1315,6 +1318,9 @@
  	 * Actually load the image file we previously decided to load.
  	 */
  	lret = load_machfile(imgp, mach_header, thread, &map, &load_result);
@@ -19,7 +19,8 @@
 +	}
  	if (lret != LOAD_SUCCESS) {
  		error = load_return_to_errno(lret);
-@@ -2197,6 +2203,9 @@ again:
+ 
+@@ -2197,6 +2203,9 @@
  	}
  
  	error = exec_check_permissions(imgp);
@@ -29,11 +30,10 @@
  	if (error) {
  		goto bad;
  	}
-@@ -2640,6 +2649,57 @@ done:
- 	return ret;
+@@ -2623,6 +2632,57 @@
  }
  
-+/*
+ /*
 + * Bring-up aid, boot-arg applog=1: what applications and other programs started without a
 + * terminal say is worth reading here. Their standard output and error, which launchd opens on
 + * /dev/null, go to the console instead (that shows NSLog and the "Terminating app due to
@@ -84,10 +84,11 @@
 +	return path;
 +}
 +
- /*
++/*
   * exec_handle_file_actions
   *
-@@ -2709,7 +2769,7 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
+  * Description:	Go through the _posix_file_actions_t contents applying the
+@@ -2691,7 +2751,7 @@
  			AUDIT_SUBCALL_ENTER(OPEN, p, uthread);
  
  			NDINIT(ndp, LOOKUP, OP_OPEN, FOLLOW | AUDITVNPATH1, UIO_SYSSPACE,
@@ -96,7 +97,7 @@
  			    imgp->ip_vfs_context);
  
  			error = open1(imgp->ip_vfs_context, ndp,
-@@ -3094,10 +3154,16 @@ spawn_validate_persona(struct _posix_spawn_persona_info *px_persona)
+@@ -3076,10 +3136,16 @@
  	int error = 0;
  	struct persona *persona = NULL;
  
@@ -117,7 +118,7 @@
  	if (px_persona->pspi_flags & POSIX_SPAWN_PERSONA_GROUPS) {
  		if (px_persona->pspi_ngroups > NGROUPS_MAX) {
  			return EINVAL;
-@@ -3105,12 +3171,6 @@ spawn_validate_persona(struct _posix_spawn_persona_info *px_persona)
+@@ -3087,12 +3153,6 @@
  	}
  
  	persona = persona_lookup(px_persona->pspi_id);
@@ -130,7 +131,7 @@
  	if (persona) {
  		persona_put(persona);
  	}
-@@ -3130,9 +3190,6 @@ spawn_persona_adopt(proc_t p, struct _posix_spawn_persona_info *px_persona)
+@@ -3112,9 +3172,6 @@
  	 * the kauth with a different UID/GID combo
  	 */
  	persona = persona_lookup(px_persona->pspi_id);
@@ -140,10 +141,12 @@
  
  	cred = kauth_cred_proc_ref(p);
  
-@@ -3158,6 +3215,48 @@ spawn_persona_adopt(proc_t p, struct _posix_spawn_persona_info *px_persona)
+@@ -3138,6 +3195,27 @@
+ 		    px_persona->pspi_groups,
+ 		    px_persona->pspi_ngroups,
  		    px_persona->pspi_gmuid);
- 	}
- 
++	}
++
 +	if (persona == NULL) {
 +		__block kauth_cred_t new_cred = cred;
 +		__block uid_t old_ruid = KAUTH_UID_NONE;
@@ -152,8 +155,8 @@
 +		(void)proc_update_label(p, true, ^kauth_cred_t (kauth_cred_t cur_cred) {
 +			old_ruid = kauth_cred_getruid(cur_cred);
 +			if (new_cred != cur_cred) {
-+			        kauth_cred_ref(new_cred);
-+			        kauth_cred_unref(&cur_cred);
++					kauth_cred_ref(new_cred);
++					kauth_cred_unref(&cur_cred);
 +			}
 +			return new_cred;
 +		});
@@ -163,12 +166,10 @@
 +			(void)chgproccnt(old_ruid, -1);
 +		}
 +		return 0;
-+	}
-+
- 	ret = persona_proc_adopt(p, persona, cred);
+ 	}
  
- 	kauth_cred_unref(&cred);
-@@ -5586,10 +5685,75 @@ bad:
+ 	ret = persona_proc_adopt(p, persona, cred);
+@@ -5568,10 +5646,75 @@
   * Note:	The argument and environment vectors are user space pointers
   *		to arrays of user space pointers.
   */
@@ -244,7 +245,7 @@
  	int error = 0;
  	int     ptr_size = (imgp->ip_flags & IMGPF_WAS_64BIT_ADDR) ? 8 : 4;
  	int new_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT_ADDR) ? 8 : 4;
-@@ -5759,6 +5923,33 @@ exec_extract_strings(struct image_params *imgp)
+@@ -5741,6 +5884,32 @@
  		imgp->ip_envc++;
  	}
  
@@ -274,3 +275,6 @@
 +		imgp->ip_argspace -= new_ptr_size;
 +		imgp->ip_envc++;
 +	}
+ 	/* Save space for envv[] NULL terminator */
+ 	if (imgp->ip_argspace < new_ptr_size) {
+ 		error = E2BIG;
