@@ -7,6 +7,18 @@
 **STATE: desktop QEMU VM path implemented and CI-built; Windows kernel
 smoke test reaches root selection. Full iOS root boot is still pending.**
 
+- **WSL checkout fix / next payload ready (2026-10-24):** validation from
+  Windows selected WSL bash and could not interpret Windows paths; running
+  it in WSL then exposed CRLF syntax failures in all 7 tracked shell scripts.
+  Added `.gitattributes` (`*.sh text eol=lf`) and converted those scripts to
+  LF without changing their logic. WSL `python3 tools/validate-repo.py` now
+  passes 82 patches, 15 Python tools, 7 shell scripts. Generated
+  `research/vm/qemu.adt` (--qemu --highmem, 7,032 bytes) and
+  `research/vm/payload.bin` (16,608,976 bytes) with 0082 + complete D22AP
+  product data, rd=vblk0/rootrw/virtio/input/ramfb/cpus=1. Root copy stage
+  is currently copying OS contents into the mounted base image; no boot
+  attempted against that incomplete image.
+
 - **WSL HFS+ working; root image build started (2026-10-24):** custom
   kernel compiled/linked successfully (`make bzImage`, 2,859 compile lines).
   `research/wsl-kernel/bzImage-hfsplus` = 13,788,160 bytes, SHA-256
