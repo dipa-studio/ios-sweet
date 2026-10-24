@@ -1,3 +1,13 @@
+### >>> UPDATE 2026-10-25 (four-vCPU kernel smoke test) <<<
+
+**STATE: Kernel 0088 completed four-vCPU initialization in QEMU and ran for the full five-minute smoke-test timeout without an observed panic. XNU reports `4/4 CPUs initialized, SGI1 verified`; SpringBoard/backboardd and framebuffer swaps follow. The Apple logo is visible around guest 160 s, then the final framebuffer is black. The 4-vCPU Home Screen is not yet verified.**
+
+- Run directory `research/vm/run20h-smp4/`, started 05:01:27 and completed at the five-minute timeout. The required one-hour single-vCPU run already completed separately; this is an additional SMP smoke test.
+- At guest 1.668 s, all CPUs 0-3 came online. CPU_ON targets `0x1`, `0x2`, `0x3` each returned PSCI `rc=0`; `initCPU` ran on each secondary and SGI1 verification passed. QEMU-generated ADT CPU IDs 0-3 and PSCI HVC matched patches 0087/0088.
+- At guest 50.7 s SpringBoard executed; backboardd at 56.2 s; display on at 126.6 s; swaps on 1125x2436 surfaces through guest 147 s. Snapshot `snap003/fb.png` around guest 160 s is the Apple logo, while `snap004/fb.png` near guest 228 s and final `fb.png` at the timeout are black. The msgbuf through guest ~228 s has no panic; `result.json: not_decoded` means the runner captured a still-running guest at timeout, not an early QEMU exit.
+- Test used `--disk-snapshot` on `root-0084i.img`; no QEMU process remains. Root clone remains 17,179,869,184 bytes with its pre-test 03:54 timestamp; the preserved base remains 17,179,869,184 bytes with its pre-test 16:48 timestamp.
+- Next: if further SMP UI work is continued, investigate why the framebuffer dims/blanks after Apple logo and repeat with a longer 4-vCPU run after improving the first-boot Data state. The one-vCPU run has already shown the Home Screen and Settings > General > About, including the iOS 16.7.16 page, during an hour-long run.
+
 ### >>> UPDATE 2026-10-25 (one-hour QEMU soak reached About screen) <<<
 
 **STATE: The requested one-hour QEMU test completed at its 3,600-second host timeout. iOS 16.7.16 is visibly running: QMP touch opened Settings, General, and About; the final framebuffer shows the About page with iOS 16.7.16 / iPhone X. QEMU was still alive at timeout and was stopped only after the final capture.**
