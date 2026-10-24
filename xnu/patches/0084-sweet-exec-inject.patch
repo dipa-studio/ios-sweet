@@ -169,7 +169,7 @@
  	}
  
  	ret = persona_proc_adopt(p, persona, cred);
-@@ -5568,10 +5646,75 @@
+@@ -5568,10 +5646,79 @@
   * Note:	The argument and environment vectors are user space pointers
   *		to arrays of user space pointers.
   */
@@ -184,6 +184,7 @@
 + * etc/inject.conf) before it hands over to launchd.
 + */
 +static char exec_inject_conf[512];
++static TUNABLE(uint32_t, exec_inject_trace, "exec_inject_trace", 0);
 +SYSCTL_STRING(_kern, OID_AUTO, exec_inject, CTLFLAG_RW | CTLFLAG_LOCKED, exec_inject_conf, sizeof(exec_inject_conf),
 +    "LIBRARY NAME... [; LIBRARY NAME...]: programs started with the library inserted");
 +
@@ -233,6 +234,9 @@
 +			env[used] = 0;
 +			any = true;
 +		}
++	}
++	if (any && exec_inject_trace) {
++		printf("SWEET INJECT: %.*s -> %s\n", (int)namelen, name, env + sizeof("DYLD_INSERT_LIBRARIES=") - 1);
 +	}
 +	return any;
 +}
