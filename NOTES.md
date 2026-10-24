@@ -1,3 +1,12 @@
+### >>> UPDATE 2026-10-25 (SMP kernel CI passed; payload prepared) <<<
+
+**STATE: CI run 40134272436 succeeded for commit `339a864` (patches 0087 + 0088). The new kernel artifact is checksum-verified. A matching four-vCPU high-memory QEMU ADT and payload are prepared, but no SMP guest boot has been started yet.**
+
+- Artifact downloaded to `xnu/out-0088/`; `kernel.development.sweet` is 17,208,536 bytes, SHA-256 `c60afe065a1ef70a0cab2f2a333b762e1383204c919168f94328accf86aae8d8`, matching `SHA256SUMS`.
+- Prepared `research/vm/qemu-smp4-high.adt` using `--qemu --highmem --qemu-cpus 4`, and `research/vm/payload-0088-smp4.bin` from the CI kernel with the same diagnostic boot args as the current soak except `cpus=4`. Payload RAM base/size match the active high-memory layout (`0x100000000` / `0xfcb00000`); runner materialization confirms the boot args still contain `cpus=4`.
+- Current one-hour run remains kernel 0086, one CPU, on `root-0084i.img` with `--disk-snapshot`. Snapshot `snap008` at guest ~1,825 s is black. It continues launching services; the ring msgbuf contains sampler samples through 14 and no panic in the captured text. Soak target is host 05:00:36 Asia/Jakarta.
+- Next: let the soak hit its full hour; then run the prepared four-vCPU payload for a short isolated boot with `--disk-snapshot` and the baseline `root-0084i.img`. If QEMU reaches kernel CPU startup, check each secondary's PSCI/HVC result and `SGI1 OK` before assessing UI performance. Follow with the data-directory candidate only if time and traces support it.
+
 ### >>> UPDATE 2026-10-25 (QEMU PSCI conduit correction) <<<
 
 **STATE: QEMU SMP requires a second kernel change beyond MPIDR matching: QEMU 11.1's generated `/psci` DTB says `method = hvc`, but SWEET's phone path issues `smc #0`. Patch 0088 selects HVC only with the QEMU `virtio_blk=1` boot argument; the phone retains SMC.**
