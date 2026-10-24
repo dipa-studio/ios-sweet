@@ -5,21 +5,33 @@
 ### >>> UPDATE 2026-10-24 (read first) <<<
 
 **STATE: Windows QEMU mounts the iOS HFS+ root read/write and runs Apple
-launchd. Full iOS GUI boot is not yet verified.**
+launchd. Full iOS GUI boot is not yet verified. Kernel 0084 CI passed, but
+the exec injection part of its patch is not yet verified in the binary.**
 
-- **0084 exec_inject & HackiOS userland integration plan (2026-10-24):**
-  Identified root cause of run3 GUI stall: stock iOS launchd thrashes on >500
-  unsupported daemons, containermanagerd deadlocks waiting for user personas,
-  and SpringBoard blocks on unactivated mobileactivationd. Stock launchd strips
-  DYLD_INSERT_LIBRARIES so userland shims cannot be loaded from plist alone.
-  User supplied hackios-xnu-kernel and hackios-xnu-userland trees which solve
-  this via kern.exec_inject in the kernel, stage0/init curated jobs, and
-  injected shims (libredwood.dylib, libredwood-sb.dylib, libredwood-media.dylib).
-  Created patch `0084-sweet-exec-inject.patch` adding kern.exec_inject sysctl,
-  applog console redirection, systrace tunable, and persona override to
-  `bsd/kern/kern_exec.c`. Passed `validate-repo.py` for all 84 patches.
-  Committed `4139e14` and pushed to fork/main; dispatched CI run **40090859596**.
-  Target roadmap expanded to universal iOS emulation (ios-emulator.apk).
+- **0084 CI / injection verification and HackiOS integration (2026-10-24):**
+  Run **40090859596** completed successfully for commit `4139e142f201e8d7984c8b9f67d7d8cbf76049ff`;
+  the artifact kernel is 17,207,128 bytes. `4139e14` is pushed to fork/main.
+  The binary contains `systrace` and `spawn_persona_adopt`, but those strings
+  alone do not prove every 0084 hunk was applied. A binary string scan did not
+  find `exec_inject`, `DYLD_INSERT_LIBRARIES`, or `applog_name`; therefore the
+  `kern.exec_inject` implementation is **not verified**, despite the green CI.
+  Retrieve/inspect the CI build-tree patched `bsd/kern/kern_exec.c` or patch
+  application log before using this kernel for injection. Do not claim 0084
+  injects libraries until that check passes. No QEMU boot with 0084 has run.
+  The earlier explanation that unsupported daemons, personas, or activation
+  caused the run3 stall was a hypothesis, not an observed diagnosis. Observed:
+  launchd's sampled dyld stack was in `preflightCacheFile`/`fcntl`, and a saved
+  kernel stack showed preemption; the GUI never appeared in the captured run.
+
+  The user-provided HackiOS repositories were inspected. Their `init` expects
+  APFS, bindfs, `kern.apfs_synthetic`, `kern.redwood_switch_root`, a stage0
+  ramdisk layout, and the corresponding Redwood kernel drivers. The current
+  ios-sweet root is HFS+ and the current kernel/root do not provide that full
+  interface. Prebuilt Redwood libraries are present in the supplied tree, but
+  have not been installed or configured in the iOS root. A full userland port
+  is therefore still required; copying dylibs alone is not integration.
+  The broader target is a portable iOS VM and eventually `ios-emulator.apk`;
+  that APK is a roadmap goal, not a completed capability.
 
 - **0083 CI passed / diagnostic boot running (2026-10-24):** run
   **40086195783** succeeded for head `e0d5c16`; full kernel compile/link
