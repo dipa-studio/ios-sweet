@@ -8,6 +8,16 @@
 - The QEMU disk snapshot left `root-0084h.img` unchanged (timestamp stayed 2026-10-25 00:46); `fsck.hfsplus -fy` after the run reports the volume OK. The preserved base image is untouched. `tools/qemu-sweet.py` now supports `--disk-snapshot`.
 - Next: adapt/rebuild Redwood userland hooks for the 20H392 system binaries, then repeat the QEMU snapshot boot. Keep Android/device partitions out of this test.
 
+### >>> UPDATE 2026-10-25 (16.7.16 compatibility check) <<<
+
+**STATE: iOS 16.7.16 (20H392) remains the QEMU target; 16.5 is not required to prove kernel/early-userland boot. The current root reaches SpringBoard/backboardd without panic, but the supplied Redwood hooks are built around iOS 16.5 (20F66) addresses and do not yet provide a usable GUI on 20H392.**
+
+- User confirmed to proceed with existing 16.7.16 IPSW/root and will handle any separate IPSW download themself. No IPSW was downloaded by this investigation.
+- Compared the runtime IMP addresses printed by Redwood in `research/vm/run0086b/snap001/fb.txt` against the extracted 20H392 dyld shared cache in `research/dsc/`. `ipsw dyld a2s` resolved all 14 reported SpringBoard/UIKit/CoverSheet/SplashBoard hook IMPs to the exact corresponding Objective-C methods in `__TEXT.__text` (including `_setupActivationState`, `_setSetupRequiredReason:`, `batteryLevel`, `batteryState`, and snapshot-format hook). This confirms that dylib loading works and the current failure is expected-address mismatch in the 20F66-built Redwood libraries, not a reason to replace the iOS 16.7.16 root.
+- The old QuartzCore window-server vtable assumptions also fail on 20H392: QEMU reports incomplete hooks and some values from the stale table slots are not plausible code addresses. Do not replace these blindly; resolve the 20H392 vtable layout and slot targets before enabling writes.
+- REA `open_binary` accepted extracted `SpringBoard` (SHA-256 `e27c490ab796b542e5bf8e221c2f2c898658ccea9054fb766dc95127d93ded06`), but REA's Mach-O/deep inspection had no compatible local provider (Ghidra not configured; native macOS provider unavailable). The REA target was closed. The address comparison above is from the already installed `ipsw` CLI and dyld cache, not REA Evidence. No REA/client configuration or analyzer was installed.
+- Next safe work: port the verified 20H392 Objective-C IMP constants, resolve QuartzCore's current C++ vtables and methods, rebuild the Redwood dylibs for arm64, place them only on a disposable HFS+ copy, and run QEMU with `--disk-snapshot`. Recheck HFS+ after QEMU exits. Do not touch the preserved base image or any device partitions.
+
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
 ## Agent handoff / active work (2026-10-15, latest)
