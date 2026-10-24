@@ -7,6 +7,22 @@
 **STATE: desktop QEMU VM path implemented and CI-built; Windows kernel
 smoke test reaches root selection. Full iOS root boot is still pending.**
 
+- **Root populated and provisioned (2026-10-24):** all three APFS source
+  copies and cryptex links completed. Initial build stopped at
+  `install: invalid user: '272'`: Ubuntu 26.04 ships uutils coreutils 0.8.0,
+  whose install rejects an Apple numeric owner absent from Ubuntu's passwd.
+  Changed mkiosroot.sh to create log paths with install, then chown 272:272
+  separately. Resumed only the provisioning tail on the existing image
+  via ignored `research/resume-root.sh`; no large data recopy. Its log is
+  `/root/ios-sweet-host/root-resume.log`. Verified log directories 272:272
+  mode 751/755 and .migrated marker mode 644. Applied sweet-root-tweaks.py.
+  Initial fsck repaired the known non-ASCII filename normalization issue;
+  after tweaks, two consecutive fsck.hfsplus -fy checks returned 0 and
+  "The volume iOSRoot appears to be OK." Image is unmounted. Native Windows
+  copy/hash is in progress: base `research/vm/ios16-root-20H392-base.img`,
+  test copy `research/vm/root.img`. Do not boot either until checksum
+  verification completes. No XNU patch change or additional CI run.
+
 - **WSL checkout fix / next payload ready (2026-10-24):** validation from
   Windows selected WSL bash and could not interpret Windows paths; running
   it in WSL then exposed CRLF syntax failures in all 7 tracked shell scripts.
