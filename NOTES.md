@@ -7,6 +7,14 @@
 **STATE: desktop QEMU VM path implemented and CI-built; Windows kernel
 smoke test reaches root selection. Full iOS root boot is still pending.**
 
+- **WSL source recheck (2026-10-24):** `wsl --list --verbose` still
+  reports WSL is not installed. No distro entries were returned from the
+  current user's Lxss registry key, matching distro Appx packages, or
+  `//wsl.localhost/`. Searches of D:, C:/Users and C:/ProgramData returned
+  no `.vhdx`, `.vhd`, `*rootfs*.tar*` or `*wsl*.tar*` files. Errors were
+  suppressed, so inaccessible directories remain unexamined. No WSL disk
+  was mounted, changed or copied. Need the actual source host/disk location.
+
 - **GitHub root-source check (2026-10-24):** user suggested the root might
   be a CI artifact. Paginated `gh api repos/OWNER/ios-sweet/actions/artifacts`
   lists 2 artifacts on zaidanfaiz (1 `xnu-kernel`, 1 `xnu-buildtree`) and
