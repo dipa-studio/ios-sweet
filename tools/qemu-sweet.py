@@ -75,18 +75,28 @@ def check_kernel_tools(kernel_path):
     return True
 
 
-def build_image(payload, extra_cmdline=''):
+def build_image(payload, extra_cmdline='', smp=1):
     """Return (phys_base, ram_image, boot_args_pa, entry_pa)."""
     magic, ver, nsegs = struct.unpack_from('<8sII', payload, 0)
     assert magic == b'SWEETXNU' and ver == 1, 'not a SWEETXNU v1 payload'
     virt_base, entry_va, adt_off, adt_size, kernel_end, phys_base, mem_size = \
         struct.unpack_from('<7Q', payload, 0x10)
-    cmdline = payload[0x48:0x48 + BOOT_LINE_LENGTH]
+    base = payload[0x48:0x48 + BOOT_LINE_LENGTH].split(b'\0', 1)[0].decode('latin1').split()
+    cpus_arg = f'cpus={smp}'
+    replaced = False
+    for i, arg in enumerate(base):
+        if arg.startswith('cpus='):
+            base[i] = cpus_arg
+            replaced = True
+            break
+    if not replaced:
+        base.append(cpus_arg)
+    cmdline = ' '.join(base)
     if extra_cmdline:
-        base = cmdline.split(b'\0', 1)[0].rstrip()
-        cmdline = (base + b' ' + extra_cmdline.encode()).strip()
-        cmdline = cmdline[:BOOT_LINE_LENGTH - 1] + b'\0'
-        cmdline = cmdline.ljust(BOOT_LINE_LENGTH, b'\0')
+        cmdline += ' ' + extra_cmdline
+    cmdline = cmdline.encode('latin1')
+    cmdline = cmdline[:BOOT_LINE_LENGTH - 1] + b'\0'
+    cmdline = cmdline.ljust(BOOT_LINE_LENGTH, b'\0')
     delta = phys_base - virt_base
     adt_pa = kernel_end + delta
     ba_pa = (adt_pa + adt_size + PAGE - 1) & ~(PAGE - 1)
@@ -235,6 +245,7 @@ def main():
     ap.add_argument('--gdb', action='store_true', help='start halted, gdb stub on :1234, no timeout')
     ap.add_argument('--hmp', action='append', default=[], help='extra monitor command run after stop (repeatable), e.g. "x /8gx 0xfffffe..."')
     ap.add_argument('--cpu', default='cortex-a76', help='QEMU CPU model (default: cortex-a76)')
+    ap.add_argument('--smp', type=int, default=1, help='QEMU/XNU CPU count (1-8; enables TCG multi-threading above 1)')
     ap.add_argument('--accel', default='tcg', help='QEMU accelerator (default: tcg; hvf on Apple Silicon with --cpu host)')
     ap.add_argument('--kernel', help='matching unstripped kernel, for exact framebuffer text decoding (uses llvm-nm)')
     ap.add_argument('--fail-on-panic', action='store_true', help='exit 2 for a visible panic, 3 for incomplete/blank decoding; requires --kernel')
@@ -262,6 +273,9 @@ def main():
     if a.fail_on_panic and not a.kernel:
         ap.error('--fail-on-panic requires --kernel')
 
+    if not 1 <= a.smp <= 8:
+        ap.error('--smp must be between 1 and 8')
+
     if not check_qemu_dependency(a.cpu):
         return 1
 
@@ -280,7 +294,7 @@ def main():
     os.makedirs(a.outdir, exist_ok=True)
     out = os.path.abspath(a.outdir).replace(os.sep, '/')
 
-    phys_base, img, ba_pa, entry_pa = build_image(payload, a.extra_cmdline)
+    phys_base, img, ba_pa, entry_pa = build_image(payload, a.extra_cmdline, a.smp)
     open(f'{out}/ram.bin', 'wb').write(img)
     open(f'{out}/stub.bin', 'wb').write(stub(ba_pa, entry_pa))
     print(f'phys_base={phys_base:#x} boot_args={ba_pa:#x} entry={entry_pa:#x}', file=sys.stderr)
@@ -315,14 +329,15 @@ def main():
     # virt RAM starts at 0x40000000: cover the payload's RAM (mkadt.py --highmem needs 8G).
     mem_size = struct.unpack_from('<Q', payload, 0x40)[0]
     ram_gib = max(4, -(-(phys_base + mem_size - 0x40000000) // (1 << 30)))
-    cmd = ['qemu-system-aarch64', '-M', 'virt,gic-version=3', '-cpu', a.cpu, '-smp', '1', '-m', f'{ram_gib}G',
+    cmd = ['qemu-system-aarch64', '-M', 'virt,gic-version=3', '-cpu', a.cpu, '-smp', str(a.smp), '-m', f'{ram_gib}G',
            '-serial', f'file:{out}/serial.txt', '-qmp', monitor_arg,
            '-d', 'int,guest_errors,unimp', '-D', f'{out}/qemu.log', '-no-reboot',
            '-device', f'loader,file={out}/ram.bin,addr={phys_base:#x},force-raw=on',
            '-device', f'loader,file={out}/stub.bin,addr={STUB_PA:#x},force-raw=on',
            '-device', f'loader,addr={STUB_PA:#x},cpu-num=0']
     if a.accel == 'tcg':
-        cmd += ['-accel', f'tcg,tb-size={a.tb_mb}']
+        tcg_threads = ',thread=multi' if a.smp > 1 else ''
+        cmd += ['-accel', f'tcg,tb-size={a.tb_mb}{tcg_threads}']
     else:
         cmd += ['-accel', a.accel]
     if a.display:

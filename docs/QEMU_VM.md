@@ -149,11 +149,18 @@ python3 tools/qemu-sweet.py vm/payload.bin vm/run \
   `--secs 20` stops QEMU after twenty seconds.
 * `--live-serial` prints the kernel console in the terminal; the same text
   is in `vm/run/serial.txt`.
+* `--smp N` selects 1-8 QEMU vCPUs and sets the matching XNU `cpus=N` boot
+  argument. Above one CPU, the runner enables multi-threaded TCG. For `N > 1`,
+  build the ADT with `mkadt.py ... --qemu --qemu-cpus N` and use a kernel with
+  patch 0087; otherwise QEMU and XNU will see different CPU topologies.
 * Close the window, or press Ctrl+C in the terminal, to stop. The copy of
   the root keeps whatever the guest wrote.
 
-The first boot under TCG is slow: one emulated CPU and no KVM for an ARM
-guest on an x86 host. Expect tens of minutes, not the phone's four to five.
+The first boot under TCG is slow: by default it uses one emulated CPU and
+there is no KVM for an ARM guest on an x86 host. Expect tens of minutes, not
+the phone's four to five. After building a matching SMP kernel and ADT,
+`--smp 4` is an experimental option to give LaunchServices and other first-
+boot jobs more CPU time.
 On Apple Silicon, `--accel hvf --cpu host` is worth trying, but the ADT and
 the kernel's CPU setup were made for TCG/QEMU's Cortex-A76 and are not
 validated with HVF.
@@ -197,15 +204,16 @@ logo/progress first, then the lock screen.
 | `ramfb: no QEMU fw_cfg at ...` | The machine is not QEMU's `virt` at the expected fw_cfg address |
 | `IOFindBSDRoot: SWEET virtio-blk root vblk0 unavailable` | The disk driver did not find the device; check the two lines above |
 | Panic or read-only root | Is the copy writable? Is it the raw `.img`, not `.simg`? Did `fsck` run? |
-| Black window | The kernel was built without 0082, or its boot args lack `ramfb=1` |
+| Black window | Check for `ramfb: 1080x2400`, then inspect the framebuffer and SpringBoard/LaunchServices logs; a black screen can occur after the kernel and display driver have started |
 
 The QEMU window is a 1080x2400 surface; on a smaller host display use
 `gtk,zoom-to-fit=on` and resize the window.
 
 ## 7. Limits and next steps
 
-* QEMU TCG is the current speed limit. The guest has one CPU because the
-  QEMU ADT's MPIDRs differ from sweet's; SMP is a separate change.
+* QEMU TCG is the current speed limit. The runner defaults to one CPU; SMP
+  requires kernel patch 0087 plus an ADT generated with matching `--qemu-cpus`.
+  Its stability and performance on Windows have not yet been measured.
 * There is no GPU: iOS draws with the CPU copy path already used on the
   phone.
 * The desktop VM is the bring-up vehicle. An Android APK would need a QEMU

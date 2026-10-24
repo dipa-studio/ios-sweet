@@ -1,3 +1,14 @@
+### >>> UPDATE 2026-10-25 (QEMU SMP topology identified during 20H392 soak) <<<
+
+**STATE: The one-hour single-vCPU QEMU soak remains active. QEMU 11.1's generated `virt` DTB assigns MPIDR Aff0 values 0, 1, 2, 3 to four vCPUs, while SWEET's phone topology uses Aff1 (`core << 8`). A matching ADT and opt-in kernel path are now prepared locally; the SMP kernel still needs CI and a separate boot test.**
+
+- At host 04:23, sampler snapshot `research/vm/run20h-hour/snap006` captured guest ~1,345 seconds. It shows Apple logo pixels, `SpringBoard`, `backboardd`, and `lsd` still running, and no panic text in the msgbuf. Earlier captures were black; this is intermittent framebuffer state, not yet a usable menu.
+- Confirmed CPU IDs empirically from QEMU 11.1 by dumping `virt,gic-version=3 -smp 4` DTB to `research/vm/qemu-smp4.dtb`: `/cpus/cpu@0..3` have `reg` values 0..3. The default one-vCPU ADT is unchanged; phone ADT nodes retain `core << 8`.
+- Added local `tools/mkadt.py --qemu-cpus N` support and patch `0087-sweet-qemu-smp-mpidr.patch`. The patch accepts Aff0 only when `virtio_blk=1` is present; the phone keeps the Aff1 validation. `git apply --check` passes against the staged 0084 SweetCPU source. SMP requires this patch, a new CI kernel, a matching ADT, and a separate QEMU run; do not use the current 0086 kernel with an SMP ADT.
+- `wsl -d Ubuntu` is available with the HFS+-capable WSL kernel. `fsck.hfsplus -fn` on the disposable Data-directory candidate reports the known “Volume header needs minor repair” read-only finding; the earlier repairing check returned volume OK. No mount/write was performed in this check.
+- WSL `python3 -X utf8 tools/validate-repo.py` passes 87 contiguous patches, 15 Python tools, and 7 shell scripts. The equivalent native Windows validator needs UTF-8 and a POSIX path; its first invocation failed for environment reasons, not a source or syntax failure.
+- Next: commit/push patch 0087 and the generator/docs changes to the fork, dispatch `xnu.yml`, then use the resulting kernel and `--qemu-cpus 4` ADT for an isolated SMP experiment after the current one-hour soak. Keep all QEMU disk use on disposable copies with `--disk-snapshot`.
+
 ### >>> UPDATE 2026-10-25 (20H392 QEMU one-hour soak and Data-directory A/B) <<<
 
 **STATE: The one-hour QEMU soak is running with kernel 0086 and the CI-built 20H392 Redwood libraries on a disposable HFS+ clone. At guest ~1,024 seconds it has no observed panic, but the framebuffer is black after the Apple logo; SpringBoard is blocked waiting synchronously for LaunchServices while lsd reports database seeding/recovery work. No kernel fault is established yet.**
