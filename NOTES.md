@@ -7,6 +7,16 @@
 **STATE: desktop QEMU VM path implemented and CI-built; Windows kernel
 smoke test reaches root selection. Full iOS root boot is still pending.**
 
+- **GitHub root-source check (2026-10-24):** user suggested the root might
+  be a CI artifact. Paginated `gh api repos/OWNER/ios-sweet/actions/artifacts`
+  lists 2 artifacts on zaidanfaiz (1 `xnu-kernel`, 1 `xnu-buildtree`) and
+  132 on dipa-studio (93 `xnu-kernel`, 39 `xnu-buildtree`), with no other
+  artifact names. Both repositories' releases API returned 0 releases.
+  `.github/workflows/xnu.yml` uploads kernel/KDK diagnostics from `out/`
+  and a build-source tarball, not an iOS HFS+ root. No root image was
+  found in the available artifact/release listings; this cannot rule out
+  previously deleted artifacts or files hosted elsewhere. No download made.
+
 - **Root copy attempt (2026-10-24):** user asked to copy the existing root.
   Mounted filesystem drives are C: and D:, both NTFS; no SMB mapping was
   reported. Filename searches including ignored/hidden files across D:
