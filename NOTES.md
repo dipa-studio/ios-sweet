@@ -7,6 +7,24 @@
 **STATE: desktop QEMU VM path implemented and CI-built; Windows kernel
 smoke test reaches root selection. Full iOS root boot is still pending.**
 
+- **WSL active / root tools ready (2026-10-24):** user installed `Ubuntu`
+  (26.04.1 LTS) and created their UNIX account. Access via
+  `wsl -d Ubuntu -u root -- ...`; no password needed or stored. Running
+  kernel `6.18.54.1-microsoft-standard-WSL2` has CONFIG_HFSPLUS_FS unset;
+  `modprobe hfsplus` fails. Root creation therefore still needs HFS+ kernel
+  support. Installed hfsprogs, rsync, build dependencies and GCC 13/15.
+  Built apfs-fuse commit `66b86bd525e8cb90f9012543be89b1f092b75cf3`
+  with its pinned lzfse submodule `e634ca58b4821d9f3d560cdc6df5dec02ffc93fd`;
+  executables in /usr/local/bin. Successfully mounted OS DMG read-only via
+  apfs-fuse and read `/root/sbin/launchd` (541,600 bytes), then unmounted.
+  Extracted IM4P's OCTET payload and decoded with lzfse to ignored
+  `research/ipsw-x/d22ap.adt` (186,084 bytes). mkadt --qemu now emits
+  `research/qemu-smoke/qemu-product.adt` (7,032 bytes), no missing-product
+  warning. Kernel source download/build for WSL HFS+ support is ongoing;
+  no custom WSL kernel activated and no raw root built yet. Linux build
+  sources/tools are in `/root/ios-sweet-host`. Download retries/helpers
+  are in ignored `research/wsl-kernel/` and `research/*.py/.sh`.
+
 - **IPSW now supplied / extracted (2026-10-24):** user placed
   `iPhone10,3,iPhone10,6_16.7.16_20H392_Restore.ipsw` at the repo root
   (6,171,035,648 bytes). Read its BuildManifest: ProductVersion 16.7.16,
