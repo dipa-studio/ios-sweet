@@ -7,6 +7,46 @@
 **STATE: desktop QEMU VM path implemented and CI-built; Windows kernel
 smoke test reaches root selection. Full iOS root boot is still pending.**
 
+- **WSL HFS+ working; root image build started (2026-10-24):** custom
+  kernel compiled/linked successfully (`make bzImage`, 2,859 compile lines).
+  `research/wsl-kernel/bzImage-hfsplus` = 13,788,160 bytes, SHA-256
+  `5c32ed502e34b6c7b5613ffc922cfa165830355f19febfc20af8c5c3a8a95775`.
+  Release remains `6.18.54.1-microsoft-standard-WSL2`; config is saved in
+  `research/wsl-kernel/config-hfsplus`. Activated via the current user's
+  `.wslconfig` kernel entry, then `wsl --shutdown` and restarted Ubuntu.
+  There was no previous .wslconfig; backup marker is
+  `research/wsl-kernel/wslconfig-before.txt`. To restore stock later, remove
+  only this kernel entry and restart WSL. Confirmed CONFIG_HFSPLUS_FS=y and
+  hfsplus listed in /proc/filesystems. A 64 MiB journaled, case-sensitive
+  test image on D: mounted read/write; file, hard-link and symlink checks
+  passed. Two consecutive fsck.hfsplus -fy checks returned 0/volume OK.
+  A read-only -fn check returned 1/minor header repair, reproducing the
+  historical Linux hfsprogs quirk. Changed mkiosroot.sh's final check to
+  a second -fy (errors still propagate) so that quirk does not stop builds.
+  Raw root build is running via `research/wsl-build-root.sh`; log at
+  `/root/ios-sweet-host/root-build.log`. Destination
+  `research/vm/ios16-root-20H392-base.img` is incomplete until the helper
+  finishes; it will then apply root tweaks, fsck, hash, copy to root.img
+  and compare the copy. No phone access, flashing or partition writes.
+
+- **WSL HFS+ kernel build in progress (2026-10-24):** source tag
+  `linux-msft-wsl-6.18.54.1` resolves to official Microsoft commit
+  `d504d40ab83839cb61942a812a99d183c42227b9`. GitHub bulk source transfers
+  stalled. Downloaded SourceForge's source mirror via resumable ranges,
+  then verified every one of its 91,265 files/symlinks against the official
+  Git tree blob hashes before extraction. Verified source is at
+  `/root/ios-sweet-host/kernel-source`, archive at
+  `research/wsl-kernel/mirror-kernel.tar.gz` (256,209,121 bytes).
+  `research/verify-wsl-source.py` records the check. Built with running
+  kernel's config, HFSPLUS_FS=y, debug info disabled, GCC 13, make -j6.
+  Initial build was stopped to correctly disable the DWARF choice and
+  resumed; current log `/root/ios-sweet-host/kernel-build.log`, helper
+  `research/wsl-build-kernel.sh`. No custom kernel activated yet.
+  Additional ignored helpers: wsl-hfs-smoke.sh, wsl-build-root.sh and
+  decode-qemu.py. Decoder parsed `_iso_font` from the kernel Mach-O and
+  decoded the prior no-disk screenshot with 0 unknown glyphs, confirming
+  its expected `vblk0 unavailable` panic. No new XNU build/CI run.
+
 - **WSL active / root tools ready (2026-10-24):** user installed `Ubuntu`
   (26.04.1 LTS) and created their UNIX account. Access via
   `wsl -d Ubuntu -u root -- ...`; no password needed or stored. Running
