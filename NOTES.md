@@ -4,9 +4,36 @@
 
 ### >>> UPDATE 2026-10-24 (read first) <<<
 
-**STATE: Windows QEMU mounts the iOS HFS+ root read/write and runs Apple
-launchd. Full iOS GUI boot is not yet verified. Corrected patch 0084 is pushed;
-the new CI build must pass before a QEMU run.**
+**STATE: Corrected kernel 0084 is built and verified; a curated HFS+ test image
+boots the Redwood init and Apple launchd, but panics when
+`launchd_cache_loader` exits. SpringBoard/backboardd and full GUI boot are not
+verified.**
+
+- **0084 curated QEMU boot (2026-10-24):** Corrected CI run **40094970991**
+  succeeded at head `a37379e79dbcc2e256654629c87c97b6ac3d1a2a`. Downloaded
+  kernel SHA-256 `35ddb35623d8c8abcb8408850f2472579284615cee72a7e8296dc66d45a90b25`
+  matches `SHA256SUMS`; binary contains `exec_inject`,
+  `DYLD_INSERT_LIBRARIES`, and `applog_name`. Kernel config was also read from
+  guest RAM and contained the three expected injection groups.
+  Test image `research/vm/root-0084.img` is a copy of the preserved base image.
+  It has Redwood `init` as `/sbin/launchd`, Apple launchd backed up as
+  `/sbin/launchd.ios`, and the three prebuilt Redwood dylibs and
+  `/private/etc/inject.conf` installed. LaunchDaemons were curated to 22 jobs;
+  491 stock plists plus NanoLaunchDaemons, LaunchAngels, and the XPC launchd
+  plist are backed up under `/redwood/`.
+  Run `research/vm/run0084c/` booted and completed early boot tasks in about
+  55 guest seconds, substantially beyond the prior uncurated boot. It then
+  panicked: `launchd_cache_loader[24]` exited because it could not open fd 2.
+  The panic screen's backtrace enters `proc_exit.cold.1` and its panic call
+  string is `parent child linkage broken @kern_exit.c:0x91c`. This is the
+  observed failure; its cause is not yet established. No SpringBoard or
+  backboardd sampler output and no GUI were observed. Snapshot:
+  `research/vm/run0084c/snap003/` (`fb.png`, `msgbuf.txt`, `regs.txt`). QEMU was
+  stopped through QMP. `fsck.hfsplus -fy` reports `root-0084.img` appears OK.
+  Base HFS+ image remains separate and untouched. Next: investigate why the
+  failed `launchd_cache_loader` child triggers broken parent-child linkage;
+  test a targeted fix on a fresh copy before another boot. Do not report the
+  universal Android APK goal as achieved.
 
 - **0084 patch correction / HackiOS integration (2026-10-24):**
   Run **40090859596** completed successfully for commit `4139e142f201e8d7984c8b9f67d7d8cbf76049ff`;
