@@ -1,0 +1,43 @@
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -305,8 +305,40 @@
+ 	}
+ }
+ 
++/* dyld asks AMFI which environment and inserted-library features it may use. */
++#define SWEET_AMFI_CHECK_DYLD_POLICY 0x5a
++#define SWEET_AMFI_QUERY_BOOTARG_STATE 0x60
++#define SWEET_AMFI_DYLD_ALLOW_ALL 0xffULL
++#define SWEET_AMFI_BOOTARGS_NOT_ENFORCED 0x86ULL
++
++static int
++sweet_amfi_policy_syscall(__unused struct proc *p, int call, user_addr_t arg)
++{
++	struct {
++		uint64_t input_flags;
++		user_addr_t output_flags;
++	} args;
++	uint64_t flags = SWEET_AMFI_DYLD_ALLOW_ALL;
++	uint64_t state = SWEET_AMFI_BOOTARGS_NOT_ENFORCED;
++	int error;
++
++	switch (call) {
++	case SWEET_AMFI_CHECK_DYLD_POLICY:
++		error = copyin(arg, &args, sizeof(args));
++		if (error != 0) {
++			return error;
++		}
++		return copyout(&flags, args.output_flags, sizeof(flags));
++	case SWEET_AMFI_QUERY_BOOTARG_STATE:
++		return copyout(&state, arg, sizeof(state));
++	default:
++		return ENOPOLICY;
++	}
++}
++
+ static const struct mac_policy_ops sweet_amfi_mac_ops = {
+ 	.mpo_vnode_check_signature = sweet_amfi_vnode_check_signature,
++	.mpo_policy_syscall = sweet_amfi_policy_syscall,
+ };
+ 
+ /*
