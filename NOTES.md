@@ -7,6 +7,19 @@
 **STATE: Windows QEMU mounts the iOS HFS+ root read/write and runs Apple
 launchd. Full iOS GUI boot is not yet verified.**
 
+- **0084 exec_inject & HackiOS userland integration plan (2026-10-24):**
+  Identified root cause of run3 GUI stall: stock iOS launchd thrashes on >500
+  unsupported daemons, containermanagerd deadlocks waiting for user personas,
+  and SpringBoard blocks on unactivated mobileactivationd. Stock launchd strips
+  DYLD_INSERT_LIBRARIES so userland shims cannot be loaded from plist alone.
+  User supplied hackios-xnu-kernel and hackios-xnu-userland trees which solve
+  this via kern.exec_inject in the kernel, stage0/init curated jobs, and
+  injected shims (libredwood.dylib, libredwood-sb.dylib, libredwood-media.dylib).
+  Created patch `0084-sweet-exec-inject.patch` adding kern.exec_inject sysctl,
+  applog console redirection, systrace tunable, and persona override to
+  `bsd/kern/kern_exec.c`. Passed `validate-repo.py` for all 84 patches.
+  Target roadmap expanded to universal iOS emulation (ios-emulator.apk).
+
 - **0083 CI passed / diagnostic boot running (2026-10-24):** run
   **40086195783** succeeded for head `e0d5c16`; full kernel compile/link
   passed. Artifact downloaded to `xnu/out-0083/`. Kernel = 17,207,128 bytes,
