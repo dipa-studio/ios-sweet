@@ -4,8 +4,21 @@
 
 ### >>> UPDATE 2026-10-24 (read first) <<<
 
-**STATE: iOS HFS+ root built and verified; first Windows QEMU boot with
-the root disk is running. Full iOS GUI boot is not yet verified.**
+**STATE: Windows QEMU mounts the iOS HFS+ root read/write and runs Apple
+launchd. Full iOS GUI boot is not yet verified.**
+
+- **First root boot passed (2026-10-24):** snapshot
+  `research/vm/run/snap001/` has fb.png, regs.txt and msgbuf.txt. Kernel
+  reports virtio-blk /dev/vblk0 in slot 31, 16384 MB read-write; BSD root
+  major 1 minor 0; initializes the 8 MiB journal and mounts iOSRoot at
+  guest ~34 s. Virtio input devices found in slots 29/30; ramfb registers
+  1080x2400 at 0x9c000000, fw_cfg selector 37. `exec launchd` at ~34.8 s;
+  shared cache maps, boot tasks run, FIPS tests pass and keybagd loads the
+  system keybag. At snapshot ~63 s usermanagerd was running; GUI pending.
+  QEMU exception tracing was disabled live with QMP `log guest_errors,unimp`
+  after the initial trace reached ~4 MiB. No guest panic observed in this
+  snapshot; serial.txt remains empty. Snapshot decoder uses the kernel's
+  real font; initial root/copy milestone commit a78ca90, local/unpushed.
 
 - **Root image complete / first disk boot (2026-10-24):** base image
   `research/vm/ios16-root-20H392-base.img` and test copy
