@@ -871,3 +871,12 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
 - Earlier safe runs `run20h-offsets` (300-second limit) and `run20h-hooks-early` (150-second limit) also ended without an observed panic, but showed only console output at the final capture. QEMU's GTK emitted host-side warnings; QEMU continued.
 - After QEMU exited, `fsck.hfsplus -fy research/vm/root-0084h.img` completed successfully: `The volume iOSRoot appears to be OK.` A prior `fsck -n` on this copy reported a minor header repair even after `-fy`; do not claim read-only fsck is clean.
 - Next: capture/diagnose why the display returns to debug text and whether `libredwood-sb.dylib` hooks execute; verify touch input and a recognizable SpringBoard state. Keep using only disposable root copies with `--disk-snapshot`. No phone, Android, partitions, or upstream repository changes. The `ios-emulator.apk` goal is not achieved.
+
+### >>> UPDATE 2026-10-25 (workspace organization and disk cleanup) <<<
+
+- Organized `D:\dev\learning-projects`: `ios-sweet` remains in place; all other sibling folders are now under `D:\dev\learning-projects\github-clone`.
+- Cloned `lizezra/apple-apns-courier`, `revantTNK/ios-greatlte`, `ChefKissInc/Inferno`, `UniXNU/UniXNU`, and `UniXNU/NativeAdreno` into `github-clone`. Moved existing `hackios-xnu-kernel` and `hackios-xnu-userland` clones there without discarding local edits; `hackios-xnu-userland` still has local changes in `userland/src/inject.c` and `inject_sb.c`.
+- Removed the now-stale nested-repository ignore entries from `.gitignore`. An empty `--help` directory in the project root was removed.
+- Cleared Windows npm and pip caches and WSL apt archives/package lists. Left `.cache/codex-runtimes`, build/SDK folders, the IPSW, and current QEMU research artifacts intact.
+- Deleted superseded disposable root images `research/vm/root.img`, `root-0084.img`, and `root-0084d.img` (48 GiB total). Preserved the 20H392 base image, the latest `root-0084h.img`, and fallback `root-0084e.img`. No QEMU process was running when the three old copies were removed.
+- Measured free space: C: increased from 16,655,224,832 to 18,085,797,888 bytes after npm/pip cleanup (+1,430,573,056 bytes). D: increased from 192,126,140,416 to 243,665,747,968 bytes after removing the three old images (+51,539,607,552 bytes, about 48 GiB). Four pre-existing non-Git sibling folders were moved into `github-clone` as requested; the parent now contains only `ios-sweet` and `github-clone`.

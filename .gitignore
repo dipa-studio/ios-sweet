@@ -11,5 +11,3 @@ shim/out/
 xnu/out/
 xnu/out-*/
 __pycache__/
-hackios-xnu-kernel/
-hackios-xnu-userland/
