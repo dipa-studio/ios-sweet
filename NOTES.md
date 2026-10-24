@@ -25,15 +25,21 @@ verified.**
   55 guest seconds, substantially beyond the prior uncurated boot. It then
   panicked: `launchd_cache_loader[24]` exited because it could not open fd 2.
   The panic screen's backtrace enters `proc_exit.cold.1` and its panic call
-  string is `parent child linkage broken @kern_exit.c:0x91c`. This is the
-  observed failure; its cause is not yet established. No SpringBoard or
-  backboardd sampler output and no GUI were observed. Snapshot:
-  `research/vm/run0084c/snap003/` (`fb.png`, `msgbuf.txt`, `regs.txt`). QEMU was
-  stopped through QMP. `fsck.hfsplus -fy` reports `root-0084.img` appears OK.
-  Base HFS+ image remains separate and untouched. Next: investigate why the
-  failed `launchd_cache_loader` child triggers broken parent-child linkage;
-  test a targeted fix on a fresh copy before another boot. Do not report the
-  universal Android APK goal as achieved.
+  string is `parent child linkage broken @kern_exit.c:0x91c`. Evidence:
+  `research/vm/run0084c/snap003/`. A separate copy,
+  `research/vm/root-0084d.img`, restored the stock
+  `/System/Library/xpc/launchd.plist`; it completed early boot, started
+  SpringBoard at guest ~61 s and backboardd at ~175 s, and the sampler captured
+  both processes at ~244 s. It ran to the 300-second timeout without a kernel
+  panic, but framebuffer output remained boot/debug text and no Lock Screen or
+  Home Screen appeared. `result.json` says `not_decoded`, which is not a boot
+  success signal. Snapshots are under `research/vm/run0084d/`; `snap004` has
+  backboardd sampler/IOFB activity. `fsck.hfsplus -fy root-0084d.img` repaired
+  hard-link metadata and then completed successfully; the original curated
+  `root-0084.img` still checks OK. Base HFS+ image remains separate and
+  untouched. Next: investigate why framebuffer stays text after SpringBoard
+  and backboardd start, using their saved stacks and Redwood injection logs.
+  Do not report the universal Android APK goal as achieved.
 
 - **0084 patch correction / HackiOS integration (2026-10-24):**
   Run **40090859596** completed successfully for commit `4139e142f201e8d7984c8b9f67d7d8cbf76049ff`;
