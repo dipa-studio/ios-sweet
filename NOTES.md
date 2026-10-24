@@ -4,7 +4,38 @@
 
 ### >>> UPDATE 2026-10-24 (read first) <<<
 
-**STATE: desktop QEMU VM path implemented and CI-built; not booted.**
+**STATE: desktop QEMU VM path implemented and CI-built; Windows kernel
+smoke test reaches root selection. Full iOS root boot is still pending.**
+
+- **Windows QEMU milestone (2026-10-24):** downloaded Stefan Weil's
+  QEMU 11.1.0 installer `qemu-w64-setup-20260811.exe` from the provider
+  linked by qemu.org. SHA-512 matches the published `.sha512` file.
+  Installer/checksum are in ignored `research/qemu-download/`; extracted
+  binaries are in ignored `research/qemu/` (no system install/PATH change).
+  `--check-env` passes; Cortex-A76 and GTK/SDL are available. `llvm-nm`
+  is absent, so no automated framebuffer text decoding was requested.
+- Updated `tools/qemu-sweet.py` for Windows: loopback TCP QMP, normalized
+  paths, QMP timeout/EOF handling, and process cleanup after failures.
+  Linux/macOS retain Unix monitor sockets. Added Windows setup/results to
+  `docs/QEMU_VM.md`. No kernel patch changed; no new CI run is needed.
+- **Actual boot evidence:** generated `research/qemu-smoke/qemu.adt`
+  (`--qemu`, low memory) and `payload.bin` with the verified 0082 kernel.
+  Missing `research/ipsw-x/d22ap.adt` produced a warning: no `/product` node.
+  QEMU: TCG, Cortex-A76, one CPU, 4 GiB guest RAM, `--tb-mb 128`, no disk.
+  30-second run `research/qemu-smoke/run/`: runner exit 0, screenshot shows
+  CPU/framebuffer/IOKit initialization. 60-second run
+  `research/qemu-smoke/run-ramfb/` (`--input --display none`): runner exit 0,
+  screenshot shows panic `IOFindBSDRoot: SWEET virtio-blk root vblk0
+  unavailable: 6 @IOKitBSDInit.cpp:793`, consistent with no disk attached.
+  Both saved `fb.png`, `regs.txt`, `qemu.log`; `serial.txt` is empty.
+  `result.json` says `not_decoded`, so exit 0 does NOT mean panic-free boot.
+  Input interaction and ramfb window output remain unverified.
+- **Validation:** `python -X utf8 tools/validate-repo.py` with
+  `C:/Program Files/Git/bin` on the session PATH passes all 82 patches,
+  15 Python tools and 7 shell scripts. `git diff --check` passes.
+  Next: obtain a raw HFS+ iOS root copy (not `.simg`), fsck the copy on
+  Linux/macOS, attach with `--disk`, then inspect framebuffer/root mount
+  and userspace. No phone commands or partition writes were performed.
 
 - **Windows host recheck (2026-10-24):** working tree was clean at
   `55f9da1`, `main` tracks `fork/main`; fork and upstream URLs match the

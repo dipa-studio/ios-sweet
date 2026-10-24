@@ -9,6 +9,34 @@ Status: patch `0082-sweet-qemu-vm.patch` adds the disk, input and display
 devices. This is desktop QEMU first. It does **not** produce an Android APK
 yet.
 
+## Windows host setup
+
+The [official QEMU download page](https://www.qemu.org/download/#windows)
+links to Stefan Weil's Windows builds. Use the 64-bit package containing
+`qemu-system-aarch64.exe`. An extracted package can live in the ignored
+`research/qemu/` directory. In PowerShell, add it to the current session:
+
+```powershell
+$env:PATH = "$PWD/research/qemu;" + $env:PATH
+python tools/qemu-sweet.py --check-env
+```
+
+The runner uses a loopback TCP QMP monitor on Windows and Unix sockets on
+Linux/macOS. Windows paths are converted to forward slashes for QEMU.
+The disk is still a raw HFS+ image; downloading QEMU does not supply the
+iOS root. Prepare and check a copy on Linux/macOS as described below,
+then transfer that copy to the Windows host. Use one-line commands in
+PowerShell instead of the shell `\` continuations in the examples below.
+Check available display backends with `qemu-system-aarch64 -display help`.
+On 2026-10-24, QEMU 11.1.0 on Windows ran the 0082 kernel with a low-memory
+QEMU ADT, one Cortex-A76 CPU and a 128 MiB TCG cache. A 30-second run
+captured CPU/framebuffer/IOKit initialization. A 60-second run with
+`--input --display none` reached root selection and panicked with
+`IOFindBSDRoot: SWEET virtio-blk root vblk0 unavailable: 6`, because no disk
+was attached. QMP register and framebuffer capture worked; `serial.txt`
+was empty. These runs verify initial kernel execution, not an iOS boot
+or working input/display interaction. Full root boot is still pending.
+
 ## What the virtual machine uses
 
 | Part | QEMU device / guest name |

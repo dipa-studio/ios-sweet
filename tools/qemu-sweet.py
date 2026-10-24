@@ -39,6 +39,7 @@ def check_qemu_dependency(cpu='cortex-a76'):
         print('      Ubuntu/Debian: sudo apt install qemu-system-arm', file=sys.stderr)
         print('      Fedora:         sudo dnf install qemu-system-aarch64', file=sys.stderr)
         print('      macOS:          brew install qemu', file=sys.stderr)
+        print('      Windows:        https://www.qemu.org/download/#windows (add QEMU to PATH)', file=sys.stderr)
         return False
     try:
         ver = subprocess.check_output([qemu_bin, '--version'], text=True).splitlines()[0]
@@ -168,7 +169,8 @@ def screen_result(screen, unknown):
 
 def qmp(sock_path, *cmds, pmemsave=None):
     """Run QEMU human-monitor commands over QMP (synchronous, unlike the echoing HMP socket)."""
-    s = socket.socket(socket.AF_UNIX)
+    s = socket.socket(socket.AF_INET if isinstance(sock_path, tuple) else socket.AF_UNIX)
+    s.settimeout(30)
     s.connect(sock_path)
     f = s.makefile('rw')
     f.readline()
@@ -177,7 +179,10 @@ def qmp(sock_path, *cmds, pmemsave=None):
         f.write(json.dumps({'execute': execute, 'arguments': args}) + '\n')
         f.flush()
         while True:
-            r = json.loads(f.readline())
+            line = f.readline()
+            if not line:
+                raise ConnectionError('QEMU closed the QMP connection')
+            r = json.loads(line)
             if 'return' in r or 'error' in r:
                 return r
 
@@ -272,7 +277,7 @@ def main():
             ap.error('kernel must contain exactly one _iso_font symbol')
         font = payload_data(payload, fonts[0], 256 * 16)
     os.makedirs(a.outdir, exist_ok=True)
-    out = os.path.abspath(a.outdir)
+    out = os.path.abspath(a.outdir).replace(os.sep, '/')
 
     phys_base, img, ba_pa, entry_pa = build_image(payload, a.extra_cmdline)
     open(f'{out}/ram.bin', 'wb').write(img)
@@ -280,7 +285,7 @@ def main():
     print(f'phys_base={phys_base:#x} boot_args={ba_pa:#x} entry={entry_pa:#x}', file=sys.stderr)
 
     if a.disk:
-        a.disk = os.path.abspath(a.disk)
+        a.disk = os.path.abspath(a.disk).replace(os.sep, '/')
         if not os.path.exists(a.disk):
             ap.error(f'disk image not found: {a.disk}')
     bootline = payload[0x48:0x48 + BOOT_LINE_LENGTH].split(b'\0', 1)[0].decode('latin1')
@@ -295,14 +300,22 @@ def main():
         print('[!] --display: the payload boot-args do not say ramfb=1; '
               'build it with that or pass --extra-cmdline', file=sys.stderr)
 
-    mon = f'{out}/mon.sock'
-    if os.path.exists(mon):
-        os.unlink(mon)
+    if os.name == 'nt':
+        # Use loopback TCP so the Windows monitor does not require Unix sockets.
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            mon = probe.getsockname()
+        monitor_arg = f'tcp:{mon[0]}:{mon[1]},server=on,wait=off'
+    else:
+        mon = f'{out}/mon.sock'
+        if os.path.exists(mon):
+            os.unlink(mon)
+        monitor_arg = f'unix:{mon},server=on,wait=off'
     # virt RAM starts at 0x40000000: cover the payload's RAM (mkadt.py --highmem needs 8G).
     mem_size = struct.unpack_from('<Q', payload, 0x40)[0]
     ram_gib = max(4, -(-(phys_base + mem_size - 0x40000000) // (1 << 30)))
     cmd = ['qemu-system-aarch64', '-M', 'virt,gic-version=3', '-cpu', a.cpu, '-smp', '1', '-m', f'{ram_gib}G',
-           '-serial', f'file:{out}/serial.txt', '-qmp', f'unix:{mon},server,nowait',
+           '-serial', f'file:{out}/serial.txt', '-qmp', monitor_arg,
            '-d', 'int,guest_errors,unimp', '-D', f'{out}/qemu.log', '-no-reboot',
            '-device', f'loader,file={out}/ram.bin,addr={phys_base:#x},force-raw=on',
            '-device', f'loader,file={out}/stub.bin,addr={STUB_PA:#x},force-raw=on',
@@ -382,6 +395,9 @@ def main():
             p.wait()
         return 130
     finally:
+        if p and p.poll() is None:
+            p.kill()
+            p.wait()
         ram_file = f'{out}/ram.bin'
         if os.path.exists(ram_file):
             try:
