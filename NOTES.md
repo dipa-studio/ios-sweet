@@ -7,6 +7,34 @@
 **STATE: Windows QEMU mounts the iOS HFS+ root read/write and runs Apple
 launchd. Full iOS GUI boot is not yet verified.**
 
+- **First 30-minute VM test ended; diagnosing GUI wait (2026-10-24):**
+  Windows QEMU 0082 finished the --secs 1800 test (runner exit 0,
+  result.json `not_decoded`, not a GUI success signal). `run/snap005/`
+  and `snap006/` screenshots show Apple's boot logo. backboardd creates
+  IOSurfaces and sends frame swaps; SpringBoard stays running, no kernel
+  panic captured. driverkitd was killed with SIGKILL at guest ~339 s;
+  other service relaunches include unsupported hardware daemons. No lock
+  screen/home screen observed after 30 minutes. Baseline root image is
+  preserved; test root.img now contains guest writes/journal updates.
+- **Diagnostic patch 0083:** sampler was started only by successful UFS
+  init (patch 0054), so virtual roots never sampled SpringBoard/backboardd.
+  Added opt-in call after virtio-blk registration when `sweetsample` is
+  present. Commit `e0d5c16` pushed to fork/main, along with earlier local
+  Windows/root build fixes. No push to upstream. Validator passes all
+  83 patches, 15 Python tools, 7 shell scripts. Correct CI run manually
+  dispatched: **40086195783**, head e0d5c16. Earlier accidental dispatch
+  **40086122663** built old head 30d64c1; cancellation requested.
+- **Second 0082 test running:** `research/vm/run2/`, same working disk,
+  --secs 1800 --tb-mb 512 --extra-cmdline
+  `sweetfb_noconsole=1 sweetfb_hz=10`. The payload already contains
+  sweetfb_hz=30, so that duplicate override must not be assumed effective.
+  New 0083 payload should use a clean boot-args string with sampling,
+  sweetfb_noconsole=1 and a single sweetfb_hz=10. Next: inspect second
+  boot, download/verify 0083 once CI succeeds, then collect process stacks
+  if the UI is still waiting. Untracked hackios-xnu-kernel/ and
+  hackios-xnu-userland/ appeared during the session; they were not created,
+  modified, added or pushed by this agent.
+
 - **First root boot passed (2026-10-24):** snapshot
   `research/vm/run/snap001/` has fb.png, regs.txt and msgbuf.txt. Kernel
   reports virtio-blk /dev/vblk0 in slot 31, 16384 MB read-write; BSD root
