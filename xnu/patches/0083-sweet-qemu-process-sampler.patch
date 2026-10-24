@@ -1,0 +1,28 @@
+--- a/bsd/dev/sweet_virtio_blk.c
++++ b/bsd/dev/sweet_virtio_blk.c
+@@ -45,6 +45,7 @@
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+ extern uint64_t kvtophys(vm_offset_t va);
++extern void sweet_sample_start(void);
+ 
+ #define VIRTIO_BUS              0x0a000000UL    /* QEMU virt: 32 transports of 0x200 bytes */
+ #define VIRTIO_SLOTS            32
+@@ -578,6 +579,7 @@
+ blk_init(void)
+ {
+ 	uint32_t enabled = 0;
++	char sample_names[128];
+ 	vm_offset_t bus;
+ 	struct blk_device *d = &blk_dev;
+ 
+@@ -624,6 +626,9 @@
+ 		printf("virtio-blk: /dev/vblk0 in slot %d, %llu MB, %s\n",
+ 		    slot, d->capacity * VIRTIO_BLK_SECTOR >> 20,
+ 		    d->writable ? "read-write" : "read-only");
++		if (PE_parse_boot_argn("sweetsample", sample_names, sizeof(sample_names))) {
++			sweet_sample_start();
++		}
+ 		return 0;
+ 	}
+ 	printf("virtio-blk: no block device on the bus\n");
