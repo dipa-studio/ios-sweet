@@ -18,6 +18,7 @@ launchd. Full iOS GUI boot is not yet verified.**
   Created patch `0084-sweet-exec-inject.patch` adding kern.exec_inject sysctl,
   applog console redirection, systrace tunable, and persona override to
   `bsd/kern/kern_exec.c`. Passed `validate-repo.py` for all 84 patches.
+  Committed `4139e14` and pushed to fork/main; dispatched CI run **40090859596**.
   Target roadmap expanded to universal iOS emulation (ios-emulator.apk).
 
 - **0083 CI passed / diagnostic boot running (2026-10-24):** run
