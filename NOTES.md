@@ -18,6 +18,8 @@ smoke test reaches root selection. Full iOS root boot is still pending.**
   paths, QMP timeout/EOF handling, and process cleanup after failures.
   Linux/macOS retain Unix monitor sockets. Added Windows setup/results to
   `docs/QEMU_VM.md`. No kernel patch changed; no new CI run is needed.
+  Implementation and smoke-test handoff committed as `cbd2508` (local;
+  not pushed). Earlier host-prerequisite note is commit `ae6f796`.
 - **Actual boot evidence:** generated `research/qemu-smoke/qemu.adt`
   (`--qemu`, low memory) and `payload.bin` with the verified 0082 kernel.
   Missing `research/ipsw-x/d22ap.adt` produced a warning: no `/product` node.
