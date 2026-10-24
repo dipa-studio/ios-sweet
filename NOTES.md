@@ -7,6 +7,20 @@
 **STATE: desktop QEMU VM path implemented and CI-built; Windows kernel
 smoke test reaches root selection. Full iOS root boot is still pending.**
 
+- **Root copy attempt (2026-10-24):** user asked to copy the existing root.
+  Mounted filesystem drives are C: and D:, both NTFS; no SMB mapping was
+  reported. Filename searches including ignored/hidden files across D:
+  and C:/Users found no `ios16-root*`, `phone-root*`, or `.simg` source.
+  Some unrelated IPSWs exist locally; none of the listed files is the
+  required iPhone X 20H392 root. Search errors were suppressed, so this
+  is not proof of absence from inaccessible directories. The historical
+  `/run/media/dipa/android/ios-sweet-ipsw/ios16-root-20H392-v15.img` is
+  documented on an external Linux SSD, which is not currently exposed
+  as a mounted Windows filesystem. No SSH config/source address was found.
+  No image was copied or downloaded. Asked user to connect the source SSD
+  or provide the Linux host/share location; then copy into ignored
+  `research/` and verify size/hash before testing. No device commands run.
+
 - **Windows QEMU milestone (2026-10-24):** downloaded Stefan Weil's
   QEMU 11.1.0 installer `qemu-w64-setup-20260811.exe` from the provider
   linked by qemu.org. SHA-512 matches the published `.sha512` file.
