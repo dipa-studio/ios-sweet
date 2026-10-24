@@ -1,3 +1,12 @@
+### >>> UPDATE 2026-10-25 (20H392 QEMU safe boot retest) <<<
+
+**STATE: The 0086 guest reaches backboardd and SpringBoard startup without an observed kernel panic in a 600-second QEMU run. The framebuffer transitions from diagnostics to the Apple logo and then black; no usable lock/home UI was verified.**
+
+- Ran `tools/qemu-sweet.py research/vm/payload-0086-trace.bin research/vm/run20h-quiet --secs 600 --disk research/vm/root-0084h.img --disk-snapshot --input --display gtk --tb-mb 512 --extra-cmdline sweetfb_noconsole=1`. QEMU exited at the requested timeout. `result.json` says `not_decoded`, which is the helper's kernel-state decoder result, not a QEMU exit or guest panic status.
+- Captures are in `research/vm/run20h-quiet/snap001` through `snap015`; final capture is `snap015`. The screen first showed kernel/userland diagnostics, then the Apple logo at guest ~160 s, and later black. The msgbuf records `exec backboardd` at 77.67 s, backboardd surfaces at 1125x2436, framebuffer swaps through guest 266.50 s, and SpringBoard activity. No panic text was found in the captured msgbuf. FB swap calls prove the guest submitted surfaces; they do not prove that a usable UI was rendered.
+- QEMU was run with `--disk-snapshot`. `root-0084h.img` remained 17,179,869,184 bytes with its pre-run timestamp, and `ios16-root-20H392-base.img` remained untouched. Read-only `fsck.hfsplus -fn` reports the same `Volume header needs minor repair` condition on both base and test image. No repair was run; the shared result indicates this is not evidence of a write made by this QEMU session.
+- `research/vm/run20h-quiet/qemu.log` is ~194 MB and contains verbose QEMU trace output; captures and msgbuf summaries are sufficient for follow-up. Next diagnose why framebuffer contents are black after swap (including pixel format/stride and source buffer), and verify SpringBoard's rendered layer before changing guest assets. Keep tests on disposable/snapshot disks; do not touch Android or device partitions.
+
 ### >>> UPDATE 2026-10-25 (safe QEMU, dyld injection, and Redwood hooks) <<<
 
 **STATE: Safe QEMU boot now confirms AMFI policy calls succeed and Redwood dylibs load into SpringBoard/backboardd. No kernel panic, but usable iOS GUI is still blocked by incomplete Redwood hooks against the iOS 16.7.16 root.**
