@@ -1,3 +1,12 @@
+### >>> UPDATE 2026-10-25 (Home Screen visible; touch wakes display) <<<
+
+**STATE: The current 0086 one-vCPU guest reached an actual iOS Home Screen at guest ~2,528 seconds during the one-hour QEMU soak. The display had dimmed to near-black; one QMP absolute-pointer/left-button event woke it and produced a bright Home Screen. No kernel panic has been observed.**
+
+- `research/vm/run20h-hour/snap010/fb.png` visibly contains the iOS Photos, App Store, and Settings icons, Photos widget, Search control, and dock; the framebuffer is dim but not black. The log at guest 2,501 s says `SWEET FB: display on`, and later swaps continue at 1125x2436 BGRA.
+- QMP `input-send-event` returned success for a QEMU absolute pointer plus left-button event. At `snap011/fb.png` (host 04:43:59), the screen was bright and showed status time `4:43`, charging icon, colored Home Screen icons, Photos widget, Search, and dock. This is evidence the virtual input path can wake the guest display. A subsequent tap aimed at Settings did not confirm app launch; the UI dimmed to black again by `snap012`.
+- Snapshot `snap011` also shows ordinary userland churn, including a Photos widget extension check-in timeout. No XNU panic/reset was found in the captured ring msgbuf. SpringBoard render and display wake are confirmed; interactive app launch and an hour-long post-boot stable Home Screen remain unverified.
+- QEMU is still the same one-hour process (PID 13408, started 04:00:36 Asia/Jakarta) using kernel 0086 and `--disk-snapshot` on `root-0084i.img`; target end is 05:00:36. Leave it running to timeout. Then perform the separate kernel 0088 SMP boot on the same baseline clone and, if time allows, an A/B one-vCPU boot on `root-0084j-datadirs.img`.
+
 ### >>> UPDATE 2026-10-25 (SMP kernel CI passed; payload prepared) <<<
 
 **STATE: CI run 40134272436 succeeded for commit `339a864` (patches 0087 + 0088). The new kernel artifact is checksum-verified. A matching four-vCPU high-memory QEMU ADT and payload are prepared, but no SMP guest boot has been started yet.**
