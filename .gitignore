@@ -2,6 +2,9 @@
 backup/
 dtb/
 recovery/
+# Apple restore packages and filesystem components
+*.ipsw
+*.dmg
 # third-party/Apple sources fetched for reading
 research/
 shim/out/

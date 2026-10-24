@@ -7,6 +7,30 @@
 **STATE: desktop QEMU VM path implemented and CI-built; Windows kernel
 smoke test reaches root selection. Full iOS root boot is still pending.**
 
+- **IPSW now supplied / extracted (2026-10-24):** user placed
+  `iPhone10,3,iPhone10,6_16.7.16_20H392_Restore.ipsw` at the repo root
+  (6,171,035,648 bytes). Read its BuildManifest: ProductVersion 16.7.16,
+  ProductBuildVersion 20H392, supported iPhone10,3 and iPhone10,6. Selected
+  the d22ap identity and extracted into ignored `research/ipsw-x/`:
+  OS `087-86698-044.dmg` (4,730,814,044 bytes), SystemOS
+  `087-86593-047.dmg` (2,743,074,816), AppOS `087-86715-047.dmg`
+  (10,485,760), and `Firmware/all_flash/DeviceTree.d22ap.im4p` (33,719).
+  Each streamed ZIP member passed CRC verification. SHA-256 values,
+  sizes and paths are saved in `research/ipsw-x/extraction.json`;
+  BuildManifest.plist is also saved there. This verifies extracted data
+  against the supplied ZIP, not the archive's provenance against Apple.
+  Added `*.ipsw` and `*.dmg` to .gitignore to keep Apple artifacts out of git.
+- **Linux prerequisite:** WSL still reports not installed; current process
+  is not Administrator. Windows build is 26200; hypervisor present and
+  firmware virtualization enabled. Before extraction D: had ~138.8 GB free,
+  C: ~27.3 GB. Instructed user to run Administrator PowerShell command
+  `wsl --install -d Ubuntu-24.04 --no-launch` and restart if requested.
+  No WSL install or reboot was initiated by the agent. After WSL is ready:
+  check loop/HFS+ kernel support (do not assume the stock WSL kernel has
+  it), prepare apfs-fuse/hfsprogs/rsync, build root with mkiosroot.sh, apply
+  sweet-root-tweaks.py, extract/decompress d22ap.adt from IM4P, regenerate
+  payload and test a root copy in QEMU. Raw HFS+ root is not built yet.
+
 - **Source availability clarified / pushed-content audit (2026-10-24):**
   user confirmed they do not have the historical Linux/WSL image. Treat
   old `/run/media/dipa/...` paths as upstream handoff history, not evidence
