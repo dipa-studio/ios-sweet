@@ -240,6 +240,7 @@ def main():
     ap.add_argument('--fail-on-panic', action='store_true', help='exit 2 for a visible panic, 3 for incomplete/blank decoding; requires --kernel')
     ap.add_argument('--live-serial', action='store_true', help='stream serial console output to stdout in real time')
     ap.add_argument('--disk', metavar='IMAGE', help='raw disk image on QEMU virtio-blk (boot with rd=vblk0)')
+    ap.add_argument('--disk-snapshot', action='store_true', help='discard all guest writes to --disk when QEMU exits')
     ap.add_argument('--input', action='store_true', help='attach QEMU virtio tablet and keyboard (boot with virtio_input=1)')
     ap.add_argument('--display', metavar='BACKEND', help='show a QEMU window (gtk, sdl, cocoa) and the guest ramfb (boot with ramfb=1)')
     ap.add_argument('--extra-cmdline', default='', help='append this to the payload boot-args')
@@ -331,7 +332,8 @@ def main():
     if a.disk or a.input:
         cmd += ['-global', 'virtio-mmio.force-legacy=false']
     if a.disk:
-        cmd += ['-drive', f'file={a.disk},format=raw,if=none,id=vmdisk,cache=writeback',
+        snapshot = ',snapshot=on' if a.disk_snapshot else ''
+        cmd += ['-drive', f'file={a.disk},format=raw,if=none,id=vmdisk,cache=writeback{snapshot}',
                 '-device', 'virtio-blk-device,drive=vmdisk']
     if a.input:
         cmd += ['-device', 'virtio-tablet-device',
