@@ -211,6 +211,40 @@ def qmp(sock_path, *cmds, pmemsave=None):
     return out
 
 
+def qmp_wake_tap(sock_path, x=16384, y=16384):
+    """Tap the absolute virtio tablet through QMP, at normalized 0..32767 coordinates."""
+    s = socket.socket(socket.AF_INET if isinstance(sock_path, tuple) else socket.AF_UNIX)
+    s.settimeout(30)
+    s.connect(sock_path)
+    f = s.makefile('rw')
+    f.readline()  # QMP greeting
+
+    def execute(command, arguments, request_id):
+        f.write(json.dumps({'execute': command, 'arguments': arguments, 'id': request_id}) + '\n')
+        f.flush()
+        while True:
+            line = f.readline()
+            if not line:
+                raise ConnectionError('QEMU closed the QMP connection')
+            response = json.loads(line)
+            if response.get('id') == request_id:
+                if 'error' in response:
+                    raise RuntimeError(f"QMP {command} failed: {response['error']}")
+                return response.get('return')
+
+    try:
+        execute('qmp_capabilities', {}, 0)
+        execute('input-send-event', {'events': [
+            {'type': 'abs', 'data': {'axis': 'x', 'value': x}},
+            {'type': 'abs', 'data': {'axis': 'y', 'value': y}},
+            {'type': 'btn', 'data': {'down': True, 'button': 'left'}},
+            {'type': 'btn', 'data': {'down': False, 'button': 'left'}},
+        ]}, 1)
+    finally:
+        f.close()
+        s.close()
+
+
 def stream_serial_file(serial_path, file_pos, out_stream=sys.stdout):
     """Read newly appended content from serial.txt and write directly to stream."""
     if not os.path.exists(serial_path):
@@ -253,6 +287,10 @@ def main():
     ap.add_argument('--disk', metavar='IMAGE', help='raw disk image on QEMU virtio-blk (boot with rd=vblk0)')
     ap.add_argument('--disk-snapshot', action='store_true', help='discard all guest writes to --disk when QEMU exits')
     ap.add_argument('--input', action='store_true', help='attach QEMU virtio tablet and keyboard (boot with virtio_input=1)')
+    ap.add_argument('--wake-every', type=float, default=0,
+                    help='send a blank-center tablet tap every N host seconds to wake an idle guest display')
+    ap.add_argument('--wake-start', type=float, default=300,
+                    help='seconds after QEMU starts before the first --wake-every tap (default: 300)')
     ap.add_argument('--display', metavar='BACKEND', help='show a QEMU window (gtk, sdl, cocoa) and the guest ramfb (boot with ramfb=1)')
     ap.add_argument('--extra-cmdline', default='', help='append this to the payload boot-args')
     ap.add_argument('--tb-mb', type=int, default=512, help='QEMU TCG translation cache in MB (default: 512)')
@@ -275,6 +313,11 @@ def main():
 
     if not 1 <= a.smp <= 8:
         ap.error('--smp must be between 1 and 8')
+
+    if a.wake_every < 0 or a.wake_start < 0:
+        ap.error('--wake-every and --wake-start must be non-negative')
+    if a.wake_every and not a.input:
+        ap.error('--wake-every requires --input')
 
     if not check_qemu_dependency(a.cpu):
         return 1
@@ -359,6 +402,7 @@ def main():
     p = None
     serial_file = f'{out}/serial.txt'
     serial_pos = 0
+    wake_log = None
 
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
@@ -369,7 +413,17 @@ def main():
 
         t0 = time.time()
         deadline = float('inf') if a.wait else a.secs
+        next_wake = t0 + a.wake_start if a.wake_every else float('inf')
+        wake_log = open(f'{out}/wake-events.log', 'a', encoding='utf-8') if a.wake_every else None
         while p.poll() is None and time.time() - t0 < deadline:
+            now = time.time()
+            if wake_log is not None and now >= next_wake:
+                qmp_wake_tap(mon)
+                stamp = time.strftime('%Y-%m-%dT%H:%M:%S%z', time.localtime(now))
+                wake_log.write(f'{stamp} QMP absolute tablet tap x=16384 y=16384\n')
+                wake_log.flush()
+                while next_wake <= now:
+                    next_wake += a.wake_every
             if a.live_serial:
                 serial_pos = stream_serial_file(serial_file, serial_pos)
             time.sleep(0.2)
@@ -412,6 +466,8 @@ def main():
             p.wait()
         return 130
     finally:
+        if wake_log is not None:
+            wake_log.close()
         if p and p.poll() is None:
             p.kill()
             p.wait()

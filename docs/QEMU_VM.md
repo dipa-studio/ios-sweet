@@ -145,6 +145,11 @@ python3 tools/qemu-sweet.py vm/payload.bin vm/run \
 * `--input` adds the virtio tablet and keyboard. The mouse with the left
   button held is a finger; dragging moves it. Keys: `L` is the power button,
   `H` is Home, `Up`/`Down` are the volume buttons.
+* `--wake-every 300 --wake-start 300` sends a blank-center tablet tap every
+  five host minutes, beginning five minutes after QEMU starts. This is useful
+  when iOS dims or sleeps the display during a long boot; each sent tap is
+  recorded in `wake-events.log`. It requires `--input` and does not unlock the
+  device or launch an app.
 * `--wait` keeps the VM running until QEMU exits. Without it the default
   `--secs 20` stops QEMU after twenty seconds.
 * `--live-serial` prints the kernel console in the terminal; the same text

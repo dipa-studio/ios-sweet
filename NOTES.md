@@ -1,3 +1,11 @@
+### >>> UPDATE 2026-10-25 (QMP display-wake automation prepared) <<<
+
+**STATE: The QEMU runner now has an opt-in periodic tablet-tap feature for controlled display-wake/stability runs. The QMP command was checked against a protocol mock and repository validation passes in WSL. It has not yet been exercised against a live QEMU guest; repeatable interactive stability remains unverified. No QEMU process was started in this milestone.**
+
+- `tools/qemu-sweet.py` accepts `--wake-every N --wake-start S` with `--input`. It sends QMP `input-send-event` absolute tablet coordinates at blank screen center and a left-button down/up, then records host timestamps in `wake-events.log`. Both values are host seconds; default first event is 300s. This does not unlock the guest or launch an app. The documented use is for waking an idle display during a bounded run.
+- Checked Python compilation, CLI help output, and the QMP message sequence against a local mock QMP server. `python -X utf8 tools/validate-repo.py` in WSL passed: 89 contiguous patches, 15 Python tools, and 7 shell scripts. Native Windows invocation of the repository validator fails only because it passes Windows paths to bash without path conversion; WSL run is authoritative.
+- No kernel patch/build, disk image modification, QEMU boot, or device partition operation was performed. For the next real run, use the known 0086 kernel/payload and disposable `root-0084i.img` with `--disk-snapshot --input --display gtk --wake-start 300 --wake-every 300`, bounded duration, and inspect guest msgbuf plus framebuffer snapshots. A second run reaching Home Screen and staying responsive is still required before claiming the objective complete.
+
 ### >>> UPDATE 2026-10-25 (re-evaluation: idle display policy vs kernel hang) <<<
 
 **STATE: The available evidence does not justify another kernel patch for the black framebuffer. iOS reaches SpringBoard, and its power manager sets a display aggressiveness level early in boot; a later QMP touch wakes the panel and the existing 0086 run navigated through Settings/About. A black idle framebuffer therefore cannot be used as evidence that XNU or SpringBoard has stopped. Repeatability still needs a controlled, bounded user-input run; no new QEMU run was started in this turn.**
