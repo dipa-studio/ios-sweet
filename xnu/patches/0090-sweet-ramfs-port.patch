@@ -2055,35 +2055,25 @@ new file mode 100644
 +	}
 +	printf("SWEET RAMFS: registered (sweet_ramfs=1)\n");
 +}
-diff --git a/config/MASTER b/config/MASTER
---- a/config/MASTER
-+++ b/config/MASTER
-@@ -116,3 +116,4 @@
- options		MOCKFS		# Boot from an executable	# <mockfs>
- options		SWEET_HFS	# Built-in Apple OSS HFS (SWEET)	# <sweet_hfs>
-+options		RAMFS		# Read-write filesystem in memory	# <ramfs>
- options		FIFO		# fifo support			# <fifo>
 diff --git a/bsd/conf/files b/bsd/conf/files
 --- a/bsd/conf/files
 +++ b/bsd/conf/files
 @@ -430,3 +430,6 @@
  bsd/sweet_hfs/sweet_hfs_iokit.c		optional sweet_hfs
  
-+bsd/miscfs/ramfs/ramfs.c			optional ramfs
-+bsd/miscfs/ramfs/sweet_ramfs_register.c	optional ramfs
++bsd/miscfs/ramfs/ramfs.c			standard
++bsd/miscfs/ramfs/sweet_ramfs_register.c	standard
 +
  bsd/kern/kern_csr.c			optional config_csr
 diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -697,4 +697,10 @@
+@@ -697,4 +697,8 @@
  	sweet_hfs_register();
  #endif
  
-+#if RAMFS
 +	/* In-memory filesystem, opt-in (sweet_ramfs=1) so the HFS data volume is not shadowed. */
 +	extern void sweet_ramfs_register(void);
 +	sweet_ramfs_register();
-+#endif
 +
  #if CONFIG_PROC_UUID_POLICY
