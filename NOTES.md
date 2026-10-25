@@ -1,3 +1,11 @@
+### >>> UPDATE 2026-10-25 (0086 one-hour repeat did not reach UI) <<<
+
+**STATE: A second one-hour boot with the previously successful 0086 payload did not reproduce the Home Screen. QEMU stayed alive to its 3,600-second timeout without an observed panic, but the final framebuffer is black. The visible menu result remains non-repeatable.**
+
+- Run directory `research/vm/run20h-repeat-0086/`, QEMU PID 23784, started 06:33:53 and the runner captured/stopped it at 07:33:53 Asia/Jakarta. `result.json: not_decoded` is the timeout capture status, not an early exit. Snapshots `snap001`, `snap004`, `snap007`, `snap010` showed the Apple logo; other snapshots, including final `fb.png`, were black. Two QMP touch events were accepted but did not wake the display.
+- Used the same `research/vm/payload-0086-iconagent.bin`, one vCPU, `--disk-snapshot --input --display gtk`, and original `research/vm/root-0084i.img` that was used by the successful prior 0086 soak. The base clone remained 17,179,869,184 bytes with its 03:54:01 timestamp; preserved IPSW-derived base remained 17,179,869,184 bytes with its 16:48:39 timestamp. No QEMU process remains.
+- This falsifies the assumption that the prior 0086 UI boot repeats from this exact snapshot baseline. Follow-up: use the separate disposable `root-0084i-repaired.img` clone with QEMU writes enabled (no snapshot overlay) to determine whether HFS+ journal/cache initialization discarded by snapshot mode explains the difference. Preserve `root-0084i.img` and the IPSW-derived base. Do not touch phone partitions.
+
 ### >>> UPDATE 2026-10-25 (0088 one-hour repeat boot) <<<
 
 **STATE: CI kernel 0088 ran in QEMU for 3,600 seconds on one vCPU without an observed kernel panic or QEMU exit. SpringBoard and backboardd remain present in XNU sampler snapshots, but the screen never reached a visible menu; it alternated between Apple logo and black and ended black. This is not a second successful UI run.**
