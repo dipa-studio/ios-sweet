@@ -150,6 +150,10 @@ python3 tools/qemu-sweet.py vm/payload.bin vm/run \
   when iOS dims or sleeps the display during a long boot; each sent tap is
   recorded in `wake-events.log`. It requires `--input` and does not unlock the
   device or launch an app.
+* On Windows, `--sample-every 300 --kernel xnu/out-0086-trace/kernel.development.sweet`
+  captures the guest framebuffer, registers, and kernel msgbuf every five
+  host minutes into `snapNNN/`. Capture status is appended to
+  `snapshot-capture.log`. It pauses the guest briefly while copying memory.
 * `--wait` keeps the VM running until QEMU exits. Without it the default
   `--secs 20` stops QEMU after twenty seconds.
 * `--live-serial` prints the kernel console in the terminal; the same text

@@ -291,6 +291,8 @@ def main():
                     help='send a blank-center tablet tap every N host seconds to wake an idle guest display')
     ap.add_argument('--wake-start', type=float, default=300,
                     help='seconds after QEMU starts before the first --wake-every tap (default: 300)')
+    ap.add_argument('--sample-every', type=float, default=0,
+                    help='capture framebuffer, registers, and msgbuf every N host seconds (Windows only; requires --kernel)')
     ap.add_argument('--display', metavar='BACKEND', help='show a QEMU window (gtk, sdl, cocoa) and the guest ramfb (boot with ramfb=1)')
     ap.add_argument('--extra-cmdline', default='', help='append this to the payload boot-args')
     ap.add_argument('--tb-mb', type=int, default=512, help='QEMU TCG translation cache in MB (default: 512)')
@@ -318,6 +320,12 @@ def main():
         ap.error('--wake-every and --wake-start must be non-negative')
     if a.wake_every and not a.input:
         ap.error('--wake-every requires --input')
+    if a.sample_every < 0:
+        ap.error('--sample-every must be non-negative')
+    if a.sample_every and not a.kernel:
+        ap.error('--sample-every requires --kernel')
+    if a.sample_every and os.name != 'nt':
+        ap.error('--sample-every currently requires the Windows QMP process lookup used by research/snapshot-qemu.py')
 
     if not check_qemu_dependency(a.cpu):
         return 1
@@ -414,6 +422,8 @@ def main():
         t0 = time.time()
         deadline = float('inf') if a.wait else a.secs
         next_wake = t0 + a.wake_start if a.wake_every else float('inf')
+        next_sample = t0 + a.sample_every if a.sample_every else float('inf')
+        sample_index = 1
         wake_log = open(f'{out}/wake-events.log', 'a', encoding='utf-8') if a.wake_every else None
         while p.poll() is None and time.time() - t0 < deadline:
             now = time.time()
@@ -424,6 +434,21 @@ def main():
                 wake_log.flush()
                 while next_wake <= now:
                     next_wake += a.wake_every
+            if now >= next_sample:
+                sample_dir = f'{out}/snap{sample_index:03d}'
+                snapshot_script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                               'research', 'snapshot-qemu.py')
+                with open(f'{out}/snapshot-capture.log', 'a', encoding='utf-8') as capture_log:
+                    capture_log.write(f'[{time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now))}] '
+                                      f'capture {sample_dir}\n')
+                    capture_log.flush()
+                    capture = subprocess.run([sys.executable, snapshot_script, sample_dir, a.kernel],
+                                             cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                             stdout=capture_log, stderr=subprocess.STDOUT)
+                    capture_log.write(f'snapshot exit {capture.returncode}\n')
+                sample_index += 1
+                while next_sample <= time.time():
+                    next_sample += a.sample_every
             if a.live_serial:
                 serial_pos = stream_serial_file(serial_file, serial_pos)
             time.sleep(0.2)
