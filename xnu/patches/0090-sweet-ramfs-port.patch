@@ -2053,7 +2053,7 @@ new file mode 100644
 +	if (ret) {
 +		panic("SWEET RAMFS: vfs_fsadd failed: %d", ret);
 +	}
-+	printf("SWEET RAMFS: registered (sweet_ramfs=1)\n");
++	kprintf("SWEET RAMFS: registered (sweet_ramfs=1)\n");
 +}
 diff --git a/bsd/conf/files b/bsd/conf/files
 --- a/bsd/conf/files
