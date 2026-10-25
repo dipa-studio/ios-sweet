@@ -11,3 +11,12 @@ shim/out/
 xnu/out/
 xnu/out-*/
 __pycache__/
+# build output: disk images, local logs, caches and secrets must never be committed
+output/
+logs/
+*.img
+*.simg
+*.log
+.cache/
+.env
+.env.*

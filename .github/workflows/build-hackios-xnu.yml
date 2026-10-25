@@ -1,0 +1,100 @@
+name: build-hackios-xnu
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - ".github/workflows/build-hackios-xnu.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-hackios-xnu-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Safety net: the tree must never carry Apple firmware, iOS images,
+      # credentials or other non-distributable artifacts into CI.
+      - name: Provenance and license check
+        run: |
+          set -euo pipefail
+          bad=0
+          for ext in ipsw dmg img simg; do
+            found=$(find . -type f -name "*.$ext" -not -path './.git/*' | head -20 || true)
+            if [ -n "$found" ]; then
+              echo "::error::non-distributable $ext file found:"; echo "$found"
+              bad=1
+            fi
+          done
+          for secret in .env .env.* id_rsa credentials.json; do
+            found=$(find . -type f -name "$secret" -not -path './.git/*' | head -20 || true)
+            if [ -n "$found" ]; then
+              echo "::error::secret-like file found: $secret"; bad=1
+            fi
+          done
+          [ "$bad" -eq 0 ] || exit 1
+          echo "provenance check passed: no Apple firmware, iOS images or secrets"
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: Shell syntax check
+        run: |
+          set -euo pipefail
+          mapfile -t sh < <(find scripts tools shim userland xnu/patches -type f -name '*.sh' | sort)
+          fail=0
+          for f in "${sh[@]}"; do
+            if ! bash -n "$f"; then echo "::error::bash -n failed: $f"; fail=1; fi
+          done
+          [ "$fail" -eq 0 ] || exit 1
+          echo "checked ${#sh[@]} shell scripts"
+
+      - name: Python syntax check
+        run: |
+          set -euo pipefail
+          mapfile -t py < <(find scripts tools -type f -name '*.py' | sort)
+          for f in "${py[@]}"; do
+            python3 -X utf8 -m py_compile "$f" || { echo "::error::py_compile failed: $f"; exit 1; }
+          done
+          echo "checked ${#py[@]} python files"
+
+      - name: Repository validation
+        run: python3 -X utf8 tools/validate-repo.py --verbose
+
+      - name: Static analysis (shellcheck)
+        run: |
+          set -euo pipefail
+          mapfile -t sh < <(find scripts tools shim userland xnu/patches -type f -name '*.sh' | sort)
+          for f in "${sh[@]}"; do
+            shellcheck -S warning "$f" || true
+          done
+          echo "shellcheck pass complete"
+
+      - name: Build reproducible patch/tool artifact
+        run: |
+          set -euo pipefail
+          mkdir -p out-hackios
+          cp -R xnu/patches out-hackios/patches
+          cp -R scripts out-hackios/scripts
+          cp -R userland/patches out-hackios/userland-patches
+          cp tools/*.py out-hackios/ 2>/dev/null || true
+          (cd out-hackios && find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          tar czf hackios-build-artifacts.tgz out-hackios
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hackios-build-artifacts
+          path: hackios-build-artifacts.tgz
+          if-no-files-found: error
+          retention-days: 14
