@@ -292,7 +292,8 @@ def main():
     ap.add_argument('--wake-start', type=float, default=300,
                     help='seconds after QEMU starts before the first --wake-every tap (default: 300)')
     ap.add_argument('--sample-every', type=float, default=0,
-                    help='capture framebuffer, registers, and msgbuf every N host seconds (Windows only; requires --kernel)')
+                    help='capture framebuffer, registers, and msgbuf every N host seconds (Windows only; requires --sample-kernel)')
+    ap.add_argument('--sample-kernel', help='matching unstripped kernel used by periodic msgbuf capture (does not require llvm-nm)')
     ap.add_argument('--display', metavar='BACKEND', help='show a QEMU window (gtk, sdl, cocoa) and the guest ramfb (boot with ramfb=1)')
     ap.add_argument('--extra-cmdline', default='', help='append this to the payload boot-args')
     ap.add_argument('--tb-mb', type=int, default=512, help='QEMU TCG translation cache in MB (default: 512)')
@@ -322,8 +323,11 @@ def main():
         ap.error('--wake-every requires --input')
     if a.sample_every < 0:
         ap.error('--sample-every must be non-negative')
-    if a.sample_every and not a.kernel:
-        ap.error('--sample-every requires --kernel')
+    sample_kernel = a.sample_kernel or a.kernel
+    if a.sample_every and not sample_kernel:
+        ap.error('--sample-every requires --sample-kernel or --kernel')
+    if a.sample_every and not os.path.isfile(sample_kernel):
+        ap.error(f'periodic capture kernel does not exist: {sample_kernel}')
     if a.sample_every and os.name != 'nt':
         ap.error('--sample-every currently requires the Windows QMP process lookup used by research/snapshot-qemu.py')
 
@@ -442,7 +446,7 @@ def main():
                     capture_log.write(f'[{time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now))}] '
                                       f'capture {sample_dir}\n')
                     capture_log.flush()
-                    capture = subprocess.run([sys.executable, snapshot_script, sample_dir, a.kernel],
+                    capture = subprocess.run([sys.executable, snapshot_script, sample_dir, sample_kernel],
                                              cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                              stdout=capture_log, stderr=subprocess.STDOUT)
                     capture_log.write(f'snapshot exit {capture.returncode}\n')
