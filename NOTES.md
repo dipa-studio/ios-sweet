@@ -1,3 +1,12 @@
+### >>> UPDATE 2026-10-25 13:35 WIB (0086 run stopped; qemu.log and guest evidence analyzed) <<<
+
+**STATE: The repeat run was stopped after ~12 minutes to avoid keeping the laptop under QEMU load while the guest showed no boot progress. This run did not reach SpringBoard/menu. The QEMU trace does not show a panic; the stronger lead is missing/unavailable private data-volume setup in the guest. No kernel patch is justified by this evidence alone.**
+
+- Run `research/vm/run20h-0086-repeatable-wake-1h/` used kernel 0086 and `--disk-snapshot`; it was stopped with Ctrl-C at ~13:35:44 WIB. `qemu.log` flushed to 1,175,320 bytes, `serial.txt` is empty, and no QEMU process remains. The base `root-0084i.img` remains 17,179,869,184 bytes and retains its original 03:54:01 timestamp.
+- `snap002/msgbuf.txt` confirms HFS+ `iOSRoot` mounted and PID 1 `/sbin/launchd` started. By guest ~597s there are no `exec SpringBoard` or `backboardd` messages. The framebuffer shows failures to mount a memory filesystem on `/private/var`, create data-volume directories, and find `HFS+ Private Data`; determine the exact source/context before changing XNU.
+- `qemu.log` is CPU exception trace, not boot text. It contains 8,967 records (3,630 IRQ, 797 Data Abort, 55 SVC, 2 Prefetch Abort), with no panic/watchdog/fatal marker. Its dominant kernel addresses resolve in the exact 0086 kernel to `_machine_idle+0xfc`, `_ml_set_interrupts_enabled_with_debug+0x110`, and `_ml_get_timebase+0x18`, consistent with idle/interrupt handling. The familiar `__bcopyout+0x1c` appears 11 times only; earlier long traces have the same recoverable pattern. Two frequent EL0 addresses remain unsymbolicated.
+- Detailed notes: `research/vm/run20h-0086-repeatable-wake-1h/qemu-analysis.txt`. Compare private/data-volume setup against the earlier successful run before making kernel changes. No further QEMU run was started.
+
 ### >>> UPDATE 2026-10-25 (5-minute QMP wake smoke; periodic msgbuf capture added) <<<
 
 **STATE: A real 5-minute Windows QEMU smoke run confirmed QMP wake taps are accepted and the disposable disk remains unchanged. The final framebuffer is still the Apple logo, so this short boot did not reach a usable menu. The 0086 one-hour UI result remains historical evidence, not a repeat in this run. To make the next longer run diagnosable, the runner can now capture framebuffer/register/msgbuf snapshots periodically.**
