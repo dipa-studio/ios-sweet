@@ -3,7 +3,11 @@ name: build-hackios-xnu
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, hackios-xnu-integration]
+    paths:
+      - "scripts/**"
+      - ".github/workflows/build-hackios-xnu.yml"
+  pull_request:
     paths:
       - "scripts/**"
       - ".github/workflows/build-hackios-xnu.yml"
