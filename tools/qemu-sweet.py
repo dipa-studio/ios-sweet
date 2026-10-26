@@ -20,7 +20,7 @@ snapshot of the circular screen, not a complete boot log. --fail-on-panic
 returns 2 when a panic is visible; absence of a panic does not prove boot.
 An undecodable or blank screen returns 3 with --fail-on-panic.
 """
-import argparse, json, os, shutil, socket, struct, subprocess, sys, time, zlib
+import argparse, hashlib, json, os, shutil, socket, struct, subprocess, sys, time, zlib
 
 FB_BASE, FB_W, FB_H = 0x9c000000, 1080, 2400
 FB_STRIDE = FB_W * 4
@@ -75,12 +75,8 @@ def check_kernel_tools(kernel_path):
     return True
 
 
-def build_image(payload, extra_cmdline='', smp=1):
-    """Return (phys_base, ram_image, boot_args_pa, entry_pa)."""
-    magic, ver, nsegs = struct.unpack_from('<8sII', payload, 0)
-    assert magic == b'SWEETXNU' and ver == 1, 'not a SWEETXNU v1 payload'
-    virt_base, entry_va, adt_off, adt_size, kernel_end, phys_base, mem_size = \
-        struct.unpack_from('<7Q', payload, 0x10)
+def compose_cmdline(payload, extra_cmdline='', smp=1):
+    """Return the exact boot-args bytes placed in boot_args (without padding)."""
     base = payload[0x48:0x48 + BOOT_LINE_LENGTH].split(b'\0', 1)[0].decode('latin1').split()
     cpus_arg = f'cpus={smp}'
     replaced = False
@@ -94,8 +90,133 @@ def build_image(payload, extra_cmdline='', smp=1):
     cmdline = ' '.join(base)
     if extra_cmdline:
         cmdline += ' ' + extra_cmdline
-    cmdline = cmdline.encode('latin1')
-    cmdline = cmdline[:BOOT_LINE_LENGTH - 1] + b'\0'
+    return cmdline.encode('latin1')[:BOOT_LINE_LENGTH - 1]
+
+
+def iso_now(epoch=None):
+    return time.strftime('%Y-%m-%dT%H:%M:%S%z', time.localtime(epoch))
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as source:
+        for chunk in iter(lambda: source.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_record(path):
+    path = os.path.abspath(path)
+    return {
+        'path': path.replace(os.sep, '/'),
+        'size': os.path.getsize(path),
+        'sha256': sha256_file(path),
+    }
+
+
+def qemu_identity():
+    """Return (absolute binary path, first --version line); no guest is started."""
+    qemu_bin = shutil.which('qemu-system-aarch64')
+    if not qemu_bin:
+        return None, None
+    qemu_bin = os.path.abspath(qemu_bin)
+    try:
+        version = subprocess.check_output(
+            [qemu_bin, '--version'], text=True, stderr=subprocess.DEVNULL
+        ).splitlines()[0].strip()
+    except Exception:
+        version = None
+    return qemu_bin, version
+
+
+def build_manifest(*, argv, payload_path, payload, extra_cmdline, boot_args, trace,
+                   disk_snapshot, disk, kernel, sample_kernel, qemu_binary,
+                   qemu_version, host_started=None):
+    """Build the pre-run manifest without starting QEMU."""
+    started = time.time() if host_started is None else host_started
+    records = {}
+
+    def record(path):
+        if not path:
+            return None
+        key = os.path.normcase(os.path.abspath(path))
+        if key not in records:
+            records[key] = file_record(path)
+        return dict(records[key])
+
+    manifest = {
+        'schema_version': 1,
+        'state': 'prepared',
+        'host_started': iso_now(started),
+        'host_started_unix': round(started, 6),
+        'qemu_binary': qemu_binary,
+        'qemu_version': qemu_version,
+        'argv': list(argv),
+        'payload_path': os.path.abspath(payload_path).replace(os.sep, '/'),
+        'payload_size': len(payload),
+        'payload_sha256': hashlib.sha256(payload).hexdigest(),
+        'extra_cmdline': extra_cmdline,
+        'boot_args': boot_args,
+        'trace': trace,
+        'disk_snapshot': bool(disk_snapshot),
+    }
+    for key, path in (('kernel', kernel), ('sample_kernel', sample_kernel)):
+        value = record(path)
+        if value is not None:
+            manifest[key] = value
+    if disk:
+        disk = os.path.abspath(disk)
+        disk_stat = os.stat(disk)
+        # Metadata does not establish disk content identity; avoid scanning multi-GB images at every boot.
+        manifest['disk'] = {
+            'path': disk.replace(os.sep, '/'),
+            'size': disk_stat.st_size,
+            'mtime_ns': disk_stat.st_mtime_ns,
+        }
+    return manifest
+
+
+def finalize_manifest(manifest, *, stop_reason, qemu_returncode, runner_exit_code,
+                      result_status=None, host_finished=None, error=None):
+    """Add host outcome fields before writing the final manifest."""
+    finished = time.time() if host_finished is None else host_finished
+    started = manifest.get('host_started_unix', finished)
+    state = {
+        'interrupted': 'interrupted',
+        'runner_error': 'failed',
+        'launch_failed': 'failed',
+    }.get(stop_reason, 'finished')
+    manifest.update({
+        'state': state,
+        'host_finished': iso_now(finished),
+        'host_finished_unix': round(finished, 6),
+        'duration_secs': round(max(0.0, finished - started), 3),
+        'stop_reason': stop_reason,
+        'qemu_returncode': qemu_returncode,
+        'runner_exit_code': runner_exit_code,
+        'timed_out': stop_reason == 'deadline',
+    })
+    if result_status is not None:
+        manifest['result_status'] = result_status
+    if error:
+        manifest['error'] = error
+    return manifest
+
+
+def write_manifest(path, manifest):
+    with open(path, 'w', encoding='utf-8') as manifest_file:
+        json.dump(manifest, manifest_file, indent=2)
+        manifest_file.write('\n')
+
+
+def build_image(payload, extra_cmdline='', smp=1):
+    """Return (phys_base, ram_image, boot_args_pa, entry_pa, boot_args_text)."""
+    magic, ver, nsegs = struct.unpack_from('<8sII', payload, 0)
+    assert magic == b'SWEETXNU' and ver == 1, 'not a SWEETXNU v1 payload'
+    virt_base, entry_va, adt_off, adt_size, kernel_end, phys_base, mem_size = \
+        struct.unpack_from('<7Q', payload, 0x10)
+    raw_cmdline = compose_cmdline(payload, extra_cmdline, smp)
+    cmdline = raw_cmdline + b'\0'
     cmdline = cmdline.ljust(BOOT_LINE_LENGTH, b'\0')
     delta = phys_base - virt_base
     adt_pa = kernel_end + delta
@@ -112,7 +233,7 @@ def build_image(payload, extra_cmdline='', smp=1):
     ba += cmdline + b'\0' * 4 + struct.pack('<QQ', 0, mem_size)
     assert len(ba) == 736
     img[ba_pa - phys_base:ba_pa - phys_base + len(ba)] = ba
-    return phys_base, bytes(img), ba_pa, entry_va + delta
+    return phys_base, bytes(img), ba_pa, entry_va + delta, raw_cmdline.decode('latin1')
 
 
 def stub(ba_pa, entry_pa):
@@ -211,8 +332,12 @@ def qmp(sock_path, *cmds, pmemsave=None):
     return out
 
 
-def qmp_wake_tap(sock_path, x=16384, y=16384):
-    """Tap the absolute virtio tablet through QMP, at normalized 0..32767 coordinates."""
+def qmp_wake_tap(sock_path, x=16384, y=16384, press_ms=100):
+    """Tap the absolute virtio tablet; each QMP request ends with its own SYN."""
+    if any(type(value) is not int or not 0 <= value <= 32767 for value in (x, y)):
+        raise ValueError('absolute tablet coordinates must be integers in 0..32767')
+    if type(press_ms) is not int or not 1 <= press_ms <= 5000:
+        raise ValueError('press_ms must be an integer in 1..5000')
     s = socket.socket(socket.AF_INET if isinstance(sock_path, tuple) else socket.AF_UNIX)
     s.settimeout(30)
     s.connect(sock_path)
@@ -230,16 +355,28 @@ def qmp_wake_tap(sock_path, x=16384, y=16384):
             if response.get('id') == request_id:
                 if 'error' in response:
                     raise RuntimeError(f"QMP {command} failed: {response['error']}")
-                return response.get('return')
+                if 'return' not in response:
+                    raise RuntimeError(f'QMP {command} returned no result for id {request_id}')
+                return response['return']
 
     try:
         execute('qmp_capabilities', {}, 0)
-        execute('input-send-event', {'events': [
+        down = {'events': [
             {'type': 'abs', 'data': {'axis': 'x', 'value': x}},
             {'type': 'abs', 'data': {'axis': 'y', 'value': y}},
             {'type': 'btn', 'data': {'down': True, 'button': 'left'}},
-            {'type': 'btn', 'data': {'down': False, 'button': 'left'}},
-        ]}, 1)
+        ]}
+        up = {'events': [{'type': 'btn', 'data': {'down': False, 'button': 'left'}}]}
+        try:
+            execute('input-send-event', down, 1)
+            time.sleep(press_ms / 1000)
+        except BaseException:
+            try:
+                execute('input-send-event', up, 2)
+            except Exception:
+                pass
+            raise
+        execute('input-send-event', up, 2)
     finally:
         f.close()
         s.close()
@@ -291,12 +428,17 @@ def main():
                     help='send a blank-center tablet tap every N host seconds to wake an idle guest display')
     ap.add_argument('--wake-start', type=float, default=300,
                     help='seconds after QEMU starts before the first --wake-every tap (default: 300)')
+    ap.add_argument('--wake-press-ms', type=int, default=100,
+                    help='QMP tablet press duration in milliseconds (1..5000; default: 100)')
     ap.add_argument('--sample-every', type=float, default=0,
                     help='capture framebuffer, registers, and msgbuf every N host seconds (Windows only; requires --sample-kernel)')
     ap.add_argument('--sample-kernel', help='matching unstripped kernel used by periodic msgbuf capture (does not require llvm-nm)')
-    ap.add_argument('--display', metavar='BACKEND', help='show a QEMU window (gtk, sdl, cocoa) and the guest ramfb (boot with ramfb=1)')
+    ap.add_argument('--display', metavar='BACKEND', default='gtk', help='QEMU window backend: gtk, sdl, cocoa (default: gtk)')
+    ap.add_argument('--headless', action='store_true', help='run without a graphical window (implies -nographic) for unattended tests')
     ap.add_argument('--extra-cmdline', default='', help='append this to the payload boot-args')
     ap.add_argument('--tb-mb', type=int, default=512, help='QEMU TCG translation cache in MB (default: 512)')
+    ap.add_argument('--trace', choices=('exceptions', 'errors'), default='exceptions',
+                    help='QEMU log detail: exceptions preserves historical tracing; errors omits per-exception logging')
     ap.add_argument('--check-env', action='store_true', help='check QEMU installation and dependencies without running a payload')
     a = ap.parse_args()
 
@@ -319,6 +461,8 @@ def main():
 
     if a.wake_every < 0 or a.wake_start < 0:
         ap.error('--wake-every and --wake-start must be non-negative')
+    if not 1 <= a.wake_press_ms <= 5000:
+        ap.error('--wake-press-ms must be in 1..5000')
     if a.wake_every and not a.input:
         ap.error('--wake-every requires --input')
     if a.sample_every < 0:
@@ -333,6 +477,7 @@ def main():
 
     if not check_qemu_dependency(a.cpu):
         return 1
+    qemu_binary, qemu_version = qemu_identity()
 
     if a.kernel and not check_kernel_tools(a.kernel):
         return 1
@@ -349,7 +494,7 @@ def main():
     os.makedirs(a.outdir, exist_ok=True)
     out = os.path.abspath(a.outdir).replace(os.sep, '/')
 
-    phys_base, img, ba_pa, entry_pa = build_image(payload, a.extra_cmdline, a.smp)
+    phys_base, img, ba_pa, entry_pa, boot_args = build_image(payload, a.extra_cmdline, a.smp)
     open(f'{out}/ram.bin', 'wb').write(img)
     open(f'{out}/stub.bin', 'wb').write(stub(ba_pa, entry_pa))
     print(f'phys_base={phys_base:#x} boot_args={ba_pa:#x} entry={entry_pa:#x}', file=sys.stderr)
@@ -366,7 +511,7 @@ def main():
     if a.input and 'virtio_input=1' not in bootline.split():
         print('[!] --input: the payload boot-args do not say virtio_input=1; '
               'build it with that or pass --extra-cmdline', file=sys.stderr)
-    if a.display and 'ramfb=1' not in bootline.split():
+    if not a.headless and a.display and 'ramfb=1' not in bootline.split():
         print('[!] --display: the payload boot-args do not say ramfb=1; '
               'build it with that or pass --extra-cmdline', file=sys.stderr)
 
@@ -386,7 +531,8 @@ def main():
     ram_gib = max(4, -(-(phys_base + mem_size - 0x40000000) // (1 << 30)))
     cmd = ['qemu-system-aarch64', '-M', 'virt,gic-version=3', '-cpu', a.cpu, '-smp', str(a.smp), '-m', f'{ram_gib}G',
            '-serial', f'file:{out}/serial.txt', '-qmp', monitor_arg,
-           '-d', 'int,guest_errors,unimp', '-D', f'{out}/qemu.log', '-no-reboot',
+           '-d', 'int,guest_errors,unimp' if a.trace == 'exceptions' else 'guest_errors,unimp',
+           '-D', f'{out}/qemu.log', '-no-reboot',
            '-device', f'loader,file={out}/ram.bin,addr={phys_base:#x},force-raw=on',
            '-device', f'loader,file={out}/stub.bin,addr={STUB_PA:#x},force-raw=on',
            '-device', f'loader,addr={STUB_PA:#x},cpu-num=0']
@@ -395,10 +541,10 @@ def main():
         cmd += ['-accel', f'tcg,tb-size={a.tb_mb}{tcg_threads}']
     else:
         cmd += ['-accel', a.accel]
-    if a.display:
-        cmd += ['-display', a.display, '-device', 'ramfb']
-    else:
+    if a.headless:
         cmd += ['-nographic']
+    else:
+        cmd += ['-display', a.display, '-device', 'ramfb,id=sweetfb']
     if a.disk or a.input:
         cmd += ['-global', 'virtio-mmio.force-legacy=false']
     if a.disk:
@@ -411,16 +557,42 @@ def main():
     if a.gdb:
         cmd += ['-S', '-gdb', 'tcp::1234']
 
+    manifest = build_manifest(
+        argv=cmd,
+        payload_path=a.payload,
+        payload=payload,
+        extra_cmdline=a.extra_cmdline,
+        boot_args=boot_args,
+        trace=a.trace,
+        disk_snapshot=a.disk_snapshot,
+        disk=a.disk,
+        kernel=a.kernel,
+        sample_kernel=sample_kernel,
+        qemu_binary=qemu_binary,
+        qemu_version=qemu_version,
+    )
+    manifest_path = f'{out}/run-manifest.json'
+    write_manifest(manifest_path, manifest)
+
     p = None
     serial_file = f'{out}/serial.txt'
     serial_pos = 0
     wake_log = None
+    stop_reason = 'launch_failed'
+    qemu_returncode = None
+    runner_exit_code = None
+    result_status = None
+    manifest_error = None
 
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
+        stop_reason = 'running'
         if a.gdb:
             print('gdb stub on :1234; QMP socket:', mon, file=sys.stderr)
             p.wait()
+            stop_reason = 'gdb_exited'
+            qemu_returncode = p.returncode
+            runner_exit_code = 0
             return 0
 
         t0 = time.time()
@@ -432,7 +604,7 @@ def main():
         while p.poll() is None and time.time() - t0 < deadline:
             now = time.time()
             if wake_log is not None and now >= next_wake:
-                qmp_wake_tap(mon)
+                qmp_wake_tap(mon, press_ms=a.wake_press_ms)
                 stamp = time.strftime('%Y-%m-%dT%H:%M:%S%z', time.localtime(now))
                 wake_log.write(f'{stamp} QMP absolute tablet tap x=16384 y=16384\n')
                 wake_log.flush()
@@ -460,6 +632,7 @@ def main():
         if a.live_serial:
             stream_serial_file(serial_file, serial_pos)
 
+        stop_reason = 'qemu_exited' if p.poll() is not None else 'deadline'
         result = {'status': 'qemu_exited', 'qemu_returncode': p.returncode}
         if p.poll() is None:
             _, regs, *extra = qmp(mon, 'stop', 'info registers', *a.hmp, pmemsave=(FB_BASE, FB_STRIDE * FB_H, f'{out}/fb.raw'))
@@ -477,29 +650,54 @@ def main():
         else:
             print(f'qemu exited early: {p.returncode}', file=sys.stderr)
 
+        qemu_returncode = p.returncode
+        result_status = result['status']
         open(f'{out}/result.json', 'w').write(json.dumps(result, indent=2) + '\n')
         print(json.dumps(result), file=sys.stderr)
         print(f'{out}/fb.png  {out}/regs.txt  {out}/qemu.log', file=sys.stderr)
         if a.fail_on_panic and result['status'] == 'panic':
-            return 2
-        if a.fail_on_panic and result['status'] in ('incomplete_decode', 'blank_screen'):
-            return 3
-        if result['status'] == 'qemu_exited':
-            return 1
-        return 0
+            runner_exit_code = 2
+        elif a.fail_on_panic and result['status'] in ('incomplete_decode', 'blank_screen'):
+            runner_exit_code = 3
+        elif result['status'] == 'qemu_exited':
+            runner_exit_code = 1
+        else:
+            runner_exit_code = 0
+        return runner_exit_code
 
     except KeyboardInterrupt:
         print('\n[!] Interrupted by user, stopping QEMU...', file=sys.stderr)
+        stop_reason = 'interrupted'
+        runner_exit_code = 130
         if p and p.poll() is None:
             p.kill()
             p.wait()
         return 130
+    except Exception as exc:
+        stop_reason = 'runner_error'
+        runner_exit_code = 1
+        manifest_error = f'{type(exc).__name__}: {exc}'
+        raise
     finally:
         if wake_log is not None:
             wake_log.close()
         if p and p.poll() is None:
             p.kill()
             p.wait()
+        if p is not None and qemu_returncode is None:
+            qemu_returncode = p.returncode
+        try:
+            finalize_manifest(
+                manifest,
+                stop_reason=stop_reason,
+                qemu_returncode=qemu_returncode,
+                runner_exit_code=runner_exit_code,
+                result_status=result_status,
+                error=manifest_error,
+            )
+            write_manifest(manifest_path, manifest)
+        except Exception as exc:
+            print(f'[!] Failed to finalize run manifest: {exc}', file=sys.stderr)
         ram_file = f'{out}/ram.bin'
         if os.path.exists(ram_file):
             try:
