@@ -155,8 +155,26 @@ python3 tools/qemu-sweet.py vm/payload.bin vm/run \
   host minutes into `snapNNN/`. Capture status is appended to
   `snapshot-capture.log`. It pauses the guest briefly while copying memory;
   `--sample-kernel` does not need LLVM tools installed.
+* Every run writes `run-manifest.json` before QEMU starts and finalises it on
+  exit. It records the full argv, QEMU binary/version, payload and kernel
+  SHA-256, the exact effective boot arguments, disk path/size/mtime, and the
+  QEMU/runner exit status. Use a fresh output directory for comparisons.
+  `--trace errors` omits per-exception logging but keeps guest errors and
+  unimplemented-device warnings; the default `--trace exceptions` preserves
+  the historical log.
 * `--wait` keeps the VM running until QEMU exits. Without it the default
   `--secs 20` stops QEMU after twenty seconds.
+* `--wake-every N --input` sends an absolute tablet tap every N host seconds.
+  The press and release are separate QMP requests, each with its own input
+  sync. `--wake-press-ms 100` controls the dwell (valid range 1–5000 ms).
+  A successful QMP response confirms event acceptance; inspect `SWEET HID:
+  touch` in a captured guest msgbuf to confirm delivery.
+* For a GTK comparison during a running VM, run
+  `python tools/capture-display.py RUN_DIR NEW_CAPTURE_DIR MATCHING_KERNEL`
+  in another terminal. It records the identified GTK window, retained guest
+  raw bytes, QMP screendump, msgbuf input/display records, and capture times.
+  The GTK capture precedes QMP pause; compare their timestamps before treating
+  a difference as a display defect.
 * `--live-serial` prints the kernel console in the terminal; the same text
   is in `vm/run/serial.txt`.
 * `--smp N` selects 1-8 QEMU vCPUs and sets the matching XNU `cpus=N` boot
