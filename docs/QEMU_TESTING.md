@@ -2,6 +2,10 @@
 
 This document explains how to test the patched Apple XNU kernel for the Redmi Note 10 Pro (`sweet`, SM7150) in QEMU virtual machine without touching physical hardware or risking device user data.
 
+To boot the real iOS HFS+ root image as an external virtio-blk disk, with a
+window, touch and buttons, see [QEMU_VM.md](QEMU_VM.md). This guide covers the
+lighter RAM-disk smoke tests.
+
 ---
 
 ## 1. Overview

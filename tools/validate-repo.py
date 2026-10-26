@@ -50,9 +50,42 @@ def validate_patches(verbose=False):
             continue
 
         with open(path, 'r', errors='ignore') as f:
-            head = f.read(2048)
+            content = f.read()
+            head = content[:2048]
             if not ('--- ' in head or 'diff ' in head or 'Index:' in head):
                 errors.append(f"Patch missing standard diff header: {fname}")
+                continue
+
+            # Catch malformed unified-diff hunk counts before the build workflow
+            # silently skips a patch whose `git apply --check` fails.
+            lines = content.splitlines()
+            for i, line in enumerate(lines):
+                hunk = re.match(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', line)
+                if not hunk:
+                    continue
+                old_count = new_count = 0
+                for changed in lines[i + 1:]:
+                    if changed.startswith(('@@ ', '--- ', 'diff ')):
+                        break
+                    if changed.startswith(' '):
+                        old_count += 1
+                        new_count += 1
+                    elif changed.startswith('-'):
+                        old_count += 1
+                    elif changed.startswith('+'):
+                        new_count += 1
+                    elif changed.startswith('\\'):
+                        continue
+                    else:
+                        break
+                expected_old = int(hunk.group(2) or 1)
+                expected_new = int(hunk.group(4) or 1)
+                if (old_count, new_count) != (expected_old, expected_new):
+                    errors.append(
+                        f"{fname}: malformed hunk at line {i + 1}: "
+                        f"header says {expected_old}/{expected_new}, "
+                        f"body has {old_count}/{new_count} lines"
+                    )
 
     # Check contiguous sequence
     if seen_numbers:

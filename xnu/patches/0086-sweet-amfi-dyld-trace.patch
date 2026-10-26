@@ -1,0 +1,60 @@
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -27,6 +27,7 @@
+ #include <kern/startup.h>
+ #include <libkern/amfi/amfi.h>
+ #include <mach/kern_return.h>
++#include <pexpert/pexpert.h>
+ #include <sys/codesign.h>
+ #include <sys/mount.h>
+ #include <sys/priv.h>
+@@ -311,13 +312,16 @@
+ #define SWEET_AMFI_DYLD_ALLOW_ALL 0xffULL
+ #define SWEET_AMFI_BOOTARGS_NOT_ENFORCED 0x86ULL
+ 
++static int sweet_amfi_trace_enabled;
++static unsigned int sweet_amfi_trace_count;
++
+ static int
+ sweet_amfi_policy_syscall(__unused struct proc *p, int call, user_addr_t arg)
+ {
+ 	struct {
+ 		uint64_t input_flags;
+ 		user_addr_t output_flags;
+-	} args;
++	} args = { 0 };
+ 	uint64_t flags = SWEET_AMFI_DYLD_ALLOW_ALL;
+ 	uint64_t state = SWEET_AMFI_BOOTARGS_NOT_ENFORCED;
+ 	int error;
+@@ -325,10 +329,16 @@
+ 	switch (call) {
+ 	case SWEET_AMFI_CHECK_DYLD_POLICY:
+ 		error = copyin(arg, &args, sizeof(args));
+-		if (error != 0) {
+-			return error;
++		if (error == 0) {
++			error = copyout(&flags, args.output_flags, sizeof(flags));
+ 		}
+-		return copyout(&flags, args.output_flags, sizeof(flags));
++		if (sweet_amfi_trace_enabled && sweet_amfi_trace_count < 16) {
++			sweet_amfi_trace_count++;
++			printf("SWEET AMFI DYLD POLICY: request %u input %#llx output %#llx error %d\n",
++			    sweet_amfi_trace_count, (unsigned long long)args.input_flags,
++			    (unsigned long long)flags, error);
++		}
++		return error;
+ 	case SWEET_AMFI_QUERY_BOOTARG_STATE:
+ 		return copyout(&state, arg, sizeof(state));
+ 	default:
+@@ -405,7 +415,10 @@
+ void
+ sweet_amfi_policy_register(void)
+ {
+-	int error = mac_policy_register(&sweet_amfi_mac_conf, &sweet_amfi_mac_handle, NULL);
++	int error;
++
++	(void) PE_parse_boot_argn("sweetamfitrace", &sweet_amfi_trace_enabled, sizeof(sweet_amfi_trace_enabled));
++	error = mac_policy_register(&sweet_amfi_mac_conf, &sweet_amfi_mac_handle, NULL);
+ 	printf("SWEET AMFI: platform binary policy %s (%d)\n",
+ 	    error ? "NOT registered" : "registered", error);
+ 	error = mac_policy_register(&sweet_sandbox_mac_conf, &sweet_sandbox_mac_handle, NULL);

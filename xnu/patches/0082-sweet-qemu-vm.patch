@@ -1,0 +1,1332 @@
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -105,6 +105,9 @@
+ 
+ bsd/dev/memdev.c			standard
+ bsd/dev/sweet_ufs.c			standard
++bsd/dev/sweet_virtio_blk.c		standard
++bsd/dev/sweet_virtio_input.c		standard
++bsd/dev/sweet_ramfb.c			standard
+ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_touch.c			standard
+--- /dev/null
++++ b/bsd/dev/sweet_virtio_blk.c
+@@ -0,0 +1,648 @@
++/*
++ * SWEET virtio-blk root disk.
++ *
++ * A disk image on the host becomes vblk0 (rvblk0) in the guest.  QEMU's
++ * "virt" machine attaches it to the virtio-mmio bus:
++ *
++ *   -drive file=ios16-root.img,format=raw,if=none,id=vmdisk
++ *   -device virtio-blk-device,drive=vmdisk
++ *   -global virtio-mmio.force-legacy=false
++ *
++ * and the kernel gets rd=vblk0.  Only with boot-arg virtio_blk=1: the bus
++ * address is QEMU's and means nothing on the phone.
++ *
++ * The transport is the modern one (version 2), queue 0, one request at a
++ * time, no interrupt: put a request on the queue, notify the device, watch
++ * the used ring.  QEMU serves the image from the host's page cache.
++ *
++ * Reads and writes use one descriptor per contiguous run inside a page, so
++ * a request can span pages that are not physically adjacent.  A write is
++ * accepted only if the device did not offer VIRTIO_BLK_F_RO (QEMU sets it
++ * for a read-only drive).
++ *
++ * Adapted from HackiOS xnu/files/bsd/dev/redwood_virtio_blk.c (APSL 2.0).
++ * The write path, the flush request and the settable logical block size are
++ * the changes needed for an iOS HFS+ root.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++
++#include <kern/clock.h>
++#include <kern/locks.h>
++#include <libkern/libkern.h>
++#include <mach/mach_types.h>
++#include <mach/vm_param.h>
++#include <miscfs/devfs/devfs.h>
++#include <pexpert/pexpert.h>
++#include <sys/buf.h>
++#include <sys/conf.h>
++#include <sys/disk.h>
++#include <sys/errno.h>
++#include <sys/fcntl.h>
++#include <sys/proc.h>
++#include <sys/systm.h>
++#include <sys/uio.h>
++#include <vm/vm_kern.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++extern uint64_t kvtophys(vm_offset_t va);
++
++#define VIRTIO_BUS              0x0a000000UL    /* QEMU virt: 32 transports of 0x200 bytes */
++#define VIRTIO_SLOTS            32
++#define VIRTIO_SLOT_SIZE        0x200
++
++#define VIRTIO_MAGIC            0x000           /* "virt" */
++#define VIRTIO_VERSION          0x004
++#define VIRTIO_DEVICE_ID        0x008
++#define VIRTIO_DEVICE_FEATURES  0x010
++#define VIRTIO_DEVICE_FEATURES_SEL 0x014
++#define VIRTIO_DRIVER_FEATURES  0x020
++#define VIRTIO_DRIVER_FEATURES_SEL 0x024
++#define VIRTIO_QUEUE_SEL        0x030
++#define VIRTIO_QUEUE_NUM_MAX    0x034
++#define VIRTIO_QUEUE_NUM        0x038
++#define VIRTIO_QUEUE_READY      0x044
++#define VIRTIO_QUEUE_NOTIFY     0x050
++#define VIRTIO_INTERRUPT_ACK    0x064
++#define VIRTIO_STATUS           0x070
++#define VIRTIO_QUEUE_DESC       0x080
++#define VIRTIO_QUEUE_DRIVER     0x090
++#define VIRTIO_QUEUE_DEVICE     0x0a0
++#define VIRTIO_CONFIG           0x100           /* the device's own configuration */
++
++#define VIRTIO_ID_BLOCK         2
++#define STATUS_ACKNOWLEDGE      1
++#define STATUS_DRIVER           2
++#define STATUS_DRIVER_OK        4
++#define STATUS_FEATURES_OK      8
++
++#define VIRTIO_BLK_F_RO         5               /* feature bit: the drive is read-only */
++#define VIRTIO_BLK_F_FLUSH      9               /* feature bit: flush is supported */
++
++#define QUEUE_SIZE              64
++#define DESC_F_NEXT             1
++#define DESC_F_WRITE            2
++#define AVAIL_F_NO_INTERRUPT    1
++
++/* the request types we use */
++#define VIRTIO_BLK_T_IN         0
++#define VIRTIO_BLK_T_OUT        1
++#define VIRTIO_BLK_T_FLUSH      4
++#define VIRTIO_BLK_S_OK         0
++
++#define VIRTIO_BLK_SECTOR       512             /* virtio-blk counts in these, always */
++
++/*
++ * The most one request may carry.  A request needs one descriptor for its
++ * header, one for its status byte and one per run inside a page of the data,
++ * so this bounds the chain well inside the queue.
++ */
++#define BLK_MAX_XFER            (64 * 1024)
++#define BLK_MAX_DATA_DESC       (BLK_MAX_XFER / PAGE_SIZE + 1)
++
++struct vq_desc {
++	uint64_t addr;
++	uint32_t len;
++	uint16_t flags;
++	uint16_t next;
++};
++struct vq_avail {
++	uint16_t flags;
++	uint16_t idx;
++	uint16_t ring[QUEUE_SIZE];
++};
++struct vq_used {
++	uint16_t flags;
++	uint16_t idx;
++	struct {
++		uint32_t id;
++		uint32_t len;
++	} ring[QUEUE_SIZE];
++};
++struct blk_req_hdr {
++	uint32_t type;
++	uint32_t reserved;
++	uint64_t sector;
++};
++
++/* the ring and the small request pieces share one page */
++#define OFFSET_DESC             0x0000
++#define OFFSET_AVAIL            0x0400
++#define OFFSET_USED             0x0800
++#define OFFSET_HDR              0x0c00
++#define OFFSET_STATUS           0x0c40
++
++struct blk_device {
++	vm_offset_t          regs;
++	vm_offset_t          page;
++	uint64_t             page_phys;
++	struct vq_desc      *desc;
++	struct vq_avail     *avail;
++	struct vq_used      *used;
++	struct blk_req_hdr  *hdr;
++	volatile uint8_t    *status;
++	uint16_t             seen;      /* how far the used ring has been read */
++	uint64_t             capacity;  /* in 512-byte sectors */
++	uint32_t             secsize;   /* what the filesystem asked for */
++	bool                 writable;
++	bool                 flush;
++	lck_mtx_t            lock;
++};
++
++static LCK_GRP_DECLARE(blk_lck_grp, "sweet-virtio-blk");
++static struct blk_device blk_dev;
++static bool blk_ready;
++static int blk_bmajor = -1, blk_cmajor = -1;
++
++static inline uint32_t
++reg_read(struct blk_device *d, uint32_t reg)
++{
++	return *(volatile uint32_t *)(d->regs + reg);
++}
++
++static inline void
++reg_write(struct blk_device *d, uint32_t reg, uint32_t value)
++{
++	*(volatile uint32_t *)(d->regs + reg) = value;
++}
++
++static inline void
++reg_write64(struct blk_device *d, uint32_t reg, uint64_t value)
++{
++	reg_write(d, reg, (uint32_t)value);
++	reg_write(d, reg + 4, (uint32_t)(value >> 32));
++}
++
++/*
++ * One request.  `data` is kernel memory that need not be page aligned and
++ * whose pages need not be next to each other in physical memory, so it goes
++ * on the queue a run inside a page at a time.  Type is IN, OUT or FLUSH.
++ */
++static int
++blk_request(struct blk_device *d, uint32_t type, uint64_t offset, void *data,
++    size_t len)
++{
++	vm_offset_t va = (vm_offset_t)data;
++	uint16_t idx = 1;
++	size_t done = 0;
++	uint64_t deadline;
++	int error = 0;
++
++	if (type != VIRTIO_BLK_T_FLUSH) {
++		if (len == 0 || len > BLK_MAX_XFER) {
++			return EINVAL;
++		}
++		if ((offset % VIRTIO_BLK_SECTOR) != 0) {
++			return EINVAL;
++		}
++		if (offset / VIRTIO_BLK_SECTOR >= d->capacity ||
++		    (offset + len) / VIRTIO_BLK_SECTOR > d->capacity) {
++			return EINVAL;
++		}
++	} else if (len != 0 || offset != 0) {
++		return EINVAL;
++	}
++
++	lck_mtx_lock(&d->lock);
++
++	d->hdr->type = type;
++	d->hdr->reserved = 0;
++	d->hdr->sector = offset / VIRTIO_BLK_SECTOR;
++	*d->status = 0xff;
++
++	/* descriptor 0: the header, which the device reads */
++	d->desc[0].addr = d->page_phys + OFFSET_HDR;
++	d->desc[0].len = sizeof(struct blk_req_hdr);
++	d->desc[0].flags = DESC_F_NEXT;
++	d->desc[0].next = 1;
++
++	/* then the data, one descriptor per run of bytes inside a page */
++	while (done < len) {
++		vm_offset_t at = va + done;
++		size_t chunk = PAGE_SIZE - (at & PAGE_MASK);
++
++		if (chunk > len - done) {
++			chunk = len - done;
++		}
++		if (idx >= 1 + BLK_MAX_DATA_DESC) {
++			lck_mtx_unlock(&d->lock);
++			return EINVAL;
++		}
++		d->desc[idx].addr = kvtophys(at);
++		d->desc[idx].len = (uint32_t)chunk;
++		/* a read fills the buffer; a write only reads it */
++		d->desc[idx].flags = (type == VIRTIO_BLK_T_IN ? DESC_F_WRITE : 0) |
++		    DESC_F_NEXT;
++		d->desc[idx].next = (uint16_t)(idx + 1);
++		idx++;
++		done += chunk;
++	}
++
++	/* last: the status byte, which the device writes */
++	d->desc[idx].addr = d->page_phys + OFFSET_STATUS;
++	d->desc[idx].len = 1;
++	d->desc[idx].flags = DESC_F_WRITE;
++	d->desc[idx].next = 0;
++
++	d->avail->flags = AVAIL_F_NO_INTERRUPT;
++	d->avail->ring[d->avail->idx % QUEUE_SIZE] = 0;         /* the chain starts at 0 */
++	__builtin_arm_dmb(0xb);
++	d->avail->idx++;
++	__builtin_arm_dmb(0xb);
++	reg_write(d, VIRTIO_QUEUE_NOTIFY, 0);
++
++	/* wait for it to come back; the host's page cache should take microseconds */
++	clock_interval_to_deadline(10, NSEC_PER_SEC, &deadline);
++	for (;;) {
++		__builtin_arm_dmb(0xb);
++		if (d->used->idx != d->seen) {
++			d->seen = d->used->idx;
++			break;
++		}
++		if (mach_absolute_time() > deadline) {
++			printf("virtio-blk: request %u of %lu bytes at %llu went unanswered\n",
++			    type, (unsigned long)len, offset);
++			lck_mtx_unlock(&d->lock);
++			return EIO;
++		}
++		delay(10);
++	}
++	reg_write(d, VIRTIO_INTERRUPT_ACK, reg_read(d, 0x060));  /* keep the device quiet */
++
++	if (*d->status != VIRTIO_BLK_S_OK) {
++		printf("virtio-blk: request %u of %lu bytes at %llu failed with status %u\n",
++		    type, (unsigned long)len, offset, *d->status);
++		error = EIO;
++	}
++	lck_mtx_unlock(&d->lock);
++	return error;
++}
++
++static int
++blk_rw(struct blk_device *d, uint64_t offset, void *data, size_t len,
++    bool write)
++{
++	if (write && !d->writable) {
++		return EROFS;
++	}
++	return blk_request(d, write ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN,
++	    offset, data, len);
++}
++
++static int
++blk_flush(struct blk_device *d)
++{
++	if (!d->writable || !d->flush) {
++		return 0;
++	}
++	return blk_request(d, VIRTIO_BLK_T_FLUSH, 0, NULL, 0);
++}
++
++/* ---- the block device ---- */
++
++static int
++blk_dev_open(__unused dev_t dev, int flags, __unused int devtype,
++    __unused struct proc *p)
++{
++	if (!blk_ready) {
++		return ENXIO;
++	}
++	if ((flags & FWRITE) && !blk_dev.writable) {
++		return EROFS;
++	}
++	return 0;
++}
++
++static int
++blk_dev_close(__unused dev_t dev, __unused int flags, __unused int devtype,
++    __unused struct proc *p)
++{
++	return 0;
++}
++
++static void
++blk_dev_strategy(buf_t bp)
++{
++	struct blk_device *d = &blk_dev;
++	uint64_t offset;
++	size_t len;
++	size_t done = 0;
++	bool write;
++	int error = 0;
++	caddr_t vaddr = NULL;
++
++	if (!blk_ready) {
++		buf_seterror(bp, ENXIO);
++		buf_biodone(bp);
++		return;
++	}
++	if (buf_flags(bp) & B_READ) {
++		write = false;
++	} else {
++		write = true;
++	}
++	if (write && !d->writable) {
++		buf_seterror(bp, EROFS);
++		buf_biodone(bp);
++		return;
++	}
++
++	offset = (uint64_t)buf_blkno(bp) * d->secsize;
++	len = buf_count(bp);
++
++	buf_setresid(bp, (uint32_t)len);
++	if (offset > d->capacity * VIRTIO_BLK_SECTOR ||
++	    len > d->capacity * VIRTIO_BLK_SECTOR - offset) {
++		buf_seterror(bp, EINVAL);
++		buf_biodone(bp);
++		return;
++	}
++	if (len == 0) {
++		buf_setresid(bp, 0);
++		buf_biodone(bp);
++		return;
++	}
++	if (buf_map(bp, &vaddr)) {
++		buf_seterror(bp, EIO);
++		buf_biodone(bp);
++		return;
++	}
++
++	while (done < len) {
++		size_t chunk = len - done;
++
++		if (chunk > BLK_MAX_XFER) {
++			chunk = BLK_MAX_XFER;
++		}
++		error = blk_rw(d, offset + done, vaddr + done, chunk, write);
++		if (error) {
++			break;
++		}
++		done += chunk;
++		buf_setresid(bp, (uint32_t)(len - done));
++	}
++	buf_unmap(bp);
++	if (error) {
++		buf_seterror(bp, error);
++	}
++	buf_biodone(bp);
++}
++
++static int
++blk_dev_ioctl(dev_t dev, u_long cmd, caddr_t data, int flag,
++    struct proc *p, int is_char)
++{
++	struct blk_device *d = &blk_dev;
++	uint32_t *f = (uint32_t *)data;
++	uint64_t *o = (uint64_t *)data;
++
++	(void)dev;
++	(void)flag;
++	(void)p;
++
++	if (!blk_ready) {
++		return ENXIO;
++	}
++	switch (cmd) {
++	case DKIOCGETBLOCKSIZE:
++		*f = d->secsize;
++		return 0;
++	case DKIOCSETBLOCKSIZE:
++		if (is_char) {
++			return ENODEV;
++		}
++		if (*f < VIRTIO_BLK_SECTOR || *f > 4096 ||
++		    (*f & (*f - 1))) {
++			return EINVAL;
++		}
++		d->secsize = *f;
++		return 0;
++	case DKIOCGETPHYSICALBLOCKSIZE:
++		*f = VIRTIO_BLK_SECTOR;
++		return 0;
++	case DKIOCGETBLOCKCOUNT:
++		*o = d->capacity * VIRTIO_BLK_SECTOR / d->secsize;
++		return 0;
++	case DKIOCISWRITABLE:
++		*f = d->writable;
++		return 0;
++	case DKIOCSYNCHRONIZE:
++	case DKIOCSYNCHRONIZECACHE:
++		return blk_flush(d);
++	case DKIOCGETMAXBLOCKCOUNTREAD:
++		*o = BLK_MAX_XFER / d->secsize;
++		return 0;
++	case DKIOCGETMAXBLOCKCOUNTWRITE:
++		*o = d->writable ? BLK_MAX_XFER / d->secsize : 0;
++		return 0;
++	case DKIOCGETMAXSEGMENTCOUNTREAD:
++	case DKIOCGETMAXSEGMENTCOUNTWRITE:
++		*o = 1;
++		return 0;
++	default:
++		return ENOTTY;
++	}
++}
++
++static int
++blk_dev_bioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
++{
++	return blk_dev_ioctl(dev, cmd, data, flag, p, 0);
++}
++
++static int
++blk_dev_cioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
++{
++	return blk_dev_ioctl(dev, cmd, data, flag, p, 1);
++}
++
++static int
++blk_dev_psize(dev_t dev)
++{
++	(void)dev;
++	return blk_ready ?
++	    (int)MIN(blk_dev.capacity * VIRTIO_BLK_SECTOR / blk_dev.secsize,
++	    INT_MAX) : -1;
++}
++
++static int
++blk_dev_read(dev_t dev, struct uio *uio, __unused int ioflag)
++{
++	return physio(blk_dev_strategy, NULL, dev, B_READ, minphys, uio,
++	    (int)blk_dev.secsize);
++}
++
++static int
++blk_dev_write(dev_t dev, struct uio *uio, __unused int ioflag)
++{
++	if (!blk_dev.writable) {
++		return EROFS;
++	}
++	return physio(blk_dev_strategy, NULL, dev, B_WRITE, minphys, uio,
++	    (int)blk_dev.secsize);
++}
++
++static const struct bdevsw blk_bdevsw = {
++	.d_open     = blk_dev_open,
++	.d_close    = blk_dev_close,
++	.d_strategy = blk_dev_strategy,
++	.d_ioctl    = blk_dev_bioctl,
++	.d_dump     = eno_dump,
++	.d_psize    = blk_dev_psize,
++	.d_type     = D_DISK,
++};
++
++static const struct cdevsw blk_cdevsw = {
++	.d_open       = blk_dev_open,
++	.d_close      = blk_dev_close,
++	.d_read       = blk_dev_read,
++	.d_write      = blk_dev_write,
++	.d_ioctl      = blk_dev_cioctl,
++	.d_stop       = eno_stop,
++	.d_reset      = eno_reset,
++	.d_ttys       = NULL,
++	.d_select     = eno_select,
++	.d_mmap       = eno_mmap,
++	.d_strategy   = eno_strat,
++	.d_reserved_1 = eno_getc,
++	.d_reserved_2 = eno_putc,
++	.d_type       = D_DISK,
++};
++
++/* ---- bringing it up ---- */
++
++static bool
++blk_attach(struct blk_device *d, int slot)
++{
++	uint32_t cap_lo, cap_hi, features, driver_lo;
++
++	if (kmem_alloc(kernel_map, &d->page, PAGE_SIZE,
++	    KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++		return false;
++	}
++	d->page_phys = kvtophys(d->page);
++	d->desc = (struct vq_desc *)(d->page + OFFSET_DESC);
++	d->avail = (struct vq_avail *)(d->page + OFFSET_AVAIL);
++	d->used = (struct vq_used *)(d->page + OFFSET_USED);
++	d->hdr = (struct blk_req_hdr *)(d->page + OFFSET_HDR);
++	d->status = (volatile uint8_t *)(d->page + OFFSET_STATUS);
++	d->secsize = VIRTIO_BLK_SECTOR;
++
++	reg_write(d, VIRTIO_STATUS, 0);         /* reset */
++	reg_write(d, VIRTIO_STATUS, STATUS_ACKNOWLEDGE);
++	reg_write(d, VIRTIO_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER);
++
++	/* a read-only drive says so before we negotiate it away */
++	reg_write(d, VIRTIO_DEVICE_FEATURES_SEL, 0);
++	features = reg_read(d, VIRTIO_DEVICE_FEATURES);
++	d->writable = (features & (1u << VIRTIO_BLK_F_RO)) == 0;
++	d->flush = (features & (1u << VIRTIO_BLK_F_FLUSH)) != 0;
++
++	/* take flush if it is there; bit 32 is VIRTIO_F_VERSION_1 */
++	driver_lo = features & (1u << VIRTIO_BLK_F_FLUSH);
++	reg_write(d, VIRTIO_DRIVER_FEATURES_SEL, 0);
++	reg_write(d, VIRTIO_DRIVER_FEATURES, driver_lo);
++	reg_write(d, VIRTIO_DRIVER_FEATURES_SEL, 1);
++	reg_write(d, VIRTIO_DRIVER_FEATURES, 1);
++	reg_write(d, VIRTIO_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
++	if (!(reg_read(d, VIRTIO_STATUS) & STATUS_FEATURES_OK)) {
++		printf("virtio-blk: slot %d: features refused\n", slot);
++		return false;
++	}
++
++	cap_lo = reg_read(d, VIRTIO_CONFIG);
++	cap_hi = reg_read(d, VIRTIO_CONFIG + 4);
++	d->capacity = ((uint64_t)cap_hi << 32) | cap_lo;
++	if (d->capacity == 0) {
++		printf("virtio-blk: slot %d: the disk is empty\n", slot);
++		return false;
++	}
++
++	reg_write(d, VIRTIO_QUEUE_SEL, 0);
++	if (reg_read(d, VIRTIO_QUEUE_NUM_MAX) < QUEUE_SIZE) {
++		printf("virtio-blk: slot %d: request queue of %u\n", slot,
++		    reg_read(d, VIRTIO_QUEUE_NUM_MAX));
++		return false;
++	}
++	reg_write(d, VIRTIO_QUEUE_NUM, QUEUE_SIZE);
++	reg_write64(d, VIRTIO_QUEUE_DESC, d->page_phys + OFFSET_DESC);
++	reg_write64(d, VIRTIO_QUEUE_DRIVER, d->page_phys + OFFSET_AVAIL);
++	reg_write64(d, VIRTIO_QUEUE_DEVICE, d->page_phys + OFFSET_USED);
++	__builtin_arm_dmb(0xb);
++	reg_write(d, VIRTIO_QUEUE_READY, 1);
++	reg_write(d, VIRTIO_STATUS,
++	    STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
++	return true;
++}
++
++static int
++blk_init(void)
++{
++	uint32_t enabled = 0;
++	vm_offset_t bus;
++	struct blk_device *d = &blk_dev;
++
++	if (blk_ready) {
++		return 0;
++	}
++	if (!PE_parse_boot_argn("virtio_blk", &enabled, sizeof(enabled)) || !enabled) {
++		return ENXIO;
++	}
++	bus = ml_io_map(VIRTIO_BUS, VIRTIO_SLOTS * VIRTIO_SLOT_SIZE);
++	lck_mtx_init(&d->lock, &blk_lck_grp, LCK_ATTR_NULL);
++	for (int slot = 0; slot < VIRTIO_SLOTS; slot++) {
++		d->regs = bus + (vm_offset_t)slot * VIRTIO_SLOT_SIZE;
++		if (reg_read(d, VIRTIO_MAGIC) != 0x74726976 ||
++		    reg_read(d, VIRTIO_DEVICE_ID) != VIRTIO_ID_BLOCK) {
++			continue;
++		}
++		if (reg_read(d, VIRTIO_VERSION) != 2) {
++			printf("virtio-blk: slot %d is a legacy transport; start QEMU with "
++			    "-global virtio-mmio.force-legacy=false\n", slot);
++			continue;
++		}
++		if (!blk_attach(d, slot)) {
++			continue;
++		}
++		blk_bmajor = bdevsw_add(-1, &blk_bdevsw);
++		if (blk_bmajor < 0) {
++			printf("virtio-blk: bdevsw_add failed\n");
++			return ENXIO;
++		}
++		blk_cmajor = cdevsw_add_with_bdev(-1, &blk_cdevsw, blk_bmajor);
++		if (blk_cmajor < 0) {
++			printf("virtio-blk: cdevsw_add failed\n");
++			return ENXIO;
++		}
++		if (devfs_make_node(makedev(blk_bmajor, 0), DEVFS_BLOCK, UID_ROOT,
++		    GID_OPERATOR, 0600, "vblk0") == NULL ||
++		    devfs_make_node(makedev(blk_cmajor, 0), DEVFS_CHAR, UID_ROOT,
++		    GID_OPERATOR, 0600, "rvblk0") == NULL) {
++			printf("virtio-blk: devfs_make_node failed\n");
++			return ENXIO;
++		}
++		blk_ready = true;
++		printf("virtio-blk: /dev/vblk0 in slot %d, %llu MB, %s\n",
++		    slot, d->capacity * VIRTIO_BLK_SECTOR >> 20,
++		    d->writable ? "read-write" : "read-only");
++		return 0;
++	}
++	printf("virtio-blk: no block device on the bus\n");
++	return ENXIO;
++}
++
++/* Root device for rd=vblk0 (IOFindBSDRoot). */
++int sweet_virtio_blk_rootdev(dev_t *dev);
++
++int
++sweet_virtio_blk_rootdev(dev_t *dev)
++{
++	int error = blk_init();
++
++	if (error) {
++		return error;
++	}
++	*dev = makedev(blk_bmajor, 0);
++	return 0;
++}
++
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+--- /dev/null
++++ b/bsd/dev/sweet_virtio_input.c
+@@ -0,0 +1,368 @@
++/*
++ * SWEET virtio input: the QEMU tablet and keyboard as touch and buttons.
++ *
++ * QEMU's "virt" machine gets
++ *
++ *   -device virtio-tablet-device -device virtio-keyboard-device
++ *   -global virtio-mmio.force-legacy=false
++ *
++ * and the kernel gets virtio_input=1.  The tablet's pointer with the left
++ * button held is a finger (absolute coordinates, so a drag is a touch move);
++ * L/H/Up/Down and the real power/volume/home keys are the phone's buttons.
++ * Only with that boot-arg: the bus address is QEMU's and means nothing on the
++ * phone.
++ *
++ * No interrupt is used; the event queues are looked at 125 times a second.
++ * The SweetHID services may not have started when this does, so events that
++ * arrive early are dropped by sweet_hid_*().
++ *
++ * Adapted from HackiOS xnu/files/bsd/dev/redwood_virtio_input.c (APSL 2.0).
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++
++#include <kern/clock.h>
++#include <kern/thread_call.h>
++#include <libkern/libkern.h>
++#include <mach/mach_types.h>
++#include <mach/vm_param.h>
++#include <pexpert/pexpert.h>
++#include <sys/systm.h>
++#include <vm/vm_kern.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++extern uint64_t kvtophys(vm_offset_t va);       /* pmap_paddr_t */
++
++/* iokit/Kernel/arm/hid/SweetHID.cpp */
++extern void sweet_hid_key(int key, int down);
++extern void sweet_hid_touch(int finger, int down, int x, int y);
++
++#define VIRTIO_BUS              0x0a000000UL    /* QEMU virt: 32 transports of 0x200 bytes */
++#define VIRTIO_SLOTS            32
++#define VIRTIO_SLOT_SIZE        0x200
++
++#define VIRTIO_MAGIC            0x000           /* "virt" */
++#define VIRTIO_VERSION          0x004
++#define VIRTIO_DEVICE_ID        0x008
++#define VIRTIO_DRIVER_FEATURES  0x020
++#define VIRTIO_DRIVER_FEATURES_SEL 0x024
++#define VIRTIO_QUEUE_SEL        0x030
++#define VIRTIO_QUEUE_NUM_MAX    0x034
++#define VIRTIO_QUEUE_NUM        0x038
++#define VIRTIO_QUEUE_READY      0x044
++#define VIRTIO_QUEUE_NOTIFY     0x050
++#define VIRTIO_STATUS           0x070
++#define VIRTIO_QUEUE_DESC       0x080
++#define VIRTIO_QUEUE_DRIVER     0x090
++#define VIRTIO_QUEUE_DEVICE     0x0a0
++
++#define VIRTIO_ID_INPUT         18
++#define STATUS_ACKNOWLEDGE      1
++#define STATUS_DRIVER           2
++#define STATUS_DRIVER_OK        4
++#define STATUS_FEATURES_OK      8
++
++#define QUEUE_SIZE              64
++#define DESC_F_WRITE            2
++#define AVAIL_F_NO_INTERRUPT    1
++
++struct vq_desc {
++	uint64_t addr;
++	uint32_t len;
++	uint16_t flags;
++	uint16_t next;
++};
++struct vq_avail {
++	uint16_t flags;
++	uint16_t idx;
++	uint16_t ring[QUEUE_SIZE];
++};
++struct vq_used {
++	uint16_t flags;
++	uint16_t idx;
++	struct {
++		uint32_t id;
++		uint32_t len;
++	} ring[QUEUE_SIZE];
++};
++struct input_event {
++	uint16_t type;
++	uint16_t code;
++	uint32_t value;
++};
++
++/* everything the device reads and writes is in one page */
++#define OFFSET_DESC             0x0000
++#define OFFSET_AVAIL            0x0400
++#define OFFSET_USED             0x0800
++#define OFFSET_EVENTS           0x0c00
++
++/* Linux input event numbers, which is what virtio input speaks */
++#define EV_SYN                  0
++#define EV_KEY                  1
++#define EV_ABS                  3
++#define ABS_X                   0
++#define ABS_Y                   1
++#define ABS_RANGE               0x7fff          /* QEMU's tablet: 0..0x7fff across the screen */
++#define BTN_LEFT                0x110
++#define BTN_TOUCH               0x14a
++
++/* QEMU's key codes, as Linux input numbers */
++#define KEY_POWER               116
++#define KEY_VOLUMEUP            115
++#define KEY_VOLUMEDOWN          114
++#define KEY_HOME                102
++#define KEY_L                   38
++#define KEY_H                   35
++#define KEY_UP                  103
++#define KEY_DOWN                108
++#define KEY_F11                 87
++
++/* iokit/Kernel/arm/hid/SweetHID.cpp takes pixels on the 1080x2400 panel */
++#define SWEET_TOUCH_W           1080
++#define SWEET_TOUCH_H           2400
++#define SWEET_KEY_POWER         0
++#define SWEET_KEY_VOLUME_UP     1
++#define SWEET_KEY_VOLUME_DOWN   2
++#define SWEET_KEY_HOME          3
++
++struct input_device {
++	vm_offset_t             regs;
++	struct vq_avail *       avail;
++	struct vq_used *        used;
++	struct input_event *    events;
++	uint16_t                seen;           /* how far the used ring has been read */
++	/* the pointer */
++	uint32_t                x, y;
++	bool                    pressed, touching, moved;
++};
++
++#define MAX_DEVICES     4
++static struct input_device devices[MAX_DEVICES];
++static int device_count;
++static thread_call_t poll_call;
++
++static inline uint32_t
++reg_read(struct input_device *d, uint32_t reg)
++{
++	return *(volatile uint32_t *)(d->regs + reg);
++}
++
++static inline void
++reg_write(struct input_device *d, uint32_t reg, uint32_t value)
++{
++	*(volatile uint32_t *)(d->regs + reg) = value;
++}
++
++static inline void
++reg_write64(struct input_device *d, uint32_t reg, uint64_t value)
++{
++	reg_write(d, reg, (uint32_t)value);
++	reg_write(d, reg + 4, (uint32_t)(value >> 32));
++}
++
++/* Which of the phone's buttons a key stands for; -1 = none. */
++static int
++button_for_key(uint16_t key)
++{
++	switch (key) {
++	case KEY_POWER:
++	case KEY_L:
++		return SWEET_KEY_POWER;
++	case KEY_VOLUMEUP:
++	case KEY_UP:
++		return SWEET_KEY_VOLUME_UP;
++	case KEY_VOLUMEDOWN:
++	case KEY_DOWN:
++		return SWEET_KEY_VOLUME_DOWN;
++	case KEY_HOME:
++	case KEY_H:
++		return SWEET_KEY_HOME;
++	}
++	return -1;
++}
++
++static int
++touch_x(uint32_t x)
++{
++	int px = (int)((uint64_t)x * SWEET_TOUCH_W / 65535);
++
++	return px >= SWEET_TOUCH_W ? SWEET_TOUCH_W - 1 : px;
++}
++
++static int
++touch_y(uint32_t y)
++{
++	int py = (int)((uint64_t)y * SWEET_TOUCH_H / 65535);
++
++	return py >= SWEET_TOUCH_H ? SWEET_TOUCH_H - 1 : py;
++}
++
++static void
++input_event(struct input_device *d, const struct input_event *e)
++{
++	int button;
++
++	switch (e->type) {
++	case EV_ABS:
++		if (e->code == ABS_X) {
++			d->x = e->value * 65535 / ABS_RANGE;
++			d->moved = true;
++		} else if (e->code == ABS_Y) {
++			d->y = e->value * 65535 / ABS_RANGE;
++			d->moved = true;
++		}
++		break;
++	case EV_KEY:
++		if (e->code == BTN_LEFT || e->code == BTN_TOUCH) {
++			d->pressed = e->value != 0;
++		} else if (e->code == KEY_F11 && e->value < 2) {
++			/* five more fingers, as long as the key is held */
++			for (uint32_t i = 0; i < 5; i++) {
++				sweet_hid_touch(5 + i, e->value ? 1 : 0,
++				    touch_x(13107 + 9830 * i), touch_y(32768));
++			}
++		} else if ((button = button_for_key(e->code)) >= 0 && e->value < 2) {
++			/* 2 = key repeat */
++			sweet_hid_key(button, e->value ? 1 : 0);
++		}
++		break;
++	case EV_SYN:
++		if (d->pressed && !d->touching) {
++			sweet_hid_touch(0, 1, touch_x(d->x), touch_y(d->y));
++		} else if (d->pressed && d->moved) {
++			sweet_hid_touch(0, 1, touch_x(d->x), touch_y(d->y));
++		} else if (!d->pressed && d->touching) {
++			sweet_hid_touch(0, 0, touch_x(d->x), touch_y(d->y));
++		}
++		d->touching = d->pressed;
++		d->moved = false;
++		break;
++	}
++}
++
++static void
++input_poll(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	uint64_t deadline;
++
++	for (int i = 0; i < device_count; i++) {
++		struct input_device *d = &devices[i];
++		bool returned = false;
++
++		while (d->seen != *(volatile uint16_t *)&d->used->idx) {
++			uint32_t id = d->used->ring[d->seen++ % QUEUE_SIZE].id % QUEUE_SIZE;
++
++			input_event(d, &d->events[id]);
++			/* give the buffer back */
++			d->avail->ring[d->avail->idx % QUEUE_SIZE] = (uint16_t)id;
++			__builtin_arm_dmb(0xb);         /* ISH */
++			d->avail->idx++;
++			returned = true;
++		}
++		if (returned) {
++			__builtin_arm_dmb(0xb);
++			reg_write(d, VIRTIO_QUEUE_NOTIFY, 0);
++		}
++	}
++	clock_interval_to_deadline(8, NSEC_PER_MSEC, &deadline);
++	thread_call_enter_delayed(poll_call, deadline);
++}
++
++static bool
++input_attach(struct input_device *d, int slot)
++{
++	vm_offset_t page = 0;
++	struct vq_desc *desc;
++	uint64_t phys;
++
++	if (kmem_alloc(kernel_map, &page, PAGE_SIZE,
++	    KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++		return false;
++	}
++	phys = kvtophys(page);
++	desc = (struct vq_desc *)(page + OFFSET_DESC);
++	d->avail = (struct vq_avail *)(page + OFFSET_AVAIL);
++	d->used = (struct vq_used *)(page + OFFSET_USED);
++	d->events = (struct input_event *)(page + OFFSET_EVENTS);
++
++	reg_write(d, VIRTIO_STATUS, 0);         /* reset */
++	reg_write(d, VIRTIO_STATUS, STATUS_ACKNOWLEDGE);
++	reg_write(d, VIRTIO_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER);
++	reg_write(d, VIRTIO_DRIVER_FEATURES_SEL, 0);
++	reg_write(d, VIRTIO_DRIVER_FEATURES, 0);
++	reg_write(d, VIRTIO_DRIVER_FEATURES_SEL, 1);
++	reg_write(d, VIRTIO_DRIVER_FEATURES, 1);        /* bit 32: VIRTIO_F_VERSION_1 */
++	reg_write(d, VIRTIO_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
++	if (!(reg_read(d, VIRTIO_STATUS) & STATUS_FEATURES_OK)) {
++		printf("virtio-input: slot %d: features refused\n", slot);
++		return false;
++	}
++
++	/* queue 0 brings the events: hand the device all the buffers */
++	reg_write(d, VIRTIO_QUEUE_SEL, 0);
++	if (reg_read(d, VIRTIO_QUEUE_NUM_MAX) < QUEUE_SIZE) {
++		printf("virtio-input: slot %d: event queue of %u\n", slot,
++		    reg_read(d, VIRTIO_QUEUE_NUM_MAX));
++		return false;
++	}
++	for (int i = 0; i < QUEUE_SIZE; i++) {
++		desc[i].addr = phys + OFFSET_EVENTS + (uint64_t)i * sizeof(struct input_event);
++		desc[i].len = sizeof(struct input_event);
++		desc[i].flags = DESC_F_WRITE;
++		d->avail->ring[i] = (uint16_t)i;
++	}
++	d->avail->flags = AVAIL_F_NO_INTERRUPT;
++	d->avail->idx = QUEUE_SIZE;
++	reg_write(d, VIRTIO_QUEUE_NUM, QUEUE_SIZE);
++	reg_write64(d, VIRTIO_QUEUE_DESC, phys + OFFSET_DESC);
++	reg_write64(d, VIRTIO_QUEUE_DRIVER, phys + OFFSET_AVAIL);
++	reg_write64(d, VIRTIO_QUEUE_DEVICE, phys + OFFSET_USED);
++	__builtin_arm_dmb(0xb);
++	reg_write(d, VIRTIO_QUEUE_READY, 1);
++	reg_write(d, VIRTIO_STATUS,
++	    STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
++	reg_write(d, VIRTIO_QUEUE_NOTIFY, 0);
++	return true;
++}
++
++void
++sweet_virtio_input_init(void)
++{
++	uint32_t enabled = 0;
++	vm_offset_t bus;
++
++	if (!PE_parse_boot_argn("virtio_input", &enabled, sizeof(enabled)) || !enabled) {
++		return;
++	}
++	bus = ml_io_map(VIRTIO_BUS, VIRTIO_SLOTS * VIRTIO_SLOT_SIZE);
++	for (int slot = 0; slot < VIRTIO_SLOTS && device_count < MAX_DEVICES; slot++) {
++		struct input_device *d = &devices[device_count];
++
++		d->regs = bus + (vm_offset_t)slot * VIRTIO_SLOT_SIZE;
++		if (reg_read(d, VIRTIO_MAGIC) != 0x74726976 ||
++		    reg_read(d, VIRTIO_DEVICE_ID) != VIRTIO_ID_INPUT) {
++			continue;
++		}
++		if (reg_read(d, VIRTIO_VERSION) != 2) {
++			printf("virtio-input: slot %d is a legacy transport; start QEMU with "
++			    "-global virtio-mmio.force-legacy=false\n", slot);
++			continue;
++		}
++		if (input_attach(d, slot)) {
++			printf("virtio-input: device in slot %d\n", slot);
++			device_count++;
++		}
++	}
++	if (device_count) {
++		poll_call = thread_call_allocate(input_poll, NULL);
++		if (poll_call) {
++			input_poll(NULL, NULL);
++		} else {
++			printf("virtio-input: no thread call for the poll\n");
++		}
++	} else {
++		printf("virtio-input: no input devices\n");
++	}
++}
++
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+--- /dev/null
++++ b/bsd/dev/sweet_ramfb.c
+@@ -0,0 +1,247 @@
++/*
++ * SWEET QEMU ramfb: make the panel memory a window on the host.
++ *
++ * QEMU's "virt" machine has a fw_cfg device at 0x09020000.  The "ramfb"
++ * device (command line: -device ramfb) adds an fw_cfg file "etc/ramfb";
++ * writing a 28-byte description of a rectangle of guest RAM to that file
++ * makes QEMU scan it out, which is the smallest possible virtual display
++ * adapter.  The panel path already draws into 0x9c000000, so the same code
++ * that makes the phone show iOS makes a QEMU window show it.
++ *
++ * Only with boot-arg ramfb=1: the fw_cfg address is QEMU's and means
++ * nothing on the phone.  No ramfb device or no DMA support is not fatal;
++ * the kernel boots headless and the serial log says why.
++ *
++ * The registers are the ones Linux's qemu_fw_cfg driver uses on arm64:
++ * data at 0x00, big-endian selector at 0x08, big-endian DMA address at
++ * 0x10 (high word first), and the fw_cfg DMA structure itself is
++ * big-endian.  The file directory is read through the data port because
++ * that needs no second DMA buffer.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++
++#include <kern/clock.h>
++#include <libkern/libkern.h>
++#include <mach/mach_types.h>
++#include <mach/vm_param.h>
++#include <pexpert/pexpert.h>
++#include <sys/errno.h>
++#include <sys/systm.h>
++#include <vm/vm_kern.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++extern uint64_t kvtophys(vm_offset_t va);
++
++#define FW_CFG_BASE             0x09020000UL
++#define FW_CFG_SIZE             0x18
++#define FW_CFG_DATA             0x00
++#define FW_CFG_SELECTOR         0x08
++#define FW_CFG_DMA              0x10
++
++#define FW_CFG_FILE_DIR         0x19
++#define FW_CFG_MAX_FILES        32
++
++#define FW_CFG_DMA_SELECT       0x08
++#define FW_CFG_DMA_WRITE        0x10
++#define FW_CFG_DMA_ERROR        0x01
++
++/* the panel, as tools/qemu-sweet.py writes its screenshot and SweetFramebuffer */
++#define SWEET_FB_BASE           0x9c000000UL
++#define SWEET_FB_WIDTH          1080
++#define SWEET_FB_HEIGHT         2400
++#define SWEET_FB_STRIDE         4320            /* 1080 * 4 */
++#define DRM_FORMAT_XRGB8888     0x34325258      /* 'X' 'R' '2' '4' */
++
++struct fw_cfg_dma {
++	uint32_t control;
++	uint32_t length;
++	uint64_t address;
++};
++
++struct fw_cfg_file {
++	uint32_t size;
++	uint16_t select;
++	uint16_t reserved;
++	char name[56];
++};
++
++struct ramfb_cfg {
++	uint64_t addr;
++	uint32_t fourcc;
++	uint32_t flags;
++	uint32_t width;
++	uint32_t height;
++	uint32_t stride;
++} __attribute__((packed));
++
++static inline uint32_t
++be32(uint32_t v)
++{
++	return __builtin_bswap32(v);
++}
++
++static inline uint16_t
++be16(uint16_t v)
++{
++	return __builtin_bswap16(v);
++}
++
++static inline uint64_t
++be64(uint64_t v)
++{
++	return __builtin_bswap64(v);
++}
++
++static uint8_t
++fw_read8(vm_offset_t base)
++{
++	return *(volatile uint8_t *)(base + FW_CFG_DATA);
++}
++
++static void
++fw_select(vm_offset_t base, uint16_t key)
++{
++	*(volatile uint16_t *)(base + FW_CFG_SELECTOR) = be16(key);
++}
++
++/* Read `len` bytes of the selected fw_cfg item through the 8-bit data port. */
++static void
++fw_read(vm_offset_t base, void *buf, size_t len)
++{
++	uint8_t *p = buf;
++
++	while (len--) {
++		*p++ = fw_read8(base);
++	}
++}
++
++/*
++ * Write `len` bytes to the selected fw_cfg item.  A write-only item such as
++ * etc/ramfb has no read side; the DMA interface is the only way to write it
++ * in current QEMU (the data port was write-only for the guest in older ones
++ * and is gone since 2.4).
++ */
++static int
++fw_write(vm_offset_t base, uint16_t key, void *data, size_t len)
++{
++	vm_offset_t page_va = 0;
++	uint8_t *page;
++	struct fw_cfg_dma *dma;
++	uint64_t dma_pa;
++	int error = EIO;
++
++	if (len > PAGE_SIZE - 0x100) {
++		return EINVAL;
++	}
++	if (kmem_alloc(kernel_map, &page_va, PAGE_SIZE,
++	    KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++		return ENOMEM;
++	}
++	page = (uint8_t *)page_va;
++	dma = (struct fw_cfg_dma *)page;
++	memcpy(page + 0x80, data, len);
++	dma->control = be32((uint32_t)key << 16 | FW_CFG_DMA_SELECT | FW_CFG_DMA_WRITE);
++	dma->length = be32((uint32_t)len);
++	dma->address = be64(kvtophys((vm_offset_t)page + 0x80));
++	dma_pa = kvtophys((vm_offset_t)page);
++
++	__builtin_arm_dmb(0xb);
++	*(volatile uint32_t *)(base + FW_CFG_DMA) = be32((uint32_t)(dma_pa >> 32));
++	__builtin_arm_dmb(0xb);
++	*(volatile uint32_t *)(base + FW_CFG_DMA + 4) = be32((uint32_t)dma_pa);
++	__builtin_arm_dmb(0xb);
++
++	/* QEMU completes synchronously, but the interface is allowed to be slow */
++	for (int i = 0; i < 1000; i++) {
++		uint32_t control = be32(dma->control);
++
++		__builtin_arm_dmb(0xb);
++		if ((control & ~FW_CFG_DMA_ERROR) == 0) {
++			if (control & FW_CFG_DMA_ERROR) {
++				printf("ramfb: fw_cfg write of %lu bytes failed\n",
++				    (unsigned long)len);
++			} else {
++				error = 0;
++			}
++			break;
++		}
++		delay(1);
++	}
++	kmem_free(kernel_map, page_va, PAGE_SIZE);
++	return error;
++}
++
++/*
++ * Find the selector fw_cfg assigned to a named file.  The directory is
++ * count (big-endian u32) followed by entries with size, selector and a
++ * 56-byte name; reading it through the data port is enough.
++ */
++static int
++fw_find(vm_offset_t base, const char *name, uint16_t *key)
++{
++	uint8_t page[4 + FW_CFG_MAX_FILES * sizeof(struct fw_cfg_file)]
++	    __attribute__((aligned(8)));
++	uint32_t count;
++	struct fw_cfg_file *files = (struct fw_cfg_file *)(page + 4);
++
++	fw_select(base, FW_CFG_FILE_DIR);
++	fw_read(base, page, 4);
++	count = be32(*(uint32_t *)page);
++	if (count > FW_CFG_MAX_FILES) {
++		count = FW_CFG_MAX_FILES;
++	}
++	fw_read(base, files, count * sizeof(*files));
++	for (uint32_t i = 0; i < count; i++) {
++		char entry[sizeof(files[i].name) + 1];
++
++		memcpy(entry, files[i].name, sizeof(files[i].name));
++		entry[sizeof(files[i].name)] = 0;
++		if (strcmp(entry, name) == 0) {
++			*key = be16(files[i].select);
++			return 0;
++		}
++	}
++	return ENOENT;
++}
++
++void
++sweet_ramfb_init(void)
++{
++	uint32_t enabled = 0;
++	vm_offset_t base;
++	uint16_t key;
++	struct ramfb_cfg cfg;
++	uint8_t signature[4];
++
++	if (!PE_parse_boot_argn("ramfb", &enabled, sizeof(enabled)) || !enabled) {
++		return;
++	}
++	base = ml_io_map(FW_CFG_BASE, FW_CFG_SIZE);
++
++	/* the signature tells us the mapping is right before anything else */
++	fw_select(base, 0x00);          /* FW_CFG_SIGNATURE */
++	fw_read(base, signature, sizeof(signature));
++	if (memcmp(signature, "QEMU", 4) != 0) {
++		printf("ramfb: no QEMU fw_cfg at %#lx\n", (unsigned long)FW_CFG_BASE);
++		return;
++	}
++	if (fw_find(base, "etc/ramfb", &key) != 0) {
++		printf("ramfb: QEMU has no ramfb device (add -device ramfb)\n");
++		return;
++	}
++
++	cfg.addr = be64(SWEET_FB_BASE);
++	cfg.fourcc = be32(DRM_FORMAT_XRGB8888);
++	cfg.flags = 0;
++	cfg.width = be32(SWEET_FB_WIDTH);
++	cfg.height = be32(SWEET_FB_HEIGHT);
++	cfg.stride = be32(SWEET_FB_STRIDE);
++
++	if (fw_write(base, key, &cfg, sizeof(cfg)) == 0) {
++		printf("ramfb: %dx%d at %#lx, selector %u\n",
++		    SWEET_FB_WIDTH, SWEET_FB_HEIGHT,
++		    (unsigned long)SWEET_FB_BASE, key);
++	}
++}
++
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -267,6 +267,10 @@
+ extern void kminit(void);
+ extern void bsd_bufferinit(void);
+ extern void throttle_init(void);
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++extern void sweet_virtio_input_init(void);
++extern void sweet_ramfb_init(void);
++#endif
+ 
+ vm_map_t        bsd_pageable_map;
+ vm_map_t        mb_map;
+@@ -999,6 +1003,10 @@
+ 
+ 		bsd_init_kprintf("calling devfs_kernel_mount\n");
+ 		devfs_kernel_mount(mounthere);
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		sweet_virtio_input_init();	/* QEMU tablet/keyboard -> SweetHID */
++		sweet_ramfb_init();		/* QEMU ramfb -> the same panel memory */
++#endif
+ 	}
+ #endif /* DEVFS */
+ 
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -782,6 +782,21 @@
+ 		*oflags = 0;
+ 		goto iofrootx;
+ 	}
++//
++//	SWEET: root on a virtio-blk disk image (bsd/dev/sweet_virtio_blk.c, QEMU)
++//
++	if (strcmp(rdBootVar, "vblk0") == 0) {
++		extern int sweet_virtio_blk_rootdev(dev_t *dev);
++		OSSafeReleaseNULL(matching);
++		int blk_error = sweet_virtio_blk_rootdev(root);
++		if (blk_error) {
++			panic("IOFindBSDRoot: SWEET virtio-blk root %s unavailable: %d", rdBootVar, blk_error);
++		}
++		strlcpy(rootName, rdBootVar, rootNameSize);
++		IOLog("BSD root: %s, major %d, minor %d\n", rootName, major(*root), minor(*root));
++		*oflags = 0;
++		goto iofrootx;
++	}
+ #endif
+ 
+ //

@@ -1,0 +1,22 @@
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -73,8 +73,18 @@
+ 	if (*(const uint32_t *)reg->getBytesNoCopy() != cpu->phys_id) {
+ 		return false;
+ 	}
++	int qemu_virtio = 0;
++	PE_parse_boot_argn("virtio_blk", &qemu_virtio, sizeof(qemu_virtio));
+ 	/* MPIDR Aff1 = core: 0x000-0x500 A55, 0x600/0x700 A76 */
+-	if (cpu->phys_id > 0x700 || (cpu->phys_id & 0xff) != 0 ||
++	/* QEMU virt numbers vCPUs in MPIDR Aff0; the phone uses Aff1. */
++	if (qemu_virtio) {
++		if (cpu->phys_id >= SWEET_SMP_MAX_CPUS ||
++		    cpu->phys_id != cpu->cpu_id ||
++		    topology->num_cpus > SWEET_SMP_MAX_CPUS) {
++			panic("SWEET QEMU CPU: invalid topology cpu=%u mpidr=0x%x count=%u",
++			    cpu->cpu_id, cpu->phys_id, topology->num_cpus);
++		}
++	} else if (cpu->phys_id > 0x700 || (cpu->phys_id & 0xff) != 0 ||
+ 	    topology->num_cpus > SWEET_SMP_MAX_CPUS) {
+ 		panic("SWEET CPU: invalid topology cpu=%u mpidr=0x%x count=%u",
+ 		    cpu->cpu_id, cpu->phys_id, topology->num_cpus);

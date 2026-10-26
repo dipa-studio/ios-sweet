@@ -2,7 +2,7 @@
 """Build the minimal Apple Device Tree that the SWEET xnu needs to boot.
 
 Only what the early boot path actually reads (see NOTES.md); every MMIO
-address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem]
+address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu [--qemu-cpus N]] [--highmem]
 """
 import hashlib, os, struct, sys
 
@@ -74,8 +74,10 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False):
-    """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
+def build(seed=None, qemu=False, highmem=False, qemu_cpus=1):
+    """qemu=True: use QEMU virt addresses and optionally its Aff0 CPU IDs."""
+    if not 1 <= qemu_cpus <= 8:
+        raise ValueError('qemu_cpus must be between 1 and 8')
     phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
     # Carve the panic log off the top so the kernel never allocates over it.
     panic_base = phys_base + mem_size - PANIC_LOG_SIZE
@@ -132,14 +134,15 @@ def build(seed=None, qemu=False, highmem=False):
     # SWEET SMP: all eight cores in physical-core order (0-5 Cortex-A55,
     # 6-7 Cortex-A76), one homogeneous cluster. The kernel defaults to one
     # and uses cpus=N to select an initial prefix (N <= 8).
-    # QEMU retains its original single-CPU tree: its MPIDRs differ from sweet.
+    # QEMU virt assigns MPIDR Aff0 = vCPU index; sweet hardware uses Aff1.
     cpu_nodes = []
-    for core in range(1 if qemu else 8):
+    for core in range(qemu_cpus if qemu else 8):
+        mpidr = core if qemu else core << 8
         cpu_nodes.append(node(f'cpu{core}', [
             ph(),
             ('device_type', cstr('cpu')),
             ('compatible', cstr('qcom,kryo470') + cstr('ARM,v8')),
-            ('reg', u32(core << 8)),  # actual MPIDR Aff1:Aff0, NOT logical ID
+            ('reg', u32(mpidr)),  # physical MPIDR, not a logical ID
             ('cpu-id', u32(core)),   # descriptive: XNU assigns IDs by DT order
             ('cluster-id', u32(0)),  # descriptive; see ml_parse_cpu_topology
             ('cluster-type', u32(0)),  # homogeneous CLUSTER_TYPE_SMP, not AMP
@@ -242,7 +245,18 @@ def build(seed=None, qemu=False, highmem=False):
 
 
 if __name__ == '__main__':
-    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv)
+    qemu = '--qemu' in sys.argv
+    qemu_cpus = 1
+    if '--qemu-cpus' in sys.argv:
+        if not qemu:
+            raise SystemExit('--qemu-cpus requires --qemu')
+        i = sys.argv.index('--qemu-cpus')
+        try:
+            qemu_cpus = int(sys.argv[i + 1])
+        except (IndexError, ValueError):
+            raise SystemExit('--qemu-cpus requires an integer from 1 to 8')
+    root = build(qemu=qemu, highmem='--highmem' in sys.argv,
+                 qemu_cpus=qemu_cpus)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:

@@ -1,6 +1,782 @@
+### >>> UPDATE 2026-10-25 (real image built + booted; ramfs port; CI running) <<<
+
+- **Image built and modified**: `output/ios16-20H392-hackios-xnu-v1.img`
+  (16 GiB, SHA-256 `657130c7aec18103ab5a9b8622cc1bdf8aa1c3efe5c0b438f2763d2d29f9f1bc`).
+  Working copy of `root-0084i.img` (the Home-Screen baseline); original preserved.
+  Real change: created the missing writable data-volume dirs the live console
+  reported (`/private/var/mobile/Library/{CoreData,CoreDuet,CoreDuet/Knowledge,dmd,dmd/Policies}`,
+  501:501 0755) and set `Library` mode 0711->0755. Manifest + checksum in
+  `output/ios16-20H392-hackios-xnu-v1.img.manifest.md`.
+- **Boot test recorded**: 300 s QEMU smoke (`output/run-hx-v1-smoke/`), QEMU 11.1.0,
+  TCG one vCPU, 7 GiB, kernel 0086, `--disk-snapshot`. `run-manifest.json` shows
+  `stop_reason=deadline`, QEMU return 1, no panic; `fb.png` is the Apple logo on
+  black (SpringBoard splash) at 300 s. `regs.txt` PC `fffffe0007491104` (EL1).
+  This confirms the new image mounts and reaches the boot-logo stage; the Home
+  Screen needs the ~30 min LaunchServices rebuild and was not the smoke target.
+- **Kernel patch 0090 (committed `f4c340c`, pushed)**: selective port of HackiOS
+  ramfs (`xnu/patches/0090-sweet-ramfs-port.patch`, 2089 lines). `bsd/miscfs/ramfs/ramfs.c`
+  is the ported HackiOS source (only the opv_desc `const` was dropped for
+  `vfs_fsadd`); `sweet_ramfs_register.c` registers it through `vfs_fsadd` but is
+  **gated behind boot-arg `sweet_ramfs=1`** so the HFS `/private/var` is not
+  shadowed by a fresh empty ramfs. `validate-repo.py` passes 90 patches.
+- **Kernel build VERIFIED (ramfs actually compiled)**: the first 0090 approach
+  (`options RAMFS` / `optional ramfs`) was not honoured by the CI config, so the
+  first kernel had no ramfs symbols (size stayed 17,208,536). Fixed by compiling
+  the ramfs sources `standard` and using `kprintf` in the wrapper. Final xnu.yml
+  run **40226769073** succeeded; kernel SHA-256
+  `a5dcc47b8a3ac9f921913a2bbd0fc5eff40be0975216a857a331ef2b68392f6e`, size
+  17,230,248 bytes, and `_ramfs_*` symbols + `SWEET RAMFS: registered` string are
+  present in `output/xnu-out-0090/kernel.development.sweet`.
+- **0090 kernel boot-tested**: payload `output/payload-0090.bin` (kernel `xnu/out-0090/`,
+  entry `0xfffffe000748b488`) booted 300 s against the new image
+  (`output/run-hx-v1-0090/`). `stop_reason=deadline`, no panic, `fb.png` = Apple
+  logo, final `regs.txt` PC `fffffe0007491104` — identical to the 0086 smoke, so
+  the linked-in ramfs causes no boot regression.
+- **CI fixed**: `.github/workflows/build-hackios-xnu.yml` now triggers on
+  `push` to `hackios-xnu-integration` + `pull_request` (workflow_dispatch is
+  default-branch-only). Run 40223405257 passed (validate, 14 s).
+- Preserved: `root-0084i.img` and all baseline images untouched; prior
+  uncommitted work (`qemu-sweet.py`, `docs/QEMU_VM.md`, run artifacts) left as-is.
+
+### >>> UPDATE 2026-10-25 (HackiOS repo audit + build/CI scaffolding; no kernel/image/boot) <<<
+
+- Repo audit: there is exactly one `hackios-xnu-kernel` checkout (`github-clone/`, remote `oosexgang/hackios-xnu-kernel`, branches `main`+`metal`). The two directory names in the request resolve to the same kernel repo; the genuinely distinct repos are the HackiOS **kernel** and **userland** halves. Full write-up: `docs/HACKIOS_REPO_AUDIT.md`.
+- HackiOS kernel = xnu-8796.121.2 (iOS 16.5) vs ios-sweet = xnu-8796.141.3 (20H392). Not a drop-in; it is a reference source only. This agrees with `docs/HACKIOS_20H392_PORT.md` (no kernel change justified by current boot evidence; blocker is LaunchServices rebuild under one-vCPU TCG).
+- Added build/CI scaffolding (all new, none of it runs QEMU in WSL): `scripts/wsl/setup.sh`, `build-kernel.sh`, `patch-image.sh`, `verify-image.sh`; `scripts/windows/boot-hackios.ps1`, `collect-boot-logs.ps1`; `.github/workflows/build-hackios-xnu.yml` (Linux: provenance/license, shell+python syntax, `validate-repo.py`, shellcheck, reproducible patch/tool artifact). `.gitignore` now excludes `output/ logs/ *.img *.simg *.log .cache/ .env`.
+- Verification: `bash -n` passed on the four WSL scripts; PowerShell parser passed on both `.ps1`; `git diff --check` clean. Windows `validate-repo.py` still fails only on the known bash-path mangling (WSL run is authoritative).
+- NOT done (no false claims): no kernel built, no image produced, no QEMU boot. The kernel links on macOS CI (`.github/workflows/xnu.yml`); the image builder needs the local IPSW + apfs-fuse + hfsprogs and was not run.
+- Preserved all prior uncommitted work; these notes, `tools/qemu-sweet.py`, `docs/QEMU_VM.md` and the run artifacts were left as-is.
+
+### >>> UPDATE 2026-10-25 (QMP touch fix verified; one 240 s snapshot smoke) <<<
+
+- `tools/qemu-sweet.py:qmp_wake_tap` now sends ABS X/Y + DOWN and UP in separate QMP requests with independent sync, validates 0..32767 coordinates, checks both replies, and supports a configurable 1..5000 ms press (`--wake-press-ms`, default 100). On a down-stage failure it attempts release and reports failure. `research/vm/control-3000-monitor.py` already calls this helper, so the historical control helper inherits the fix without editing that run artifact.
+- `tools/test-qmp-input.py` mock QMP regression passed packet order, coordinate order, error handling at capability/down/up, invalid input and call-site checks. `py_compile`, `tools/test-qemu-manifest.py`, `git diff --check`, and WSL `tools/validate-repo.py` passed: 89 patches, 19 Python tools, 7 shell scripts.
+- One short run `research/vm/run20h-0086-input-smoke-20261025/` used 0086 kernel/payload, `root-0084i.img`, QEMU `snapshot=on`, headless, one CPU, `--trace errors`, 240 s and 150 ms QMP press. Manifest says finished in 240.501 s, runner exit 0. Wake log has 4 accepted taps (8 accepted input-send-event packets); deduplicated guest msgbuf has 4 matching DOWN and 4 UP SweetHID edges, all at 540,1200 (guest 89.786/89.938, 134.668/134.819, 179.600/179.748, 224.469/224.622 s). The host QMP protocol bug is verified fixed for these four taps. This does not establish late-stage SpringBoard input or GTK display behavior.
+- `tools/capture-display.py` prepares a future GTK/raw/QMP comparison, recording image hashes, capture times, framebuffer state and HID log; it has only been syntax/help checked. The headless smoke did not exercise it. See `docs/DISPLAY_INPUT_AUDIT.md` and `docs/QEMU_VM.md`.
+- Kernel, root image and nested repositories were not changed. Root source retains 17,179,869,184 bytes and mtime_ns 1792875241146249200; no QEMU remains. No commit or push. Preserve all earlier uncommitted work.
+
+### >>> UPDATE 2026-10-25 (offline display/input audit; no VM or commit) <<<
+
+- Reviewed current uncommitted runner/manifest/preflight changes and preserved all prior work. Findings: `docs/DISPLAY_INPUT_AUDIT.md`. No QEMU, kernel edit, image write, commit or push.
+- Original `run20h-hour/snap011` and `snap015` through `snap021` visibly show Home, Settings, General and About (16.7.16). Corresponding logs contain touch edges and `exec Preferences`. These PNGs come from physical-memory capture at 0x9c000000, not GTK screenshots. Neither audited run retains raw framebuffer, QMP screendump or identified GTK-window captures, so three-way display equality cannot be proven offline.
+- Static display contract matches: 1080x2400, stride 4320, XRGB8888/BGRX at 0x9c000000. Both runs report RAMFB configuration. Control black frames follow display-off at guest 2677.178789; patch 0079 explicitly blanks guest memory. Swap logs are capped at 16, so the last logged swap is not the last actual update.
+- Concrete host-input flaw: `qmp_wake_tap` sends down and up in one input-send-event request. Upstream QEMU synchronizes once after the list; SWEET publishes touches only at EV_SYN, seeing the final released state. Offline event replay produces no touch for this batch, versus down/up for separate batches. Both scheduled wakes and control Settings taps use this helper. This predates DeepSeek manifest changes. Exact Windows QEMU source revision was not available; upstream semantics plus local guest source support the finding. No fix applied yet.
+- Therefore, missing touch logs after guest 491 s do not establish a dead input driver. Next proposed change is host-only split down/up requests, followed by simultaneous raw/screendump/GTK capture on a separately authorized run. Kernel changes are not justified by current display evidence. Preserve the full existing run data and uncommitted changes; do not commit/push without permission.
+
+### >>> UPDATE 2026-10-25 (authorized 3,000 s 0086 control run: no Home Screen; lsd completed late, run ended during post-recovery init) <<<
+
+- The single authorized control run is complete: `research/vm/run20h-0086-control-3000/`. Host start `2026-10-25T18:42:22+0700`, finish `19:32:22+0700`, duration `3000.611 s`, `stop_reason=deadline`, QEMU return 1, runner return 0, `result_status=not_decoded`. One vCPU, `--disk-snapshot`, `--trace errors`, snapshots every 300 s, wake/tap schedule as recorded. No QEMU or Python process remained after exit. No panic was found in any captured msgbuf.
+- Inputs were unchanged: payload SHA-256 `0f31237b...`, kernel 0086 SHA-256 `11bb2b36...`, base `root-0084i.img` still 17,179,869,184 bytes and mtime `2026-10-24T20:54:01Z`. The base image is not modified by the snapshot run.
+- Guest result: `home-check` at host `2600.094 s` / guest `2596.712297 s` is still the Apple logo; the last captured framebuffer swap is at guest `859.414372 s`. `display off` is at guest `2677.178789 s`; no later `display on` or swap exists. `settings-check-1` (guest `2736.979323`) and `settings-check-2` (guest `2882.845565`) are black, consistent with the panel being off. Final `fb.png` is black. No Home Screen or Settings UI was observed.
+- lsd was still in the same cold LaunchServices phase at `2351.128649 s` and `2591.159060 s` (`-_LSInstallProgressService performJournalRecovery` -> `dispatch_sync_f_slow`). At `2712.910249 s` its main thread was formatting/logging an `NSError` (`redactedDescription` -> `__os_log_impl_flatten_and_send`). By `2832.950107 s` it was in the normal `CFRunLoop` (`_runServerMainRunLoop` -> `_LSServerMain`), and all captured worker threads were idle. Completion therefore lies between `2712.91 s` and `2832.95 s`. Historical lsd normal was already observed at `2185.577083 s`; the completion is roughly 527-647 s later.
+- SpringBoard was still synchronously blocked in `_LSCopyServerStore` at `2591.166561 s`; at `2712.928808 s` it was in `CHSChronoServicesConnection descriptors:`; at `2832.961794 s` it was waiting on IconServices `+[ISDefaults sharedInstance]` -> `-[ISDefaults init]`. This is forward progress through post-LaunchServices initialization, not an unchanged deadlock. `iconservicesagen` at `2832.946198 s` was decoding an `_LSCopyServerStore` XPC reply and its second thread was registering a notifyd token; it had been enumerating directories at `2712.909263 s`.
+- Timing shift versus `run20h-hour`: `exec installd` `2633.344571` vs `2041.870202` (+591.47 s); display off `2677.178789` vs `2083.424946` (+593.75 s); lsd normal `2832.950107` vs `2185.577083` (+647.37 s). Historical Home Screen was `2528.230459 s`, 342.65 s after its observed lsd normal. Applying that delay to the control's lsd completion window gives an expected Home time of about `3055.6-3175.6 s`; the run ended at `3000.611 s`, i.e. roughly 55-175 s short. This is consistent with the same cold rebuild running slower, not with a newly proven lsd/HFS deadlock.
+- Input caveat: the runner logged successful QMP taps at Settings (`qmp 4492,7795` -> panel `148,571`) at host `2650.067/2650.888` and `2820.198/2821.017`, plus wake taps at `2301/2501/2742/2942`. No `SWEET HID: touch` was captured for any of them; the last guest HID touch is `491.508128 s`. The early burst of 29 touches at `424-491 s` proves the HID path worked earlier, but the later taps did not reach/log in the guest. Settings opening is therefore unverified, and the black frames do not prove a Settings app launched.
+- Classification: **NOT REPRODUCED within the 3,000 s host window**. It is not `INCONCLUSIVE` under the stated rule because the guest passed 2,600 s. It is also not evidence of a new boot deadlock: lsd completed and SpringBoard/iconservicesagen were processing LaunchServices/IconServices replies at the end. The host deadline was only about 1-3 minutes short of the historical lsd-to-Home interval. No lsd, HFS, kernel, or boot-path patch is justified by this result.
+- Next: do not start another QEMU run without explicit approval. If authorized, the minimal check is the same inputs and snapshot mode with a 3,300-3,600 s limit (or a persistent disposable clone to avoid the cold rebuild); separately verify why QMP taps stop reaching the guest after the early `424-491 s` burst. No commit or push was made.
+
+### >>> UPDATE 2026-10-25 (LaunchServices DB audit: cold rebuild, not a proven deadlock; no VM run) <<<
+
+- Read-only audit only: `root-0084i.img` was mounted HFSX read-only in WSL; no QEMU, no image write, no phone/Android access. The lsd data container is `/private/var/mobile/Containers/Data/InternalDaemon/777AD767-B07D-4928-B178-4C6F0FE3C1B0`; its metadata says `MCMMetadataIdentifier=com.apple.lsd`, uid/gid 501, content class 10. `Library/Caches` is empty, and there is no `*.csstore` anywhere under `/private/var`; `/private/var/db/lsd` is also empty. The expected LaunchServices strings are `LS_DATABASE_DIR`, `_LSDefaultsBaseSystemContainerURL`, `Library/Caches`, `LS_NAME_PREFIX=com.apple.LaunchServices`, and `%s-%03llu-v2.csstore`, so the missing store is the container cache, not a permissions problem. Container and `Library/Caches` are 0755 501:501; metadata is 0644 root:501; there are no symlinks. The ACL marker is present but the owner has rwx, lsd runs as `mobile` (501), and the historical run wrote the DB successfully.
+- `--disk-snapshot` is QEMU `snapshot=on`: the base image is unchanged and all guest writes are discarded. The base has no LaunchServices DB, so every snapshot-backed boot starts with an empty lsd container and performs a full rebuild. This is not a new corruption caused by snapshot mode; `run20h-hour` also used `--disk-snapshot` and completed after the long rebuild. A persistent disposable clone (no snapshot) would keep the DB but is a separate data change and needs approval.
+- Historical proof of the rebuild: at guest 2065.556906 s lsd t2 is in `-[LSRebuildStatisticsGatherer performRebuild:]` -> `__LSServer_LSEnumerateAndRegisterAllBundles` -> `+[LSDatabaseRebuildContext withStatsGatherer:runWithRebuildContext:]` -> `__LAUNCH_SERVICES_IS_REBUILDING_THE_DATABASE_BECAUSE_IT_DID_NOT_EXIST`. lsd t0 is parked in `performJournalRecovery`/`dispatch_sync_f_slow`; sample 17 at 2185.577083 s is back in the normal `CFRunLoop`. `exec installd` was 2041.870202 s; display off 2083.424946 s, on 2501.397564 s; first Home Screen snapshot last guest time 2528.230459 s. Recovery therefore completed between 2065.556906 and 2185.577083 s, about 30-34 minutes after start.
+- P0 is the same rebuild, not a new deadlock: P0 sample 5 at 741.763652 s has lsd t2 in `MIInstalledInfoGatherer _fixUpForBuiltInAppParallelPlaceholder` -> `MIContainer` -> container XPC; historical sample 5 at 745.284743 s has lsd t2 in `MIInstalledInfoGatherer _populatePlaceholderRecordValues` -> installation-identity semaphore. Both are in built-in-app record gathering; P0 t0 is the same `performJournalRecovery` stack as historical samples 1-16. P0 ended at guest 837.365 s, before the historical completion window. P0 lsd t5 entered `fsync` at 375.822697 s and was out by 501.719598 s, so the observed HFS fsync did not fail or remain stuck.
+- HFS audit from local sources: Apple hfs-627.100.6 is built in; SWEET changes are the dirty-root mount allowance, hardlink-log throttling, and the VFS `RENAME_SWAP` -> `VNOP_EXCHANGE` fallback. `hfs_vnop_fsync`/`hfs_fsync` are implemented, `hfs_vnop_renamex` supports only `VFS_RENAME_EXCL`, `hfs_vnop_mmap` returns `ENOTSUP` intentionally so the UBC cluster layer does the mapping, and the locking/journal code is unmodified. Boot logs show `jnl ... reset`, `hfs: mounted`, and no HFS/EIO/ENOTSUP/fsync/rename/mmap failure. There is no syscall-failure evidence to blame HFS.
+- Conclusion: the P0 no-UI state is a very slow first-boot LaunchServices database rebuild under one-vCPU TCG, not a proven lsd deadlock and not unfinished failing HFS I/O. The 900 s deadline was too short.
+- Next (needs explicit QEMU authorization): same 0086 kernel/payload/root, `--disk-snapshot`, 3,000 s host limit, snapshots every 300 s, wake at 2,300 and 2,500 s. Historical lsd normal was 2,185.6 s and Home 2,528.2 s; the later control run reached lsd normal only at ~2,833 s (see the top update). Do not patch lsd or delete the DB. Only if faster repeats are required, consider a persistent disposable clone to seed the DB, with backup and rollback. No QEMU, commit or push was made.
+
+### >>> UPDATE 2026-10-25 17:01 WIB (P0 0086 900 s complete: no PID 1 stall; launchd.ios reached; UI still at LaunchServices/lsd) <<<
+
+- P0 ran to its deadline: `run-manifest.json` records 900.751 s, `stop_reason=deadline`, QEMU return 1, runner return 0, `not_decoded`; 14 host snapshots (`snap001`-`snap014`), `qemu.log` and `serial.txt` empty. No panic or reboot appears in the captured msgbuf.
+- PID 1 was not stalled. The guest reached Apple launchd and normal process churn: `exec launchd.ios` 33.071560 s, `exec launchd_cache_loader` 49.876722 s, `exec SpringBoard` 54.048638 s, `exec backboardd` 95.920103 s, `exec lsd` 103.384173 s, `SWEET FB: display on` 154.799706 s, and new `exec ...` records through guest 837.365 s. `launchd.ios:1` holds the listening sockets logged at ~52.5 s. This is functional PID 1, not a memory-test stall.
+- No `SMP launchd[1]` or `SMP launchd.ios[1]` was captured. The first sampler marker is guest 121.191808 s; `0054-sweet-process-sampler.patch` sleeps 90 s from virtio-blk attach, so sample 0 is ~88 s after handoff. The payload targets exact name `launchd`, while PID 1's `proc_name()` after handoff is `launchd.ios`; `run0084b` proved that name is what the sampler reports. The older stalled run did not request PID 1 at all (`sweetsample=SpringBoard,backboardd,lsd,iconservicesagen`, extracted from its `ram.bin`). Therefore a missing PID-1 sample is instrumentation mismatch, not evidence that PID 1 is dead.
+- `test_memory()` completed. The deployed `/sbin/launchd` is the custom init (SHA-256 `0e2e63e...`); its source calls `test_memory()` before `run_rc()`, and `/etc/rc` is exactly `exec /sbin/launchd.ios`. That exec happened at 33.071560 s, so the test returned. P0 used `--trace errors`, so it has no per-fault count/FAR series (`qemu.log` is 0 bytes); the old 783-of-4096 page-fault series is not from this run and is not comparable. There is no evidence for a memory-test skip patch.
+- Scheduler evidence: sample markers are 121.191808, 241.236065, 375.822697, 501.719598, 621.738712 and 741.763652 s (intervals 120.044, 134.587, 125.897, 120.019 and 120.025 s). The SpringBoard header inside sample 1 is delayed to 255.816412 s, 14.58 s after the marker, but later samples still progress. Snapshot PCs are mostly `_ml_get_timebase`/`el0_irq_vector_64_long`; `snap014` is EL0 `libsystem_malloc._tiny_malloc_from_free_list`, final `regs.txt` is EL0 `libobjc.sidetable_clearDeallocating` (slide 0x7d6c000). This is not an empty-runqueue/global-scheduler-deadlock signature, but these PCs are not attributable to PID 1 and do not give its kernel wait site.
+- The current no-UI blocker at 741 s is LaunchServices/lsd, with high confidence from the captured stacks: SpringBoard t0 is in `_LAUNCH_SERVICES_WAS_ASKED_TO_PERFORM_BLOCKING_IO_ON_THE_MAIN_QUEUE` -> `_LSCopyServerStore` -> synchronous XPC wait; `lsd` is in `performJournalRecovery`; `iconservicesagen` is in `_LAUNCH_SERVICES_IS_RESEEDING_ITS_DATABASE_AND_MAY_BLOCK`. The final framebuffer is the Apple logo, not Home Screen. This is the known slow lsd recovery path, separate from PID 1; 900 s ended before it cleared.
+- The earlier PID 1 stall did not reproduce. Root/kernel match the prior runs, but boot args, trace mode and wake/sample options differ, and the older command line was not captured. The old `qemu.log` contains 9,767 exception records (1,175,320 bytes); P0's `--trace errors` log is empty. Strongest remaining hypothesis is a run-environment/TCG or fault-handling nondeterminism, not a deterministic init bug; confidence medium-low, not proven.
+- `root-0084i.img` is still 17,179,869,184 bytes with pre-run mtime `2026-10-24T20:54:01.1462492Z`; `ios16-root-20H392-base.img` is unchanged at the same size and `2026-10-24T09:48:39Z`. The snapshot overlay was discarded; no QEMU process remains. No commit or push was made.
+- Next: do not add a boot-path/memory-test patch. If a pre-handoff PID 1 stack is still required, use opt-in instrumentation only (for example `sweetsample_delay` default 90 s, plus both `launchd` and `launchd.ios`), with a new payload and explicit approval. For usable UI, investigate the lsd LaunchServices journal recovery with a longer run or targeted trace; 900 s is too short.
+
+### >>> UPDATE 2026-10-25 (P1 manifest complete; P0 static preflight; no VM run) — superseded by the 17:01 P0 result above <<<
+
+- P1 is complete in `tools/qemu-sweet.py`. `run-manifest.json` is written before QEMU starts and finalized in `finally`; it now records QEMU binary/version, full argv, payload size/SHA-256, kernel/sample-kernel path+size+SHA-256, exact effective `boot_args`, trace mode, absolute disk path/size/mtime, host start/finish timestamps, `stop_reason`, `timed_out`, QEMU return code and runner exit code. Disk size/mtime is explicitly not a content hash.
+- New static test `tools/test-qemu-manifest.py` passes on Windows and WSL: schema, payload/kernel SHA-256, disk normalization, boot-arg replacement/truncation, manifest serialization, deadline/interrupted/failed finalization.
+- New `tools/p0-preflight.py` passes all checks without starting QEMU: prepared payload SHA-256 `0f31237b...`, only the 608-byte boot-args field differs from `payload-0086-iconagent.bin`, `sweetsample` includes `launchd`, kernel 0086 SHA-256 and sampler symbols match, the QEMU virtio-blk path parses `sweetsample` and calls `_sweet_sample_start` (confirmed in source and 0086 disassembly), source shows `proc_name`/`p_comm`, and historical `run0084b/snap006` proves the sampler emitted `SMP launchd.ios[1]` with a user stack. The pre-handoff name `launchd` is established from source; a pre-handoff runtime sample is still unproven.
+- P0 was subsequently run; see the 17:01 update above. At this point it was prepared but not run. Exact 900 s command, sampling schedule, classification table and success/stall anchors are in `docs/HACKIOS_20H392_PORT.md`. It used `payload-0086-launchd-sample.bin`, `xnu/out-0086-trace/kernel.development.sweet`, `root-0084i.img`, `--disk-snapshot`, `--sample-every 60` and `--trace errors`; output target is `research/vm/run20h-0086-launchd-stack`.
+- Static validation: `py_compile` clean; WSL `python3 tools/validate-repo.py --verbose` passed 89 patches, 17 Python tools and 7 shell scripts. Windows direct `validate-repo.py` still fails only because bash receives unescaped Windows paths.
+- Uncommitted: `tools/qemu-sweet.py`, `tools/test-qemu-manifest.py`, `tools/p0-preflight.py`, `docs/HACKIOS_20H392_PORT.md`, `docs/QEMU_VM.md`; `github-clone/` remains untracked. No commit or push.
+- Next: wait for explicit QEMU authorization, then run P0 and inspect `SMP launchd[1]` plus `regs.txt` in each snapshot. Do not add a memory-test skip until P0 shows the stall is confined to `test_memory()`; the earliest observed divergence remains before that test.
+
+### >>> UPDATE 2026-10-25 (0086 PID 1 sampler payload prepared; no VM run) — superseded by the 17:01 P0 result above <<<
+
+- `research/vm/payload-0086-launchd-sample.bin` is a separate copy of the existing 0086 SWEET payload with only the fixed 608-byte boot-args field changed: `sweetsample=launchd,SpringBoard,backboardd,lsd,iconservicesagen`. SHA-256 `0f31237b363d9d444c3b4d70e7671cb40790e39e00c7cf44bfbe8c9a4c70b673`; original `payload-0086-iconagent.bin` remains unchanged (SHA-256 `510360e8dc78d94eb16332cd03c6990c27bffc1b436b12d26ea6d336f99164d8`). A byte comparison confirms every byte outside the boot-args field is identical.
+- This payload uses **ios-sweet kernel 0086** from `xnu/out-0086-trace/kernel.development.sweet` (SHA-256 `11bb2b36b806b92556a6d4aee75eb3a269dcbabfdce03fe5b01430647583ec43`). It does not use `github-clone/hackios-xnu-kernel`; that repository's separate `mach.development.bcm2837`/UEFI prebuilt is not part of this QEMU diagnostic. No kernel source/binary or ADT was changed.
+- The already-built 0086 kernel contains `_sweet_sample_names`; the process sampler accepts the `sweetsample` boot argument and will include PID 1 (process name `launchd`) in its user-stack samples, alongside SpringBoard/backboardd/lsd/iconservicesagen. This is intended to show whether PID 1 is still in `test_memory()` or blocked in a syscall.
+- No QEMU run was started. When a new diagnostic boot is requested, use the payload above with the same 0086 kernel, `root-0084i.img`, `--disk-snapshot --input --display gtk`, and periodic captures. The exact bounded command and interpretation table are in `docs/HACKIOS_20H392_PORT.md`; it adds `--trace errors` to the earlier example.
+
+### >>> UPDATE 2026-10-25 (offline 0086 boot diagnosis; no VM/device changes) <<<
+
+**STATE: The proximate blocker in the stopped 0086 run is established: PID 1 is still inside HackiOS `init`'s 64 MiB anonymous-memory self-test at guest 597s, so `/etc/rc` and Apple `launchd.ios` have not started. The underlying reason the test stops progressing is not proven. Separately, the init's `ramfs` mount of `/private/var` fails because this kernel has no registered `ramfs` filesystem, leaving the data-volume skeleton uncreated; init continues past that failure. No kernel change is justified yet.**
+
+- Executable mapping: read-only extraction from `root-0084i.img` proves `/sbin/launchd` SHA-256 `0e2e63e737049a6b17e47f0edd55a8ef5bfe2d9881f4d0966bd2fd5b0c943185`, identical to `github-clone/hackios-xnu-userland/prebuilt/userland/init`; it is Mach-O `MH_EXECUTE` (not PIE), UUID `ED425049-F08B-3ABE-A0CB-6884982F60D1`, `__TEXT` 0x100000000-0x100008000. `ELR 0x100003288` resolves to `_main + 8376`; `ELR 0x100006934` resolves to `_mini_syscall + 32`. The second address is consistent with init's test syscalls. The same image has `/sbin/launchd.ios` SHA `12370e5e35bf28ae479b6c4b4455f4f4693ab803e37c5eb3032537c18cac61c`, matching the extracted Apple launchd (UUID `5C15DB07-B3BC-3DF3-B62F-3E498B993B8E`). In the current run there is no `exec launchd.ios` by guest 597s, so its EL0 PCs are not evidence of Apple launchd/dyld. `research/ios-bins/dyld` has UUID `199941A5-95EE-3054-8E54-AE6387A9FA9A`; its preferred-base address space can numerically overlap, but no captured task map/ASID was saved. The extracted 20H392 shared cache header is UUID `8F970452-C9E3-3E88-B114-FEB1864BC9E0` (iOS 16.7, 42 subcaches); the successful run msgbuf logs maps for `dyld_shared_cache_arm64` plus `.01` through `.42` at guest ~33.66s, confirming that run found the split cache. The latest stopped run never logs `exec launchd.ios` or cache map attempts by guest 597s, so it cannot establish whether that process reached dyld. A saved successful-run CPU snapshot has PC `0x18806ebac`; interpreting that as an unslid cache address maps it into CFNetwork `__TEXT.__const`, but no runtime slide or task map was captured, so do not treat that as a symbolicated runtime stack. Because the QEMU CPU trace omits PID and VM map, attribution of the low 0x100... ELRs is supported by the init hash, framebuffer diagnostics, and matching code address, not by an explicit per-process map.
+- Abort analysis: latest `qemu.log` has 797 Data Aborts total; 783 at ELR 0x100003288 have ESR 0x92000047 (translation fault, level 3), 783 distinct FARs from 0x100048000 to 0x100c80000 at 16-KiB steps. `init.c:test_memory()` allocates 64 MiB anonymous memory and writes/reads each 4-KiB stride; with 16-KiB guest pages this produces demand faults. The captured framebuffer ends at the `-- memory --` heading without the function's final `64 MB ...` check, which source prints only after both loops. Trace tail ends after the store-loop fault at FAR 0x100c80000 (about 12.5 MiB from the mapping base); later records are IRQ/kernel timebase activity, with no further user EL0 data abort or SVC in the saved tail. This supports a stall in/after the memory test but does not prove the exact kernel wait. `run20h-hour/qemu.log` and `run20h-0086-repeat-wake-interactive/qemu.log` each contain exactly 4,096 Data Aborts at this ELR, with unique FARs 0x100048000-0x104044000, and both reached the init handoff; therefore the repeated abort signature is not a demonstrated exception loop or fatal fault. Latest trace was partial (12m21 host run, guest sample at 597s), so counts are not directly a throughput measure.
+- A/B baseline check: the successful hour run and the stalled run are both recorded as kernel `xnu/out-0086-trace/kernel.development.sweet`, payload `research/vm/payload-0086-iconagent.bin`, and root `research/vm/root-0084i.img`, with guest writes on disk snapshots. Their generated 32-byte boot stubs also hash identically (`6c660f59407c08295a8d2982a6415dc157e02ed6249df859a21c48353db770be`). The successful run has all 4,096 anonymous-memory write-loop page faults and then `exec launchd.ios`/SpringBoard; the stalled run has 783 and no handoff. This points to a nondeterministic or run-environment-sensitive VM/test stall rather than a fixed missing file in the baseline image. Command-line capture for the older run is absent, so this is not proof that every QEMU option matched.
+- First observed timeline divergence: successful `run20h-hour/snap001/msgbuf.txt` has root mount at ~32.55s, `load_init_program` at 31.27/31.30s, `exec launchd.ios` at 32.668s, `exec SpringBoard` at 59.823s and `exec backboardd` at 82.160s. Latest `snap002/msgbuf.txt` mounts the same HFS root at 32.546s, then does not log `load_init_program` until 59.381s and retries `/sbin/launchd` at 74.193s; no `exec launchd.ios`, SpringBoard or backboardd by 597.241s. Guest time is kernel monotonic time from msgbuf. Host capture times are recorded separately in `snapshot-capture.log` (13:28:23 and 13:33:23 WIB); QEMU `qemu.log` has no timestamps to align. The earliest evidenced divergence is the delayed init-program loading/transition, but the available records do not isolate why. The framebuffer's `[FAIL]` lines are from HackiOS `init.c` self-tests; main continues through the tests and only later runs `/etc/rc`, so a failed check is not automatically fatal. In particular, `test_files()` expects creating `/etc/newfile` to fail specifically with `EROFS` (errno 30). Its `[FAIL] creating a file gives EROFS` means that expected error was not observed; the screen does not say whether the open succeeded or returned some other errno. It is not evidence that the root is read-only. Separately, `mount_writable()` calls `mount("ramfs", "/private/var", ...)`; it prints `Operation not supported by device`, then skips skeleton creation (`0 directories, 0 files`). Kernel port sources register HFS and bindfs but no `ramfs` VFS filesystem, matching this specific mount failure.
+- Read-only root audit: 7-Zip HFS catalog lists `/private/var/containers` in both `root-0084i.img` and `root-0084j-datadirs.img`. Under `/private/var/mobile/Library`, j adds exactly `CoreData`, `CoreDuet`, `CoreDuet/Knowledge`, `dmd`, and `dmd/Policies`; it also changes Library mode from 0711 (i) to 0755 (j). Both extracted `com.apple.migration.plist` files parse as `LastSystemVersion=20H392` and `DMUserDataDisposition={SyntheticDidUpgrade:false, buildVersion:20H392}`. The upstream image history recorded here: v9 adds containers plus launchd stdout/stderr path changes; v10's `com.apple.DataMigration.plist` did not stop migration; v11 investigated IOPlatformUUID/ByHost requirements; v12 sets the plain `com.apple.migration.plist` version and was recorded to stop the repeated one-hour migration. The checked current i/j values confirm the version key; no current capture proves migration is causing the 0086 delay.
+- HFS rename: patch 0052 retries `VNOP_RENAME` with `VNOP_EXCHANGE` only for same-volume regular files when `VFS_RENAME_SWAP` returns `ENOTSUP`. The built HFS source has `hfs_vnop_exchange` registered in the vnode operations and implements exchangedata semantics. This is relevant atomic-write compatibility, not proof of the current delay. No filesystem conclusion is drawn from the init self-test alone; the 0086 guest successfully mounted HFS and the framebuffer check is specifically a memory-filesystem mount.
+- Root cause boundary / next diagnostic: the immediate boot gate is init's memory self-test, before `/etc/rc`; the kernel mechanism behind the lack of completion remains unproven. A separate compatibility gap is the missing `ramfs` filesystem registration: `/private/var` is not overlaid and its skeleton is not created, though init continues. Since the earlier successful run used the same recorded kernel/payload/root and reached SpringBoard, this particular failure is not sufficient to explain the current run's earlier handoff stall; it may still affect later services. To test the memory gate without changing XNU, the minimal candidate is an opt-in boot argument that skips only the diagnostic memory loop and emits a clear marker; default behavior remains unchanged. Rollback is removing that userland gate/restoring the prior init binary. Verify later on a fresh disposable image with QEMU disk snapshot: confirm `/etc/rc`, `exec launchd.ios`, cache mapping, SpringBoard and usable screen; then separately investigate VM under real userspace memory pressure. Do not implement or boot until the user authorizes that next step; no speculation about a kernel fault is established by this trace.
+- No new QEMU was run, no kernel or image was changed, no device partition was accessed, and historical captures/images were preserved. `github-clone/` remains untracked and untouched.
+
+### >>> UPDATE 2026-10-25 13:35 WIB (0086 run stopped; qemu.log and guest evidence analyzed) <<<
+
+**STATE: The repeat run was stopped after ~12 minutes to avoid keeping the laptop under QEMU load while the guest showed no boot progress. This run did not reach SpringBoard/menu. The QEMU trace does not show a panic; framebuffer `[FAIL]` lines are HackiOS init self-test output; they do not prove a general read-only root or fatal failure. No kernel patch is justified by this evidence alone.**
+
+- Run `research/vm/run20h-0086-repeatable-wake-1h/` used kernel 0086 and `--disk-snapshot`; it was stopped with Ctrl-C at ~13:35:44 WIB. `qemu.log` flushed to 1,175,320 bytes, `serial.txt` is empty, and no QEMU process remains. The base `root-0084i.img` remains 17,179,869,184 bytes and retains its original 03:54:01 timestamp.
+- `snap002/msgbuf.txt` confirms HFS+ `iOSRoot` mounted and PID 1 `/sbin/launchd` started. By guest ~597s there are no `exec SpringBoard` or `backboardd` messages. The framebuffer shows failures to mount a memory filesystem on `/private/var`, create data-volume directories, and find `HFS+ Private Data`; determine the exact source/context before changing XNU.
+- `qemu.log` is CPU exception trace, not boot text. It contains 8,967 records (3,630 IRQ, 797 Data Abort, 55 SVC, 2 Prefetch Abort), with no panic/watchdog/fatal marker. Its dominant kernel addresses resolve in the exact 0086 kernel to `_machine_idle+0xfc`, `_ml_set_interrupts_enabled_with_debug+0x110`, and `_ml_get_timebase+0x18`, consistent with idle/interrupt handling. The familiar `__bcopyout+0x1c` appears 11 times only; earlier long traces have the same recoverable pattern. The dominant EL0 address resolves to HackiOS init `_main + 8376` (see offline diagnosis below); the second resolves to `_mini_syscall + 32`.
+- Detailed notes: `research/vm/run20h-0086-repeatable-wake-1h/qemu-analysis.txt`. Compare private/data-volume setup against the earlier successful run before making kernel changes. No further QEMU run was started.
+
+### >>> UPDATE 2026-10-25 (5-minute QMP wake smoke; periodic msgbuf capture added) <<<
+
+**STATE: A real 5-minute Windows QEMU smoke run confirmed QMP wake taps are accepted and the disposable disk remains unchanged. The final framebuffer is still the Apple logo, so this short boot did not reach a usable menu. The 0086 one-hour UI result remains historical evidence, not a repeat in this run. To make the next longer run diagnosable, the runner can now capture framebuffer/register/msgbuf snapshots periodically.**
+
+- Run `research/vm/run-qmp-wake-smoke/` used QEMU 11.1.0, `payload-0086-iconagent.bin`, kernel `xnu/out-0086-trace/kernel.development.sweet`, `root-0084i.img`, virtio input, GTK ramfb, `--disk-snapshot`, and a 300s limit. It stopped at timeout with QEMU return 0 and runner status `not_decoded` (capture status, not guest crash). Final framebuffer is the Apple logo; `serial.txt` is empty. Full QEMU exception trace is 41,318,110 bytes and has no guest timestamps.
+- The new periodic wake option emitted successful QMP taps at host 13:16:40 and 13:18:40 (run start 13:15:40; 60s start, 120s interval). `wake-events.log` records both. The guest did not visibly advance beyond the Apple logo by the 5-minute capture, so this only proves QMP command transport, not that guest HID received or acted on it; this run had no live msgbuf sampler.
+- `root-0084i.img` remains 17,179,869,184 bytes with original timestamp 03:54:01, and no QEMU process remains. The `--disk-snapshot` overlay was discarded at exit. No phone/Android partitions were used.
+- `tools/qemu-sweet.py` now also accepts Windows-only `--sample-every N --kernel KERNEL`; every interval invokes `research/snapshot-qemu.py` to record `snapNNN/{fb.png,regs.txt,msgbuf.txt}` and `snapshot-capture.log`, pausing the guest briefly for the capture. This is intended to distinguish the early boot state, the screen's idle policy, and userland stalls during the next long run. Local syntax and mock QMP checks passed; live snapshot orchestration still needs to be exercised in QEMU.
+- Next: run the known 0086 payload with a bounded, snapshot-backed period long enough to reach the historic Home Screen time, e.g. 3,600s with `--disk-snapshot --input --display gtk --wake-start 300 --wake-every 300 --sample-every 300 --kernel xnu/out-0086-trace/kernel.development.sweet`. Inspect every saved msgbuf and framebuffer, interact with Home/Settings, and repeat only after this run's result is understood. The goal of a second run showing a responsive menu and stable guest remains incomplete.
+
+### >>> UPDATE 2026-10-25 (controlled 0086 one-hour repeat in progress; periodic guest capture verified) <<<
+
+**STATE: The repeatable-stability run is active on QEMU 11.1.0 with the known 0086 kernel, guest disk snapshot, periodic wake taps, and periodic live msgbuf/framebuffer/register capture. The first 5-minute capture completed successfully and resumed QEMU. The guest had mounted HFS+ and started PID 1 launchd; it had not reached SpringBoard/menu at guest 143s. Do not start a competing VM.**
+
+- Active run `research/vm/run20h-0086-repeatable-wake-1h/`, QEMU PID 25500, 3,600-second host limit. Inputs: `research/vm/payload-0086-iconagent.bin`, `xnu/out-0086-trace/kernel.development.sweet`, and `research/vm/root-0084i.img` with QEMU disk snapshot enabled; `--input --display gtk`, wake every 300s from 300s, sample every 300s using `--sample-kernel`. The display window is open. No phone/Android partitions are involved.
+- The initial launch attempt did not start QEMU because `--kernel` requires `llvm-nm` for final framebuffer text decoding and Windows PATH has no `llvm-nm`. Added `--sample-kernel` so periodic sampling can parse `_msgbufp` directly without LLVM. The current process started successfully with this option; final runner screen remains `not_decoded` absent optional LLVM decode, but snapshots include the guest log and framebuffer.
+- At host 300s, wake tap was logged at 2026-10-25 13:28:23 WIB and periodic capture `snap001` succeeded (exit 0). Guest snapshot time was ~143.23s. `msgbuf.txt` shows `virtio-blk: /dev/vblk0`, HFS root mounted, `load_init_program` attempting launchd, and `init: process 1 started as /sbin/launchd`; framebuffer still shows kernel console. This establishes that the snapshot helper can stop/copy/resume the live VM and the wake command is accepted by QMP. The first capture contains only HID device registration, so it does not yet prove the scheduled tap reached the guest HID driver.
+- `root-0084i.img` is still 17,179,869,184 bytes with the original 2026-10-25 03:54:01 timestamp. The guest is attached with `--disk-snapshot`; the source image is not being modified.
+- Next: keep this same PID under observation until its configured timeout, checking `snapshot-capture.log`, successive `snapNNN/msgbuf.txt` and framebuffer images, periodic `wake-events.log`, and any guest panic. Once SpringBoard/Home Screen appears, capture an additional readable frame and input response. Completion of this 60-minute repeat requires usable menu evidence and no guest crash/reset, not just runner timeout.
+
+### >>> UPDATE 2026-10-25 (QMP display-wake automation prepared) <<<
+
+**STATE: The QEMU runner now has an opt-in periodic tablet-tap feature for controlled display-wake/stability runs. The QMP command was checked against a protocol mock and repository validation passes in WSL. It has not yet been exercised against a live QEMU guest; repeatable interactive stability remains unverified. No QEMU process was started in this milestone.**
+
+- `tools/qemu-sweet.py` accepts `--wake-every N --wake-start S` with `--input`. It sends QMP `input-send-event` absolute tablet coordinates at blank screen center and a left-button down/up, then records host timestamps in `wake-events.log`. Both values are host seconds; default first event is 300s. This does not unlock the guest or launch an app. The documented use is for waking an idle display during a bounded run.
+- Checked Python compilation, CLI help output, and the QMP message sequence against a local mock QMP server. `python -X utf8 tools/validate-repo.py` in WSL passed: 89 contiguous patches, 15 Python tools, and 7 shell scripts. Native Windows invocation of the repository validator fails only because it passes Windows paths to bash without path conversion; WSL run is authoritative.
+- No kernel patch/build, disk image modification, QEMU boot, or device partition operation was performed. For the next real run, use the known 0086 kernel/payload and disposable `root-0084i.img` with `--disk-snapshot --input --display gtk --wake-start 300 --wake-every 300`, bounded duration, and inspect guest msgbuf plus framebuffer snapshots. A second run reaching Home Screen and staying responsive is still required before claiming the objective complete.
+
+### >>> UPDATE 2026-10-25 (re-evaluation: idle display policy vs kernel hang) <<<
+
+**STATE: The available evidence does not justify another kernel patch for the black framebuffer. iOS reaches SpringBoard, and its power manager sets a display aggressiveness level early in boot; a later QMP touch wakes the panel and the existing 0086 run navigated through Settings/About. A black idle framebuffer therefore cannot be used as evidence that XNU or SpringBoard has stopped. Repeatability still needs a controlled, bounded user-input run; no new QEMU run was started in this turn.**
+
+- `research/vm/run20h-20h392/snap005/msgbuf.txt`: `exec SpringBoard` at guest 54.90s; `PMRD` reports system aggressiveness 0→2147483647, display 0 at 101.20s, followed by display aggressiveness 10 at 101.21s and system 2147483647→0 at 110.58s. Framebuffer powers on at 146.45s. Same early launchd cache mappings appear with `not in trust cache`; no `no dyld cache`/libSystem failure is present in this captured QEMU boot.
+- `research/vm/run20h-hour/snap010`–`snap011` and `NOTES.md`'s earlier 04:00–05:00 run record show an initially dim/black display, then a QMP pointer/touch wake at guest ~2501s, a bright Home Screen at snap011, and successful Settings → General → About navigation before the one-hour run ended. That is direct evidence the 0086 guest can present and accept input; the screen can sleep while the VM continues.
+- In `research/vm/run20h-0086-repeat-wake-interactive/`, display was off at guest 2352s and on at 3405s without injected touch; however, current-state inspection confirms only snapshots through `snap038` exist and `snap038/fb.png` still shows the Apple logo. This run did **not** reproduce the Home Screen before it was stopped. The earlier `run20h-hour` remains the confirmed UI result. The QEMU exception stream cannot diagnose screen policy; use timestamped `msgbuf.txt` and screenshots.
+- The HackiOS kernel README documents a fuller QEMU port including APFS and virtio input/display, but our current 20H392 setup already passes launchd/cache startup and runs SpringBoard. Porting APFS or libignition at this stage would not address this idle-screen symptom. Relevant upstream references: [HackiOS kernel](https://github.com/oosexgang/hackios-xnu-kernel), [HackiOS userland QEMU/APFS build](https://github.com/oosexgang/hackios-xnu-userland).
+- Next action for the overall objective: use a snapshot-backed 0086 run with an explicit QMP wake event and screenshots/msgbuf around the wake; confirm the visible Home Screen responds, then conduct the requested stability soak with periodic input to prevent the normal idle display timeout. Keep the base root immutable, keep `--disk-snapshot`, and do not run an unbounded soak. The previous one-hour run already demonstrated a usable menu; the repeat run has not yet demonstrated repeatable interactive stability. Do not claim the overall objective complete until a second controlled run confirms it.
+
+### >>> UPDATE 2026-10-25 13:10 WIB (full 0086 repeat trace stopped; dyld/cryptex findings) <<<
+
+**STATE: The user asked to stop repeated long QEMU runs and focus on kernel diagnosis/research. QEMU is stopped. The current 0086 guest does find its split dyld cache; the observed cache messages are trust-cache warnings, not a missing-cache failure. The historic 0029i hardware boot did fail earlier in libignition because it could not look up a separate Preboot volume. These are distinct boot configurations and must not be conflated.**
+
+- Run `research/vm/run20h-0086-repeat-wake-interactive/` was stopped at 2026-10-25 13:03:54 WIB (QEMU PID 24744); no QEMU process remains. It ran about 43m25s. The full `qemu.log` is 358,403,984 bytes; `serial.txt` is empty. The trace contains 1,409,456 QEMU exception records (949,582 SVC, 224,365 IRQ, 210,517 Data Abort, 24,992 Prefetch Abort). It is CPU exception tracing without guest-time timestamps, not an iOS console transcript. The frequent EL1 Data Abort at `0xfffffe0007491a68` (`__bcopyout+28`) is also present in prior 0086 runs and is not, by itself, evidence of a kernel panic. No panic can be inferred from this trace alone.
+- Correlating the trace with guest msgbuf: `research/vm/run20h-0086-repeat-wake-interactive/snap008/msgbuf.txt` shows XNU launching `launchd.ios` at guest 33.07s, then attempting to map all 43 `dyld_shared_cache_arm64[.01... .42]` files at guest 34.08–34.13s. The kernel reports `not in trust cache`; launchd continues, and SpringBoard executes at guest 50.18s. Thus this run found the split cache files; it does not exhibit the pasted “libSystem absent/no dyld cache” failure. The local 0086 UI stall remains later in LaunchServices/SpringBoard startup as previously recorded.
+- Historic phone log `research/boot0029i.log` is a different failure: dyld's built-in libignition ran at ignition level 0x5, tried to mount/look up a separate Preboot volume by role, got `failed to lookup preboot: 25` (ENOTTY), then reported no dyld cache and `libSystem.B.dylib` missing before launchd exited and initproc panicked. That evidence points first to missing Preboot volume-role / cryptex bootstrap topology, not framebuffer/touch or a generic cache-directory environment override.
+- Local XNU `bsd/vm/vm_unix.c` already searches standard `/System/Library/Caches/com.apple.dyld/` and Cryptex locations including `/System/Cryptexes/OS/...` and `/private/preboot/Cryptexes/OS/...`. The exact extracted iOS 16.7 dyld contains the strings `DYLD_SHARED_CACHE_DIR`, `/System/Library/Caches/com.apple.dyld`, and `System/Cryptexes/OS`. This supports that dyld knows the override/path mechanisms, but does not prove PID 1 launchd will honor an environment override under platform-binary restrictions.
+- HackiOS's iOS 16 QEMU recipe builds a composite APFS system root with the OS cryptex under `System/Cryptexes/OS` and the split cache beneath it; its flash-root path instead mounts cryptex volumes under Preboot and uses an init/bootstrap stage. The QEMU recipe does not require a separate “ignition” service. For ios-sweet, the current image is HFS+ and kernel lacks an APFS volume driver, so the composite APFS route is not a drop-in kernel patch. Do not copy HackiOS's mount relaxation blindly: its relevant patch is in a `#else /* CONFIG_CSR */` branch, while this kernel is built with CONFIG_CSR.
+- No kernel/source changes, CI dispatch, device boot, or partition writes were made in this diagnosis. No further long QEMU run is authorized by the user's latest instruction. Next concrete step: compare the exact 0029i/0029j/0029k ignition logs and current image layout, then implement a targeted Preboot-role/ignition bootstrap or image-layout fix only if it applies to the active HFS+ QEMU image. Use a short bounded QEMU check only after that targeted change is ready and the user asks to retest. Keep all phone/Android partitions untouched.
+
+### >>> UPDATE 2026-10-25 12:12 WIB (0086 one-hour repeat; full QEMU trace analyzed) <<<
+
+**STATE: A repeat with the previously UI-capable kernel 0086 did reach the iOS Home Screen, but only very late in the run. Two consecutive snapshots show the full screen; the runner's final framebuffer differs, so stable rendering through shutdown is unresolved. Full QEMU trace comparison with the earlier successful 0086 run shows the EL1 `__bcopyout` abort is a shared baseline, not a regression signal.**
+
+- Run: `research/vm/run20h-0086-repeat-springboarddiag/`; QEMU PID 11744, started 11:12:01 and ended at the 12:12:01 one-hour timeout. Kernel is `xnu/out-0086-trace/kernel.development.sweet`, payload `research/vm/payload-0086-iconagent.bin`, root `research/vm/root-0084i.img`, QEMU `--disk-snapshot --input --display gtk`. No phone or Android partitions were used. The source root remains 17,179,869,184 bytes with its original 03:54 timestamp.
+- The entire `qemu.log` is 1,385,637,719 bytes. It is QEMU exception tracing, not an iOS text console, and has no guest-time timestamps. It records 5,490,538 exception entries: 4,205,826 SVC, 605,505 Data Abort, 605,081 IRQ, and 74,126 Prefetch Abort. Of Data Aborts, 574,794 (94.9%) entered from EL0 and 30,711 from EL1. The earlier successful 0086 trace has the same repeated EL1 PC `__bcopyout+28` (`0xfffffe0007491a68`) 32,622 times, versus 26,338 here. The checked-in XNU source `research/buildtree-0084/tree/src/xnu/osfmk/arm64/sleh.c` has a `copyio_recover_table` path in `handle_kernel_abort`; the PC is the 16-byte `stp` store into the user destination in `__bcopyout`. This strongly indicates ordinary recoverable copyout/page faults, not a kernel defect. No evidence in this trace establishes a panic.
+- Timestamped guest evidence is in `snapNNN/msgbuf.txt` and `fb.png`, which must be correlated with the un-timestamped QEMU trace. SpringBoard began creating surfaces at guest 3427.7 s; the compositor logged framebuffer swaps through 3549.6 s. Snapshots `snap042` (~3517 s) and `snap043` (~3559 s) both visibly show the iOS Home Screen: Photos, App Store, Settings, dock, and status bar. Runner `fb.png` captured at the one-hour timeout instead shows status bar/search/dock with the main icon area black. No SpringBoard crash appears in the captured msgbuf; the discrepancy between the final capture and the preceding snapshots is unresolved. Several widget extensions were killed for `extension check-in timeout`; that is guest userland trouble, not a kernel panic.
+- Framebuffer power transition differs from the prior successful run: this repeat logged display off at guest 2352 s and display on at 3405 s (about 17.5 minutes later), compared with 2083 s to 2501 s (about 7 minutes) in `run20h-hour`. No touch was injected in this repeat, while the earlier run used QMP touches to wake and navigate to Settings > General > About. This timing difference is a stronger lead for the late UI than the shared `__bcopyout` aborts, but the cause is unconfirmed.
+- `result.json` says `not_decoded`; this is the runner framebuffer decoder status and does not mean QEMU crashed. The process exited at its configured timeout. While QEMU was active, `qemu.log` stayed 0 bytes; it was flushed on process exit. `serial.txt` was empty. No `panic(cpu ...)` was found in the captured guest msgbufs.
+- Next: repeat kernel 0086 with `--disk-snapshot`, monitor display-off/on, inject a QMP wake tap when needed, and verify Home Screen interaction/navigation plus successive framebuffer snapshots through the end. Compare the final runner capture to QMP snapshots to isolate the frame discrepancy. Keep the phone partitions untouched.
+
+### >>> UPDATE 2026-10-25 10:57 WIB (0089 root-i repeat one-hour soak completed) <<<
+
+**STATE: CI kernel 0089 ran for the full 3,600 seconds under QEMU on the previously UI-capable `root-0084i.img`, with `--disk-snapshot`. XNU stayed alive without an observed panic, but the framebuffer never reached a usable menu; the final frame is the Apple logo on black.**
+
+- Run directory: `research/vm/run20h-0089-rooti-repeat/`; QEMU PID 30652; start 09:56:54 and timeout/exit 10:56:54 WIB. Used `payload-0089-qemu.bin`, one vCPU, `--input --display gtk`, and `--disk-snapshot`. `result.json` says `not_decoded` (frame decode/capture result, not a QEMU crash). No QEMU or Python boot process remains.
+- XNU reached `launchd.ios`; SpringBoard executed at guest 51.9 s, backboardd at 75.3 s, and `lsd` at 81.1 s. Display turned on at 129.3 s with several framebuffer swaps; then it stayed at Apple logo/black, with no further UI swaps. Repeated sampler traces through guest 3,123 s still show `lsd` main thread in `-[_LSInstallProgressService performJournalRecovery]` / `__dispatch_sync_f_slow`, and SpringBoard synchronously waiting in the LaunchServices path. No `panic(cpu ...)` signature was found in captured msgbufs.
+- Direct QMP absolute input produced guest HID events at `(147,571)` and `(481,1799)` (matching the taps logged in the earlier one-off successful run), plus an upward swipe from `(540,2300)` to `(540,499)`. All were accepted by the guest but did not change the framebuffer. HMP `mouse_move` attempts targeted `(937,765)` and are not used as evidence for the intended taps.
+- Complete QEMU trace: `qemu.log`, 1,064,750,844 bytes, last written at 10:56:54 WIB. It is QEMU `-d int,guest_errors,unimp` output and has no guest-time timestamps; it is not the iOS console transcript. `serial.txt` is empty. There are 66 `snapNNN/` directories containing framebuffer, registers, and msgbuf captures; `snapshot-capture.log` holds periodic collector output. Final framebuffer/regs are `fb.png` / `regs.txt`; `result.json` is adjacent.
+- Full trace comparison against the earlier successful 0086 run (`research/vm/run20h-hour/qemu.log`, 1,808,604,449 bytes): 0086 has about 378k IRQ, 733k Data Abort, 82k Prefetch Abort records; 0089 has about 363k IRQ, 424k Data Abort, 71k Prefetch Abort records. Both traces repeatedly enter the same kernel EL1 exception PCs (including `0xfffffe0007653be8` and a Data Abort at `0xfffffe0007491a68` / FAR `0x4000`); Data Abort records are not, by themselves, proof of a panic. At the final captured state the successful run's CPU is EL0, while 0089's is EL1 at `_thread_get_perfcontrol_class+0x90`. That is a useful state difference, not a root-cause diagnosis or evidence that this routine caused the UI stall. The payload boot-args strings are otherwise identical; 0087–0089 are the kernel changes (QEMU CPU topology/PSCI handling and PID 1 bindfs entitlement). The old successful run also had the repeated `lsd` recovery stack, so that stack alone cannot explain why its UI appeared. Continue correlating the no-timestamp QEMU trace only with timestamped msgbuf/sampler/framebuffer snapshots; do not infer a precise event time from `qemu.log`.
+- Render-path comparison across all available sampler snapshots: both 0086 and 0089 show backboardd creating 1125x2436 surfaces and framebuffer swaps early (0086 around guest 138–278 s; 0089 around 130–173 s). Only the successful 0086 run later logs SpringBoard-created surfaces, starting at guest 2507.9 s; these coincide with the visible Home Screen. No SpringBoard-created surface appears in the 0089 run's snapshots, whose screen remains Apple logo/black. HID input reaches the 0089 kernel, so the evidence places the divergence after basic kernel framebuffer/HID setup, around SpringBoard/LaunchServices initialization. Both runs also report the same three BindFS lookup failures for absent preboot firmware, Pearl reference frames, and factory-data cache paths; those errors alone do not explain the difference.
+- Root `root-0084i.img` stayed 17,179,869,184 bytes with the pre-run 03:54:01 timestamp; `ios16-root-20H392-base.img` stayed 17,179,869,184 bytes with 24-Oct 16:48:39 timestamp. Read-only WSL `fsck.hfsplus -fn` reports the existing “Volume header needs minor repair” warning for root i and made no changes. No phone/Android partition was used.
+- Security hypothesis evidence from `snap009/msgbuf.txt`: XNU reports trust caches unavailable (`Image4/AMFI not installed`) and `map_with_linking_np ... region 0, not code signed` for SpringBoard, backboardd, and containermanager. These processes subsequently execute and run, so the lines do not prove outright process rejection. The emulated AppleKeyStore reports `no passcode, unlocked`, launchd proceeds through `init-with-data-volume` and `keybag`, and the HFS root contains `/private/var/mobile`; per-file/data-protection failures are still possible. The direct observed blocker remains LaunchServices journal recovery; relation to signature/SEP failures is not proven.
+- Read-only HFS listing comparison confirmed the `root-0084j-datadirs.img` experiment added five paths relative to root i (`CoreData`, `CoreDuet`, `dmd`, `CoreDuet\Knowledge`, `dmd\Policies`). That change alone is not established as the cause of `lsd` stalls.
+- Next: diagnose the stuck LaunchServices journal recovery and Redwood graphics path on a disposable root copy, then repeat boot/UI validation. Preserve original/base images and use snapshot disks; never touch phone partitions.
+
+### >>> UPDATE 2026-10-25 (0089 CI, one-hour QEMU soak, and 0089 smoke completed) <<<
+
+**STATE: Kernel patch 0089 builds successfully and boots in QEMU without an observed panic. The requested one-hour QEMU soak completed, but the display never reached a usable menu. SpringBoard and backboardd start; the remaining blockers are LaunchServices/persona waits and the Redwood graphics path reporting no GPU draws.**
+
+- Patch 0089 lets PID 1 mount bindfs only when `virtio_blk=1`. Its first CI run 40152946371 failed because `PE_parse_boot_argn` lacked a declaration; commit `259e8cc` added `<pexpert/pexpert.h>`. WSL `tools/validate-repo.py` and `git apply --check` passed. CI run **40153612755** succeeded. Kernel SHA-256 `c6ba98e1dfe8e8d82ad7bb942f4206370867057ef83fb00ac2a7b893e7805f1d` matches the manifest; payload is `research/vm/payload-0089-qemu.bin`.
+- The one-hour run `research/vm/run20h-datadirs-hour/` started 08:47:29 and ended automatically 09:47:30 Asia/Jakarta. QEMU PID 24396 and runner PID 25092 exited. It used kernel 0086 and `root-0084j-datadirs.img` with `--disk-snapshot`. Final frame is black; intermediate snapshots 001–024 alternated between Apple logo and black. No panic signature was found in captured msgbufs. `result.json` is `not_decoded`, which is a frame-state decoder result, not a guest crash. Touch and swipe events reached the guest but did not reveal UI.
+- The one-hour stacks repeatedly show LaunchServices `performJournalRecovery` / eligible-persona XPC work blocking `lsd` and SpringBoard. Later logs show recurring `bluetoothd` and `fairplayd.H2` launches and `datamigrator`. The candidate image's `libredwood.dylib` and `libredwood-sb.dylib` hashes match the 20H392 artifact from CI run 40123325026, so this test used the adapted hooks.
+- A five-minute 0089 smoke boot ran in `research/vm/run20h-0089-bindfs-smoke/` from 09:48:06 to 09:53:07, also with `--disk-snapshot`. XNU reached SpringBoard at guest ~86 s and backboardd at ~139 s without a matched panic signature. PID 1 made bindfs calls; three failed because lower paths under preboot/Pearl/FactoryData did not exist. SpringBoard logs still say `no GPU draws` and framebuffer ends at the Apple logo. The result is `not_decoded`; Windows lacks `llvm-nm`, so this smoke used direct snapshot/msgbuf inspection rather than `--fail-on-panic`.
+- `root-0084j-datadirs.img` remains 17,179,869,184 bytes with 04:10:55 timestamp; preserved `ios16-root-20H392-base.img` remains 17,179,869,184 bytes with 24-Oct 16:48:39 timestamp. No QEMU process remains. No phone/Android partition was used.
+- Remaining work: the current HFS+ root has stock daemon backups but no curated `/redwood/LaunchDaemons`, and this init does not enter `root_apfs` mode. Patch 0089 therefore does not curate this boot. Adapt/rebuild the Redwood init to mount a curated job overlay for the QEMU HFS+ root, then resolve the 20H392 graphics hooks and validate another repeatable menu boot. Preserve originals and use snapshot disks.
+### >>> UPDATE 2026-10-25 (0086 persistent-write one-hour QEMU run) <<<
+
+**STATE: QEMU 0086 stayed alive for the full 3,600-second run when guest writes were enabled on the disposable `root-0084i-repaired.img`. The final framebuffer is completely black, and no usable iOS menu appeared in captured frames. This run does not reproduce the earlier Home Screen result.**
+
+- Run directory `research/vm/run20h-persist-0086/`; `tools/qemu-sweet.py` used `payload-0086-iconagent.bin`, one vCPU, `--disk` pointing to `root-0084i-repaired.img`, `--input --display gtk`, and no `--disk-snapshot`. Started 07:34:33 and the runner captured the final framebuffer and stopped QEMU at 08:34:33 Asia/Jakarta. QEMU PID 2896 was alive at 08:34:15 and had exited by 08:34:49, consistent with the requested timeout. `result.json` is `not_decoded` (capture/decoder status, not a guest error). Final `fb.png` is black. The 1.14-GB QEMU trace log shows ongoing EL0 syscalls and kernel IRQ activity near the end; no panic or early QEMU exit was observed.
+- Snapshots are `snap001` through `snap007`, captured between 07:40 and 08:15. `snap001` and `snap004` showed the Apple logo; `snap002`, `snap003`, and `snap005` through `snap007` were black. QMP touch attempts accepted during the run did not wake the display. Thus persistent writes did not bring back the visible menu during this hour.
+- Guest writes were limited to the disposable `research/vm/root-0084i-repaired.img` clone, which remained 17,179,869,184 bytes and was last written at 08:34:33. The original `root-0084i.img` stayed 17,179,869,184 bytes with its prior 03:54:01 timestamp, and `ios16-root-20H392-base.img` stayed 17,179,869,184 bytes with its prior 24-Oct 16:48:39 timestamp. No phone or Android partition was involved.
+- WSL read-only `fsck.hfsplus -fn` after shutdown reports `Volume header needs minor repair` / `volume ... found corrupt and needs to be repaired` for both `root-0084i-repaired.img` and the original `root-0084i.img`. These are observations from the checker; this run did not use repair mode, and the base image was not checked in this step. Do not treat the clone as clean or as suitable for further writes without making another disposable copy. Do not run a repair against the preserved original/base.
+- This controlled comparison shows that allowing persistent guest writes on the previously repaired clone did not make the iOS UI repeatable. The repaired clone still has a minor HFS+ header warning, so storage integrity is not fully ruled out. Next diagnose framebuffer/window-server blanking and the exact successful-run differences; continue on a fresh disposable copy or snapshot, and preserve the original root and base. Overall goal of a repeatable iOS menu remains open.
+
+### >>> UPDATE 2026-10-25 (0086 one-hour repeat did not reach UI) <<<
+
+**STATE: A second one-hour boot with the previously successful 0086 payload did not reproduce the Home Screen. QEMU stayed alive to its 3,600-second timeout without an observed panic, but the final framebuffer is black. The visible menu result remains non-repeatable.**
+
+- Run directory `research/vm/run20h-repeat-0086/`, QEMU PID 23784, started 06:33:53 and the runner captured/stopped it at 07:33:53 Asia/Jakarta. `result.json: not_decoded` is the timeout capture status, not an early exit. Snapshots `snap001`, `snap004`, `snap007`, `snap010` showed the Apple logo; other snapshots, including final `fb.png`, were black. Two QMP touch events were accepted but did not wake the display.
+- Used the same `research/vm/payload-0086-iconagent.bin`, one vCPU, `--disk-snapshot --input --display gtk`, and original `research/vm/root-0084i.img` that was used by the successful prior 0086 soak. The base clone remained 17,179,869,184 bytes with its 03:54:01 timestamp; preserved IPSW-derived base remained 17,179,869,184 bytes with its 16:48:39 timestamp. No QEMU process remains.
+- This falsifies the assumption that the prior 0086 UI boot repeats from this exact snapshot baseline. Follow-up: use the separate disposable `root-0084i-repaired.img` clone with QEMU writes enabled (no snapshot overlay) to determine whether HFS+ journal/cache initialization discarded by snapshot mode explains the difference. Preserve `root-0084i.img` and the IPSW-derived base. Do not touch phone partitions.
+
+### >>> UPDATE 2026-10-25 (0088 one-hour repeat boot) <<<
+
+**STATE: CI kernel 0088 ran in QEMU for 3,600 seconds on one vCPU without an observed kernel panic or QEMU exit. SpringBoard and backboardd remain present in XNU sampler snapshots, but the screen never reached a visible menu; it alternated between Apple logo and black and ended black. This is not a second successful UI run.**
+
+- Run directory: `research/vm/run20h-repeat-0088/`. Started 05:07:49 and the runner captured/stopped QEMU at 06:07:49 Asia/Jakarta. `result.json: not_decoded` is the expected timeout/capture marker, not a QEMU early exit. Final `fb.png` is black. Intermediate `snap002`, `snap006`, `snap009` showed the Apple logo; other snapshots were black. QMP touch down/up was accepted but did not wake the screen.
+- Used `payload-0088-smp1.bin`, kernel `xnu/out-0088/kernel.development.sweet` (CI run 40134272436, SHA-256 `c60afe065a1ef70a0cab2f2a333b762e1383204c919168f94328accf86aae8d8`), with `--disk-snapshot --input --display gtk` on `research/vm/root-0084i.img`. The snapshot overlay discarded guest writes. Root clone remained 17,179,869,184 bytes with original 03:54:01 timestamp; base image remained 17,179,869,184 bytes with original 16:48:39 timestamp. No QEMU process remains.
+- QMP ring-buffer capture at guest ~2,864 s includes sampler stacks for SpringBoard and backboardd, and no panic was found. There were no new `SWEET FB: display` lines in that ring snapshot. Inference: guest launch services remain alive while the display/UI path is stalled. The earlier 0086 one-vCPU soak reached Home Screen and Settings > General > About in the final snapshot, so 0088 has not repeated the usable UI result.
+- `payload-0086-iconagent.bin` and `payload-0088-smp1.bin` have matching boot-argument strings. Patches 0087/0088 select the QEMU MPIDR/PSCI paths when `virtio_blk=1` is set, but this run requested only one CPU, so no secondary CPU startup was needed. The 0086/0088 UI difference therefore remains unexplained; do not attribute it to SMP until a controlled trace identifies the cause.
+- WSL checks: `python3 -X utf8 tools/validate-repo.py` passed 88 contiguous patches, 15 Python tools, and 7 shell scripts. Read-only `fsck.hfsplus -fn` reported “Volume header needs minor repair” for `root-0084i.img`; it was not modified. An attempted second 17-GB scratch copy stalled, was stopped, and the incomplete scratch file was removed. Disk D: retained about 205 GB free; no source image or phone partition was touched.
+- Repair experiment: made `research/vm/root-0084i-repaired.img` as a complete 17,179,869,184-byte copy, then ran WSL `fsck.hfsplus -fy`; it reported the volume appeared OK. A later read-only `fsck.hfsplus -fn` still reported the minor header repair, so the repair did not yield a verifiably clean image. A 15-minute 0088 one-vCPU boot from this copy with `--disk-snapshot` again showed the Apple logo early and black framebuffer by ~8 minutes, with no visible menu; final capture is `research/vm/run20h-fsck0088/fb.png`. This makes the minor header warning less likely to explain the UI stall, but does not fully rule it out. Both root clones and the original base remain unchanged during QEMU.
+- Next: investigate why 0088 one-vCPU framebuffer returns to Apple logo/black while the 0086 diagnostic kernel showed Home Screen. Use captured `research/vm/run20h-repeat-0088/snap012/msgbuf.txt` and sampler evidence to compare framebuffer and SpringBoard stack paths. Keep all follow-up tests on `--disk-snapshot` and preserve both root images. The overall goal of a repeatable usable iOS menu is still open.
+
+### >>> UPDATE 2026-10-25 (four-vCPU kernel smoke test) <<<
+
+**STATE: Kernel 0088 completed four-vCPU initialization in QEMU and ran for the full five-minute smoke-test timeout without an observed panic. XNU reports `4/4 CPUs initialized, SGI1 verified`; SpringBoard/backboardd and framebuffer swaps follow. The Apple logo is visible around guest 160 s, then the final framebuffer is black. The 4-vCPU Home Screen is not yet verified.**
+
+- Run directory `research/vm/run20h-smp4/`, started 05:01:27 and completed at the five-minute timeout. The required one-hour single-vCPU run already completed separately; this is an additional SMP smoke test.
+- At guest 1.668 s, all CPUs 0-3 came online. CPU_ON targets `0x1`, `0x2`, `0x3` each returned PSCI `rc=0`; `initCPU` ran on each secondary and SGI1 verification passed. QEMU-generated ADT CPU IDs 0-3 and PSCI HVC matched patches 0087/0088.
+- At guest 50.7 s SpringBoard executed; backboardd at 56.2 s; display on at 126.6 s; swaps on 1125x2436 surfaces through guest 147 s. Snapshot `snap003/fb.png` around guest 160 s is the Apple logo, while `snap004/fb.png` near guest 228 s and final `fb.png` at the timeout are black. The msgbuf through guest ~228 s has no panic; `result.json: not_decoded` means the runner captured a still-running guest at timeout, not an early QEMU exit.
+- Test used `--disk-snapshot` on `root-0084i.img`; no QEMU process remains. Root clone remains 17,179,869,184 bytes with its pre-test 03:54 timestamp; the preserved base remains 17,179,869,184 bytes with its pre-test 16:48 timestamp.
+- Next: if further SMP UI work is continued, investigate why the framebuffer dims/blanks after Apple logo and repeat with a longer 4-vCPU run after improving the first-boot Data state. The one-vCPU run has already shown the Home Screen and Settings > General > About, including the iOS 16.7.16 page, during an hour-long run.
+
+### >>> UPDATE 2026-10-25 (one-hour QEMU soak reached About screen) <<<
+
+**STATE: The requested one-hour QEMU test completed at its 3,600-second host timeout. iOS 16.7.16 is visibly running: QMP touch opened Settings, General, and About; the final framebuffer shows the About page with iOS 16.7.16 / iPhone X. QEMU was still alive at timeout and was stopped only after the final capture.**
+
+- Run directory `research/vm/run20h-hour/`; process PID 13408 started at 04:00:36 and the runner captured final `fb.png`/`regs.txt` at 05:00:36. `result.json: not_decoded` means the guest remained running at timeout and the helper did not do text decode; it is not a failure/exit status. The final screen is the Settings > General > About page, showing version 16.7.16, model iPhone X, 17 GB capacity, and 4.09 GB available.
+- UI milestones: Home Screen at `snap010`, full-color screen after a touch wake at `snap011`, Settings at `snap015`, General at `snap018`, and About in the final `fb.png`. QMP input logs include `SWEET HID: touch` down/up coordinates; one hour elapsed without an observed kernel panic/reset. This establishes a usable rendered menu and navigation during the run.
+- Limit: the UI dimmed while idle, multiple unsupported widget/daemon processes timed out or restarted, and the one-hour soak does not prove every service is stable. Input launches and Settings navigation worked; the About page was visible at shutdown. The disk was attached with `--disk-snapshot`, so guest writes were discarded. `root-0084i.img` stayed 17,179,869,184 bytes with its original 03:54 timestamp; preserved base image stayed 17,179,869,184 bytes with its 16:48 timestamp. No phone/Android partition was touched.
+- Next test: use CI kernel 0088 (SHA-256 `c60afe065a1ef70a0cab2f2a333b762e1383204c919168f94328accf86aae8d8`) with `payload-0088-smp4.bin` and `--smp 4` for a short separate boot on baseline `root-0084i.img`, always with `--disk-snapshot`. Verify all four CPU bring-up messages and no panic; then compare one-vCPU root-0084i versus root-0084j only if useful.
+
+### >>> UPDATE 2026-10-25 (Home Screen visible; touch wakes display) <<<
+
+**STATE: The current 0086 one-vCPU guest reached an actual iOS Home Screen at guest ~2,528 seconds during the one-hour QEMU soak. The display had dimmed to near-black; one QMP absolute-pointer/left-button event woke it and produced a bright Home Screen. No kernel panic has been observed.**
+
+- `research/vm/run20h-hour/snap010/fb.png` visibly contains the iOS Photos, App Store, and Settings icons, Photos widget, Search control, and dock; the framebuffer is dim but not black. The log at guest 2,501 s says `SWEET FB: display on`, and later swaps continue at 1125x2436 BGRA.
+- QMP `input-send-event` returned success for a QEMU absolute pointer plus left-button event. At `snap011/fb.png` (host 04:43:59), the screen was bright and showed status time `4:43`, charging icon, colored Home Screen icons, Photos widget, Search, and dock. This is evidence the virtual input path can wake the guest display. A subsequent tap aimed at Settings did not confirm app launch; the UI dimmed to black again by `snap012`.
+- Snapshot `snap011` also shows ordinary userland churn, including a Photos widget extension check-in timeout. No XNU panic/reset was found in the captured ring msgbuf. SpringBoard render and display wake are confirmed; interactive app launch and an hour-long post-boot stable Home Screen remain unverified.
+- QEMU is still the same one-hour process (PID 13408, started 04:00:36 Asia/Jakarta) using kernel 0086 and `--disk-snapshot` on `root-0084i.img`; target end is 05:00:36. Leave it running to timeout. Then perform the separate kernel 0088 SMP boot on the same baseline clone and, if time allows, an A/B one-vCPU boot on `root-0084j-datadirs.img`.
+
+### >>> UPDATE 2026-10-25 (SMP kernel CI passed; payload prepared) <<<
+
+**STATE: CI run 40134272436 succeeded for commit `339a864` (patches 0087 + 0088). The new kernel artifact is checksum-verified. A matching four-vCPU high-memory QEMU ADT and payload are prepared, but no SMP guest boot has been started yet.**
+
+- Artifact downloaded to `xnu/out-0088/`; `kernel.development.sweet` is 17,208,536 bytes, SHA-256 `c60afe065a1ef70a0cab2f2a333b762e1383204c919168f94328accf86aae8d8`, matching `SHA256SUMS`.
+- Prepared `research/vm/qemu-smp4-high.adt` using `--qemu --highmem --qemu-cpus 4`, and `research/vm/payload-0088-smp4.bin` from the CI kernel with the same diagnostic boot args as the current soak except `cpus=4`. Payload RAM base/size match the active high-memory layout (`0x100000000` / `0xfcb00000`); runner materialization confirms the boot args still contain `cpus=4`.
+- Current one-hour run remains kernel 0086, one CPU, on `root-0084i.img` with `--disk-snapshot`. Snapshot `snap008` at guest ~1,825 s is black. It continues launching services; the ring msgbuf contains sampler samples through 14 and no panic in the captured text. Soak target is host 05:00:36 Asia/Jakarta.
+- Next: let the soak hit its full hour; then run the prepared four-vCPU payload for a short isolated boot with `--disk-snapshot` and the baseline `root-0084i.img`. If QEMU reaches kernel CPU startup, check each secondary's PSCI/HVC result and `SGI1 OK` before assessing UI performance. Follow with the data-directory candidate only if time and traces support it.
+
+### >>> UPDATE 2026-10-25 (QEMU PSCI conduit correction) <<<
+
+**STATE: QEMU SMP requires a second kernel change beyond MPIDR matching: QEMU 11.1's generated `/psci` DTB says `method = hvc`, but SWEET's phone path issues `smc #0`. Patch 0088 selects HVC only with the QEMU `virtio_blk=1` boot argument; the phone retains SMC.**
+
+- The `research/vm/qemu-smp4.dtb` generated with the installed QEMU 11.1.2 executable confirms both CPU `reg` IDs `0..3` and PSCI `method = hvc`. Patch `0088-sweet-qemu-psci-hvc.patch` adds the QEMU-specific conduit selection in `sweet_psci_cpu_on()`.
+- Patch 0088 applies cleanly to the staged XNU source after patch 0087. Both patches must be in the CI-built kernel before any SMP test. Run `40134194926` is building commit `9d50467` without the HVC change; the next push will supersede it under the workflow's cancel-in-progress rule and build the complete patch series.
+- The one-hour QEMU soak is still the existing one-vCPU run and is unaffected by these code changes.
+
+### >>> UPDATE 2026-10-25 (QEMU SMP topology identified during 20H392 soak) <<<
+
+**STATE: The one-hour single-vCPU QEMU soak remains active. QEMU 11.1's generated `virt` DTB assigns MPIDR Aff0 values 0, 1, 2, 3 to four vCPUs, while SWEET's phone topology uses Aff1 (`core << 8`). A matching ADT and opt-in kernel path are now prepared locally; the SMP kernel still needs CI and a separate boot test.**
+
+- At host 04:23, sampler snapshot `research/vm/run20h-hour/snap006` captured guest ~1,345 seconds. It shows Apple logo pixels, `SpringBoard`, `backboardd`, and `lsd` still running, and no panic text in the msgbuf. Earlier captures were black; this is intermittent framebuffer state, not yet a usable menu.
+- Confirmed CPU IDs empirically from QEMU 11.1 by dumping `virt,gic-version=3 -smp 4` DTB to `research/vm/qemu-smp4.dtb`: `/cpus/cpu@0..3` have `reg` values 0..3. The default one-vCPU ADT is unchanged; phone ADT nodes retain `core << 8`.
+- Added `tools/mkadt.py --qemu-cpus N` support and patch `0087-sweet-qemu-smp-mpidr.patch`. The patch accepts Aff0 only when `virtio_blk=1` is present; the phone keeps the Aff1 validation. `git apply --check` passes against the staged 0084 SweetCPU source. SMP requires patches 0087 and 0088, a new CI kernel, a matching ADT, and a separate QEMU run; do not use the current 0086 kernel with an SMP ADT.
+- `wsl -d Ubuntu` is available with the HFS+-capable WSL kernel. `fsck.hfsplus -fn` on the disposable Data-directory candidate reports the known “Volume header needs minor repair” read-only finding; the earlier repairing check returned volume OK. No mount/write was performed in this check.
+- WSL `python3 -X utf8 tools/validate-repo.py` passes 87 contiguous patches, 15 Python tools, and 7 shell scripts. The equivalent native Windows validator needs UTF-8 and a POSIX path; its first invocation failed for environment reasons, not a source or syntax failure.
+- Next: push patch 0088 so CI builds the complete SMP path, then use the resulting kernel and `--qemu-cpus 4` ADT for an isolated SMP experiment after the current one-hour soak. Keep all QEMU disk use on disposable copies with `--disk-snapshot`.
+
+### >>> UPDATE 2026-10-25 (20H392 QEMU one-hour soak and Data-directory A/B) <<<
+
+**STATE: The one-hour QEMU soak is running with kernel 0086 and the CI-built 20H392 Redwood libraries on a disposable HFS+ clone. At guest ~1,024 seconds it has no observed panic, but the framebuffer is black after the Apple logo; SpringBoard is blocked waiting synchronously for LaunchServices while lsd reports database seeding/recovery work. No kernel fault is established yet.**
+
+- Redwood userland workflow **40123325026** succeeded. The arm64 artifacts are `research/userland-20H392-ci/libredwood.dylib` (SHA-256 `fbefe7978e6772c58d08ae5cbf5612c7e2e2080818b38a3f8b99f30afca1503d`) and `libredwood-sb.dylib` (SHA-256 `f905e690bc18fd17be90ac516af17e0974f169b37665242b2d8efdf41b7da75a`). WSL `file` confirms both are arm64 Mach-O dylibs. They were installed only into `research/vm/root-0084i.img`, a 17,179,869,184-byte clone; QEMU always uses `--disk-snapshot`.
+- QEMU run `research/vm/run20h-hour/` started at 04:00:36 Asia/Jakarta with QEMU 11.1, kernel `xnu/out-0086-trace/kernel.development.sweet` (SHA-256 `11bb2b36b806b92556a6d4aee75eb3a269dcbabfdce03fe5b01430647583ec43`), and a 3,600-second host timeout. Snapshot `snap002` at guest ~121 s shows the Apple logo; `snap003` around guest ~660 s and `snap004` around guest ~1,024 s are black. No panic appears in the msgbuf. SpringBoard and backboardd remain active and submit framebuffer swaps.
+- At guest 985 s, symbolicated SpringBoard main-thread frames are `LSCopyServerStore` / `LSContextInit` / `LSApplicationRecord init`, waiting on a synchronous XPC reply. lsd is still in `LSInstallProgressService performJournalRecovery`; another lsd thread reports LaunchServices clients waiting for database seeding. This points to slow/incomplete first-boot LaunchServices state, not a demonstrated XNU fault. The test has only run ~17 minutes; leave it running to the full hour.
+- WSL is now using the HFS+-capable kernel configured in `%USERPROFILE%\\.wslconfig`. A read-only HFS+ inventory found `/private/var/db/lsd` empty and `/private/var/mobile/Library` mode `0711`, with `CoreDuet/Knowledge`, `CoreData`, and `dmd/Policies` absent. Read-only inspection did not modify the running root.
+- Prepared A/B image `research/vm/root-0084j-datadirs.img` from `root-0084i.img`. On this separate clone only, `/private/var/mobile/Library` was changed from `0711` to `0755`, and the three absent directory trees were created with owner `501:501` and mode `0755`. `fsck.hfsplus -fy` reports the candidate volume OK. After the one-hour soak, boot this candidate for a bounded comparison with `exec_inject_trace=1` and targeted sampler/logging. Preserve `root-0084i.img`, the base IPSW-derived image, and phone partitions.
+- No kernel source change is justified by the current trace: framebuffer setup, Apple logo, surface swaps, SpringBoard/backboardd execution, and a no-panic ~17-minute run all succeed. If later evidence identifies a kernel failure, patch and build that path; next immediate experiment is the isolated Data-directory candidate plus explicit injection logging.
+
+### >>> UPDATE 2026-10-25 (UniXNU DarwinBoot ABI compatibility) <<<
+
+**STATE: UniXNU is a plausible UEFI boot manager/loader base, but its current DarwinBoot binary is not ABI-compatible with the existing iOS 16.7.16 (20H392 / Darwin 22) kernel. Inferno `vmapple` is not an installable option for this Windows/Android QEMU path. No guest or device images were modified.**
+
+- Source inspection of the pinned `github-clone/UniXNU/drivers/DarwinBoot` confirms its Mach-O loader accepts ARM64 `MH_EXECUTE` kernels with `LC_UNIXTHREAD`; the 20H392 kernel has that format. This part is compatible.
+- The hard-coded DarwinBoot ABI is Darwin 23: `CommandLine[1024]`, `bootFlags` at `0x470`, `memSizeActual` at `0x478`, total `boot_args` size `0x480`. The 20H392 XNU header uses `BOOT_LINE_LENGTH=608`; offsets are `bootFlags=0x2d0`, `memSizeActual=0x2d8`, total size `0x2e0`. Passing the current DarwinBoot struct would put these fields at the wrong offsets and is unsafe. Implement a Darwin22 ABI variant selected for the 20H392 guest before attempting handoff.
+- The current `research/vm/qemu.adt` and the Sweet runner are Sweet-specific fixtures, not a verified UniXNU QEMU `virt` device tree / ESP. A working boot path still needs an ESP with UniXNU EFI + DarwinBoot + `kernel.macho` and matching `.adt`, plus a Darwin22 handoff; then the current root image must be attached with a storage interface the guest kernel recognizes. This is a bootloader integration task, not installing iOS into the boot manager.
+- Inferno's local `hw/vmapple/Kconfig` requires ARM and HVF. The available Windows QEMU 11.1 lists `virt`, not `vmapple`; Android QEMU also lacks Apple's HVF. It cannot be enabled as-is on this host. Porting the machine model to TCG would be a separate substantial engineering effort.
+- Next: create a Darwin22-selectable DarwinBoot build path, prepare an ESP fixture with the existing 20H392 Mach-O and ADT, and test only through QEMU snapshots. Keep the base IPSW-derived image and all phone partitions untouched. No code change or boot test has yet been made in the clones.
+### >>> UPDATE 2026-10-25 (Inferno and UniXNU QEMU fit check) <<<
+
+**STATE: These clones do not provide a drop-in runner for the current Windows 20H392 guest. UniXNU does provide relevant design material for the missing writable Data volume; Inferno's Apple machine cannot run on this host or Android.**
+
+- `github-clone/Inferno/hw/vmapple/Kconfig` makes `VMAPPLE` depend on `HVF`; the existing Windows QEMU 11.1 machine list has `virt` but no `vmapple`. No Inferno Windows executable is present in the clone. This machine is not usable with the current TCG `virt` boot or the planned Android APK host.
+- UniXNU's `docs/reference/qemu.md` and `package/Scripts/smoke.sh` exercise its UEFI boot manager, payload/ADT fixtures and test drivers; they do not boot an iOS IPSW or provide a SpringBoard guest. `python3 unixnu status --json` under WSL reports no device repository/config. `bash package/build.sh -b DEBUG` stops because `Mu_Basecore` EDK2 is absent; WSL also has no `qemu-system-aarch64` or `dtc`. Its source submodules are not initialized, and the docs/scripts say userdata and `--skip-setup` require macOS `hdiutil`; no seed/build outputs are in the clone.
+- Reusable finding: UniXNU models the writable iOS Data volume as an APFS seed ramdisk, with `/private/var` mounted separately. Its packed `DBRDISK1` format and Data mount implementation depend on UniXNU's DarwinBoot/kernel path and are not directly loadable by the current Sweet payload. This supports investigating an equivalent writable Data volume for the 20H392 guest, but requires a compatible seed builder and mount/bootstrap integration.
+- No files in the clones or guest images were changed during this fit check. Next: prototype a disposable 20H392 Data-volume image and attach/mount it through the Sweet QEMU path, reusing UniXNU's documented volume layout where compatible; keep the existing HFS base and phone partitions untouched.
+
+### >>> UPDATE 2026-10-25 (20H392 QEMU injection and SpringBoard trace) <<<
+
+**STATE: The 0086 kernel successfully injects the current Redwood libraries into SpringBoard and backboardd. Redwood reports its window-server and activation/setup hooks installed, and the guest continues without an observed panic. No usable iOS screen is verified: the quiet framebuffer retest goes black after the Apple logo.**
+
+- `research/vm/run20h-inject-trace/` ran 240 seconds with `exec_inject_trace=1`, `--disk-snapshot`, and `sweetfb_noconsole=1`. The kernel logged injections for SpringBoard, mediaserverd, backboardd, and containermanagerd. `backboardd` created 1125x2436 BGRA surfaces and submitted swaps. The final quiet framebuffer remained black; no panic text was found in the captured msgbuf. `result.json: not_decoded` is only the helper's framebuffer state decoder result.
+- `research/vm/run20h-windowtrace/` ran 240 seconds with `exec_inject_trace=1`, `--disk-snapshot`, and the kernel console left enabled. At guest ~75-80 seconds the framebuffer logs say `window server hooks installed`, activation answered, setup assistant refused, application snapshots as JPEG, and battery UI hooks OK. The repeated `prewarmOrbViewShaders` expected-address mismatch is a Siri shader hook, not the primary window-server setup. `no GPU draws` is an expected software-renderer diagnostic in `inject_sb.c`; it is not evidence of a fatal GPU error. The console covers the rendered display in this run, so it cannot verify UI pixels.
+- Read-only 7-Zip inventory confirms `/var` points to `private/var`; the 20H392 HFS root has `/private/var/mobile/Library/Preferences` and `SpringBoard`, but no `CoreDuet` or `CoreData` directories. The live CoreData console reports missing `/var/mobile/Library/CoreDuet/Knowledge/knowledgeC.db` and `/var/mobile/Library/dmd/Policies`. This supports an underinitialized/missing writable Data-volume state as the next hypothesis; it is not yet proven to be the reason for the black screen.
+- Root/test image sizes and timestamps remained unchanged. Both `root-0084h.img` and the preserved base report the same `Volume header needs minor repair` under read-only `fsck.hfsplus -fn`; no repair was run. The quiet run's final screen and the console run's service output together show kernel, dylib injection, surface creation, and software rendering all advance, but SpringBoard's visible layer/state remains unverified.
+- Next: inspect SpringBoard layer state and required `/private/var/mobile` directories (the live console reports CoreData paths under `/var/mobile/Library` missing), then capture actual panel pixels with the console muted after confirming layer contents. Continue only on `--disk-snapshot`; leave the preserved base and device partitions untouched.
+
+### >>> UPDATE 2026-10-25 (20H392 QEMU safe boot retest) <<<
+
+**STATE: The 0086 guest reaches backboardd and SpringBoard startup without an observed kernel panic in a 600-second QEMU run. The framebuffer transitions from diagnostics to the Apple logo and then black; no usable lock/home UI was verified.**
+
+- Ran `tools/qemu-sweet.py research/vm/payload-0086-trace.bin research/vm/run20h-quiet --secs 600 --disk research/vm/root-0084h.img --disk-snapshot --input --display gtk --tb-mb 512 --extra-cmdline sweetfb_noconsole=1`. QEMU exited at the requested timeout. `result.json` says `not_decoded`, which is the helper's kernel-state decoder result, not a QEMU exit or guest panic status.
+- Captures are in `research/vm/run20h-quiet/snap001` through `snap015`; final capture is `snap015`. The screen first showed kernel/userland diagnostics, then the Apple logo at guest ~160 s, and later black. The msgbuf records `exec backboardd` at 77.67 s, backboardd surfaces at 1125x2436, framebuffer swaps through guest 266.50 s, and SpringBoard activity. No panic text was found in the captured msgbuf. FB swap calls prove the guest submitted surfaces; they do not prove that a usable UI was rendered.
+- QEMU was run with `--disk-snapshot`. `root-0084h.img` remained 17,179,869,184 bytes with its pre-run timestamp, and `ios16-root-20H392-base.img` remained untouched. Read-only `fsck.hfsplus -fn` reports the same `Volume header needs minor repair` condition on both base and test image. No repair was run; the shared result indicates this is not evidence of a write made by this QEMU session.
+- `research/vm/run20h-quiet/qemu.log` is ~194 MB and contains verbose QEMU trace output; captures and msgbuf summaries are sufficient for follow-up. Next diagnose why framebuffer contents are black after swap (including pixel format/stride and source buffer), and verify SpringBoard's rendered layer before changing guest assets. Keep tests on disposable/snapshot disks; do not touch Android or device partitions.
+
+### >>> UPDATE 2026-10-25 (safe QEMU, dyld injection, and Redwood hooks) <<<
+
+**STATE: Safe QEMU boot now confirms AMFI policy calls succeed and Redwood dylibs load into SpringBoard/backboardd. No kernel panic, but usable iOS GUI is still blocked by incomplete Redwood hooks against the iOS 16.7.16 root.**
+
+- CI **40120335795** succeeded at commit `df22644e6054d3f45494a3e9cbe557471abb7e3b`. Artifact `xnu-kernel` (60,039,086-byte ZIP) passed 7-Zip integrity check; kernel is 17,208,448 bytes, SHA-256 `11bb2b36b806b92556a6d4aee75eb3a269dcbabfdce03fe5b01430647583ec43`, matching `SHA256SUMS`. Patch 0086 adds opt-in `sweetamfitrace=1`, logging at most 16 policy calls. An earlier 0086 run **40119764250** failed because trace code dereferenced incomplete `struct proc`; corrected commit `df22644` logs request count without dereferencing it.
+- QEMU run `research/vm/run0086a/` ran kernel 0086 for 180 seconds using `--disk-snapshot` on disposable `root-0084h.img`. This QEMU option discards guest disk writes at exit. AMFI policy registered as `AMFI`; all 16 traced dyld calls returned output `0xff` with error `0` at guest 33.86 to 44.58 s. Kernel logged injection for SpringBoard at 52.71 s, backboardd at 80.56 s, containermanagerd at 89.41 s, and mediaserverd at 111.79 s. SpringBoard and backboardd ran; the sampler captured them around guest 121.56 s. No panic was observed.
+- `research/vm/run0086a/snap004/fb.png` shows Redwood constructors executing in SpringBoard. They report multiple hook addresses differ from expected values, `window server hooks INCOMPLETE`, activation/setup-assistant hooks not replaced, `/dev/redwood-touch` missing, and no GPU draws. This is consistent with prebuilt HackiOS dylibs targeting iOS 16.5 (Mach-O build minimum/SDK 16.5) being used with the iOS 16.7.16 / 20H392 root; exact hook version mismatch is the next blocker. The screen remains diagnostic text, not SpringBoard UI.
+- The QEMU disk snapshot left `root-0084h.img` unchanged (timestamp stayed 2026-10-25 00:46); `fsck.hfsplus -fy` after the run reports the volume OK. The preserved base image is untouched. `tools/qemu-sweet.py` now supports `--disk-snapshot`.
+- Next: adapt/rebuild Redwood userland hooks for the 20H392 system binaries, then repeat the QEMU snapshot boot. Keep Android/device partitions out of this test.
+
+### >>> UPDATE 2026-10-25 (16.7.16 compatibility check) <<<
+
+**STATE: iOS 16.7.16 (20H392) remains the QEMU target; 16.5 is not required to prove kernel/early-userland boot. The current root reaches SpringBoard/backboardd without panic, but the supplied Redwood hooks are built around iOS 16.5 (20F66) addresses and do not yet provide a usable GUI on 20H392.**
+
+- User confirmed to proceed with existing 16.7.16 IPSW/root and will handle any separate IPSW download themself. No IPSW was downloaded by this investigation.
+- Compared the runtime IMP addresses printed by Redwood in `research/vm/run0086b/snap001/fb.txt` against the extracted 20H392 dyld shared cache in `research/dsc/`. `ipsw dyld a2s` resolved all 14 reported SpringBoard/UIKit/CoverSheet/SplashBoard hook IMPs to the exact corresponding Objective-C methods in `__TEXT.__text` (including `_setupActivationState`, `_setSetupRequiredReason:`, `batteryLevel`, `batteryState`, and snapshot-format hook). This confirms that dylib loading works and the current failure is expected-address mismatch in the 20F66-built Redwood libraries, not a reason to replace the iOS 16.7.16 root.
+- The old QuartzCore window-server vtable assumptions also fail on 20H392: QEMU reports incomplete hooks and some values from the stale table slots are not plausible code addresses. Do not replace these blindly; resolve the 20H392 vtable layout and slot targets before enabling writes.
+- REA `open_binary` accepted extracted `SpringBoard` (SHA-256 `e27c490ab796b542e5bf8e221c2f2c898658ccea9054fb766dc95127d93ded06`), but REA's Mach-O/deep inspection had no compatible local provider (Ghidra not configured; native macOS provider unavailable). The REA target was closed. The address comparison above is from the already installed `ipsw` CLI and dyld cache, not REA Evidence. No REA/client configuration or analyzer was installed.
+- Next safe work: port the verified 20H392 Objective-C IMP constants, resolve QuartzCore's current C++ vtables and methods, rebuild the Redwood dylibs for arm64, place them only on a disposable HFS+ copy, and run QEMU with `--disk-snapshot`. Recheck HFS+ after QEMU exits. Do not touch the preserved base image or any device partitions.
+
+### >>> UPDATE 2026-10-25 (20H392 Redwood offset overlay prepared) <<<
+
+- Adapted the supplied HackiOS `inject_sb.c` and `inject.c` sources locally for the observed 20H392 root. The SpringBoard/UIKit method IMPs were matched against `research/dsc/`; the QuartzCore vtable symbols and selected entries were read from `dyld_shared_cache_arm64` and checked with `ipsw dyld a2s`. `begin_update` is at vtable offset `0x178` and `finish_update` at `0x180` for 20H392 (one slot later than the old 20F66 values). The shader pointer table address was derived from `GLContext::create_shader` disassembly; Metal's `_deviceArray`, `-[CAWindowServer _detectDisplays]`, `-[BLControl waitForALSArrival]`, and `+[MCMUserIdentityCache personasAreSupported]` were matched to the current cache.
+- Added `userland/patches/20H392-redwood.patch` and workflow `.github/workflows/redwood-userland.yml`, which pins HackiOS userland commit `a79ff0772a3454fd1ef127e181e5b3bce6c9ce18`, applies the overlay, builds the two arm64 dylibs using the runner's iPhoneOS SDK, and publishes artifact `redwood-20H392`. The optional Siri orb hook remains guarded to 20F66 and is intentionally inactive pending its 20H392 IMP.
+- Patch application was checked on a clean detached worktree at the pinned upstream commit; `git diff --check` and `bash -n userland/build-redwood.sh` passed. The macOS compilation and QEMU boot are pending the workflow run. Do not install these dylibs into the preserved base image; next use only the disposable `root-0084h.img` and QEMU `--disk-snapshot`, then check HFS+ integrity.
+
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
 ## Agent handoff / active work (2026-10-15, latest)
+
+### >>> UPDATE 2026-10-24 (read first) <<<
+
+**STATE: Corrected kernel 0084 is built and verified; a curated HFS+ test image
+boots the Redwood init and Apple launchd, but panics when
+`launchd_cache_loader` exits. SpringBoard/backboardd and full GUI boot are not
+verified.**
+
+- **0084 curated QEMU boot (2026-10-24):** Corrected CI run **40094970991**
+  succeeded at head `a37379e79dbcc2e256654629c87c97b6ac3d1a2a`. Downloaded
+  kernel SHA-256 `35ddb35623d8c8abcb8408850f2472579284615cee72a7e8296dc66d45a90b25`
+  matches `SHA256SUMS`; binary contains `exec_inject`,
+  `DYLD_INSERT_LIBRARIES`, and `applog_name`. Kernel config was also read from
+  guest RAM and contained the three expected injection groups.
+  Test image `research/vm/root-0084.img` is a copy of the preserved base image.
+  It has Redwood `init` as `/sbin/launchd`, Apple launchd backed up as
+  `/sbin/launchd.ios`, and the three prebuilt Redwood dylibs and
+  `/private/etc/inject.conf` installed. LaunchDaemons were curated to 22 jobs;
+  491 stock plists plus NanoLaunchDaemons, LaunchAngels, and the XPC launchd
+  plist are backed up under `/redwood/`.
+  Run `research/vm/run0084c/` booted and completed early boot tasks in about
+  55 guest seconds, substantially beyond the prior uncurated boot. It then
+  panicked: `launchd_cache_loader[24]` exited because it could not open fd 2.
+  The panic screen's backtrace enters `proc_exit.cold.1` and its panic call
+  string is `parent child linkage broken @kern_exit.c:0x91c`. Evidence:
+  `research/vm/run0084c/snap003/`. A separate copy,
+  `research/vm/root-0084d.img`, restored the stock
+  `/System/Library/xpc/launchd.plist`; it completed early boot, started
+  SpringBoard at guest ~61 s and backboardd at ~175 s, and the sampler captured
+  both processes at ~244 s. It ran to the 300-second timeout without a kernel
+  panic, but framebuffer output remained boot/debug text and no Lock Screen or
+  Home Screen appeared. `result.json` says `not_decoded`, which is not a boot
+  success signal. Snapshots are under `research/vm/run0084d/`; `snap004` has
+  backboardd sampler/IOFB activity. `fsck.hfsplus -fy root-0084d.img` repaired
+  hard-link metadata and then completed successfully; the original curated
+  `root-0084.img` still checks OK. Base HFS+ image remains separate and
+  untouched. Next: investigate why framebuffer stays text after SpringBoard
+  and backboardd start, using their saved stacks and Redwood injection logs.
+  Do not report the universal Android APK goal as achieved.
+
+- **0084 patch correction / HackiOS integration (2026-10-24):**
+  Run **40090859596** completed successfully for commit `4139e142f201e8d7984c8b9f67d7d8cbf76049ff`;
+  the artifact kernel is 17,207,128 bytes. `4139e14` is pushed to fork/main.
+  Inspection of its build-tree artifact showed `bsd/kern/kern_exec.c` lacked
+  `exec_inject_env` and `DYLD_INSERT_LIBRARIES`: the patch had malformed hunk
+  counts, and upstream `build.sh` warned then skipped it while still building.
+  The patch has now been regenerated from the exact CI source tree and checked
+  with `git apply --check`. `tools/validate-repo.py` now checks unified hunk
+  counts, and the workflow makes failed numbered fork patches fatal while
+  preserving the helper's intentional `TrustCache.patch` skip. The first strict
+  CI attempt (40094690853) stopped at that helper patch after applying numbered
+  patches; the workflow condition is corrected and another run is pending. Do
+  not use the old 0084 artifact for injection. No QEMU boot with corrected 0084
+  has run.
+  The earlier explanation that unsupported daemons, personas, or activation
+  caused the run3 stall was a hypothesis, not an observed diagnosis. Observed:
+  launchd's sampled dyld stack was in `preflightCacheFile`/`fcntl`, and a saved
+  kernel stack showed preemption; the GUI never appeared in the captured run.
+
+  The user-provided HackiOS repositories were inspected. Their `init` expects
+  APFS, bindfs, `kern.apfs_synthetic`, `kern.redwood_switch_root`, a stage0
+  ramdisk layout, and the corresponding Redwood kernel drivers. The current
+  ios-sweet root is HFS+ and the current kernel/root do not provide that full
+  interface. Prebuilt Redwood libraries are present in the supplied tree, but
+  have not been installed or configured in the iOS root. A full userland port
+  is therefore still required; copying dylibs alone is not integration.
+  The broader target is a portable iOS VM and eventually `ios-emulator.apk`;
+  that APK is a roadmap goal, not a completed capability.
+
+- **0083 CI passed / diagnostic boot running (2026-10-24):** run
+  **40086195783** succeeded for head `e0d5c16`; full kernel compile/link
+  passed. Artifact downloaded to `xnu/out-0083/`. Kernel = 17,207,128 bytes,
+  SHA-256 `59079144dda9ffb00540897503c02060329b66ac13417cc53d70d90d4accdc93`,
+  matching the artifact SHA256SUMS. Cancelled stale run 40086122663 ended
+  cancelled. Second 0082 boot was stopped deliberately with QMP quit at
+  guest ~708 s, still tracing IOAcceleratorES lookups, before a GUI appeared;
+  QEMU exited 0, runner exit 1 reflects its generic qemu_exited handling.
+  Final pre-stop evidence at `research/vm/run2/snap005/`.
+  Built `research/vm/payload-0083.bin` with one clean set of boot args:
+  no kprintf spam flag, sweetfb_noconsole=1, sweetfb_hz=10,
+  sweetsample=SpringBoard,backboardd and sweetiolog=-, plus normal virtio
+  root/input/ramfb args. Third boot is running in `research/vm/run3/`,
+  --secs 1800 --tb-mb 512. Use snapshot-qemu.py OUT
+  xnu/out-0083/kernel.development.sweet so symbols match this kernel.
+- **Symbolication ready:** ipsw Windows CLI v3.1.739 at
+  `research/ipsw-tools/bin/ipsw.exe`, release archive checksum verified.
+  Shared cache extracted from the SystemOS DMG: `research/dsc/`, 44 files,
+  3,330,359,296 bytes. Lookup of unslid 0x1c2611d98 resolves `_read + 8` in
+  libsystem_kernel.dylib, consistent with driverkitd's captured PC/slide.
+  A temporary duplicate exists in WSL `/research/dsc` from inline shell
+  argument expansion; neither cache is in git. WSL shut down after copy.
+
+- **First 30-minute VM test ended; diagnosing GUI wait (2026-10-24):**
+  Windows QEMU 0082 finished the --secs 1800 test (runner exit 0,
+  result.json `not_decoded`, not a GUI success signal). `run/snap005/`
+  and `snap006/` screenshots show Apple's boot logo. backboardd creates
+  IOSurfaces and sends frame swaps; SpringBoard stays running, no kernel
+  panic captured. driverkitd was killed with SIGKILL at guest ~339 s;
+  other service relaunches include unsupported hardware daemons. No lock
+  screen/home screen observed after 30 minutes. Baseline root image is
+  preserved; test root.img now contains guest writes/journal updates.
+- **Diagnostic patch 0083:** sampler was started only by successful UFS
+  init (patch 0054), so virtual roots never sampled SpringBoard/backboardd.
+  Added opt-in call after virtio-blk registration when `sweetsample` is
+  present. Commit `e0d5c16` pushed to fork/main, along with earlier local
+  Windows/root build fixes. No push to upstream. Validator passes all
+  83 patches, 15 Python tools, 7 shell scripts. Correct CI run manually
+  dispatched: **40086195783**, head e0d5c16. Earlier accidental dispatch
+  **40086122663** built old head 30d64c1; cancellation requested.
+- **Second 0082 test running:** `research/vm/run2/`, same working disk,
+  --secs 1800 --tb-mb 512 --extra-cmdline
+  `sweetfb_noconsole=1 sweetfb_hz=10`. The payload already contains
+  sweetfb_hz=30, so that duplicate override must not be assumed effective.
+  New 0083 payload should use a clean boot-args string with sampling,
+  sweetfb_noconsole=1 and a single sweetfb_hz=10. Next: inspect second
+  boot, download/verify 0083 once CI succeeds, then collect process stacks
+  if the UI is still waiting. Untracked hackios-xnu-kernel/ and
+  hackios-xnu-userland/ appeared during the session; they were not created,
+  modified, added or pushed by this agent.
+
+- **First root boot passed (2026-10-24):** snapshot
+  `research/vm/run/snap001/` has fb.png, regs.txt and msgbuf.txt. Kernel
+  reports virtio-blk /dev/vblk0 in slot 31, 16384 MB read-write; BSD root
+  major 1 minor 0; initializes the 8 MiB journal and mounts iOSRoot at
+  guest ~34 s. Virtio input devices found in slots 29/30; ramfb registers
+  1080x2400 at 0x9c000000, fw_cfg selector 37. `exec launchd` at ~34.8 s;
+  shared cache maps, boot tasks run, FIPS tests pass and keybagd loads the
+  system keybag. At snapshot ~63 s usermanagerd was running; GUI pending.
+  QEMU exception tracing was disabled live with QMP `log guest_errors,unimp`
+  after the initial trace reached ~4 MiB. No guest panic observed in this
+  snapshot; serial.txt remains empty. Snapshot decoder uses the kernel's
+  real font; initial root/copy milestone commit a78ca90, local/unpushed.
+
+- **Root image complete / first disk boot (2026-10-24):** base image
+  `research/vm/ios16-root-20H392-base.img` and test copy
+  `research/vm/root.img` are both 17,179,869,184 bytes. Native Windows
+  SHA-256 checks matched before boot:
+  `36e8150e208c1395c090a6b7684f694b4b952f4f5e7ee96c1196aa696c1e04e8`.
+  Checksums saved as base.img.sha256 and root-before-boot.sha256 beside
+  the images. The base remains unbooted; QEMU writes only root.img.
+  Copied Linux build/provision logs to `research/vm/`, then shut down WSL
+  to free memory. Started Windows QEMU via qemu-sweet.py with payload.bin,
+  root.img, --input --display gtk,zoom-to-fit=on --secs 1800 --tb-mb 128.
+  Runner selected 7 GiB guest RAM for the highmem ADT, Cortex-A76, 1 CPU.
+  Boot outputs: `research/vm/run/`. Ignored snapshot helper
+  `research/snapshot-qemu.py OUT` locates only this VM, captures framebuffer
+  and reads XNU msgbuf over QMP, then resumes the VM. No boot result yet.
+  Completed implementation commits: b9913b9 (HFS fsck/WSL milestone),
+  da7f034 (LF attributes), ea144f7 (numeric owner compatibility); unpushed.
+
+- **Root populated and provisioned (2026-10-24):** all three APFS source
+  copies and cryptex links completed. Initial build stopped at
+  `install: invalid user: '272'`: Ubuntu 26.04 ships uutils coreutils 0.8.0,
+  whose install rejects an Apple numeric owner absent from Ubuntu's passwd.
+  Changed mkiosroot.sh to create log paths with install, then chown 272:272
+  separately. Resumed only the provisioning tail on the existing image
+  via ignored `research/resume-root.sh`; no large data recopy. Its log is
+  `/root/ios-sweet-host/root-resume.log`. Verified log directories 272:272
+  mode 751/755 and .migrated marker mode 644. Applied sweet-root-tweaks.py.
+  Initial fsck repaired the known non-ASCII filename normalization issue;
+  after tweaks, two consecutive fsck.hfsplus -fy checks returned 0 and
+  "The volume iOSRoot appears to be OK." Image is unmounted. Native Windows
+  copy/hash is in progress: base `research/vm/ios16-root-20H392-base.img`,
+  test copy `research/vm/root.img`. Do not boot either until checksum
+  verification completes. No XNU patch change or additional CI run.
+
+- **WSL checkout fix / next payload ready (2026-10-24):** validation from
+  Windows selected WSL bash and could not interpret Windows paths; running
+  it in WSL then exposed CRLF syntax failures in all 7 tracked shell scripts.
+  Added `.gitattributes` (`*.sh text eol=lf`) and converted those scripts to
+  LF without changing their logic. WSL `python3 tools/validate-repo.py` now
+  passes 82 patches, 15 Python tools, 7 shell scripts. Generated
+  `research/vm/qemu.adt` (--qemu --highmem, 7,032 bytes) and
+  `research/vm/payload.bin` (16,608,976 bytes) with 0082 + complete D22AP
+  product data, rd=vblk0/rootrw/virtio/input/ramfb/cpus=1. Root copy stage
+  is currently copying OS contents into the mounted base image; no boot
+  attempted against that incomplete image.
+
+- **WSL HFS+ working; root image build started (2026-10-24):** custom
+  kernel compiled/linked successfully (`make bzImage`, 2,859 compile lines).
+  `research/wsl-kernel/bzImage-hfsplus` = 13,788,160 bytes, SHA-256
+  `5c32ed502e34b6c7b5613ffc922cfa165830355f19febfc20af8c5c3a8a95775`.
+  Release remains `6.18.54.1-microsoft-standard-WSL2`; config is saved in
+  `research/wsl-kernel/config-hfsplus`. Activated via the current user's
+  `.wslconfig` kernel entry, then `wsl --shutdown` and restarted Ubuntu.
+  There was no previous .wslconfig; backup marker is
+  `research/wsl-kernel/wslconfig-before.txt`. To restore stock later, remove
+  only this kernel entry and restart WSL. Confirmed CONFIG_HFSPLUS_FS=y and
+  hfsplus listed in /proc/filesystems. A 64 MiB journaled, case-sensitive
+  test image on D: mounted read/write; file, hard-link and symlink checks
+  passed. Two consecutive fsck.hfsplus -fy checks returned 0/volume OK.
+  A read-only -fn check returned 1/minor header repair, reproducing the
+  historical Linux hfsprogs quirk. Changed mkiosroot.sh's final check to
+  a second -fy (errors still propagate) so that quirk does not stop builds.
+  Raw root build is running via `research/wsl-build-root.sh`; log at
+  `/root/ios-sweet-host/root-build.log`. Destination
+  `research/vm/ios16-root-20H392-base.img` is incomplete until the helper
+  finishes; it will then apply root tweaks, fsck, hash, copy to root.img
+  and compare the copy. No phone access, flashing or partition writes.
+
+- **WSL HFS+ kernel build in progress (2026-10-24):** source tag
+  `linux-msft-wsl-6.18.54.1` resolves to official Microsoft commit
+  `d504d40ab83839cb61942a812a99d183c42227b9`. GitHub bulk source transfers
+  stalled. Downloaded SourceForge's source mirror via resumable ranges,
+  then verified every one of its 91,265 files/symlinks against the official
+  Git tree blob hashes before extraction. Verified source is at
+  `/root/ios-sweet-host/kernel-source`, archive at
+  `research/wsl-kernel/mirror-kernel.tar.gz` (256,209,121 bytes).
+  `research/verify-wsl-source.py` records the check. Built with running
+  kernel's config, HFSPLUS_FS=y, debug info disabled, GCC 13, make -j6.
+  Initial build was stopped to correctly disable the DWARF choice and
+  resumed; current log `/root/ios-sweet-host/kernel-build.log`, helper
+  `research/wsl-build-kernel.sh`. No custom kernel activated yet.
+  Additional ignored helpers: wsl-hfs-smoke.sh, wsl-build-root.sh and
+  decode-qemu.py. Decoder parsed `_iso_font` from the kernel Mach-O and
+  decoded the prior no-disk screenshot with 0 unknown glyphs, confirming
+  its expected `vblk0 unavailable` panic. No new XNU build/CI run.
+
+- **WSL active / root tools ready (2026-10-24):** user installed `Ubuntu`
+  (26.04.1 LTS) and created their UNIX account. Access via
+  `wsl -d Ubuntu -u root -- ...`; no password needed or stored. Running
+  kernel `6.18.54.1-microsoft-standard-WSL2` has CONFIG_HFSPLUS_FS unset;
+  `modprobe hfsplus` fails. Root creation therefore still needs HFS+ kernel
+  support. Installed hfsprogs, rsync, build dependencies and GCC 13/15.
+  Built apfs-fuse commit `66b86bd525e8cb90f9012543be89b1f092b75cf3`
+  with its pinned lzfse submodule `e634ca58b4821d9f3d560cdc6df5dec02ffc93fd`;
+  executables in /usr/local/bin. Successfully mounted OS DMG read-only via
+  apfs-fuse and read `/root/sbin/launchd` (541,600 bytes), then unmounted.
+  Extracted IM4P's OCTET payload and decoded with lzfse to ignored
+  `research/ipsw-x/d22ap.adt` (186,084 bytes). mkadt --qemu now emits
+  `research/qemu-smoke/qemu-product.adt` (7,032 bytes), no missing-product
+  warning. Kernel source download/build for WSL HFS+ support is ongoing;
+  no custom WSL kernel activated and no raw root built yet. Linux build
+  sources/tools are in `/root/ios-sweet-host`. Download retries/helpers
+  are in ignored `research/wsl-kernel/` and `research/*.py/.sh`.
+
+- **IPSW now supplied / extracted (2026-10-24):** user placed
+  `iPhone10,3,iPhone10,6_16.7.16_20H392_Restore.ipsw` at the repo root
+  (6,171,035,648 bytes). Read its BuildManifest: ProductVersion 16.7.16,
+  ProductBuildVersion 20H392, supported iPhone10,3 and iPhone10,6. Selected
+  the d22ap identity and extracted into ignored `research/ipsw-x/`:
+  OS `087-86698-044.dmg` (4,730,814,044 bytes), SystemOS
+  `087-86593-047.dmg` (2,743,074,816), AppOS `087-86715-047.dmg`
+  (10,485,760), and `Firmware/all_flash/DeviceTree.d22ap.im4p` (33,719).
+  Each streamed ZIP member passed CRC verification. SHA-256 values,
+  sizes and paths are saved in `research/ipsw-x/extraction.json`;
+  BuildManifest.plist is also saved there. This verifies extracted data
+  against the supplied ZIP, not the archive's provenance against Apple.
+  Added `*.ipsw` and `*.dmg` to .gitignore to keep Apple artifacts out of git.
+- **Linux prerequisite:** WSL still reports not installed; current process
+  is not Administrator. Windows build is 26200; hypervisor present and
+  firmware virtualization enabled. Before extraction D: had ~138.8 GB free,
+  C: ~27.3 GB. Instructed user to run Administrator PowerShell command
+  `wsl --install -d Ubuntu-24.04 --no-launch` and restart if requested.
+  No WSL install or reboot was initiated by the agent. After WSL is ready:
+  check loop/HFS+ kernel support (do not assume the stock WSL kernel has
+  it), prepare apfs-fuse/hfsprogs/rsync, build root with mkiosroot.sh, apply
+  sweet-root-tweaks.py, extract/decompress d22ap.adt from IM4P, regenerate
+  payload and test a root copy in QEMU. Raw HFS+ root is not built yet.
+
+- **Source availability clarified / pushed-content audit (2026-10-24):**
+  user confirmed they do not have the historical Linux/WSL image. Treat
+  old `/run/media/dipa/...` paths as upstream handoff history, not evidence
+  of artifacts available to this user. `git fetch fork` leaves `fork/main`
+  at `55f9da1`. Pushed content includes patches 0001-0082, shim sources,
+  tools (including `mkiosroot.sh`, `sweet-root-tweaks.py`, `remotezip.py`),
+  docs/site and the kernel CI workflow. No Apple root image is tracked.
+  Before this note, HEAD had 6 unpushed commits through `4f3e77e`; their
+  changed files are NOTES.md, docs/QEMU_VM.md and tools/qemu-sweet.py.
+  Next concrete route: download iPhone X iOS 16.7.16 (20H392) IPSW from
+  Apple's CDN, extract OS/SystemOS/AppOS and D22AP device tree, provision
+  a Linux build environment for `mkiosroot.sh` + root tweaks, then boot
+  a copy of the resulting HFS+ image in the existing Windows QEMU.
+  No IPSW download or Linux installation has started yet.
+
+- **WSL source recheck (2026-10-24):** `wsl --list --verbose` still
+  reports WSL is not installed. No distro entries were returned from the
+  current user's Lxss registry key, matching distro Appx packages, or
+  `//wsl.localhost/`. Searches of D:, C:/Users and C:/ProgramData returned
+  no `.vhdx`, `.vhd`, `*rootfs*.tar*` or `*wsl*.tar*` files. Errors were
+  suppressed, so inaccessible directories remain unexamined. No WSL disk
+  was mounted, changed or copied. Need the actual source host/disk location.
+
+- **GitHub root-source check (2026-10-24):** user suggested the root might
+  be a CI artifact. Paginated `gh api repos/OWNER/ios-sweet/actions/artifacts`
+  lists 2 artifacts on zaidanfaiz (1 `xnu-kernel`, 1 `xnu-buildtree`) and
+  132 on dipa-studio (93 `xnu-kernel`, 39 `xnu-buildtree`), with no other
+  artifact names. Both repositories' releases API returned 0 releases.
+  `.github/workflows/xnu.yml` uploads kernel/KDK diagnostics from `out/`
+  and a build-source tarball, not an iOS HFS+ root. No root image was
+  found in the available artifact/release listings; this cannot rule out
+  previously deleted artifacts or files hosted elsewhere. No download made.
+
+- **Root copy attempt (2026-10-24):** user asked to copy the existing root.
+  Mounted filesystem drives are C: and D:, both NTFS; no SMB mapping was
+  reported. Filename searches including ignored/hidden files across D:
+  and C:/Users found no `ios16-root*`, `phone-root*`, or `.simg` source.
+  Some unrelated IPSWs exist locally; none of the listed files is the
+  required iPhone X 20H392 root. Search errors were suppressed, so this
+  is not proof of absence from inaccessible directories. The historical
+  `/run/media/dipa/android/ios-sweet-ipsw/ios16-root-20H392-v15.img` is
+  documented on an external Linux SSD, which is not currently exposed
+  as a mounted Windows filesystem. No SSH config/source address was found.
+  No image was copied or downloaded. Asked user to connect the source SSD
+  or provide the Linux host/share location; then copy into ignored
+  `research/` and verify size/hash before testing. No device commands run.
+
+- **Windows QEMU milestone (2026-10-24):** downloaded Stefan Weil's
+  QEMU 11.1.0 installer `qemu-w64-setup-20260811.exe` from the provider
+  linked by qemu.org. SHA-512 matches the published `.sha512` file.
+  Installer/checksum are in ignored `research/qemu-download/`; extracted
+  binaries are in ignored `research/qemu/` (no system install/PATH change).
+  `--check-env` passes; Cortex-A76 and GTK/SDL are available. `llvm-nm`
+  is absent, so no automated framebuffer text decoding was requested.
+- Updated `tools/qemu-sweet.py` for Windows: loopback TCP QMP, normalized
+  paths, QMP timeout/EOF handling, and process cleanup after failures.
+  Linux/macOS retain Unix monitor sockets. Added Windows setup/results to
+  `docs/QEMU_VM.md`. No kernel patch changed; no new CI run is needed.
+  Implementation and smoke-test handoff committed as `cbd2508` (local;
+  not pushed). Earlier host-prerequisite note is commit `ae6f796`.
+- **Actual boot evidence:** generated `research/qemu-smoke/qemu.adt`
+  (`--qemu`, low memory) and `payload.bin` with the verified 0082 kernel.
+  Missing `research/ipsw-x/d22ap.adt` produced a warning: no `/product` node.
+  QEMU: TCG, Cortex-A76, one CPU, 4 GiB guest RAM, `--tb-mb 128`, no disk.
+  30-second run `research/qemu-smoke/run/`: runner exit 0, screenshot shows
+  CPU/framebuffer/IOKit initialization. 60-second run
+  `research/qemu-smoke/run-ramfb/` (`--input --display none`): runner exit 0,
+  screenshot shows panic `IOFindBSDRoot: SWEET virtio-blk root vblk0
+  unavailable: 6 @IOKitBSDInit.cpp:793`, consistent with no disk attached.
+  Both saved `fb.png`, `regs.txt`, `qemu.log`; `serial.txt` is empty.
+  `result.json` says `not_decoded`, so exit 0 does NOT mean panic-free boot.
+  Input interaction and ramfb window output remain unverified.
+- **Validation:** `python -X utf8 tools/validate-repo.py` with
+  `C:/Program Files/Git/bin` on the session PATH passes all 82 patches,
+  15 Python tools and 7 shell scripts. `git diff --check` passes.
+  Next: obtain a raw HFS+ iOS root copy (not `.simg`), fsck the copy on
+  Linux/macOS, attach with `--disk`, then inspect framebuffer/root mount
+  and userspace. No phone commands or partition writes were performed.
+
+- **Windows host recheck (2026-10-24):** working tree was clean at
+  `55f9da1`, `main` tracks `fork/main`; fork and upstream URLs match the
+  handoff. `gh run view 40022572169` reports completed/success with head
+  `1a76371c5d6342051f419e0ca42317cb1808ec18`. Local kernel is 17,207,128
+  bytes, SHA-256
+  `490b69c01bdf092d9401bc0f676a01b38c445994501ad7dfa7a78f15664df3fe`.
+  `wsl --list --verbose` reports WSL is not installed;
+  `qemu-system-aarch64` is not on PATH. A repo file search (including
+  ignored files, excluding `backup/` and `.git/`) found no `.img` or `.adt`
+  files. This does not establish whether images exist elsewhere on the host.
+  Boot test remains pending: obtain access to a Linux/macOS QEMU host and
+  a raw HFS+ root copy, generate the QEMU ADT/payload per `docs/QEMU_VM.md`,
+  then capture serial output and framebuffer. No phone commands were run.
+
+- `xnu/patches/0082-sweet-qemu-vm.patch` adds an external virtio-blk root
+  (`vblk0` / `rvblk0`), virtio tablet+keyboard input, and QEMU ramfb display.
+  Local commits: **f33c3b4** (patch + docs + runner), **1f897d8** (fix:
+  virtio-input event buffers were at `0x1000`; that is still inside XNU's
+  default 16 KiB page here, but outside a 4 KiB page. Moved to `0x0c00` so
+  the one-page layout is safe with either page size). Pushed to the user's fork
+  **https://github.com/zaidanfaiz/ios-sweet** (branch `main`); the upstream
+  `dipa-studio/ios-sweet` was not pushed.
+- New files in the patch: `bsd/dev/sweet_virtio_blk.c`,
+  `bsd/dev/sweet_virtio_input.c`, `bsd/dev/sweet_ramfb.c`; `bsd/conf/files`;
+  `bsd_init.c` input/ramfb init; `IOKitBSDInit.cpp` `rd=vblk0` root branch.
+  Phone boot path and `rd=ufsroot0` are unchanged. Boot args are opt-in:
+  `rd=vblk0 rootrw=1 virtio_blk=1 virtio_input=1 ramfb=1 cpus=1`.
+- `tools/qemu-sweet.py` now has `--disk`, `--input`, `--display`, `--wait`,
+  `--accel`, `--extra-cmdline`, `--tb-mb`; docs are in `docs/QEMU_VM.md`
+  and linked from `docs/QEMU_TESTING.md` / `README.md`.
+- **Local validation:** Zig 0.13.0 clang 18.1.6 compiled
+  `sweet_virtio_blk.c`, `sweet_virtio_input.c`, `sweet_ramfb.c` and
+  `bsd_init.c` with the CI `.CFLAGS`, exit 0. Only the existing `NDEBUG`
+  redefinition warning. `IOKitBSDInit.cpp` cannot be compiled with Zig clang
+  (missing Apple `__builtin_xnu_types_compatible`); manual review: the file
+  is inside `extern "C"`, the new branch follows the existing UFS branch, and
+  the symbol has C linkage. `tools/validate-repo.py` passes: 82 patches
+  contiguous/format OK, 15 Python tools and 7 shell scripts syntax OK.
+- **CI build passed:** workflow_dispatch run **40022572169** on the fork
+  (`head 1a76371`) finished success in 7m10s.
+  `xnu-kernel` was downloaded to `xnu/out-0082/kernel.development.sweet`
+  (17,207,128 bytes, sha256 `490b69c0...64df3fe`); strings for the new
+  virtio-blk/input and ramfb drivers are present. This proves the full kernel
+  compiles and links, not that it boots. The initial push did not create a
+  run (fork Actions registration), so the run was started with
+  `gh workflow run xnu.yml -R zaidanfaiz/ios-sweet --ref main`.
+- **No boot test yet.** Need a Linux QEMU host, a raw HFS+ root **copy**, and
+  the CI-built kernel (now in `xnu/out-0082`). Intended command:
+  `python3 tools/qemu-sweet.py PAYLOAD OUT --disk COPY.img --input --display gtk,zoom-to-fit=on --wait --live-serial`.
+  TCG/one CPU: first boot can take tens of minutes. Keep the original image;
+  use `--secs` for a headless run and inspect `serial.txt` / `fb.png`.
+- Nothing on the phone was flashed, deleted or changed in this work. The
+  Android installation and partition backups are untouched. The later Android
+  APK wrapper remains deferred.
 
 ### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<
 
@@ -431,3 +1207,43 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
      cpu_init, before arm_vm_init.
   5. panic hook at top of panic_trap_to_debugger: va_copy + _doprnt(fmt, &copy, sweet_early_putc, 16).
   Verify with tools/xnu-cc.py (compile+symbols) and patch-order simulation before the single CI run.
+### >>> UPDATE 2026-10-24 (QEMU-safe follow-up) <<<
+
+**STATE: QEMU 0084 boot is repeatably panic-free through SpringBoard and backboardd, but has no graphical iOS UI. Do not call `not_decoded` a success.**
+
+- Run `research/vm/run0084g/` used corrected kernel `xnu/out-0084-fixed/kernel.development.sweet`, a payload with `applog=1` and no `sweetfb_noconsole=1`, and the disposable HFS+ copy `research/vm/root-0084e.img`. The preserved `ios16-root-20H392-base.img` was not used or changed. QEMU exited at its 180-second limit; result is `not_decoded`. Snapshots: `snap001` through `snap004`; final `fb.png` is still debug text. QEMU emitted a GTK natural-allocation assertion, but continued booting.
+- Observed guest timeline: Apple launchd starts at ~36.8s, SpringBoard at ~59.4s, backboardd at ~132s. Kernel messages show SweetHID devices opened and backboardd making framebuffer selector calls. No panic observed. The final screen is kernel/debug output, not SpringBoard. No `redwood:` constructor line, `init: library insertion`, or framebuffer swap/present message was found in captured msgbuf/logs. Thus loading of the Redwood dylibs remains unproven; absence in this limited capture is not proof they failed to load.
+- `root-0084e.img` contains `/private/etc/inject.conf` and all three dylibs under `/redwood/lib`; `fsck.hfsplus -fy` after QEMU reports the volume OK. `/etc` is a symlink to `/private/etc`; HackiOS init explicitly converts config newlines to `;`, so multiline formatting was not the cause. The test config was rewritten onto one line for run0084g, with equivalent groups.
+- A concrete compatibility concern surfaced: HackiOS `inject.c` says its checked hardcoded offsets target iOS 16.5 build 20F66, while this root's shared cache is iOS 16.7 build 20H392. This is a plausible reason Redwood hooks may not activate; it is not yet confirmed by a guest error. Before changing kernel code or downloading another multi-GB IPSW, next safe step is to capture launchd/init output directly and verify whether `kern.exec_inject` received the config and whether each dylib is mapped. If hooks reject expected pointers, either adapt offsets for 20H392 or use a matching 20F66 root.
+- Safe QEMU rule: only boot disposable copies such as `root-0084e.img`, and run `fsck.hfsplus -fy` after QEMU stops. Keep `ios16-root-20H392-base.img` untouched. No phone, Android, partition, or upstream repository changes.
+
+### >>> UPDATE 2026-10-25 (20H392 Redwood overlay / safe QEMU boot) <<<
+
+**STATE: The 20H392 Redwood dylib overlay builds and loads far enough to run the persona and backboardd hooks. QEMU remains panic-free, but the guest has not reached a verified SpringBoard UI.**
+
+- Added `userland/patches/20H392-redwood.patch`, `userland/build-redwood.sh`, documentation, and `.github/workflows/redwood-userland.yml`. The patch updates HackiOS Redwood hardcoded addresses for build 20H392. Source comparison against the extracted 20H392 dyld shared cache supports those address changes; the optional Siri orb hook remains guarded for its old 20F66 address.
+- Fork CI run `40123325026` succeeded on macOS 14. Artifact `redwood-20H392` contains arm64 `libredwood.dylib` (90,224 bytes, SHA-256 `fbefe7978e6772c58d08ae5cbf5612c7e2e2080818b38a3f8b99f30afca1503d`) and `libredwood-sb.dylib` (89,000 bytes, SHA-256 `f905e690bc18fd17be90ac516af17e0974f169b37665242b2d8efdf41b7da75a`). The artifact hashes were checked against its manifest.
+- Installed those two libraries only into disposable `research/vm/root-0084h.img`; the base `research/vm/ios16-root-20H392-base.img` remains untouched. QEMU used `--disk-snapshot`. The disposable image timestamp remained `2026-10-25 02:02:38` through the QEMU run.
+- QEMU run `research/vm/run20h-hooks-live/` (kernel 0086-trace, 220-second limit) exited normally with result `not_decoded`; snapshots at about 96.9, 143, and 193 guest seconds show no kernel panic. The first snapshot's framebuffer log explicitly says `redwood: container manager: no personas` and `redwood: metal: no device in this process; CoreAnimation keeps OpenGL ES by itself`; it also shows backboardd framebuffer selectors. The next snapshot showed `SWEET FB: swap` messages and an Apple logo with debug text over it. The last snapshot returned to boot/service logs. These are evidence the persona hook and framebuffer activity ran, but not evidence of a usable SpringBoard or a successful UI boot.
+- Earlier safe runs `run20h-offsets` (300-second limit) and `run20h-hooks-early` (150-second limit) also ended without an observed panic, but showed only console output at the final capture. QEMU's GTK emitted host-side warnings; QEMU continued.
+- After QEMU exited, `fsck.hfsplus -fy research/vm/root-0084h.img` completed successfully: `The volume iOSRoot appears to be OK.` A prior `fsck -n` on this copy reported a minor header repair even after `-fy`; do not claim read-only fsck is clean.
+- Next: capture/diagnose why the display returns to debug text and whether `libredwood-sb.dylib` hooks execute; verify touch input and a recognizable SpringBoard state. Keep using only disposable root copies with `--disk-snapshot`. No phone, Android, partitions, or upstream repository changes. The `ios-emulator.apk` goal is not achieved.
+
+### >>> UPDATE 2026-10-25 (workspace organization and disk cleanup) <<<
+
+- Organized `D:\dev\learning-projects`: `ios-sweet` remains in place; all other sibling folders are now under `D:\dev\learning-projects\github-clone`.
+- Cloned `lizezra/apple-apns-courier`, `revantTNK/ios-greatlte`, `ChefKissInc/Inferno`, `UniXNU/UniXNU`, and `UniXNU/NativeAdreno` into `github-clone`. Moved existing `hackios-xnu-kernel` and `hackios-xnu-userland` clones there without discarding local edits; `hackios-xnu-userland` still has local changes in `userland/src/inject.c` and `inject_sb.c`.
+- Removed the now-stale nested-repository ignore entries from `.gitignore`. An empty `--help` directory in the project root was removed.
+- Cleared Windows npm and pip caches and WSL apt archives/package lists. Left `.cache/codex-runtimes`, build/SDK folders, the IPSW, and current QEMU research artifacts intact.
+- Deleted superseded disposable root images `research/vm/root.img`, `root-0084.img`, and `root-0084d.img` (48 GiB total). Preserved the 20H392 base image, the latest `root-0084h.img`, and fallback `root-0084e.img`. No QEMU process was running when the three old copies were removed.
+- Measured free space: C: increased from 16,655,224,832 to 18,085,797,888 bytes after npm/pip cleanup (+1,430,573,056 bytes). D: increased from 192,126,140,416 to 243,665,747,968 bytes after removing the three old images (+51,539,607,552 bytes, about 48 GiB). Four pre-existing non-Git sibling folders were moved into `github-clone` as requested; the parent now contains only `ios-sweet` and `github-clone`.
+
+### >>> UPDATE 2026-10-25 (product scope clarified: ios-emulator.apk) <<<
+
+**The product goal is an Android APK that hosts iOS as a QEMU guest. Booting iOS on the Redmi Note 10 Pro (`sweet`) is not the product target. Treat this repository as a source of guest-kernel/QEMU work only; do not spend the next milestone on the phone's physical drivers or partitions.**
+
+- Best QEMU guest reference is `github-clone/hackios-xnu-kernel` + `hackios-xnu-userland`: its documented Linux QEMU path uses `virt`, GICv3, Cortex-A76, TCG, UEFI, APFS system/root images, ramfb, and virtio tablet/keyboard. The repo reports a lock screen after 2–3 minutes on desktop QEMU, but its prebuilt guest targets iOS 16.5 / 20F66. Our 20H392 dylib overlay builds, but the existing QEMU capture still did not show a verified SpringBoard UI.
+- `ios-greatlte` is evidence that iOS 16.7.16 / 20H392 can reach/render the UI on Exynos hardware. Its kernel, display, and touch path are phone-specific; it is not an Android QEMU frontend or a generic virtual guest.
+- `UniXNU` has useful generic QEMU `virt` / UEFI / ADT tooling and Android-device port documentation, but its QEMU guide exercises EFI and XNU-entry fixtures, not a complete iOS GUI guest. Its `pandora` / `negroni` docs describe separate phone ports.
+- `Inferno` is a QEMU fork with Apple SoC device models; its Apple hardware machine is a different guest platform from the generic `virt` configuration and does not provide the Android APK frontend. `NativeAdreno` covers A740 on SM8550 only, so it is not a drop-in Android-host renderer or an SM7150 guest GPU driver. `apple-apns-courier` is unrelated to getting the guest to boot and depends on device-specific activation credentials.
+- No cloned repository contains the Android APK/NDK frontend. The APK work still needs a QEMU Android arm64 TCG build, an Android display/input frontend, and a user-supplied IPSW/image import path. Next milestone: finish a repeatable 20H392 guest UI boot on desktop QEMU, then scope the Android host packaging separately. Keep the guest assets and Apple firmware local; do not bundle them into the project repository.
