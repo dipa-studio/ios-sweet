@@ -17,8 +17,14 @@
 #include <stdint.h>
 #include "console.h"
 
-#define GPA1_CON		0x11850020UL	/* pinctrl@11850000 (ALIVE), bank stride 0x20 (guess) */
-#define GPA1_DAT		0x11850024UL
+/* pinctrl@11850000 (ALIVE): etc0 0x000, gpa0 0x020, gpa1 0x040 (pinctrl-exynos-arm64.c) */
+#define GPA1_CON		0x11850040UL
+#define GPA1_DAT		0x11850044UL
+#define GPA1_PUD		0x11850048UL
+#define PMU			0x11860000UL	/* exynos-reboot.c */
+#define PMU_SWRESET		0x0400
+#define PMU_SYSIP_DAT0		0x0810
+#define  REBOOT_MODE_RECOVERY	0xff
 #define WDT_CL0			0x10050000UL	/* WTCON at +0 */
 #define WDT_CL1			0x10060000UL
 
@@ -110,10 +116,16 @@ static void delay_us(unsigned us)
 		;
 }
 
+/*
+ * PSCI SYSTEM_RESET is not implemented (PSCI 0.1). Reboot like Linux's
+ * exynos_reboot("recovery"): reboot mode in SYSIP_DAT0, then SWRESET.
+ */
 static void __attribute__((noreturn)) reset_now(void)
 {
 	dsb();
-	smc(PSCI_SYSTEM_RESET, 0, 0, 0);
+	wr32(PMU + PMU_SYSIP_DAT0, REBOOT_MODE_RECOVERY);
+	dsb();
+	wr32(PMU + PMU_SWRESET, 1);
 	for (;;)
 		__asm__ volatile("wfe");
 }
@@ -223,7 +235,7 @@ void shim_main(uint64_t dtb)
 	decon_kick();
 	stage = "start";
 	con_clear(RED);
-	con_str("SHIM", "a51 milestone A1c: probe");
+	con_str("SHIM", "a51 milestone A1d: probe");
 	con_skip();
 
 	/* Display question first: if this line moves, the panel follows memory. */
@@ -236,6 +248,8 @@ void shim_main(uint64_t dtb)
 	con_hex2(" after", "ctl=", decon_after[0], "trig=", decon_after[2]);
 	con_hex2(" wait", "n=", decon_runwait, "upd=", decon_after[1]);
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);
+	extern char _head[];
+	con_hex2("LOAD", "head=", (uintptr_t)_head, "sec=", (uintptr_t)secondary_entry);
 	con_hex("CNTFRQ", rsr("cntfrq_el0"));
 	con_hex("SCTLR1", rsr("sctlr_el1"));
 
@@ -287,12 +301,13 @@ void shim_main(uint64_t dtb)
 
 	stage = "gpio";
 	con_hex2("GPA1", "con=", rd32(GPA1_CON), "dat=", rd32(GPA1_DAT));
+	con_hex2(" pud", "pud=", rd32(GPA1_PUD), 0, 0);
 	con_str("KEYS", "bit5 volup 6 voldn 7 pwr");
 	con_skip();
 	a53_row = con_get_row();
 	con_str("A53OFF", sec_seen[A73_IDX] ? "pending" : "skipped (no A73)");
 	con_skip();
-	con_str("EXIT", "hold Power + Vol down");
+	con_str("EXIT", "auto reboot to TWRP ~40s");
 
 	/*
 	 * Live loop for ~20 s on the A53, then hand the heartbeat to the A73 and

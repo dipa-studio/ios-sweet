@@ -63,10 +63,41 @@ secondary_entry:
 	ubfx	x4, x2, #8, #8
 	add	x3, x3, x4, lsl #2
 	and	x3, x3, #7
+	/* Clean each marker to memory in case this core runs cacheable. */
 	adr	x1, sec_marker
-	str	x2, [x1, x3, lsl #3]
+	add	x1, x1, x3, lsl #3
+	str	x2, [x1]
+	dc	civac, x1
 	adr	x1, sec_ctx
-	str	x0, [x1, x3, lsl #3]
+	add	x1, x1, x3, lsl #3
+	str	x0, [x1]
+	dc	civac, x1
+	dsb	sy
+	/*
+	 * Paint a green 96x64 block at x = 24 + idx * 128, y = 2300 straight
+	 * into the framebuffer (stride 4320), visible whatever else fails.
+	 */
+	mov	x4, #0xca000000
+	mov	x5, #2300
+	mov	x6, #4320
+	madd	x4, x5, x6, x4
+	mov	x5, #128
+	mul	x5, x3, x5
+	add	x5, x5, #24
+	add	x4, x4, x5, lsl #2
+	mov	w6, #0xff00ff00
+	mov	x10, #4320
+	mov	x7, #64			/* rows */
+4:	mov	x8, #96			/* pixels per row */
+	mov	x9, x4
+5:	str	w6, [x9]
+	dc	civac, x9
+	add	x9, x9, #4
+	subs	x8, x8, #1
+	b.ne	5b
+	add	x4, x4, x10
+	subs	x7, x7, #1
+	b.ne	4b
 	dsb	sy
 	mov	x0, x3
 	mrs	x1, CurrentEL

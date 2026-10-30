@@ -98,6 +98,22 @@ recovery = sda13, super = sda25.
   incoming x0 into sec_marker/sec_ctx; secondaries set VBAR (crash -> blue panic screen);
   tries cpu1 (A53 0x1), cpu4 (0x100), cpu5 (0x101) with 3 s waits.
 
+- **Boot A1c (24af5f6, sha256 8dfb27fb...)**: same display/CPU values as A1b. CPU_ON for cpu1
+  (A53 0x1), cpu4 (0x100), cpu5 (0x101) all return 0, but **no core ever executed
+  secondary_entry** (marker and x0 slots still 0x5a5a5a5a after 3 s each), so it is not our
+  stack/x0 bug. No reset after 40 s: **PSCI SYSTEM_RESET is not implemented** either. Keys
+  never changed: my bank guess was wrong - pinctrl-exynos-arm64.c exynos9610_pin_banks0 is
+  etc0 0x000, gpa0 0x020, **gpa1 0x040** (CON 0x11850040, DAT 0x11850044), gpa2 0x060, gpq0
+  0x080; A1/A1b/A1c read gpa0. Reboot per exynos-reboot.c: PMU 0x11860000, SYSIP_DAT0
+  (+0x810) = 0xff for recovery, then SWRESET (+0x400) = 1. Stock kernel header: text_offset
+  0x80000, res2 (rkp_init_data) 0 -> RKP is not used by this kernel; strings include
+  "CPU: All CPU(s) started at EL2" / "Using PSCI v0.1 Function IDs from DT".
+- **A1d**: secondary_entry cleans its markers with dc civac and paints a green 96x64 block at
+  y 2300, x 24 + idx*128 straight into the framebuffer before any stack/C; prints the load
+  address and the CPU_ON entry address; keys at the right gpa1 address (+PUD); resets into
+  recovery through the PMU after ~20 s (no A73) so TWRP comes up by itself. Next after that:
+  read TWRP's dmesg for "started at EL" / psci / secondary boot lines.
+
 **NEXT (stage 1):** user installs/allows the aarch64 cross gcc + mkbootimg. Then a board-a51 shim
 that (1) draws to 0xca000000 and checks whether the panel updates (command-mode question), (2)
 prints MMFR0 on the A53 and, via PSCI CPU_ON 0x100, on an A73. Flashing the shim to `boot`
