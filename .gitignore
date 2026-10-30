@@ -5,6 +5,7 @@ recovery/
 # third-party/Apple sources fetched for reading
 research/
 shim/out/
+shim-a51/out/
 xnu/out/
 xnu/out-*/
 __pycache__/
