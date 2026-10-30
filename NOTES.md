@@ -63,6 +63,24 @@ recovery = sda13, super = sda25.
 - UARTs: serial_0 0x13820000 (`androidboot.sec_atd.tty=/dev/ttySAC0`); no UART access here.
 - Watchdogs: 0x10050000 (cl0), 0x10060000 (cl1); PMU 0x11860000.
 
+**Stage 1 log:**
+- Toolchain: Homebrew `lld` needs a full LLVM source build here (failed/abandoned); shims now
+  link with `tools/minild.py` (verified against an objdump disassembly). Apple clang
+  `--target=aarch64-linux-gnu` compiles. Boot images: `tools/mkbootimg_v2.py` (header copied
+  from backup/a51/boot.img; repack of the stock kernel/ramdisk/dtb is byte-identical).
+- Writing `boot` from this session is refused by the Claude Code permission checker; the user
+  runs the `dd` from the prompt (`! adb shell 'dd ... of=/dev/block/by-name/boot ...'`).
+- **Boot A1 (shim 63eafdf+560f55c, sha256 53227277...): S-Boot logo stays, nothing else
+  visible** (user report, 2026-10-30 evening). Undecided: shim not running vs. running but the
+  command-mode panel never refreshed. Samsung's DECON code (`research/a51-kernel/`, from
+  LineageOS android_kernel_samsung_universal9611 dpu20/cal_9610): command mode + HW trigger
+  frames only go out while HW_SW_TRIG_CONTROL (0x148b0070) has HW_TRIG_EN set and
+  HW_TRIG_MASK_DECON clear; decon_reg_start = GLOBAL_CONTROL |= DECON_EN|DECON_EN_F,
+  SHADOW_REG_UPDATE_REQ (0x60) bit 31, wait RUN_STATUS (bit 4), unmask. Linux masks the
+  trigger again after each frame, so the panel keeping S-Boot's logo is expected.
+- **A1b**: probe kicks DECON first (prints the registers before/after), and resets itself with
+  PSCI SYSTEM_RESET after ~40 s -> a reboot loop proves the code runs even with no picture.
+
 **NEXT (stage 1):** user installs/allows the aarch64 cross gcc + mkbootimg. Then a board-a51 shim
 that (1) draws to 0xca000000 and checks whether the panel updates (command-mode question), (2)
 prints MMFR0 on the A53 and, via PSCI CPU_ON 0x100, on an A73. Flashing the shim to `boot`

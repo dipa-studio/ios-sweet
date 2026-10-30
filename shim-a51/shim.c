@@ -7,7 +7,12 @@
  *   - PSCI version, trusted-OS migration type, whether the boot A53 may
  *     switch itself off (XNU would then own only the A73 cluster).
  *   - Exynos watchdog state, and the volume/power GPIOs (gpa1 5/6/7).
- * Nothing is written to storage. Leave with a long Power + Volume down.
+ * The panel is in MIPI command mode: it only shows memory when DECON is
+ * triggered, so first restart DECON and unmask its hardware (TE) trigger
+ * the way Samsung's decon_reg_start() does (dpu20/cal_9610/decon_reg.c).
+ * After ~40 s the probe resets the phone (PSCI SYSTEM_RESET), so a reboot
+ * loop proves the code runs even if nothing shows. Hold Power + Volume up
+ * while it restarts to get to TWRP. Nothing is written to storage.
  */
 #include <stdint.h>
 #include "console.h"
@@ -17,10 +22,22 @@
 #define WDT_CL0			0x10050000UL	/* WTCON at +0 */
 #define WDT_CL1			0x10060000UL
 
+#define DECON_F			0x148b0000UL	/* decon_f, live DT */
+#define GLOBAL_CONTROL		0x0000
+#define  DECON_EN		(1U << 1)
+#define  DECON_EN_F		(1U << 0)
+#define  RUN_STATUS		(1U << 4)
+#define SHADOW_REG_UPDATE_REQ	0x0060
+#define  UPDATE_REQ_GLOBAL	(1U << 31)
+#define HW_SW_TRIG_CONTROL	0x0070
+#define  HW_TRIG_EN		(1U << 0)
+#define  HW_TRIG_MASK_DECON	(1U << 4)
+
 #define PSCI_VERSION		0x84000000UL
 #define PSCI_CPU_OFF		0x84000002UL
 #define PSCI_CPU_ON		0xc4000003UL
 #define PSCI_AFFINITY_INFO	0xc4000004UL
+#define PSCI_SYSTEM_RESET	0x84000009UL
 #define PSCI_MIGRATE_INFO_TYPE	0x84000006UL
 #define PSCI_MIGRATE_INFO_UP	0xc4000007UL
 #define PSCI_FEATURES		0x8400000aUL
@@ -44,6 +61,7 @@ static volatile uint64_t sec_seen, sec_el, sec_midr, sec_mmfr0, sec_mpidr;
 static volatile uint64_t sec_go_live;
 static volatile int live_row, a53_row;
 static volatile int64_t a53_off_ret = 0x7777;	/* stays if CPU_OFF never returns */
+static volatile uint32_t decon_before[3], decon_after[3], decon_runwait;
 
 static uint64_t smc(uint64_t fn, uint64_t a1, uint64_t a2, uint64_t a3);
 static void delay_ms(unsigned ms);
@@ -76,6 +94,44 @@ static void delay_ms(unsigned ms)
 	uint64_t end = now() + f / 1000 * ms;
 	while (now() < end)
 		;
+}
+
+static void delay_us(unsigned us)
+{
+	uint64_t f = rsr("cntfrq_el0");
+	if (!f)
+		f = 26000000;
+	uint64_t end = now() + f / 1000000 * us;
+	while (now() < end)
+		;
+}
+
+static void __attribute__((noreturn)) reset_now(void)
+{
+	dsb();
+	smc(PSCI_SYSTEM_RESET, 0, 0, 0);
+	for (;;)
+		__asm__ volatile("wfe");
+}
+
+/* decon_reg_start(): enable, global shadow update, wait run, unmask HW trigger. */
+static void decon_kick(void)
+{
+	uintptr_t d = DECON_F;
+	decon_before[0] = rd32(d + GLOBAL_CONTROL);
+	decon_before[1] = rd32(d + SHADOW_REG_UPDATE_REQ);
+	decon_before[2] = rd32(d + HW_SW_TRIG_CONTROL);
+	wr32(d + GLOBAL_CONTROL, decon_before[0] | DECON_EN | DECON_EN_F);
+	wr32(d + SHADOW_REG_UPDATE_REQ, rd32(d + SHADOW_REG_UPDATE_REQ) | UPDATE_REQ_GLOBAL);
+	uint32_t i;
+	for (i = 0; i < 20000 && !(rd32(d + GLOBAL_CONTROL) & RUN_STATUS); i++)
+		delay_us(1);
+	decon_runwait = i;
+	wr32(d + HW_SW_TRIG_CONTROL,
+	     (rd32(d + HW_SW_TRIG_CONTROL) & ~HW_TRIG_MASK_DECON) | HW_TRIG_EN);
+	decon_after[0] = rd32(d + GLOBAL_CONTROL);
+	decon_after[1] = rd32(d + SHADOW_REG_UPDATE_REQ);
+	decon_after[2] = rd32(d + HW_SW_TRIG_CONTROL);
 }
 
 static unsigned current_el(void)
@@ -134,6 +190,8 @@ void secondary_main(uint64_t idx)
 		con_hex2("A53OFF", "ret=", (uint32_t)a53_off_ret,
 			 "aff=", (uint32_t)smc(PSCI_AFFINITY_INFO, 0, 0, 0));
 		delay_ms(100);
+		if (n == 200)
+			reset_now();
 	}
 }
 
@@ -154,6 +212,8 @@ static void cpu_lines(const char *label, uint64_t el, uint64_t midr, uint64_t mm
 
 void shim_main(uint64_t dtb)
 {
+	stage = "decon";
+	decon_kick();
 	stage = "start";
 	con_clear(RED);
 	con_str("SHIM", "a51 milestone A1: probe");
@@ -165,6 +225,9 @@ void shim_main(uint64_t dtb)
 	con_skip();
 
 	stage = "dtb";
+	con_hex2("DECON", "ctl=", decon_before[0], "trig=", decon_before[2]);
+	con_hex2(" after", "ctl=", decon_after[0], "trig=", decon_after[2]);
+	con_hex2(" wait", "n=", decon_runwait, "upd=", decon_after[1]);
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);
 	con_hex("CNTFRQ", rsr("cntfrq_el0"));
 	con_hex("SCTLR1", rsr("sctlr_el1"));
@@ -221,8 +284,11 @@ void shim_main(uint64_t dtb)
 		con_set_row(live_row);
 		con_hex2("LIVE", "n=", n, "keys=", (rd32(GPA1_DAT) >> 5) & 7);
 		delay_ms(100);
-		if (n == 200 && sec_seen)
+		if (n == 200) {
+			if (!sec_seen)
+				reset_now();
 			break;
+		}
 	}
 
 	stage = "a53 off";
