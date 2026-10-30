@@ -153,6 +153,26 @@ recovery = sda13, super = sda25.
   LIVE73 loop - the A53 CPU_OFF result (A53OFF line) was not photographed. Keys: DAT 0xe2
   constant, presses still not seen (open).
 
+- **Stage 2 started (2026-10-30 late):** GitHub fork `wahyurendra/ios-sweet` (public) is now
+  `origin`, `dipa-studio/ios-sweet` is `upstream`; work is on branch `a51` (also on main).
+  Pushing/forking and writing `boot` are refused by the Claude Code permission checker -> the
+  user runs those commands. shim-a51 A2 (28ef36d): loads a SWEETXNU payload with
+  shim/loader.c's new loader_prepare(), enables GICD, CPU_ON 0x100 and jumps to XNU on the A73
+  (MMU/caches off, x0 = boot_args, I-cache invalidated there); the A53 tries CPU_OFF, else
+  parks in wfi. Without a payload the A1e probe still runs. NOT booted with a kernel yet.
+  `tools/mkadt.py --board a51`: dram 0x880000000 size 0xfdd00000 (+1 MiB /pram above it),
+  GIC-400 node (compatible arm,gic-400, reg <GICD 0x1000, GICC 0x2000> relative to SOC_BASE,
+  virtual-timer-intid 27), four A73 cpu nodes reg 0x100-0x103 (cpu0 = 0x100 running),
+  timebase 26 MHz, fbcon 0xca000000 1080x2400 stride 4320, sweet-ufs = exynos-ufs regs,
+  synthetic ECID 0x4135310000000001; root compatible keeps 'xiaomi,sweet' (platform expert)
+  plus 'samsung,a51'. Sweet's ADTs are byte-identical to before (checked with a fixed seed).
+  research/ipsw-x/d22ap.adt is not on this Mac (no /product until it is extracted again).
+- **NEXT (XNU for A51):** local xnu-8796 tree with 0001-0081 applied; then patches 0082+:
+  ARM64_BOARD_CONFIG_A51 (-march=armv8-a+crypto, no __ARM_PAN_AVAILABLE__, no LSE), GICv2
+  interrupt path (GICC IAR/EOIR MMIO, SGIs via GICD_SGIR, vtimer PPI 27), A51 framebuffer
+  console address from the ADT, watchdog (WTCON 0x10050000/0x10060000) stays off, reset via
+  PMU INFORM3 + SWRESET, CI job for the A51 config. QEMU check: virt gic-version=2.
+
 **NEXT (stage 1):** user installs/allows the aarch64 cross gcc + mkbootimg. Then a board-a51 shim
 that (1) draws to 0xca000000 and checks whether the panel updates (command-mode question), (2)
 prints MMFR0 on the A53 and, via PSCI CPU_ON 0x100, on an A73. Flashing the shim to `boot`
