@@ -126,6 +126,18 @@ recovery = sda13, super = sda25.
 - NEXT: TWRP dmesg (EL, psci lines, order of CAL/ACPM/PMU inits vs. "Bringing up secondary
   CPUs") to find what Linux has set up before CPU_ON that we have not.
 
+- **TWRP dmesg (Samsung 4.14 kernel "Grass", 2026-10-30):** "psci: Using PSCI v0.1 Function IDs
+  from DT", smccc 0x1; "smp: Bringing up secondary CPUs" at 0.06 s, all 8 booted
+  (CPU1-3 MIDR 0x410fd034, CPU4-7 0x410fd092 = Cortex-A73 r0p2); **A73 ID_AA64MMFR0 =
+  0x101122 -> TGran16 = 1, 16K pages supported on the A73s (observed)**; "CPU: All CPU(s)
+  started at EL1"; "arch_timer: CPU4: Trapping CNTVCT access" (A73 erratum workaround). Before
+  SMP Linux only does CMUCAL/PMUCAL init (cp, gnss, shub), clock setup, debug-snapshot, timer;
+  ACPM probes later (0.35 s). /proc/iomem: Kernel code 0x80228000-0x81c37fff (S-Boot places
+  the kernel at a varying offset; our shim landed at 0x80198000). System RAM as in the DT.
+- **A1e**: text_offset 0x80000 (as stock), GICv2 distributor + CPU interface enabled before
+  CPU_ON (as Linux), PMU per-core status (0x11862000 + n*0x80 / 0x11862200 for the A73s, +4)
+  before and after, cpu1/cpu4 via SMC and cpu5 via HVC; panic screen reboots to TWRP after 30 s.
+
 **NEXT (stage 1):** user installs/allows the aarch64 cross gcc + mkbootimg. Then a board-a51 shim
 that (1) draws to 0xca000000 and checks whether the panel updates (command-mode question), (2)
 prints MMFR0 on the A53 and, via PSCI CPU_ON 0x100, on an A73. Flashing the shim to `boot`

@@ -25,6 +25,12 @@
 #define PMU_SWRESET		0x0400
 #define PMU_INFORM3		0x080c	/* SEC_DEBUG_PANIC_INFORM (sec_ext.h) */
 #define  SEC_RESET_REASON_RECOVERY 0x12345674	/* sec_reboot.c */
+/* Per-core power blocks (exynos-reboot.c: PMU_CPU_OFFSET 0x80, BIG_CPU0_RESET 0x220c) */
+#define PMU_CPU_CONF(i)		((i) < 4 ? 0x2000 + (i) * 0x80 : 0x2200 + ((i) - 4) * 0x80)
+#define PMU_CPU_STATUS(i)	(PMU_CPU_CONF(i) + 4)
+
+#define GICD			0x12301000UL
+#define GICC			0x12302000UL
 #define WDT_CL0			0x10050000UL	/* WTCON at +0 */
 #define WDT_CL1			0x10060000UL
 
@@ -83,6 +89,20 @@ static uint64_t smc(uint64_t fn, uint64_t a1, uint64_t a2, uint64_t a3)
 	register uint64_t x2 __asm__("x2") = a2;
 	register uint64_t x3 __asm__("x3") = a3;
 	__asm__ volatile("smc #0"
+			 : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3)
+			 :
+			 : "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
+			   "x12", "x13", "x14", "x15", "x16", "x17", "memory");
+	return x0;
+}
+
+static uint64_t hvc(uint64_t fn, uint64_t a1, uint64_t a2, uint64_t a3)
+{
+	register uint64_t x0 __asm__("x0") = fn;
+	register uint64_t x1 __asm__("x1") = a1;
+	register uint64_t x2 __asm__("x2") = a2;
+	register uint64_t x3 __asm__("x3") = a3;
+	__asm__ volatile("hvc #0"
 			 : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3)
 			 :
 			 : "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
@@ -181,7 +201,9 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 	con_hex("X0", regs[0]);
 	con_hex("X30", regs[31]);	/* stashed lr is just above the 30-reg frame */
 	con_skip();
-	con_str("EXIT", "hold Power + Vol down");
+	con_str("EXIT", "reboot to TWRP in 30s");
+	delay_ms(30000);
+	reset_now();
 }
 
 /* ---- A73 ---- */
@@ -236,7 +258,7 @@ void shim_main(uint64_t dtb)
 	decon_kick();
 	stage = "start";
 	con_clear(RED);
-	con_str("SHIM", "a51 milestone A1d: probe");
+	con_str("SHIM", "a51 milestone A1e: probe");
 	con_skip();
 
 	/* Display question first: if this line moves, the panel follows memory. */
@@ -276,10 +298,29 @@ void shim_main(uint64_t dtb)
 		 "upcpu=", smc(PSCI_MIGRATE_INFO_UP, 0, 0, 0));
 	con_skip();
 
+	/* What Linux has done before SMP: GIC distributor + CPU interface on. */
+	stage = "gic";
+	uint32_t gd = rd32(GICD), gc = rd32(GICC);
+	wr32(GICD, gd | 1);
+	wr32(GICC + 0x4, 0xf0);		/* GICC_PMR */
+	wr32(GICC, gc | 1);
+	con_hex2("GIC", "d=", gd, "c=", gc);
+
+	/* PMU power state of every core before CPU_ON: conf/status low bits. */
+	stage = "pmu";
+	{
+		char line[] = "PMU ";
+		uint32_t st = 0;
+		for (unsigned i = 0; i < 8; i++)
+			st |= (rd32(PMU + PMU_CPU_STATUS(i)) & 0xf) << (4 * i);
+		con_hex2(line, "stat=", st, "c4=", rd32(PMU + PMU_CPU_CONF(4)));
+	}
+
 	/*
-	 * cpu1 (A53, same cluster as us), then cpu4 and cpu5 (A73). Each line:
-	 * PSCI return, then the MPIDR the core stored at its first instruction
-	 * and the x0 it was entered with (0x5A5A... = never arrived).
+	 * cpu1 (A53, same cluster as us), then cpu4 (A73) by SMC, then cpu5 by
+	 * HVC (Samsung's uH owns EL2). Each line: return value and PMU status
+	 * of that core afterwards, then what the core stored at its first
+	 * instruction (0x5A5A... = never arrived).
 	 */
 	static const uint8_t try_idx[3] = { 1, 4, 5 };
 	for (int t = 0; t < 3; t++) {
@@ -287,13 +328,14 @@ void shim_main(uint64_t dtb)
 		uint64_t mpidr = (i & 3) | ((uint64_t)(i >> 2) << 8);
 		char label[] = "CPU0";
 		label[3] = '0' + i;
-		stage = "cpu on";
+		stage = t == 2 ? "cpu on hvc" : "cpu on smc";
 		sec_marker[i] = sec_ctx[i] = 0x5a5a5a5a;
 		dsb();
-		int64_t on = smc(PSCI_CPU_ON, mpidr, (uintptr_t)secondary_entry, 0x1000 + i);
+		int64_t on = t == 2 ? hvc(PSCI_CPU_ON, mpidr, (uintptr_t)secondary_entry, 0x1000 + i)
+				    : smc(PSCI_CPU_ON, mpidr, (uintptr_t)secondary_entry, 0x1000 + i);
 		for (int w = 0; w < 300 && !sec_seen[i]; w++)
 			delay_ms(10);
-		con_hex2(label, "ret=", (uint32_t)on, "seen=", sec_seen[i]);
+		con_hex2(label, "ret=", (uint32_t)on, "pmu=", rd32(PMU + PMU_CPU_STATUS(i)));
 		con_hex2(" entry", "mpidr=", sec_marker[i], "x0=", sec_ctx[i]);
 	}
 	if (sec_seen[A73_IDX])
