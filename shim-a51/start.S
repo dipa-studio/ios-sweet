@@ -49,15 +49,37 @@ _start:
 5:	wfe
 	b	5b
 
-/* PSCI CPU_ON target. x0 = context id = cpu index (0..7). */
+/*
+ * PSCI CPU_ON target. Samsung's PSCI 0.1 firmware need not pass the
+ * context id, so the cpu index (0..7) comes from MPIDR: Aff0 + 4 * Aff1.
+ * Before touching the stack, record MPIDR and the x0 we were given, so a
+ * core that arrives but dies later is still visible.
+ */
 	.globl secondary_entry
 secondary_entry:
 	msr	daifset, #0xf
+	mrs	x2, mpidr_el1
+	and	x3, x2, #0xff
+	ubfx	x4, x2, #8, #8
+	add	x3, x3, x4, lsl #2
+	and	x3, x3, #7
+	adr	x1, sec_marker
+	str	x2, [x1, x3, lsl #3]
+	adr	x1, sec_ctx
+	str	x0, [x1, x3, lsl #3]
+	dsb	sy
+	mov	x0, x3
 	mrs	x1, CurrentEL
 	cmp	x1, #(2 << 2)
 	b.eq	1f
 	msr	spsel, #1
-1:	adr	x1, _sec_stacks
+	adr	x1, vectors
+	msr	vbar_el1, x1
+	b	3f
+1:	adr	x1, vectors
+	msr	vbar_el2, x1
+3:	isb
+	adr	x1, _sec_stacks
 	add	x1, x1, x0, lsl #12
 	add	x1, x1, #0x1000
 	mov	sp, x1

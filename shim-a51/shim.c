@@ -42,8 +42,7 @@
 #define PSCI_MIGRATE_INFO_UP	0xc4000007UL
 #define PSCI_FEATURES		0x8400000aUL
 
-#define A73_MPIDR		0x100	/* cpu4, first core of cluster 1 */
-#define A73_IDX			4
+#define A73_IDX			4	/* cpu4 = MPIDR 0x100, first core of cluster 1 */
 
 #define rsr(r) ({ uint64_t _v; __asm__ volatile("mrs %0, " r : "=r"(_v)); _v; })
 #define isb() __asm__ volatile("isb" ::: "memory")
@@ -56,8 +55,13 @@ extern char secondary_entry[];
 
 static const char *stage;	/* set at runtime: no absolute pointers in data */
 
-/* Filled by the A73. MMU and caches are off everywhere: plain shared memory. */
-static volatile uint64_t sec_seen, sec_el, sec_midr, sec_mmfr0, sec_mpidr;
+/*
+ * Filled by the secondaries, indexed Aff0 + 4 * Aff1. MMU and caches are off
+ * everywhere: plain shared memory. sec_marker/sec_ctx are written by the
+ * first instructions of secondary_entry (MPIDR, and the x0 PSCI handed over).
+ */
+volatile uint64_t sec_marker[8], sec_ctx[8];
+static volatile uint64_t sec_seen[8], sec_el[8], sec_midr[8], sec_mmfr0[8];
 static volatile uint64_t sec_go_live;
 static volatile int live_row, a53_row;
 static volatile int64_t a53_off_ret = 0x7777;	/* stays if CPU_OFF never returns */
@@ -171,13 +175,16 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 
 void secondary_main(uint64_t idx)
 {
-	sec_el = current_el();
-	sec_midr = rsr("midr_el1");
-	sec_mmfr0 = rsr("id_aa64mmfr0_el1");
-	sec_mpidr = rsr("mpidr_el1") | (idx << 56);
+	sec_el[idx] = current_el();
+	sec_midr[idx] = rsr("midr_el1");
+	sec_mmfr0[idx] = rsr("id_aa64mmfr0_el1");
 	dsb();
-	sec_seen = 1;
+	sec_seen[idx] = 1;
 	dsb();
+	/* Only cpu4 takes over the screen; the others park. */
+	if (idx != A73_IDX)
+		for (;;)
+			__asm__ volatile("wfe");
 	/* The A53 hands over the screen, then tries to switch itself off. */
 	while (!sec_go_live)
 		;
@@ -216,7 +223,7 @@ void shim_main(uint64_t dtb)
 	decon_kick();
 	stage = "start";
 	con_clear(RED);
-	con_str("SHIM", "a51 milestone A1: probe");
+	con_str("SHIM", "a51 milestone A1c: probe");
 	con_skip();
 
 	/* Display question first: if this line moves, the panel follows memory. */
@@ -254,15 +261,28 @@ void shim_main(uint64_t dtb)
 		 "upcpu=", smc(PSCI_MIGRATE_INFO_UP, 0, 0, 0));
 	con_skip();
 
-	stage = "a73 on";
-	int64_t on = smc(PSCI_CPU_ON, A73_MPIDR, (uintptr_t)secondary_entry, A73_IDX);
-	for (int i = 0; i < 100 && !sec_seen; i++)
-		delay_ms(10);
-	con_hex2("CPU_ON", "ret=", (uint32_t)on, "seen=", sec_seen);
-	if (sec_seen) {
-		cpu_lines("A73", sec_el, sec_midr, sec_mmfr0);
-		con_hex("MPIDR", sec_mpidr);
+	/*
+	 * cpu1 (A53, same cluster as us), then cpu4 and cpu5 (A73). Each line:
+	 * PSCI return, then the MPIDR the core stored at its first instruction
+	 * and the x0 it was entered with (0x5A5A... = never arrived).
+	 */
+	static const uint8_t try_idx[3] = { 1, 4, 5 };
+	for (int t = 0; t < 3; t++) {
+		unsigned i = try_idx[t];
+		uint64_t mpidr = (i & 3) | ((uint64_t)(i >> 2) << 8);
+		char label[] = "CPU0";
+		label[3] = '0' + i;
+		stage = "cpu on";
+		sec_marker[i] = sec_ctx[i] = 0x5a5a5a5a;
+		dsb();
+		int64_t on = smc(PSCI_CPU_ON, mpidr, (uintptr_t)secondary_entry, 0x1000 + i);
+		for (int w = 0; w < 300 && !sec_seen[i]; w++)
+			delay_ms(10);
+		con_hex2(label, "ret=", (uint32_t)on, "seen=", sec_seen[i]);
+		con_hex2(" entry", "mpidr=", sec_marker[i], "x0=", sec_ctx[i]);
 	}
+	if (sec_seen[A73_IDX])
+		cpu_lines("A73", sec_el[A73_IDX], sec_midr[A73_IDX], sec_mmfr0[A73_IDX]);
 	con_skip();
 
 	stage = "gpio";
@@ -270,7 +290,7 @@ void shim_main(uint64_t dtb)
 	con_str("KEYS", "bit5 volup 6 voldn 7 pwr");
 	con_skip();
 	a53_row = con_get_row();
-	con_str("A53OFF", sec_seen ? "pending" : "skipped (no A73)");
+	con_str("A53OFF", sec_seen[A73_IDX] ? "pending" : "skipped (no A73)");
 	con_skip();
 	con_str("EXIT", "hold Power + Vol down");
 
@@ -285,7 +305,7 @@ void shim_main(uint64_t dtb)
 		con_hex2("LIVE", "n=", n, "keys=", (rd32(GPA1_DAT) >> 5) & 7);
 		delay_ms(100);
 		if (n == 200) {
-			if (!sec_seen)
+			if (!sec_seen[A73_IDX])
 				reset_now();
 			break;
 		}

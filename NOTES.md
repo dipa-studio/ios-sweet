@@ -81,6 +81,23 @@ recovery = sda13, super = sda25.
 - **A1b**: probe kicks DECON first (prints the registers before/after), and resets itself with
   PSCI SYSTEM_RESET after ~40 s -> a reboot loop proves the code runs even with no picture.
 
+- **Boot A1b (89b7263, sha256 bf58615c...): RED SCREEN WITH TEXT - display solved** (photo from
+  the user, 2026-10-30 22:36). Observed: DECON ctl 0x113 before/after (enabled, command mode,
+  running), trig 0x3010 -> 0x3001 after unmasking; LIVE counter reached 0xC8 (200) on screen,
+  i.e. continuous refresh from 0xca000000 at 1080x2400 stride 4320. DTB at 0x8a100000 (magic
+  ok). CNTFRQ 0x18cba80 (26 MHz). SCTLR_EL1 0x30c5083a (MMU/caches off). Boot A53: EL1, MIDR
+  0x410fd034 (A53 r0p4), **ID_AA64MMFR0 0x1122, TGran16 0 = no 16K pages (confirmed on the
+  phone)**, MPIDR 0x80000000. **Watchdogs were running**: WTCON 0x8021 on both cl0/cl1
+  (enable + reset) -> probe cleared to 0x8000; XNU must stop or pet them. **PSCI_VERSION,
+  FEATURES, MIGRATE_INFO_TYPE/UP_CPU all return -1 (NOT_SUPPORTED): firmware is PSCI 0.1**
+  (only the DT's cpu_on/cpu_off/cpu_suspend IDs). **CPU_ON(0x100) returned 0 but the A73
+  never set sec_seen within 1 s.** Suspected our bug: secondary_entry used x0 (context id)
+  as the stack index; Samsung's PSCI 0.1 may not pass it (Linux passes 0). GPA1 CON 0,
+  DAT 0xce, keys field (DAT>>5)&7 = 6 (bit5 low) - whether a key was pressed is unknown.
+- **A1c**: secondary index from MPIDR (Aff0 + 4*Aff1); first instructions store MPIDR and the
+  incoming x0 into sec_marker/sec_ctx; secondaries set VBAR (crash -> blue panic screen);
+  tries cpu1 (A53 0x1), cpu4 (0x100), cpu5 (0x101) with 3 s waits.
+
 **NEXT (stage 1):** user installs/allows the aarch64 cross gcc + mkbootimg. Then a board-a51 shim
 that (1) draws to 0xca000000 and checks whether the panel updates (command-mode question), (2)
 prints MMFR0 on the A53 and, via PSCI CPU_ON 0x100, on an A73. Flashing the shim to `boot`
