@@ -23,8 +23,8 @@
 #define GPA1_PUD		0x11850048UL
 #define PMU			0x11860000UL	/* exynos-reboot.c */
 #define PMU_SWRESET		0x0400
-#define PMU_SYSIP_DAT0		0x0810
-#define  REBOOT_MODE_RECOVERY	0xff
+#define PMU_INFORM3		0x080c	/* SEC_DEBUG_PANIC_INFORM (sec_ext.h) */
+#define  SEC_RESET_REASON_RECOVERY 0x12345674	/* sec_reboot.c */
 #define WDT_CL0			0x10050000UL	/* WTCON at +0 */
 #define WDT_CL1			0x10060000UL
 
@@ -117,13 +117,14 @@ static void delay_us(unsigned us)
 }
 
 /*
- * PSCI SYSTEM_RESET is not implemented (PSCI 0.1). Reboot like Linux's
- * exynos_reboot("recovery"): reboot mode in SYSIP_DAT0, then SWRESET.
+ * PSCI SYSTEM_RESET is not implemented (PSCI 0.1). Reboot like Samsung's
+ * sec_reboot("recovery"): S-Boot reads the reason from PMU INFORM3 (the
+ * generic exynos SYSIP_DAT0 = 0xff was ignored in boot A1d), then SWRESET.
  */
 static void __attribute__((noreturn)) reset_now(void)
 {
 	dsb();
-	wr32(PMU + PMU_SYSIP_DAT0, REBOOT_MODE_RECOVERY);
+	wr32(PMU + PMU_INFORM3, SEC_RESET_REASON_RECOVERY);
 	dsb();
 	wr32(PMU + PMU_SWRESET, 1);
 	for (;;)

@@ -114,6 +114,18 @@ recovery = sda13, super = sda25.
   recovery through the PMU after ~20 s (no A73) so TWRP comes up by itself. Next after that:
   read TWRP's dmesg for "started at EL" / psci / secondary boot lines.
 
+- **Boot A1d (6ecdf7c, sha256 67564e41...)**: LOAD head 0x80198000, CPU_ON entry 0x80198868.
+  Still no secondary: markers 0x5a5a5a5a and **no green block** (painted from asm before any
+  stack/C, with dc civac) -> cpu1/cpu4/cpu5 never execute a single instruction at our entry
+  although CPU_ON returns 0. Samsung's arm64 smp.c/psci.c have no Exynos hook: Linux calls
+  the same CPU_ON(mpidr, __pa(secondary_entry)). gpa1 now read at the right address: DAT
+  0xe2 (bits 5-7 = 1 idle), PUD 0x11111, but the user saw keys= never change on presses (open).
+  **PMU SWRESET works** (phone rebooted by itself), but SYSIP_DAT0 = 0xff did not select
+  recovery (normal boot -> probe again). Samsung's way (sec_reboot.c, sec_ext.h): PMU INFORM3
+  (0x1186080c) = 0x12345674 (SEC_RESET_REASON_RECOVERY), then SWRESET -> used from A1e on.
+- NEXT: TWRP dmesg (EL, psci lines, order of CAL/ACPM/PMU inits vs. "Bringing up secondary
+  CPUs") to find what Linux has set up before CPU_ON that we have not.
+
 **NEXT (stage 1):** user installs/allows the aarch64 cross gcc + mkbootimg. Then a board-a51 shim
 that (1) draws to 0xca000000 and checks whether the panel updates (command-mode question), (2)
 prints MMFR0 on the A53 and, via PSCI CPU_ON 0x100, on an A73. Flashing the shim to `boot`
