@@ -138,6 +138,21 @@ recovery = sda13, super = sda25.
   CPU_ON (as Linux), PMU per-core status (0x11862000 + n*0x80 / 0x11862200 for the A73s, +4)
   before and after, cpu1/cpu4 via SMC and cpu5 via HVC; panic screen reboots to TWRP after 30 s.
 
+- **🎉 Boot A1e (c0071a3, sha256 a2b79f46...): SECONDARY CORES RUN OUR CODE, A73 HAS 16K.**
+  Photo 2026-10-30 23:05. LOAD head 0x80180000 (text_offset 0x80000 now). GICD_CTLR was 0
+  (distributor off), GICC_CTLR 1; we enabled both before CPU_ON. PMU status before: only
+  cluster 0 (cpu0-3) on (stat nibbles 0x0000000f), CPU4 conf 0x80000000. CPU_ON(0x1): ret 0,
+  PMU 0x2007000f, entry marker MPIDR 0x80000001; CPU_ON(0x100): ret 0, PMU 0x0007000f, marker
+  0x80000100; both painted their green blocks. **x0 at entry = 0xbffffe01c (garbage): the
+  firmware does not pass the PSCI context id** -> index from MPIDR is required. A73 (cpu4):
+  EL1, MIDR 0x410fd092, ID_AA64MMFR0 0x101122, **TGran16 = 1**. CPU_ON via HVC (cpu5) returned
+  0xc4000003 unchanged (uH does not proxy PSCI over HVC; no exception) -> use SMC.
+  Which change made CPU_ON work is UNCONFIRMED: GIC distributor enable (likely) or the
+  stock text_offset; keep both. The phone then rebooted into TWRP by itself (INFORM3 +
+  SWRESET works); the reset is issued by the A73 after the handover, so the A73 ran the
+  LIVE73 loop - the A53 CPU_OFF result (A53OFF line) was not photographed. Keys: DAT 0xe2
+  constant, presses still not seen (open).
+
 **NEXT (stage 1):** user installs/allows the aarch64 cross gcc + mkbootimg. Then a board-a51 shim
 that (1) draws to 0xca000000 and checks whether the panel updates (command-mode question), (2)
 prints MMFR0 on the A53 and, via PSCI CPU_ON 0x100, on an A73. Flashing the shim to `boot`
