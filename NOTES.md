@@ -1,5 +1,74 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## A51 port (Samsung Galaxy A51 SM-A515F, Exynos 9611) - handoff 2026-10-30
+
+Second board next to sweet; sweet must keep building. Plan: board `a51` with its own shim, patches
+from `0082-a51-*`, `tools/mkadt.py --board a51`. Host is macOS only (no Linux): Homebrew `dtc` and
+`ipsw` installed; aarch64 cross gcc (messense tap) and `pip install mkbootimg` were refused by the
+permission checker -> the user has to install or allow them before shim builds (stage 1).
+
+**Phone state (2026-10-30):** bootloader unlocked, Knox tripped (warranty_bit 1), TWRP (`twrp_a51`,
+adb root) in recovery, stock Android still installed, bootloader version A515FXXU8HWI1, 6 GB RAM.
+Nothing written to the phone yet. S-Boot has no fastboot; the phone also showed up once as a
+fastboot device (18d1:d00d, probably fastbootd from recovery) - not used.
+
+**Backups (stage 0, done):** `backup/a51/` (gitignored): every named partition except super,
+userdata, cache (boot, recovery, dtbo, vbmeta, vbmeta_samsung, efs, sec_efs, param, up_param,
+persistent, radio, cpefs, keystorage, prism, ...), whole bootloader LUNs `lun-sdb..sde.img`, GPT
+`sda-gpt-primary.bin` / `sda-gpt-backup.bin` (last 6 x 4 KiB blocks, "EFI PART" checked).
+`SHA256SUMS` there; boot/recovery/dtbo/vbmeta*/efs/sec_efs/param/up_param/persistent/radio/cpefs
+and LUNs b-e compared against sha256sum on the phone: all match. Live DT: `dtb/a51/live.dtb/.dts`
+(contains serials: gitignored). Stock boot.img unpacked: `dtb/a51/boot_unpacked/` (header v2, page
+2048, kernel_addr 0x10008000, ramdisk 0x11000000, tags 0x10000100, dtb 0x10000000, DTB inside
+boot.img; no separate dtb partition). The installed boot.img is not pure stock (cmdline has
+androidboot.selinux=permissive). Partitions: userdata = /dev/block/sda32 (113956 MiB), boot = sda12,
+recovery = sda13, super = sda25.
+
+**A51 hardware facts (OBSERVED in the live DT unless marked):**
+- CPUs: cpu0-3 Cortex-A53, MPIDR 0x000-0x003 (boot CPU = A53 0x0); cpu4-7 Cortex-A73, MPIDR
+  0x100-0x103. PSCI `smc`, cpu_on 0xc4000003, cpu_off 0x84000002, cpu_suspend 0xc4000001.
+- **16K pages: Cortex-A53 has NO 16 KB granule, Cortex-A73 has** (ARM DDI 0500F 4.3.21 /
+  ARM 100048 4.3.27 as quoted on LKML 2017-05, "arm64: cpufeature: check translation granule
+  size"; NOT yet read on this phone). XNU (16K) can therefore only run on the four A73 cores:
+  the shim must PSCI CPU_ON an A73 (0x100) and enter XNU there; the A53s stay parked/off.
+  Stage 1 must print ID_AA64MMFR0_EL1 on both clusters to confirm.
+- GIC-400 (GICv2, "arm,cortex-a15-gic"): GICD 0x12301000, GICC 0x12302000, GICH 0x12304000,
+  GICV 0x12306000. XNU has no GICv2 code (sweet uses the VMAPPLE GICv3 path).
+- Arch timer 26 MHz (0x18cba80), PPIs 13/14/11/10 (= INTID 29 secure phys, 30 NS phys, 27 virt,
+  26 hyp). Linux uses the PHYSICAL timer (`use-physical-timer`). MCT at 0x10040000.
+- **Samsung uH hypervisor runs at EL2** (reserved `el2_code` 0x87000000+2M, `el2_earlymem`
+  0x97de00000+34M; `uh`/`uhcfg` partitions): our kernel will enter at EL1 under it.
+- RAM (6 GB board): 0x80000000+0x3ab00000, 0xc0000000+0x20000000, 0xe1900000+0x1e700000,
+  0x880000000+0x80000000, 0x900000000+0x80000000. Largest contiguous: 0x880000000-0x980000000
+  (4 GiB) minus el2_earlymem at 0x97de00000 -> usable 0x880000000-0x97de00000 (~3.97 GiB), the
+  analogue of sweet's highmem bank. Low-bank carve-outs: modem 0xed000000+138M, debug_snapshot
+  0xf9000000.., abox 0xe9400000, secure_camera 0xe1900000, sec_debug 0x91202000.., kaslr page.
+- Ramdisk as loaded by S-Boot (TWRP boot): linux,initrd-start 0x89000000 (/chosen).
+- Display: S-Boot framebuffer `s3cfb.bootloaderfb=0xca000000` (bootargs). DECON-F 0x148b0000
+  (`psr_mode = 2` = MIPI command mode, `trig_mode = 0` = hardware TE trigger), DSIM 0x148e0000,
+  DPP 0x14881000-0x14884000, SysMMU DPU 0x14820000. Panel Samsung S6E3FA9, 1080x2400, mode 2
+  (command), 60 Hz, no DSC. Command mode = risk: whether DECON keeps refreshing from 0xca000000
+  without a driver is UNKNOWN; test in stage 1 by drawing from the shim.
+- UFS: "samsung,exynos-ufs" HCI 0x13520000 (+0x200), vendor 0x13521100, UNIPRO 0x13510000,
+  UFSP 0x13530000, PHY 0x13524000; `dma-coherent` (sysreg offset 0x1010 mask/val 0x300). Android
+  boot device "13520000.ufs".
+- Keys: all three are plain GPIOs on gpa1 (pinctrl@11850000, ALIVE): vol down gpa1-6, vol up
+  gpa1-5, power gpa1-7 (gpio-keys). Guess, to verify against Samsung's pinctrl source: bank
+  stride 0x20 -> gpa1 DAT at 0x11850024, keys active low.
+- Touch: Melfas MSS100 (`melfas,mms_ts`) at I2C 0x48 on i2c@13870000 (s3c2440-style I2C, not
+  HSI2C), IRQ gpa0-0, power `tsp_ldo_en` = GPIO gpg3-1 (pinctrl@139b0000), regulator-boot-on;
+  max_x_y 0xfff, display 1080x2400. No PMIC work needed for touch.
+- PMIC S2MPU09 over SPEEDY 0x11a10000 (+ S2MPB03 on i2c). Not needed for keys.
+- USB: DWC3 0x13200000 (high-speed only), PHYs 0x131d0000 / 0x131f0000.
+- UARTs: serial_0 0x13820000 (`androidboot.sec_atd.tty=/dev/ttySAC0`); no UART access here.
+- Watchdogs: 0x10050000 (cl0), 0x10060000 (cl1); PMU 0x11860000.
+
+**NEXT (stage 1):** user installs/allows the aarch64 cross gcc + mkbootimg. Then a board-a51 shim
+that (1) draws to 0xca000000 and checks whether the panel updates (command-mode question), (2)
+prints MMFR0 on the A53 and, via PSCI CPU_ON 0x100, on an A73. Flashing the shim to `boot`
+(sda12) from TWRP is the first destructive step: ask the user first; restore with
+`backup/a51/boot.img`.
+
 ## Agent handoff / active work (2026-10-15, latest)
 
 ### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<
