@@ -172,6 +172,32 @@ recovery = sda13, super = sda25.
   8bd1821f...7648, verified), log `research/run-41089074512.log` (for tools/xnu-cc.py). It
   cannot run on the A51: llvm-objdump finds ~670 LSE atomics (ldadd 400, ldset 83, ldclr 68,
   cas* 84, ...) and 37 PAN/GICv3 system-register accesses (undefined on A73 / GIC-400).
+- **Patch 0082-a51-board-config-gicv2 (local compile checks only, NOT CI-built yet):**
+  MACHINE_CONFIG=A51 = the SWEET kernel (-DARM64_BOARD_CONFIG_SWEET) plus
+  -DARM64_BOARD_CONFIG_A51 and **-mcpu=cortex-a73** (tested: with Apple clang and a Darwin
+  target, -march=armv8-a+crypto STILL emits LSE ldadd/casal; -mcpu=cortex-a73 gives LL/SC and
+  the assembler rejects v8.1+ opcodes). config/MASTER.arm64.a51 = copy of .sweet; bsd/libkern
+  Makefile.template SWEET blocks also for A51; plain arm64 (no arm64e). SWEET.h: SWEET_A51 ->
+  HAS_GIC_V2 instead of HAS_GIC_V3, no __ARM_PAN_AVAILABLE__, vtimer INTID 27,
+  SWEET_SMP_MAX_CPUS 4, SWEET_FB_PHYS 0xca000000 (sweet 0x9c000000; replaces the hard-coded
+  address in start.s x2, sweet_early.c, arm_vm_init.c), GICv2 register defs. pe_fiq.c: GICv2
+  init (ADT /arm-io/gic reg = GICD, GICC; banked SGI/PPI priority + enable of vtimer and the
+  IPI SGI, GICC_PMR 0xf0, GICC_CTLR EnableGrp1, GICD_CTLR enable) and sweet_gic_send_sgi()
+  (GICD_SGIR with each CPU's interface mask from banked GICD_ITARGETSR0; fallback 4*Aff1+Aff0).
+  sleh_irq: GICC_IAR/GICC_EOIR via MMIO. SweetCPU::signalCPU -> sweet_gic_send_sgi. start.s:
+  ICC_SRE_EL2 only with HAS_GIC_V3. sweet_touch/usb/keys return at once on A51 (Qualcomm MMIO).
+  **commpage_asm.s pfz_trylock_and_{en,de}queue used `casa` unguarded** (userspace runs it via
+  OSAtomicFifo*): LL/SC trylock when !__ARM_FEATURE_ATOMICS (sweet keeps casa). PAN uses are
+  all under __ARM_PAN_AVAILABLE__; machine_routines_asm.s casa under __ARM_ARCH_8_2__.
+  Checked locally with tools/xnu-cc.py against CI 41089074512's build tree
+  (research/bt-41089074512, git repo there, baseline commit = 0001-0081): the 10 touched
+  sources compile for SWEET and for A51 (XNU_CC_DROP=-march=armv8.2-a+crypto,
+  XNU_CC_EXTRA="-DARM64_BOARD_CONFIG_A51 -mcpu=cortex-a73"; exported headers in
+  build/xnu.obj/EXPORT_HDRS had to be refreshed by hand); A51 objects have no ICC_* and no LSE.
+  0082 applies cleanly to the 0001-0081 tree. NOTE: dxb build.sh SKIPS a patch that fails
+  `git apply --check` with only a warning -> check the CI log for "Applying patch: ...0082".
+  Build: `gh workflow run xnu.yml -R wahyurendra/ios-sweet --ref a51 -f machine_config=A51`
+  -> artifact kernel.development.a51.
 - **NEXT (XNU for A51):** local xnu-8796 tree with 0001-0081 applied; then patches 0082+:
   ARM64_BOARD_CONFIG_A51 (-march=armv8-a+crypto, no __ARM_PAN_AVAILABLE__, no LSE), GICv2
   interrupt path (GICC IAR/EOIR MMIO, SGIs via GICD_SGIR, vtimer PPI 27), A51 framebuffer

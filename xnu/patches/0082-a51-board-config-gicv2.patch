@@ -1,0 +1,644 @@
+diff --git a/bsd/conf/Makefile.template b/bsd/conf/Makefile.template
+index f2d8bf8..e9d9d3d 100644
+--- a/bsd/conf/Makefile.template
++++ b/bsd/conf/Makefile.template
+@@ -45,7 +45,7 @@ CFLAGS+= -include meta_features.h -DDRIVER_PRIVATE \
+ SFLAGS+= -include meta_features.h
+ 
+ # This provider is built into SWEET; other boards use their normal kext.
+-ifeq ($(CURRENT_MACHINE_CONFIG),SWEET)
++ifneq ($(filter SWEET A51,$(CURRENT_MACHINE_CONFIG)),)
+ SWEET_PTHREAD_ROOT = $(SRCROOT)/bsd/pthread/sweet_libpthread
+ SWEET_PTHREAD_INC = -I$(SWEET_PTHREAD_ROOT) -I$(SWEET_PTHREAD_ROOT)/private -I$(SWEET_PTHREAD_ROOT)/include
+ sweet_pthread_init.o_INCFLAGS = $(SWEET_PTHREAD_INC)
+diff --git a/bsd/dev/sweet_keys.c b/bsd/dev/sweet_keys.c
+index a148608..5a64688 100644
+--- a/bsd/dev/sweet_keys.c
++++ b/bsd/dev/sweet_keys.c
+@@ -125,6 +125,10 @@ keys_thread(void *arg, wait_result_t result)
+ void
+ sweet_keys_init(void)
+ {
++#if defined(ARM64_BOARD_CONFIG_A51)
++	/* Qualcomm SM7150 hardware at fixed addresses: not on the Galaxy A51. */
++	return;
++#endif
+ 	int enabled = 1;
+ 	thread_t thread;
+ 	if (keys_started) {
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 03defe6..0d99a1b 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -638,6 +638,10 @@ out:
+ void
+ sweet_touch_init(void)
+ {
++#if defined(ARM64_BOARD_CONFIG_A51)
++	/* Qualcomm SM7150 hardware at fixed addresses: not on the Galaxy A51. */
++	return;
++#endif
+ 	int enabled = 1;
+ 	thread_t thread;
+ 	if (st.started) {
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index b6c1a41..f75b08d 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -76,6 +76,10 @@ usb_rd(vm_offset_t base, uint32_t off)
+ void
+ sweet_usb_probe(void)
+ {
++#if defined(ARM64_BOARD_CONFIG_A51)
++	/* Qualcomm SM7150 hardware at fixed addresses: not on the Galaxy A51. */
++	return;
++#endif
+ 	int enabled = 1;
+ 	uint32_t gdscr, cbcr[sizeof(usb_cbcr) / sizeof(usb_cbcr[0])];
+ 	bool clocks_on = true;
+diff --git a/config/MASTER.arm64.a51 b/config/MASTER.arm64.a51
+new file mode 100644
+index 0000000..f28d469
+--- /dev/null
++++ b/config/MASTER.arm64.a51
+@@ -0,0 +1,116 @@
++#
++# a51 (Galaxy A51, Exynos 9611): the same options as MASTER.arm64.sweet, which
++# it copies. sweet (Redmi Note 10 Pro, SM7150): MASTER.arm64.MacOSX plus the open-source
++# arm64 assembly and pmap (nos_arm_asm, nos_arm_pmap). Apple's own SoC configs
++# link those from the KDK's closed lib<SOC>.os.<CONFIG>.a instead, which is
++# arm64e and Apple-silicon specific. kperf/kpc stay (xnu does not build without
++# kperf); osfmk/arm64/kpc.c is a stub with no hardware counters.
++#
++#
++# Mach Operating System
++# Copyright (c) 1986 Carnegie-Mellon University
++# Copyright 2001-2018 Apple Inc.
++#
++# All rights reserved.  The CMU software License Agreement
++# specifies the terms and conditions for use and redistribution.
++#  
++######################################################################
++#
++#  Master Apple configuration file (see the master machine independent
++#  configuration file for a description of the file format).
++#
++######################################################################
++#  
++#  Standard Apple OS Configurations:
++#  -------- ----- -- ---------------
++#
++#  KERNEL_BASE =    [ arm64 config_pmap_ppl medium msgb_large config_requires_u32_munging config_delay_idle_sleep config_proc_udata_storage config_uexc config_darkboot nos_arm_asm nos_arm_pmap ]
++#  KERNEL_RELEASE = [ KERNEL_BASE ]
++#  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug config_proc_resource_limits ]
++#  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_waitq_stats config_workloop_debug config_proc_resource_limits ]
++#  BSD_BASE =       [ mach_bsd sysv_sem sysv_msg sysv_shm config_netboot config_imageboot psynch config_proc_uuid_policy config_coredump pgo config_personas ]
++#  BSD_RELEASE =    [ BSD_BASE ]
++#  BSD_DEV =        [ BSD_BASE config_vnguard ]
++#  BSD_DEBUG =      [ BSD_BASE config_vnguard ]
++#  FILESYS_BASE =   [ devfs fdesc fifo mockfs sweet_hfs fs_compression config_protect config_mnt_rootsnap config_rosv_startup config_mount_vm config_mount_prebootrecovery config_basesystemroot config_fse quota namedstreams config_imgsrc_access config_triggers config_searchfs config_volfs config_appledouble nullfs bindfs config_mnt_suid config_firmlinks config_dataless_files config_union_mounts config_file_leases ]
++#  FILESYS_RELEASE= [ FILESYS_BASE ]
++#  FILESYS_DEV =    [ FILESYS_BASE config_iocount_trace ]
++#  FILESYS_DEBUG =  [ FILESYS_BASE config_iocount_trace ]
++#  NFS =            [ nfsserver ]
++#  SKYWALK_BASE =   [ skywalk config_nexus_user_pipe config_nexus_kernel_pipe config_nexus_monitor config_nexus_flowswitch config_nexus_netif ]
++#  SKYWALK_RELEASE = [ SKYWALK_BASE ]
++#  SKYWALK_DEV =    [ SKYWALK_BASE ]
++#  SKYWALK_DEBUG =  [ SKYWALK_BASE ]
++#  NETWORKING =     [ inet bpfilter dummynet traffic_mgt sendfile ah_all_crypto bond vlan gif stf ifnet_input_chk config_mbuf_jumbo if_bridge MULTIPATH if_fake remote_vif ]
++#  NETWORKING_RELEASE = [ NETWORKING ]
++#  NETWORKING_DEV = [ NETWORKING_RELEASE packet_mangler if_headless ]
++#  NETWORKING_DEBUG = [ NETWORKING_DEV ]
++#  VPN =            [ ipsec flow_divert necp content_filter ]
++#  PF =             [ pf pflog ]
++#  MULTIPATH =      [ multipath mptcp ]
++#if SOC_CONFIG_t8020 || SOC_IS_VIRTUALIZED
++#  HIBERNATION =    [ ]
++#else /*!(SOC_CONFIG_t8020 || SOC_IS_VIRTUALIZED)*/
++#  HIBERNATION =    [ ]
++#endif /*SOC_CONFIG_t8020 || SOC_IS_VIRTUALIZED*/
++#  IOKIT_BASE =     [ iokit iokitcpp no_kernel_hid config_sleep iokitstats HIBERNATION ]
++#  IOKIT_RELEASE =  [ IOKIT_BASE ]
++#  IOKIT_DEV =      [ IOKIT_BASE iotracking ]
++#  IOKIT_DEBUG =    [ IOKIT_BASE iotracking ]
++#  LIBKERN_BASE =   [ libkerncpp config_blocks config_kec_fips crypto_sha2 config_img4 ]
++#  LIBKERN_RELEASE =[ LIBKERN_BASE zlib ]
++#  LIBKERN_DEV =    [ LIBKERN_BASE zlib iotracking ]
++#  LIBKERN_DEBUG =  [ LIBKERN_BASE zlib iotracking ]
++#  PERF_DBG_BASE =  [ config_dtrace mach_kdp config_serial_kdp kdp_interactive_debugging config_kdp_coredump_encryption config_pervasive_energy PERFMON_BASE kperf kpc ]
++#  PERF_DBG_RELEASE=[ PERF_DBG_BASE ist_kdebug ]
++#  PERF_DBG_DEV =   [ PERF_DBG_BASE lock_stats zleaks alternate_debugger sched_hygiene_debug config_debug_syscall_rejection config_iotrace ]
++#  PERF_DBG_DEBUG = [ PERF_DBG_BASE lock_stats zleaks alternate_debugger sched_hygiene_debug config_debug_syscall_rejection config_iotrace ]
++#if SOC_IS_VIRTUALIZED
++#  PARAVIRT_BASE =  [ config_pv_ticket ]
++#else
++#  PARAVIRT_BASE =  [ ]
++#endif /*SOC_IS_VIRTUALIZED*/
++#  MACH_BASE =      [ mach config_ecc_logging vc_progress_white importance_inheritance config_atm config_coalitions config_iosched config_sysdiagnose config_telemetry config_mach_bridge_recv_time config_quiesce_counter config_arm_pfz config_user_notification phys_write_acct config_service_port_info config_voucher_deprecated PARAVIRT_BASE config_ledger_interval_max ]
++#  MACH_RELEASE =   [ MACH_BASE ]
++#  MACH_DEV =       [ MACH_BASE config_io_accounting importance_trace ]
++#  MACH_DEBUG =     [ MACH_BASE config_io_accounting importance_trace importance_debug ]
++#  SCHED_BASE =     [ config_sched_traditional config_sched_multiq config_sched_deferred_ast config_clutch config_sched_sfi config_sched_auto_join config_preadopt_tg ]
++#  SCHED_RELEASE =  [ SCHED_BASE ]
++#  SCHED_DEV =      [ SCHED_BASE ]
++#  SCHED_DEBUG =    [ SCHED_BASE config_sched_grrr config_sched_proto ]
++#  VM_BASE =        [ vm_pressure_events memorystatus config_code_decryption encrypted_swap config_deferred_reclaim ]
++#  VM_RELEASE =     [ VM_BASE ]
++#  VM_DEV =         [ VM_BASE dynamic_codesigning pgzalloc ]
++#  VM_DEBUG =       [ VM_BASE dynamic_codesigning pgzalloc ]
++#  VM_KASAN =       [ VM_BASE dynamic_codesigning config_kasan config_ubsan config_kcov config_ksancov kernel_tbi ]
++#  SECURITY =       [ config_macf config_audit kernel_integrity config_csr config_csr_from_dt config_setuid config_kas_info config_secure_bsd_root config_arcade config_supplemental_signatures second_static_trust_cache reslide_shared_cache ]
++#  BASE =           [ PF VPN SECURITY NFS ]
++#  RELEASE =        [ BASE KERNEL_RELEASE BSD_RELEASE FILESYS_RELEASE SKYWALK_RELEASE NETWORKING_RELEASE IOKIT_RELEASE LIBKERN_RELEASE    PERF_DBG_RELEASE MACH_RELEASE SCHED_RELEASE VM_RELEASE ]
++#  DEVELOPMENT =    [ BASE KERNEL_DEV     BSD_DEV     FILESYS_DEV     SKYWALK_DEV     NETWORKING_DEV     IOKIT_DEV     LIBKERN_DEV        PERF_DBG_DEV     MACH_DEV     SCHED_DEV     VM_DEV     ]
++#  DEBUG =          [ BASE KERNEL_DEBUG   BSD_DEBUG   FILESYS_DEBUG   SKYWALK_DEBUG   NETWORKING_DEBUG   IOKIT_DEBUG   LIBKERN_DEBUG      PERF_DBG_DEBUG   MACH_DEBUG   SCHED_DEBUG   VM_DEBUG   ]
++#  KASAN =          [ BASE KERNEL_DEV     BSD_DEV     FILESYS_DEV     SKYWALK_DEV     NETWORKING_DEV     IOKIT_DEV     LIBKERN_DEV        PERF_DBG_DEV     MACH_DEV     SCHED_DEV     VM_KASAN   ]
++#
++######################################################################
++#
++machine		"arm64"						# <arm64>
++
++makeoptions	OSFMK_MACHINE = "arm64"				# <mach>
++
++options		COUNT_SYSCALLS		# count bsd system calls 	# <countcalls>
++options     TRASH_VFP_ON_SAVE   # <debug,trash_vfp>
++options		ALTERNATE_DEBUGGER	# <alternate_debugger>
++
++options   CONFIG_VNODES=1024		# <xsmall>
++
++options   CONFIG_FREEZE_SUSPENDED_MIN=4		# <xsmall>
++
++options	  CONFIG_MACH_APPROXIMATE_TIME
++
++options   CONFIG_KERNEL_INTEGRITY		# <kernel_integrity>
++
++options CONFIG_MACF_LAZY_VNODE_LABELS   # Turn on labels, don't preallocate
++
++options CONFIG_HYPERVISOR_PUBLIC   # unrestricted entitlement for hypervisor
++
++options   CONFIG_RESLIDE_SHARED_CACHE		# <reslide_shared_cache>
++options   CONFIG_KERNEL_TBI		# <kernel_tbi>
+diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
+index 2545cf9..17ec71e 100644
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -12,6 +12,10 @@
+ #include <libkern/c++/OSNumber.h>
+ #include <arm64/proc_reg.h>
+ #include <machine/atomic.h>
++
++#if HAS_GIC_V2
++extern "C" void sweet_gic_send_sgi(unsigned int cpu_number, uint64_t mpidr, unsigned int sgi);
++#endif
+ #include <kern/clock.h>
+ #include <kern/processor.h>
+ #include <kern/thread.h>
+@@ -216,6 +220,10 @@ SweetCPU::signalCPU(IOCPU *target)
+ 	}
+ 	/* Use the TARGET affinity, including Aff1, never the sender's MPIDR. */
+ 	uint64_t mpidr = topology->cpus[logical].phys_id;
++#if HAS_GIC_V2
++	sweet_gic_send_sgi(logical, mpidr, SWEET_IPI_SGI);
++	return;
++#endif
+ 	unsigned int aff0 = mpidr & 0xff;
+ 	if (aff0 >= 16) {
+ 		panic("SWEET CPU: SGI target requires unsupported range selector");
+diff --git a/libkern/conf/Makefile.template b/libkern/conf/Makefile.template
+index aca295c..9f61bc7 100644
+--- a/libkern/conf/Makefile.template
++++ b/libkern/conf/Makefile.template
+@@ -19,7 +19,7 @@ include $(MakeInc_def)
+ CFLAGS+= -include meta_features.h -DLIBKERN_KERNEL_PRIVATE -DOSALLOCDEBUG=1
+ SFLAGS+= -include meta_features.h
+ 
+-ifeq ($(CURRENT_MACHINE_CONFIG),SWEET)
++ifneq ($(filter SWEET A51,$(CURRENT_MACHINE_CONFIG)),)
+ SWEET_AES_ROOT = $(SRCROOT)/libkern/crypto/sweet_bearssl
+ SWEET_AES_INC = -I$(SWEET_AES_ROOT)/inc -I$(SWEET_AES_ROOT)/src
+ sweet_aes.o_INCFLAGS = $(SWEET_AES_INC)
+diff --git a/makedefs/MakeInc.def b/makedefs/MakeInc.def
+index 69b13f9..4d3d094 100644
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -29,7 +29,7 @@ SUPPORTED_ARM64_MACHINE_CONFIGS = NONE
+ else ifneq ($(findstring _host,$(RC_ProjectName)),)
+ SUPPORTED_ARM64_MACHINE_CONFIGS = NONE
+ else
+-SUPPORTED_ARM64_MACHINE_CONFIGS = BCM2837 T6000 T8101 T8103 VMAPPLE SWEET
++SUPPORTED_ARM64_MACHINE_CONFIGS = BCM2837 T6000 T8101 T8103 VMAPPLE SWEET A51
+ 
+ endif
+ 
+@@ -62,6 +62,10 @@ MACHINE_FLAGS_ARM64_T6000 = -DARM64_BOARD_CONFIG_T6000 		-mcpu=apple-a14
+ MACHINE_FLAGS_ARM64_VMAPPLE = -DARM64_BOARD_CONFIG_VMAPPLE              -march=armv8.5a
+ MACHINE_FLAGS_ARM64_BCM2837 = -DARM64_BOARD_CONFIG_BCM2837
+ MACHINE_FLAGS_ARM64_SWEET = -DARM64_BOARD_CONFIG_SWEET                -march=armv8.2-a+crypto
++# Galaxy A51 (Exynos 9611): the sweet kernel on Cortex-A73 (ARMv8.0: no LSE,
++# no PAN). -march=armv8-a alone still emits LSE atomics for Darwin targets;
++# -mcpu=cortex-a73 gives LL/SC and makes the assembler reject v8.1+ opcodes.
++MACHINE_FLAGS_ARM64_A51 = -DARM64_BOARD_CONFIG_SWEET -DARM64_BOARD_CONFIG_A51 -mcpu=cortex-a73
+ 
+ 
+ #
+@@ -260,8 +264,8 @@ ifeq ($(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG),)
+ # Without embdedded device map, use a default arch string
+ export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := $(shell echo $(CURRENT_ARCH_CONFIG) | tr A-Z a-z)
+ ifneq ($(filter arm64,$(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG)),)
+-# sweet's Cortex-A76/A55 have no pointer authentication: stay plain arm64
+-ifneq ($(CURRENT_MACHINE_CONFIG),SWEET)
++# sweet's Cortex-A76/A55 and the A51's Cortex-A73 have no pointer authentication: stay plain arm64
++ifeq ($(filter SWEET A51,$(CURRENT_MACHINE_CONFIG)),)
+ export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := arm64e
+ endif
+ endif
+diff --git a/osfmk/arm/commpage/commpage_asm.s b/osfmk/arm/commpage/commpage_asm.s
+index da0bbba..ca5f0f3 100644
+--- a/osfmk/arm/commpage/commpage_asm.s
++++ b/osfmk/arm/commpage/commpage_asm.s
+@@ -273,7 +273,18 @@ _pfz_trylock_and_enqueue:
+ 	mov		w11, #1			 // locked value = w11 = 1
+ 
+ 	// Try to grab the lock
++#if defined(__ARM_FEATURE_ATOMICS)
+ 	casa	w10, w11, [x3]	 // Atomic CAS with acquire barrier
++#else
++	/* ARMv8.0 (no LSE, e.g. the Galaxy A51's Cortex-A73): same trylock */
++1:	ldaxr	w10, [x3]		 // acquire, arm the monitor
++	cbnz	w10, 2f			 // held: fail with w10 != 0
++	stxr	w9, w11, [x3]
++	cbnz	w9, 1b			 // lost the reservation: retry
++	b	3f
++2:	clrex
++3:
++#endif
+ 	cbz		w10, Ltrylock_enqueue_success
+ 
+ 	mov		x0, #-1			// Failed
+@@ -323,7 +334,18 @@ _pfz_trylock_and_dequeue:
+ 	mov		w10, wzr		 // unlock value = w10 = 0
+ 	mov		w11, #1			 // locked value = w11 = 1
+ 
++#if defined(__ARM_FEATURE_ATOMICS)
+ 	casa	w10, w11, [x2]	 // Atomic CAS with acquire barrier
++#else
++	/* ARMv8.0 (no LSE, e.g. the Galaxy A51's Cortex-A73): same trylock */
++1:	ldaxr	w10, [x2]		 // acquire, arm the monitor
++	cbnz	w10, 2f			 // held: fail with w10 != 0
++	stxr	w9, w11, [x2]
++	cbnz	w9, 1b			 // lost the reservation: retry
++	b	3f
++2:	clrex
++3:
++#endif
+ 	cbz		w10, Ltrylock_dequeue_success
+ 
+ 	mov		x0, #-1			// Failed
+diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
+index 06bb568..91e275b 100644
+--- a/osfmk/arm64/arm_vm_init.c
++++ b/osfmk/arm64/arm_vm_init.c
+@@ -1843,7 +1843,7 @@ sweet_early_map_final(void)
+ 	tt_entry_t *l2 = (tt_entry_t *)phystokv(l1 & ARM_TTE_TABLE_MASK);
+ 	tt_entry_t *slot = &l2[(va & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT];
+ 	assert(*slot == ARM_TTE_EMPTY);
+-	*slot = 0x9c000000ULL | ARM_TTE_VALID | ARM_TTE_TYPE_BLOCK |
++	*slot = (uint64_t)SWEET_FB_PHYS | ARM_TTE_VALID | ARM_TTE_TYPE_BLOCK |
+ 	    ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY) |
+ 	    ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITECOMB) |
+ 	    ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_PNX | ARM_TTE_BLOCK_NX;
+diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
+index 24f1abc..2dac9e4 100644
+--- a/osfmk/arm64/sleh.c
++++ b/osfmk/arm64/sleh.c
+@@ -1859,10 +1859,18 @@ sleh_irq(arm_saved_state_t *state)
+ #if defined(SWEET)
+ 	/*
+ 	 * sweet: TrustZone owns GIC Group 0, so the timer and IPIs that other
+-	 * ARM64 targets take as FIQs arrive here as Group 1 IRQs.
++	 * ARM64 targets take as FIQs arrive here as Group 1 IRQs. The A51's
++	 * GICv2 has the same split, with a memory-mapped CPU interface.
+ 	 */
++#if HAS_GIC_V2
++	uint32_t iar = *(volatile uint32_t *)(sweet_gicc_base + GICC_IAR);
++	uint32_t intid = iar & 0x3FF;	/* bits 12:10 = SGI source, keep them for EOIR */
++#define SWEET_GIC_EOI(v) (*(volatile uint32_t *)(sweet_gicc_base + GICC_EOIR) = (uint32_t)(v))
++#else
+ 	uint64_t iar = __builtin_arm_rsr64("ICC_IAR1_EL1");
+ 	uint32_t intid = (uint32_t)(iar & 0xFFFFFF);
++#define SWEET_GIC_EOI(v) __builtin_arm_wsr64("ICC_EOIR1_EL1", (v))
++#endif
+ 
+ 	if (intid >= 1020 && intid <= 1023) {
+ 		return; /* spurious */
+@@ -1873,11 +1881,11 @@ sleh_irq(arm_saved_state_t *state)
+ 		INTERRUPT_MASKED_DEBUG_START(rtclock_intr, DBG_INTR_TYPE_TIMER);
+ 		rtclock_intr(TRUE);
+ 		INTERRUPT_MASKED_DEBUG_END();
+-		__builtin_arm_wsr64("ICC_EOIR1_EL1", iar);
++		SWEET_GIC_EOI(iar);
+ 	} else if (intid < 16) {
+ 		sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_IPI);
+ 		/* Ack before handling so an IPI raised meanwhile is not lost */
+-		__builtin_arm_wsr64("ICC_EOIR1_EL1", iar);
++		SWEET_GIC_EOI(iar);
+ 		__builtin_arm_isb(ISB_SY);
+ 		cpu_signal_handler();
+ 	} else {
+@@ -1888,8 +1896,9 @@ sleh_irq(arm_saved_state_t *state)
+ 			    cdp->interrupt_nub,
+ 			    intid);
+ 		}
+-		__builtin_arm_wsr64("ICC_EOIR1_EL1", iar);
++		SWEET_GIC_EOI(iar);
+ 	}
++#undef SWEET_GIC_EOI
+ 	__builtin_arm_isb(ISB_SY);
+ #else
+ 	sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_OTHER);
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
+index 023086f..3dd2762 100644
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -306,11 +306,13 @@ LEXT(sweet_secondary_entry)
+ 	mov		x1, #3
+ 	msr		CNTHCTL_EL2, x1
+ 	msr		CNTVOFF_EL2, xzr
++#if HAS_GIC_V3
+ 	/* Permit ICC_SRE_EL1 and GIC CPU interface system-register access. */
+ 	mrs		x1, ICC_SRE_EL2
+ 	orr		x1, x1, #1
+ 	orr		x1, x1, #8
+ 	msr		ICC_SRE_EL2, x1
++#endif
+ 	/* Known Armv8 SCTLR RES1 bits, M/C/I off, little endian. */
+ 	MOV64	x1, 0x30d00800
+ 	msr		SCTLR_EL1, x1
+@@ -515,7 +517,7 @@ LEXT(start_first_cpu)
+ 
+ #if defined(SWEET)
+ 	/* Stage 0: white 64x32 band, no stack or page tables needed. */
+-	MOV64	x0, (0x9c000000 + 2368 * 4320)
++	MOV64	x0, (SWEET_FB_PHYS + 2368 * 4320)
+ 	mov		w1, #-1
+ 	mov		x2, #32
+ 	mov		x4, #4320
+@@ -686,7 +688,7 @@ Lkernelcache_base_found:
+ 	 * SWEET uses 16K pages and all bring-up RAM is below 4GB, so the first
+ 	 * V=P L2 page is bootstrap_pagetables + 2*PGBYTES.
+ 	 */
+-	MOV64	x10, 0x9c000000
++	MOV64	x10, SWEET_FB_PHYS
+ 	MOV64	x11, (ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID | ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY) | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITECOMB) | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_PNX | ARM_TTE_BLOCK_NX)
+ 	orr		x11, x11, x10
+ 	and		x12, x10, #(ARM_TT_L2_INDEX_MASK)
+diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
+index 6928957..dba02c1 100644
+--- a/osfmk/arm64/sweet_early.c
++++ b/osfmk/arm64/sweet_early.c
+@@ -11,7 +11,7 @@
+ #include <stdint.h>
+ #include <kern/misc_protos.h>
+ 
+-static volatile uint32_t *early_fb = (volatile uint32_t *)(uintptr_t)0x9c000000;
++static volatile uint32_t *early_fb = (volatile uint32_t *)(uintptr_t)SWEET_FB_PHYS;
+ #define EARLY_FB early_fb
+ #define EARLY_WIDTH 1080u
+ #define EARLY_HEIGHT 2400u
+diff --git a/pexpert/arm/pe_fiq.c b/pexpert/arm/pe_fiq.c
+index 6089db9..d907a87 100644
+--- a/pexpert/arm/pe_fiq.c
++++ b/pexpert/arm/pe_fiq.c
+@@ -222,6 +222,120 @@ pe_init_fiq()
+ 	__builtin_arm_isb(ISB_SY);
+ #endif /* SWEET */
+ }
++#elif HAS_GIC_V2
++/*
++ * GICv2 (GIC-400, Galaxy A51): memory-mapped distributor and CPU interface,
++ * two security states. The non-secure side owns Group 1 only, which the
++ * CPU interface signals as IRQ, so (like sweet's GICv3 setup) the timer
++ * and the IPI SGI go through sleh_irq(). No redistributors: the SGI/PPI
++ * enable, priority and target registers in the distributor are banked
++ * per CPU, so every core programs its own copy here.
++ */
++SECURITY_READ_ONLY_LATE(uint32_t) sweet_vtimer_intid = SWEET_VTIMER_INTID;
++static vm_offset_t gicd_base;
++vm_offset_t sweet_gicc_base;
++/* GIC CPU interface mask of each logical CPU (GICD_ITARGETSR0 byte 0, banked). */
++static uint8_t gic_cpu_mask[MAX_CPUS];
++
++static inline uint32_t
++gicd_read32(uint32_t off)
++{
++	return *(volatile uint32_t *)(gicd_base + off);
++}
++
++static inline void
++gicd_write32(uint32_t off, uint32_t value)
++{
++	*(volatile uint32_t *)(gicd_base + off) = value;
++}
++
++static inline uint32_t
++gicc_read32(uint32_t off)
++{
++	return *(volatile uint32_t *)(sweet_gicc_base + off);
++}
++
++static inline void
++gicc_write32(uint32_t off, uint32_t value)
++{
++	*(volatile uint32_t *)(sweet_gicc_base + off) = value;
++}
++
++void
++pe_init_fiq()
++{
++	/* Boot CPU only, before any secondary: SecureDT* is not thread safe. */
++	if (!gicd_base) {
++		DTEntry entry;
++		void const *prop;
++		unsigned int prop_size;
++
++		if (SecureDTLookupEntry(NULL, "/arm-io/gic", &entry) != kSuccess) {
++			panic("%s: cannot find GIC node in DT", __func__);
++		}
++		/* <GICD base, GICD size, GICC base, GICC size>, SoC relative */
++		if (SecureDTGetProperty(entry, "reg", &prop, &prop_size) != kSuccess ||
++		    prop_size < 4 * sizeof(uint64_t)) {
++			panic("%s: GIC reg property missing or short", __func__);
++		}
++		void const *timer_prop;
++		unsigned int timer_size;
++		if (SecureDTGetProperty(entry, "virtual-timer-intid", &timer_prop, &timer_size) == kSuccess &&
++		    timer_size == sizeof(uint32_t)) {
++			uint32_t intid = *(const uint32_t *)timer_prop;
++			if (intid < 16 || intid >= 32) {
++				panic("%s: virtual timer INTID %u is not a PPI", __func__, intid);
++			}
++			sweet_vtimer_intid = intid;
++		}
++
++		vm_offset_t soc_base_phys = pe_arm_get_soc_base_phys();
++		uint64_t const *reg = (uint64_t const *)prop;
++		sweet_gicc_base = ml_io_map(soc_base_phys + reg[2], reg[3]);
++		gicd_base = ml_io_map(soc_base_phys + reg[0], reg[1]);
++		if (!gicd_base || !sweet_gicc_base) {
++			panic("%s: cannot map the GIC", __func__);
++		}
++		kprintf("SWEET GIC: GICv2, virtual timer INTID %u, GICD_CTLR 0x%x\n",
++		    sweet_vtimer_intid, gicd_read32(GICD_CTLR));
++	}
++
++	unsigned int cpu = ml_get_cpu_number_local();
++	if (cpu < MAX_CPUS) {
++		gic_cpu_mask[cpu] = (uint8_t)(gicd_read32(GICD_ITARGETSR0) & 0xff);
++	}
++
++	/* This core's banked SGIs/PPIs: mid priority, timer and IPI enabled. */
++	for (unsigned int i = 0; i < 32; i += 4) {
++		gicd_write32(GICD_IPRIORITYR0 + i, 0xA0A0A0A0);
++	}
++	gicd_write32(GICD_ISENABLER0, (1U << sweet_vtimer_intid) | (1U << SWEET_IPI_SGI));
++
++	gicc_write32(GICC_PMR, 0xF0);
++	gicc_write32(GICC_BPR, 0);
++	/* Non-secure GICC_CTLR: bit 0 EnableGrp1; EOImodeNS (bit 9) 0 = EOIR deactivates. */
++	gicc_write32(GICC_CTLR, (gicc_read32(GICC_CTLR) & ~(1U << 9)) | GICC_CTLR_ENABLE);
++	gicd_write32(GICD_CTLR, gicd_read32(GICD_CTLR) | GICD_CTLR_ENABLE);
++	__builtin_arm_dsb(DSB_SY);
++	__builtin_arm_isb(ISB_SY);
++}
++
++/*
++ * IPI to a logical CPU. Its interface mask is known once it has run
++ * pe_init_fiq(); before that assume the GIC-400 numbering, cluster by
++ * cluster (Linux's cpu0-3 A53 = interfaces 0-3, cpu4-7 A73 = 4-7).
++ */
++void
++sweet_gic_send_sgi(unsigned int cpu_number, uint64_t mpidr, unsigned int sgi)
++{
++	uint8_t mask = cpu_number < MAX_CPUS ? gic_cpu_mask[cpu_number] : 0;
++	if (!mask) {
++		mask = (uint8_t)(1U << ((((mpidr >> 8) & 0xff) * 4 + (mpidr & 0xff)) & 7));
++	}
++	__builtin_arm_dsb(DSB_ISHST);
++	gicd_write32(GICD_SGIR, ((uint32_t)mask << GICD_SGIR_TARGET_SHIFT) | (sgi & 0xf));
++	__builtin_arm_isb(ISB_SY);
++}
+ #else
+ void
+ pe_init_fiq()
+diff --git a/pexpert/pexpert/arm/protos.h b/pexpert/pexpert/arm/protos.h
+index 9004f2b..b1a0649 100644
+--- a/pexpert/pexpert/arm/protos.h
++++ b/pexpert/pexpert/arm/protos.h
+@@ -39,6 +39,11 @@ void pe_init_fiq(void);
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ extern uint32_t sweet_vtimer_intid;
+ #endif
++#if defined(ARM64_BOARD_CONFIG_A51)
++/* GICv2 (pe_fiq.c): CPU interface base for sleh_irq, SGI send for IPIs. */
++extern vm_offset_t sweet_gicc_base;
++void sweet_gic_send_sgi(unsigned int cpu_number, uint64_t mpidr, unsigned int sgi);
++#endif
+ 
+ #ifdef PRIVATE
+ /**
+diff --git a/pexpert/pexpert/arm64/SWEET.h b/pexpert/pexpert/arm64/SWEET.h
+index b99c2f4..a02ef69 100644
+--- a/pexpert/pexpert/arm64/SWEET.h
++++ b/pexpert/pexpert/arm64/SWEET.h
+@@ -7,6 +7,12 @@
+  * VMAPPLE. Unlike VMAPPLE the GIC has two security states (GICD_TYPER
+  * SecurityExtn=1): Group 0 belongs to TrustZone, so every interrupt,
+  * including the timer, is a Group 1 IRQ taken through sleh_irq().
++ *
++ * ARM64_BOARD_CONFIG_A51 (Galaxy A51, Exynos 9611) reuses all of this on the
++ * four Cortex-A73s (the A53s have no 16K granule): ARMv8.0 without PAN and
++ * LSE, a GIC-400 (GICv2, memory-mapped CPU interface, IRQs only from the
++ * non-secure side), the virtual timer on the usual INTID 27, and S-Boot's
++ * framebuffer at 0xca000000 (same 1080x2400 x4 bytes layout as sweet's).
+  */
+ 
+ #ifndef _PEXPERT_ARM64_SWEET_H
+@@ -16,6 +22,9 @@
+ #define NO_ECORE                  1
+ 
+ #define SWEET                     1
++#if defined(ARM64_BOARD_CONFIG_A51)
++#define SWEET_A51                 1
++#endif
+ 
+ /*
+  * All eight cores (six A55 + two A76) as one homogeneous SMP cluster:
+@@ -23,7 +32,11 @@
+  * CPU_ON; the scheduler does not know the A76s are faster (no AMP/P-E
+  * clusters yet).
+  */
++#if defined(SWEET_A51)
++#define SWEET_SMP_MAX_CPUS         4       /* the A73 cluster */
++#else
+ #define SWEET_SMP_MAX_CPUS         8
++#endif
+ 
+ #define ARM_ARCH_TIMER
+ #define __ARM_ARCH__              8
+@@ -33,10 +46,23 @@
+ #define __ARM_DEBUG__             7
+ #define __ARM_ENABLE_SWAP__       1
+ #define __ARM_V8_CRYPTO_EXTENSIONS__ 1
+-#define __ARM_PAN_AVAILABLE__     1
++#if !defined(SWEET_A51)
++#define __ARM_PAN_AVAILABLE__     1       /* ARMv8.1; the A73 is ARMv8.0 */
++#endif
+ #define __ARM_16K_PG__            1
+ 
++#if defined(SWEET_A51)
++#define HAS_GIC_V2                1
++#else
+ #define HAS_GIC_V3                1
++#endif
++
++/* Boot framebuffer left by the bootloader (ABL / S-Boot), 32MB aligned. */
++#if defined(SWEET_A51)
++#define SWEET_FB_PHYS             0xca000000
++#else
++#define SWEET_FB_PHYS             0x9c000000
++#endif
+ 
+ #ifndef ASSEMBLER
+ #define PLATFORM_PANIC_LOG_DISABLED
+@@ -47,7 +73,11 @@
+  * virt, hyp) instead of the usual 13/14/11/10: the virtual timer XNU uses
+  * (CNTV) is INTID 16 + 3 = 19.
+  */
++#if defined(SWEET_A51)
++#define SWEET_VTIMER_INTID        27      /* GIC-400: PPI 11, the usual one */
++#else
+ #define SWEET_VTIMER_INTID        19
++#endif
+ #define SWEET_IPI_SGI             1       // SGI used for cross-CPU signals
+ 
+ #define GIC_SPURIOUS_IRQ          1023    // IRQ no. for GIC spurious interrupt
+@@ -80,4 +110,19 @@
+ #define ICC_SRE_SRE                             0x1
+ /* End of GICv3 register definitions */
+ 
++/* GICv2 (GIC-400) registers; see GICv2 spec (Arm IHI 0048B) */
++#define GICD_ISENABLER0           0x100
++#define GICD_IPRIORITYR0          0x400
++#define GICD_ITARGETSR0           0x800
++#define GICD_SGIR                 0xF00
++#define GICD_SGIR_TARGET_SHIFT    16
++#define GICD_CTLR_ENABLE          0x1
++
++#define GICC_CTLR                 0x00
++#define GICC_PMR                  0x04
++#define GICC_BPR                  0x08
++#define GICC_IAR                  0x0C
++#define GICC_EOIR                 0x10
++#define GICC_CTLR_ENABLE          0x1
++
+ #endif /* ! _PEXPERT_ARM64_SWEET_H */

@@ -14,6 +14,9 @@ patches with `git diff` there. Uses the local Apple-fork clang (swiftlang).
 Env: XNU_CC_EXTRA   extra flags (e.g. "-DKPERF -DKPC" for config changes)
      XNU_CC_POST    flags appended after the original ones (like a per-object
                     _CFLAGS_ADD in the xnu Makefiles: -U/-include after -D)
+     XNU_CC_DROP    original flags to leave out, e.g. "-march=armv8.2-a+crypto
+                    -DARM64_BOARD_CONFIG_SWEET" to check another MACHINE_CONFIG
+     XNU_CC_CLANG   compiler to use instead of ~/swift/usr/bin/clang
      XNU_CC_OBJDIR  emit real objects there instead of a syntax-only check
                     (then: llvm-nm for undefined symbols = link errors)
 """
@@ -22,7 +25,7 @@ from collections import Counter
 
 CI_DXB = '/Users/runner/work/ios-sweet/ios-sweet/dxb'
 CI_SDK_PLATFORM = re.compile(r'/Applications/Xcode[^ ]*?\.sdk/+System/Library/Frameworks/Kernel\.framework/Versions/A/PrivateHeaders/platform')
-CLANG = os.path.expanduser('~/swift/usr/bin/clang')
+CLANG = os.environ.get('XNU_CC_CLANG') or os.path.expanduser('~/swift/usr/bin/clang')
 DROP = {'-c', '-g', '-MD', '-MMD'}
 DROP_WITH_ARG = {'-MF', '-MT', '-o', '-arch'}
 COMPONENTS = ('osfmk', 'bsd', 'iokit', 'libkern', 'pexpert', 'security', 'san', 'libsa')
@@ -98,11 +101,12 @@ def run(item, bt, cdirs):
            '-D__builtin_xnu_type_signature(...)=""', '-D__builtin_xnu_type_summary(...)=0',
            '-D__builtin_xnu_types_compatible(...)=1'] + os.environ.get('XNU_CC_EXTRA', '').split()
     skip = False
+    drop_env = set(os.environ.get('XNU_CC_DROP', '').split())
     for a in args:
         if skip:
             skip = False
             continue
-        if a in DROP:
+        if a in DROP or a in drop_env:
             continue
         if a in DROP_WITH_ARG:
             skip = True
