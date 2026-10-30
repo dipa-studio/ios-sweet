@@ -16,6 +16,7 @@
  */
 #include <stdint.h>
 #include "console.h"
+#include "loader.h"
 
 /* pinctrl@11850000 (ALIVE): etc0 0x000, gpa0 0x020, gpa1 0x040 (pinctrl-exynos-arm64.c) */
 #define GPA1_CON		0x11850040UL
@@ -78,6 +79,8 @@ static volatile uint64_t sec_go_live;
 static volatile int live_row, a53_row;
 static volatile int64_t a53_off_ret = 0x7777;	/* stays if CPU_OFF never returns */
 static volatile uint32_t decon_before[3], decon_after[3], decon_runwait;
+/* XNU handover to the A73: physical entry and boot_args, go flag. */
+static volatile uint64_t xnu_entry, xnu_boot_args, xnu_go;
 
 static uint64_t smc(uint64_t fn, uint64_t a1, uint64_t a2, uint64_t a3);
 static void delay_ms(unsigned ms);
@@ -216,6 +219,19 @@ void secondary_main(uint64_t idx)
 	dsb();
 	sec_seen[idx] = 1;
 	dsb();
+	/*
+	 * Boot path: cpu4 becomes XNU's boot CPU. XNU wants the MMU and caches
+	 * off and x0 = boot_args (physical); the A53 wrote the kernel with its
+	 * caches off, so only stale I-cache lines can be in the way.
+	 */
+	if (idx == A73_IDX && xnu_entry) {
+		while (!xnu_go)
+			;
+		__asm__ volatile("dsb sy; ic iallu; dsb sy; isb" ::: "memory");
+		((void (*)(uint64_t))xnu_entry)(xnu_boot_args);
+		for (;;)
+			__asm__ volatile("wfe");
+	}
 	/* Only cpu4 takes over the screen; the others park. */
 	if (idx != A73_IDX)
 		for (;;)
@@ -258,7 +274,7 @@ void shim_main(uint64_t dtb)
 	decon_kick();
 	stage = "start";
 	con_clear(RED);
-	con_str("SHIM", "a51 milestone A1e: probe");
+	con_str("SHIM", "a51 milestone A2: xnu loader + probe");
 	con_skip();
 
 	/* Display question first: if this line moves, the panel follows memory. */
@@ -289,6 +305,44 @@ void shim_main(uint64_t dtb)
 	wr32(WDT_CL1, w1 & ~((1U << 5) | 1U));
 	con_hex2("WTCON", "cl0=", w0, "cl1=", w1);
 	con_hex2(" now", "cl0=", rd32(WDT_CL0), "cl1=", rd32(WDT_CL1));
+	con_skip();
+
+	/*
+	 * CPU_ON only worked once the GIC distributor was enabled (boot A1e,
+	 * GICD_CTLR was 0 before); Linux has it on before SMP as well.
+	 */
+	wr32(GICD, rd32(GICD) | 1);
+	wr32(GICC + 0x4, 0xf0);		/* GICC_PMR */
+	wr32(GICC, rd32(GICC) | 1);
+
+	/* An XNU payload in the ramdisk: load it, run it on the A73 (16K pages). */
+	stage = "loader";
+	uintptr_t entry, ba;
+	const char *why = loader_prepare(dtb, &entry, &ba);
+	if (!why) {
+		xnu_entry = entry;
+		xnu_boot_args = ba;
+		dsb();
+		stage = "a73 xnu";
+		int64_t on = smc(PSCI_CPU_ON, 0x100, (uintptr_t)secondary_entry, 0);
+		for (int w = 0; w < 300 && !sec_seen[A73_IDX]; w++)
+			delay_ms(10);
+		con_hex2("A73", "ret=", (uint32_t)on, "seen=", sec_seen[A73_IDX]);
+		if (!sec_seen[A73_IDX]) {
+			con_str("XNU", "A73 did not start, TWRP in 30s");
+			delay_ms(30000);
+			reset_now();
+		}
+		con_str("XNU", "A73 jumping (fbcon clears screen)");
+		dsb();
+		xnu_go = 1;
+		dsb();
+		/* The A53 leaves the stage: off if the firmware lets it, else parked. */
+		smc(PSCI_CPU_OFF, 0, 0, 0);
+		for (;;)
+			__asm__ volatile("wfi");
+	}
+	con_str("LOADER", why);
 	con_skip();
 
 	stage = "psci";

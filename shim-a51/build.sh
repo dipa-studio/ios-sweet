@@ -16,16 +16,19 @@ mkdir -p out
 $CC $CFLAGS -c start.S -o out/start.o
 $CC $CFLAGS -c shim.c -o out/shim.o
 $CC $CFLAGS -c ../shim/console.c -o out/console.o
+$CC $CFLAGS -c ../shim/loader.c -o out/loader.o
+$CC $CFLAGS -c ../shim/fdt.c -o out/fdt.o
 # The image runs wherever S-Boot puts it with no relocation pass: only the
 # header's image_size (start.o, linked at 0) may be an absolute address.
-python3 ../tools/check-abs-relocs.py out/shim.o out/console.o
-OBJS="out/start.o out/shim.o out/console.o"
+python3 ../tools/check-abs-relocs.py out/shim.o out/console.o out/loader.o out/fdt.o
+OBJS="out/start.o out/shim.o out/console.o out/loader.o out/fdt.o"
 if [ -n "$LD" ]; then
 	$LD -static -T ../shim/shim.ld --build-id=none -N $OBJS -o out/shim.elf
 	python3 ../tools/elf2bin.py out/shim.elf out/Image
 else
 	python3 ../tools/minild.py out/Image --map out/shim.map $OBJS
 fi
+# Ramdisk: an xnu payload (tools/mkpayload.py) if given as $1, else empty -> probe.
 python3 ../tools/mkbootimg_v2.py "$TEMPLATE" out/shim-a51-boot.img --kernel out/Image \
-	--cmdline "console=null"
+	${1:+--ramdisk "$1"} --cmdline "console=null"
 ls -l out/Image out/shim-a51-boot.img

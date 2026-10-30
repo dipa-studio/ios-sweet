@@ -76,7 +76,7 @@ static int magic_ok(const char *m)
 
 typedef void (*xnu_entry_t)(uint64_t boot_args_pa);
 
-const char *loader_boot(uintptr_t dtb)
+const char *loader_prepare(uintptr_t dtb, uintptr_t *entry_out, uintptr_t *ba_out)
 {
 	uint64_t rd_start, rd_end;
 
@@ -136,8 +136,18 @@ const char *loader_boot(uintptr_t dtb)
 	ba->memSizeActual = p->mem_size;
 	con_hex2("BOOTARG", "pa=", ba_pa, "top=", top);
 
-	uintptr_t entry_pa = p->entry_va + pa_of_va_base;
-	con_hex("JUMP", entry_pa);
+	*entry_out = p->entry_va + pa_of_va_base;
+	*ba_out = ba_pa;
+	con_hex("JUMP", *entry_out);
+	return 0;
+}
+
+const char *loader_boot(uintptr_t dtb)
+{
+	uintptr_t entry_pa, ba_pa;
+	const char *why = loader_prepare(dtb, &entry_pa, &ba_pa);
+	if (why)
+		return why;
 	con_str("XNU", "jumping (fbcon clears screen)");
 
 	/* Everything was written with the MMU and caches off; drop any stale I-cache lines too. */
