@@ -167,6 +167,11 @@ recovery = sda13, super = sda25.
   synthetic ECID 0x4135310000000001; root compatible keeps 'xiaomi,sweet' (platform expert)
   plus 'samsung,a51'. Sweet's ADTs are byte-identical to before (checked with a fixed seed).
   research/ipsw-x/d22ap.adt is not on this Mac (no /product until it is extracted again).
+- **First CI run on the fork:** `41089074512` (main @ 6012ee4, success, 7m54s) = the SWEET
+  kernel (patches 0001-0081 only), artifact in `xnu/out/` (kernel.development.sweet sha256
+  8bd1821f...7648, verified), log `research/run-41089074512.log` (for tools/xnu-cc.py). It
+  cannot run on the A51: llvm-objdump finds ~670 LSE atomics (ldadd 400, ldset 83, ldclr 68,
+  cas* 84, ...) and 37 PAN/GICv3 system-register accesses (undefined on A73 / GIC-400).
 - **NEXT (XNU for A51):** local xnu-8796 tree with 0001-0081 applied; then patches 0082+:
   ARM64_BOARD_CONFIG_A51 (-march=armv8-a+crypto, no __ARM_PAN_AVAILABLE__, no LSE), GICv2
   interrupt path (GICC IAR/EOIR MMIO, SGIs via GICD_SGIR, vtimer PPI 27), A51 framebuffer
