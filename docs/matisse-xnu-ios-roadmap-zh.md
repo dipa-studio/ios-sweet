@@ -201,6 +201,11 @@ GUI 的 IOSurface/AppleCLCD 拷贝路径也必须在每次提交后触发 matiss
 
 先用 CPU 绘制建立可见、可交互桌面；Mali GPU、Metal/OpenGL 兼容是独立的大项。原 sweet 的帧率和启动时间不能当作 K50 Pro 的实测性能。
 
+2026-10-31 补充：原生 1440×3200、触摸和三个实体键的实机验收已经完成，
+本节其余 bring-up 描述保留历史上下文。GPU 采用独立的
+[MT6983 CSF / Panthor / PanVK 路线与接口审计](matisse-gpu-plan.md)，
+只借鉴 UniXNU 的分层；当前尚无 GPU 加速实测。
+
 ## 5. 如何接通 UFS
 
 ### 当前状态
