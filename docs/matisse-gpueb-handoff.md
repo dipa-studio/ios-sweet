@@ -53,8 +53,9 @@ SHA256 `783b7fb871087991e97d0d944932981d7b11e207deef2f74d67e8a20cc12ffae`。
 
 新增 `tools/android-mtk.py` 按 MTK v1 扩展头检查范围、对齐和组件名，
 逐组件哈希比对。未知 trailer 单独报告，不猜测其中的魔数；证书
-只视作数据，**没有执行签名认证**。33 个其他包内镜像/二进制和 super
-均已记录文件大小、magic 和 SHA256，不表示已完成每个子系统的逆向。
+只视作数据，**没有执行签名认证**。33 个包内镜像/二进制和 super
+均已记录文件大小、magic 和 SHA256；其中 17 个 MTK 容器已完成结构
+解析，不表示已完成每个子系统的逆向。
 
 GPUEB 主组件名 `tinysys-gpueb-RV33_A`，payload 从 `0x200` 开始，
 长度 `0x6a1af`；后面是 cert1/cert2。实机两槽整分区 SHA256 均为
@@ -112,6 +113,9 @@ ramdisk/signature 与模板逐字节相同；内层 kernel 仅 banner 改动。
 正常 LK 启动是否选入该 fragment 未验证；直接正常启动这个包内
 boot.img 可能进入不可用的 Android，不能当作可靠日志收集环境。
 以 Recovery 启动只能再次看到 mode 2 跳过 GPUEB，无法回答正常交接。
+此外，loader 动态分配 2 MiB shared 与 20 MiB 额外区域；正常启动
+所得 PA 尚未知，必须检查它们与 XNU RAM window
+`0x100000000..0x22e000000` 的重叠，不能仅沿用 Recovery 的静态空洞。
 下一步应准备完全在 RAM 中运行、禁止挂载 userdata 的收集 ramdisk，
 或为既有 XNU 路径增加同启动交接日志；完成后再请求具体 boot_a 测试
 授权。不要运行旧 run-ui 脚本或刷 vendor_boot/LK 来解决这个问题。

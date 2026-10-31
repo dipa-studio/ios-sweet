@@ -66,7 +66,10 @@ Validation53 tests PASS (GPUEB10,entryprobe14,Android7,CSF1,shim8,board9,keys4);
 ASan/UBSan CSF+GPUEB8192 mutations each PASS; freestanding arm64-apple-darwin
 protocol compile PASS. No new full XNU build, CI run, flash/boot, GPU_ID or
 GPU execution. Recovery live-3 inventory7 records PASS; full audit is
-docs/matisse-gpueb-handoff.md. Code commit recorded in followup handoff.
+docs/matisse-gpueb-handoff.md. Completed implementation commit824d867
+(local, not pushed). Final read-only boot_a SHA256 still matches complete
+64MiB restored baseline2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1;
+no restore pending and no active test runner. Probe remains build-only.
 Preserve unrelated shim/build.sh,shim/shim.c,tools/sweet-marks.py,0093,
 .DS_Store and .workbuddy changes. Previous handoffs follow.
 
