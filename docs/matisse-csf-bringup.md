@@ -886,3 +886,52 @@ A new concrete approval is required for one normal2327 boot_a trial and the
 complete64MiB restore/hash. Host-managed Fastboot/Recovery restoration is
 the established recovery path; automatic Recovery from normal XNU remains
 unverified. The device remains in root Recovery with the original hash.
+
+
+## CSF2327 hardware result (2026-10-31; full restoration complete)
+
+The user explicitly approved one normal2327 boot_a trial and complete
+original restoration. The pinned image SHA256
+`a624742667410660768dd0349a9622b73439dcfd71975edbd1918832defdd30c` was written once; full-partition readback matched predicted
+`3682d6a6727d4d24157de1524e566ec8da76b6513eee4434851a987aec5afe3d`. Normal boot reached Fastboot after180.34s. A single
+persistent raw USB session returned OKAY for the known stock-prefix
+download, flash and reboot-recovery. Root Recovery then restored all
+67108864 bytes of the original boot_a. A separate read-only check confirmed
+matisse, slot_a, recovery, uid0, correct geometry and SHA256
+`2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1`. The journal reports `complete-restored-Recovery` and
+`restore_pending=false`; the runner exited0. No user USB/key intervention,
+new build, CI run or push occurred.
+
+Fresh build2327 marks contain98 records, including all37 CSF qwords at
+320..356, and match the final4096 bytes of the captured diagnostic tail.
+The previous capture was2326/count97. The18657-byte console independently
+names gpu2327/sweettrial2327. Initial power/reset observations remain
+INIT0/ON1/OFF0,SPM3->7,GPU_IDa8620004,reset100,AS_PRESENTff.
+
+The intended change is measured: coherency features1, reset protocol0,
+requested31, immediate readback31, post-MCU-wait31. Diagnostic flags are127
+and `noncoherent_protocol_verified=true`. Nevertheless MCU ends at stage4
+with timeout-53,MCU_STATUS1,JOB_RAW0,MMU_RAW0,version0,AS fault/status0,
+and no fresh global-interface IRQ. L2_READY1, rootPA40076000,
+TRANSCFG420001c6 and MEMATTR4c4c9f4c/4c4c4c4c match2326. IRQ gate passes
+with GPU80503/JOBffffffff/MMUff. Shader endpoint is PRESENT770017,
+transition0,ready0; tiler endpoint PRESENT1,transition0,ready1. The four
+configuration registers remain0; private markers remain0 and shared
+VA04000018 changes0->1d. Cleanup still reports disable timeout-53/status1,
+reset_raw600,reset_completed0,cleanup_error-53. Firmware-ready is false.
+
+Every common CSF field matches2326 except flags31->127 and
+coherency_after0->31; the newly appended requested/readback words are31.
+This shows protocol NONE alone is insufficient for handshake in the tested
+configuration. It does not locate the firmware PC, identify the timeout
+cause, or prove that no firmware instructions executed. The longer USB
+return time is measured but cannot be attributed to coherency from one run.
+GPU acceleration remains unverified.
+
+Evidence stays ignored under `shim2327-trials/gpu-normal/`: journal,
+decoded report, before/after marks and tail, console, Recovery dmesg,
+`comparison-2326-2327.json` and `independent-post-restore.txt`. Recovery
+dmesg is869052 bytes. The approved trial is consumed; any new partition
+write needs a new concrete image confirmation. Next work is offline
+vendor address-space/PTE/cache and MCU-startup comparison. Do not rerun
+this image expecting a different handshake result.

@@ -1,6 +1,56 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-10-31: CSF2327 BUILT/VERIFIED; CONCRETE TRIAL APPROVAL NEEDED <<<
+## >>> COMPLETE 2026-10-31: CSF2327 PROTOCOL31 VERIFIED; MCU TIMEOUT; FULL RESTORE <<<
+
+User explicitly replied 可以 to ONE normal2327 trial of imagea6247426
+and full original restoration. Executed once; runner session19194 exited0.
+Candidate26714112B SHA256
+a624742667410660768dd0349a9622b73439dcfd71975edbd1918832defdd30c.
+Full temporary boot_a readback matched predicted
+3682d6a6727d4d24157de1524e566ec8da76b6513eee4434851a987aec5afe3d.
+Fastboot returned after180.34s. One persistent raw USB session
+returned OKAY for stock-prefix download013e8000,flash:boot_a and
+reboot-recovery. Recovery then restored full67108864B original boot_a.
+Independent root/matisse/_a/recovery/geometry and SHA256 PASS:
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Journal complete-restored-Recovery,restore_pending=false,evidence_decoded=true.
+No active runner or pending restore. No user USB/key intervention.
+Fresh Recovery dmesg869052B. No new build/CI/push this trial.
+
+Fresh marks build2327/count98 contain37 complete CSF qwords320..356;
+marks match the captured4198400B tail. Before marks were2326/count97,
+and18657B after-console independently names gpu2327/sweettrial2327.
+Platform INIT0/ON1/OFF0,SPM3->7,GPU_IDa8620004,initial reset100,AS_PRESENTff.
+Coherency features1,before0,requested31,immediate readback31,after31;
+diag_flags127 and noncoherent_protocol_verified=true. Thus the intended
+protocol write persisted through MCU wait. MCU still stage4/error-53,
+MCU_STATUS1,JOB_RAW0,MMU_RAW0,version0,AS fault/status0,no fresh global IRQ.
+L2_READY1,TRANSCFG420001c6,rootPA40076000,MEMATTR4c4c9f4c/4c4c4c4c.
+IRQ mask gate passed GPU80503,JOBffffffff,MMUff. Endpoint shader
+PRESENT770017/transition0/ready0,tilerPRESENT1/transition0/ready1.
+CSF/SHADER/TILER/L2_MMU_CONFIG remain0. Private marker words remain0;
+shared04000018 remains0->1d. MCU disable still times out-53,status1;
+cleanup reset_raw600/reset_completed0,cleanup_error-53.
+
+Compared with2326, all common CSF fields are identical except diag_flags
+31->127 and coherency_after0->31. Added request/readback are31. This
+establishes protocol NONE alone was insufficient for handshake under this
+configuration; it does not identify the timeout cause or firmware PC. The
+longer USB return180.34s versus93.73s is an observation, not attributable
+to coherency from one run. No firmware-ready or GPU acceleration claim.
+
+Ignored evidence: shim2327-trials/gpu-normal/{journal.json,gpu-result.json,
+comparison-2326-2327.json,independent-post-restore.txt,before/after-marks.bin,
+before/after-tail.bin,after-console.txt,recovery-dmesg.txt}, plus
+shim2327-trials/gpu-normal-run.txt. Restoration plan updated complete.
+Implementation5147ace/build handoff9763e7c; previous41 tests PASS remain
+unchanged. New evidence decode/freshness/tail alignment checks PASS.
+NEXT: continue offline vendor AS/PTE/cache/MCU startup comparison; do not
+repeat2327 or change more registers blindly. This single-trial approval is
+consumed; any new concrete image/write requires confirmation. Preserve all
+unrelated shim/collector/sweet-marks edits and untracked0093.
+
+## >>> HISTORICAL 2026-10-31: CSF2327 BUILD MILESTONE; TRIAL NOW COMPLETE <<<
 
 Fresh read-only Recovery preflight confirms matisse/_a/recovery, uid0,
 67108864-byte boot_a SHA2562931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
