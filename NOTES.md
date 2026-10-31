@@ -1,5 +1,72 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: STATIC GPU IMAGE AUDIT + CSF PARSER; Android unavailable <<<
+
+USER STEERING: Android cannot boot after userdata changes; only STATIC
+analysis from now on. Do not reboot to Android, wait for rooted Android,
+load vendor GPU modules, or infer permission for partition writes. No
+device writes/boots/MMIO performed this task. Last2317 input/UI/restoration
+evidence below remains historical and unchanged. Current device mode is
+NOT established after the user attempted to change modes.
+
+Code commit c8988fd adds read-only sparse/LP extraction tool, Recovery/rooted
+Android inventory tool (not required for next static work), FDT/DTBO parser,
+portable xnu/gpu/mali_csf_firmware.{c,h}, and5 passing tests. C parser is
+NOT wired into a kernel patch or boot path; validates containers only, no
+firmware execution/GPU acceleration claim. Docs/matisse-gpu-static-audit.md
+contains the findings and next implementation dependencies.
+
+Source images are /Users/xiaohuasheng/Documents/{super,lk,vcp,dtbo}.img.
+super7918405960B SHA256289951fb8db34509591ada6259737b0522cc5a923f878171e9b746031e601957;
+source size/mtime unchanged across hash. Sparse LP geometry/header/tables
+checksums PASS. Extracted vendor_a2041831424B SHA256cc8a64dc...19defe59;
+vendor_dlkm_a19492864B b70368db...7d4514b. EROFS1.9.4 dump.erofs --cat
+used to extract individual files without mounting or changing images.
+Artifacts/manifests stay in research/matisse/20261031-gpu/, ignored.
+
+Static facts: Mali module .modinfo r32p1-01eac0 (UK version1.18), KMD
+1823016B SHA25622b26f30...2d742a3b. Vendor module vermagic5.10.209-
+android12-9-gad068458f122 differs from Recovery kernel. CSF/reload binaries
+are identical258048B SHA256de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f7229a.
+Format0.1/hash0x01010000/tableEnd0x300,21 entries/10 sections/3 protected.
+7 sections are not16KiB aligned (4 non-protected); shared VA04000000..
+04094000. Runtime CSF GLB_VERSION/ABI NOT measured; format hash is NOT ABI.
+Actual blob parse passes ASan/UBSan,8192 deterministic mutations PASS,
+freestanding arm64-apple-darwin single-file compile -Wall/-Wextra/-Werror
+PASS. No full XNU build/CI dispatch/run ID or boot in this task.
+
+LK has valid embedded FDT at0x27cee0,size335048B; GPUEB enabled, mailbox
+tables and dual buck. LK strings name tinysys-gpueb-RV33_A and runtime
+gpueb_mem_addr/size injection; strings alone do NOT prove a boot executed
+the loader. vcp.img header is tinysys-vcp-RV55_A, not GPUEB firmware. No
+independent gpueb.img found in supplied inputs. Historical Recovery DT
+20261026 GPUEB node lacks runtime mem_addr/size; no invented carveout.
+GPUEB-mode wrapper sends CMD_INIT_SHARED_MEM0 then CMD_POWER_CONTROL6
+over IPI_ID_GPUFREQ; binary confirms8-word message, timeout arg0x2710.
+Do NOT choose AP power table simply because AP code exists in module.
+
+Mesa25.1.0 pinned from official remote to5c142e46f3f6e752ed745fd48912ebb8fad67145.
+Its model table lacks G710; unknown model fails VK_ERROR_INCOMPATIBLE_DRIVER.
+No G610 spoofing. This pin is a reproducible audit baseline, not latest or
+G710 support claim. Reference snapshots retained in ignored research.
+
+Earlier this turn ADB did confirm matisse/_a/root Recovery5.10.209-
+android12-9-00019-g4ea09a298bb4-ab12292661, no mali0/bound Mali/GPUEB/
+gpufreq driver, runtime unsupported. User then disconnected/rebooted;
+automatic inventory failed before live.dtb capture (failed manifest retained).
+Do not call historical DTB a fresh read or claim GPU_ID was read.
+
+NEXT STATIC ACTION: reverse LK GPUEB boot-mode branch and runtime shared-
+memory/FDT handoff, locate independent GPUEB partition image if available,
+then implement bounded mailbox transport with confirmed ABI. In parallel
+dependency order, design4KiB GPU page mappings backed by16KiB XNU pages
+and audit G710 model/errata. Do not change startup/power until handoff and
+owners are understood. No active runner/restore started in this task.
+Preserve unrelated shim/build.sh,shim/shim.c,tools/sweet-marks.py,0093,
+.DS_Store and .workbuddy changes. Completed code is committed locally.
+
+Previous route/hardware handoffs follow; latest STATIC-only instruction wins.
+
 ## >>> ACTIVE 2026-10-31: GPU ROUTE AUDITED; 0x2317 hardware baseline unchanged <<<
 
 User supplied the UniXNU/Mali layering constraint. Documentation commit

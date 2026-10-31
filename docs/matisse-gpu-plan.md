@@ -5,6 +5,11 @@
 
 ## 当前基线
 
+本轮已推进到 [本地镜像静态审计与固件解析器实现](matisse-gpu-static-audit.md)。
+用户确认 Android 不能启动，后续只做静态分析；不再等待 Android
+GPU_ID 采集。已取得 super 中的 r32p1 KMD/CSF 固件，但未验证 GPU
+执行。下面保留架构选择和验收要求。
+
 - 本项目的 0x2317 实机已验证原生 1440×3200、触摸和三个实体键。
   显示仍走现有 IOSurface / AppleCLCD / framebuffer 路径；这不是 GPU 验证。
 - 此轮之前的完整 stock boot_a 恢复已校验；没有正在运行的硬件试验。
