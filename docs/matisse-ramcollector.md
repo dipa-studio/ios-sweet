@@ -1,10 +1,9 @@
 # matisse GPUEB RAM collector
 
-2026-10-31. Build-only milestone; no collector flash or normal-mode boot yet.
-The user requested returning to Recovery after testing. Current Recovery remains
-online. A new boot_a write still requires the specific confirmation mandated
-by AGENTS.md; neither earlier collector-development approval nor the request
-to reboot Recovery is treated as permission to write a partition.
+2026-10-31. One specifically authorized trial is complete; original boot_a is
+fully restored and Recovery is online. USB ACM enumerated briefly but the
+receiver disconnected before a complete frame. Normal GPUEB runtime addresses
+remain unmeasured. A second boot_a write requires fresh specific confirmation.
 
 ## Purpose and boundaries
 
@@ -115,3 +114,44 @@ Verified full backup:
 `backup/recovery-20261021/boot_a-live-20261021.img`, 67,108,864 bytes, SHA256
 `2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1`.
 A fresh read-only current boot_a hash still matches it. No restore is pending.
+
+## First authorized trial result
+
+User authorized the concrete image, one normal boot, full backup restoration
+and return to Recovery, then explicitly requested writing from Recovery. The
+initial fastboot getvar preflight timed out before any write; after USB replug,
+`fastboot reboot recovery` succeeded. No fastboot flash was performed.
+
+A new dedicated Recovery runner (not a historical run-ui script) hashed the
+image in `/tmp`, wrote only its prefix into boot_a with dd+fsync, and hashed
+the entire 64 MiB partition. Observed SHA256
+`3b5ef7f319e3b9a56373381ae87b77aba47229e4cff74c33cb7aedbd44420c42`
+exactly matches the collector plus original partition tail.
+Normal reboot began at **2026-10-31 09:35:00 Asia/Shanghai**.
+
+USB ACM appeared within seven seconds; receive failed with ENXIO (device not
+configured). No complete collection was saved. This establishes transient
+USB enumeration only; it does not establish a panic, watchdog reset, GPUEB
+loader success, GPU_ID or acceleration. The original receiver cleanup also
+raised ENXIO and masked the read exception; this is fixed with two regression
+tests, bringing collector tests to 11 PASS. This host fix does not fix or
+explain the device disconnect.
+
+User entered Recovery with physical keys. The runner restored all 67,108,864
+bytes of the original backup and verified full partition SHA256
+`2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1`
+at **09:36:10 Asia/Shanghai**. Independent post-check also matched. Runner
+exit0; journal `restore_pending=false`, `collection_received=false`. Recovery
+remains online. LK/vendor_boot/DTBO/userdata were not written.
+
+Read-only pstore collection returned a 262132-byte console record with
+corrupted text from older Recovery uptime around 863–953 seconds and an
+earlier reboot,bootloader. It contains no usable collector trace and cannot
+explain this trial. `/proc/last_kmsg` is absent (an exec-out error response is
+not a log). Current pl_lk is a fresh mode2 Recovery log, not the normal boot.
+Ignored artifacts are under `collector-trial-recovery-20261031/`, including
+`journal.json`, `receive.txt` and `post-recovery/`. No restoration is pending.
+
+Next work is local: retain partial receive bytes and arrange durable early
+collector diagnostics, then review a new image before requesting another
+partition-write authorization. Do not rerun this one-shot trial journal.

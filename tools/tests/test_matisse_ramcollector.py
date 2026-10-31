@@ -1,5 +1,7 @@
 """Bounds, supplier allowlist, and wire validation without firmware or devices."""
 import base64
+from contextlib import ExitStack
+import errno
 import gzip
 import hashlib
 import importlib.util
@@ -13,6 +15,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'tools'))
@@ -57,6 +60,32 @@ def frame(blob):
 
 
 class CollectorTests(unittest.TestCase):
+    def test_vanished_acm_preserves_read_error_and_closes_descriptor(self):
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(receive.os,'open',return_value=42))
+            closed=stack.enter_context(mock.patch.object(receive.os,'close'))
+            stack.enter_context(mock.patch.object(receive.termios,'tcgetattr',return_value=[]))
+            stack.enter_context(mock.patch.object(receive.tty,'setraw'))
+            stack.enter_context(mock.patch.object(receive.termios,'tcflush'))
+            stack.enter_context(mock.patch.object(receive.select,'select',return_value=([42],[],[])))
+            failure=OSError(errno.ENXIO,'read disconnected')
+            stack.enter_context(mock.patch.object(receive.os,'read',side_effect=failure))
+            stack.enter_context(mock.patch.object(receive.termios,'tcsetattr',
+                side_effect=receive.termios.error(errno.ENXIO,'cleanup disconnected')))
+            with self.assertRaises(OSError) as caught:
+                receive.receive('/dev/cu.usbmodem-test',1)
+            self.assertIs(caught.exception,failure)
+            closed.assert_called_once_with(42)
+
+    def test_failed_tty_initialization_still_closes_descriptor(self):
+        with mock.patch.object(receive.os,'open',return_value=42), \
+             mock.patch.object(receive.os,'close') as closed, \
+             mock.patch.object(receive.termios,'tcgetattr',
+                side_effect=receive.termios.error(errno.ENXIO,'port vanished')):
+            with self.assertRaises(receive.termios.error):
+                receive.receive('/dev/cu.usbmodem-test',1)
+            closed.assert_called_once_with(42)
+
     @unittest.skipUnless(shutil.which('lz4'), 'lz4 CLI required')
     def test_actual_platform_prefix_legacy_lz4_concat(self):
         archive=build.pack_newc({'collector':(stat.S_IFREG|0o755,b'payload')})

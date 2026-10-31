@@ -1,5 +1,46 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> COMPLETE 2026-10-31: ONE RAM COLLECTOR TRIAL; FULL BOOT_A RESTORED; RECOVERY ONLINE <<<
+
+The single specifically authorized collector trial is COMPLETE. User preferred
+Recovery write; no fastboot flash occurred. First fastboot getvar attempt
+failed before write, USB replug+fastboot reboot recovery worked. The new
+Recovery runner24278 exited0 after full original boot_a restoration and
+SHA256 readback. No active runner or restoration duty remains.
+
+Collector image21450752B SHA25650813edab73c4ebcb4554cb41360457f180df1df593d0325ebc76fe64f2dee6d
+was staged and hashed in /tmp, written to boot_a with dd+fsync, full64MiB
+partition readback3b5ef7f319e3b9a56373381ae87b77aba47229e4cff74c33cb7aedbd44420c42
+matched image prefix+original tail. Normal adb reboot at09:35:00 China time.
+USB ACM appeared within7s then disconnected during receive (ENXIO); no
+complete frame/collection saved. This is partial transport evidence, NOT
+GPUEB addresses/GPU_ID/acceleration, and does not establish panic or WDT.
+
+User physically entered Recovery. Runner restored full67108864B original
+backup via Recovery dd+fsync; readback09:36:10 China time equals
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Independent post-restoration read-only check confirmed matisse/_a/Recovery
+and same full hash. journal.json restore_pending=false,collection_received=false.
+Artifacts are ignored research/matisse/20261031-gpu/
+collector-trial-recovery-20261031/{journal.json,receive.txt,post-recovery/}.
+No LK/vendor_boot/DTBO/userdata writes or second test.
+
+Post-Recovery pstore console262132B is CORRUPTED/STALE: contains old Recovery
+uptime~863..953s and prior reboot,bootloader, NOT a usable collector log.
+No SWEET-ENTRY/collector/gpueb trial record found. /proc/last_kmsg absent;
+exec-out error text must NOT be called a valid last_kmsg. New pl_lk140881B
+is current mode2 Recovery log only, not normal-boot evidence. Cause of
+USB disconnect remains unknown; cannot diagnose GPUEB failure from this.
+
+Fixed receiver cleanup to close descriptor even if tty disappears and
+preserve original read exception instead of masking with tcsetattr ENXIO.
+11 collector tests PASS (2 new disconnection regressions),git diff --check
+PASS. No new kernel build/CI. Next local work: preserve partial serial
+bytes and get durable early-init diagnostics before proposing another
+image. Any next boot_a write requires fresh specific authorization.
+Preserve unrelated shim/build.sh,shim/shim.c,tools/sweet-marks.py,0093,
+.DS_Store,.workbuddy. Previous RUNNING/RESTORE notes are historical.
+
 ## >>> RESTORE PENDING 2026-10-31: ACM APPEARED THEN DISCONNECTED; AWAIT RECOVERY <<<
 
 New Recovery runner session24278 remains ACTIVE, waiting for Recovery to

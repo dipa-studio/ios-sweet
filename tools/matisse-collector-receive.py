@@ -3,6 +3,7 @@
 import argparse
 import base64
 import binascii
+import errno
 import hashlib
 import io
 import json
@@ -82,8 +83,9 @@ def receive(port, timeout):
     if not re.fullmatch(r'/dev/cu\.usbmodem[A-Za-z0-9._-]+', port):
         raise ValueError('use an explicit macOS USB ACM /dev/cu.usbmodem port')
     fd = os.open(port, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
-    original = termios.tcgetattr(fd)
+    original = None
     try:
+        original = termios.tcgetattr(fd)
         tty.setraw(fd, termios.TCSANOW)
         termios.tcflush(fd, termios.TCIFLUSH)
         deadline, data = time.monotonic()+timeout, bytearray()
@@ -101,8 +103,17 @@ def receive(port, timeout):
                 return payload
         raise TimeoutError('no complete collector frame before deadline')
     finally:
-        termios.tcsetattr(fd, termios.TCSANOW, original)
-        os.close(fd)
+        try:
+            if original is not None:
+                try:
+                    termios.tcsetattr(fd, termios.TCSANOW, original)
+                except termios.error as exc:
+                    # A vanished ACM port cannot restore tty settings. Preserve
+                    # the original read failure and still close its descriptor.
+                    if exc.args[0] not in (errno.ENXIO, errno.EIO, errno.ENODEV):
+                        raise
+        finally:
+            os.close(fd)
 
 
 def main():
