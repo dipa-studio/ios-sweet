@@ -1,5 +1,23 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: USER AUTHORIZED ONE COLLECTOR BOOT_A TRIAL + FULL RESTORE <<<
+
+User explicitly answered 可以 to the concrete temporary collector boot_a
+flash, one normal boot collection, full64MiB original boot_a restoration
+and return to Recovery. This authorization is specific to image50813eda
+and baseline2931647a; no LK/vendor_boot/DTBO/userdata writes authorized.
+Fresh Recovery preflight matisse/_a/root,boot_a67108864B,full SHA256 matches
+baseline; local image+backup hashes verified.9 collector tests PASS again.
+Dedicated new runner (no old imports) is ignored under research/matisse/
+20261031-gpu/collector-trial-20261031/run-collector-once.py. Its journal.json
+is restoration source of truth. It sets restore_pending BEFORE flash, then
+waits for fastboot and restores full backup, reboots Recovery, and clears
+restore_pending ONLY after full Recovery SHA256 readback. Collector has no
+USB command shell, so user physical Power+Volume- may be needed after
+collection to enter fastboot. No partition write yet at this handoff save.
+NEXT execute the authorized one-shot runner, monitor, restore and document
+exact outcome; do not stop while restoration is pending. Prior notes follow.
+
 ## >>> ACTIVE 2026-10-31: RAM COLLECTOR BUILT; BOOT_A FLASH NOT AUTHORIZED YET <<<
 
 User approved RAM-only collector development, then asked to reboot Recovery
