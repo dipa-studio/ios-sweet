@@ -1,5 +1,56 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: CSF2328 LEAF GROUP6 BUILT; TRIAL APPROVAL NEEDED <<<
+
+User replied 可以 to offline continuation after restored2327 (cf5024d).
+New pinned vendor-helper audit found omitted MGM transformation: actual
+mali_mgm SHA25622113cb61a7b1fab5e552ff028a7e45c8ef40cfe57b2bdd67ea835b017d0f2f9,
+helper97c..9dc selects default6 when override+210 is0 and ORs bits59..62.
+Recovery DT GPU links phandle59 to /mgm. Requested group argument does not
+select this helper's result. Synthetic override3 gives3; no Android runtime
+override or physical routing was measured. This is not a timeout diagnosis.
+
+New tools/matisse-csf-vendor-mmu-audit.py pins KMD/MGM/blob and executes
+bounded relocation-free AArch64 flag/ATE/PTE/AS/MGM helpers in Unicorn.
+Compares actual independent arena:293 ordinary leaves. Existing vendor
+cache/SH/nG/PXN/table/TRANSCFG differences remain separate hypotheses.
+2328 isolates group6 leaves only; group0 API preserves2327 bytes. Exact
+full-arena comparison changes293 bytes only (one high byte per leaf),
+leaving PA, tables, low attributes, firmware/data, AS and startup unchanged.
+Coherency31 remains requested/read back. Report304B/38 marks320..357 adds
+software requested group/page count, NOT hardware translation readback.
+Fresh IRQ/version/interface/disable/reset still required for readiness.
+
+48 targeted tests PASS3.219s (ASan/UBSan plus ELF/hash/relocation negatives,
+ABI/decode and contextual patches). Separate real-fw group0/6/15 sanitizer
+checks PASS. Group0/6 synthetic startup identical986 steps/WFI/version01010000,
+no modeled fault; high-bit routing/cache/physical execution are NOT modeled.
+Local full kernel build exit0;16724248B SHA256
+e0d046e63aa909626dfa771fa3ebaf377e11c3530437936cd5faf8653c1aaf4f.
+Build-only image26714112B SHA256
+a880c8465cbc02deaa287a4925e54a911722e938fde1685fecf0410d733959a6,
+research/matisse/20261031-gpu/shim2328-ready/matisse-shim-gpu2328.img.
+Independent pins/component/expanded80402548B/fallback+32MiB/304B ABI/rootrw0/
+ufsrw0/PIC checks PASS. Signature bytes retained, not authenticated;
+automatic Recovery unverified. Kernel replay matches with inherited untracked
+0093 hash54f0aaa5a0390bc0678eca60e55bc192d3ebea315daab808a3c456a1ce65365b.
+No new CI/push/device write/reboot. Preserve unrelated dirt and0093.
+Implementation committed as5ba6301 (17 files). Staged source whitespace
+checks PASS excluding0126's intentional unified-diff context whitespace;
+contextual patch replay already PASS. No rebuild or hardware trial repeated.
+
+Fresh root Recovery matisse/_a/uid0/67108864B boot_a SHA256 verified:
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Separate pinned shim2328-trials-run-once.py/restoration-plan.json prepared;
+ONLY read-only preflight ran/PASS. No active journal,restore_pending=false.
+Ignored firmware-static/{vendor-mmu2328-audit,group6-isolation2328,
+fetch-audit-group6-2328,kernel2328-source-replay}.json and build/test logs
+record evidence. Full original/prefix pins are unchanged.
+NEXT: ask specific approval for ONE normal2328 imagea880c846 boot_a trial,
+full readback expected1987a83a69676c290dca9a80c8aa95aa4502dd39982df192df6d8cd3e9cf3176,
+fresh2328 capture and full64MiB restore/independent hash2931647a. No approval
+for this new image yet; don't execute the runner write branch.
+
 ## >>> COMPLETE 2026-10-31: CSF2327 PROTOCOL31 VERIFIED; MCU TIMEOUT; FULL RESTORE <<<
 
 User explicitly replied 可以 to ONE normal2327 trial of imagea6247426

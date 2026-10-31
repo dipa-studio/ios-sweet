@@ -935,3 +935,100 @@ dmesg is869052 bytes. The approved trial is consumed; any new partition
 write needs a new concrete image confirmation. Next work is offline
 vendor address-space/PTE/cache and MCU-startup comparison. Do not rerun
 this image expecting a different handshake result.
+
+## Post2327 vendor memory-group audit and CSF2328 candidate (2026-10-31)
+
+The vendor comparison now includes the actual platform memory-group manager,
+not only kbase's base descriptor. The saved live Recovery DT links GPU
+physical-memory-group-manager to phandle0x59, which resolves to /mgm with
+compatible arm,physical-memory-group-manager. This is binding evidence;
+Recovery does not provide an observed Android runtime mapping trace.
+
+The extracted mali_mgm module SHA256 is
+22113cb61a7b1fab5e552ff028a7e45c8ef40cfe57b2bdd67ea835b017d0f2f9.
+Its example_mgm_update_gpu_pte at text0x97c..0x9dc reads a debug override at
+private+0x210, substitutes6 when that word is0, and ORs the selected group
+into descriptor bits59..62. The requested group argument does not choose
+the result in this helper. A synthetic override3 produces3 instead of6;
+no Android runtime override was measured. The probe's prior descriptors
+have these four bits0. This omitted platform transformation is an observed
+binary difference, not a diagnosed timeout cause or proof of its physical
+routing effect.
+
+New tools/matisse-csf-vendor-mmu-audit.py requires the pinned kbase, MGM and
+firmware hashes. It checks ELF section bounds and rejects relocations in
+selected helper ranges, then executes those original AArch64 instructions
+in bounded Unicorn instances with synthetic inputs. It exercises the
+firmware-section flag conversion block0x6fbec..0x6fc9c, entry_set_ate,
+entry_set_pte, kbase_mmu_get_as_setup and example_mgm_update_gpu_pte. It
+compares all293 ordinary mapped pages built by the actual independent C
+loader. No proprietary bytes are stored in the tool or tracked tests.
+
+The replay confirms the earlier cache/SH/nG/PXN differences: ordinary cached
+sections resolve to vendor AttrIdx0/value88/SH0; shared resolves to
+AttrIdx5/value4c/SH0 under coherency31. Their MGM-transformed leaves also
+carry group6. Base table descriptors use PA|403 rather than PA|3; the
+software entry count is stored separately in bits55..58 of the table's
+first three words. Those existing differences remain separate hypotheses.
+The vendor AS helper supplies MEMATTR00084c8d888d8f88 and base TRANSCFG6;
+the coherency31 WB/RA addition42000000 is still statically derived from
+kbase_mmu_hw_configure, not emulated by this helper audit.
+
+CSF2328 isolates just the leaf group tag relative to2327. The new explicit
+sweet_csf_memory_build_group accepts0..15; its group0 wrapper preserves
+existing behavior. The shim requests6 and retains every2327 low descriptor
+bit, table descriptor, firmware byte, MEMATTR, TRANSCFG, coherency31 write,
+IRQ setup and MCU sequence. Group tags do not enter physical-address masks.
+ASan/UBSan checks on synthetic and real pinned firmware compare every arena
+byte: exactly293 bytes change, one high byte per mapped leaf, with XOR30 in
+that byte. No firmware/table/data/permission/cache bytes change. This is a
+candidate diagnostic, not a proven fix.
+
+The report appends software group/count words to304 bytes,38 qwords at
+marks320..357. These fields explicitly describe builder inputs and293 leaf
+pages; they are not hardware translation readback. The decoder retains
+fresh IRQ, version, valid interface and successful disable/reset requirements,
+so configured group6 alone never establishes firmware readiness. Patch0126
+bumps the persistent kernel build marker to2328 and transports the new ABI.
+
+48 targeted tests pass in3.219s, including malformed ELF/hash/relocation
+rejection, descriptor group isolation, real C ASan/UBSan models, previous
+report ABIs, new metadata negative cases and contextual patch application.
+Separate real-firmware ASan/UBSan checks pass. Group0/group6 synthetic MCU
+replays are identical:986 instructions to WFI, version01010000, no modeled
+access violation. The emulator does not implement high-bit memory routing,
+GPU caches/MMU, clocks or real MCU execution; this cannot predict hardware
+success.
+
+Local complete kernel build exits0:16724248 bytes, SHA256
+e0d046e63aa909626dfa771fa3ebaf377e11c3530437936cd5faf8653c1aaf4f.
+Build-only candidate26714112 bytes, SHA256
+a880c8465cbc02deaa287a4925e54a911722e938fde1685fecf0410d733959a6,
+at research/matisse/20261031-gpu/shim2328-ready/matisse-shim-gpu2328.img.
+Independent verification checks expanded80402548 bytes, intact stock Linux
+at+32MiB, ramdisk/signature byte equality, pinned source/frozen objects,
+report ABI, rootrw0/ufsrw0 and no absolute pointer relocations. Signature
+bytes are retained, not authenticated; automatic Recovery remains unverified.
+Kernel source contextual replay matches only with the inherited untracked
+0093 console patch, hash54f0aaa5a0390bc0678eca60e55bc192d3ebea315daab808a3c456a1ce65365b,
+which remains uncommitted and preserved.
+
+Detailed evidence stays ignored in firmware-static/vendor-mmu2328-audit.json,
+group6-isolation2328.json,fetch-audit-group6-2328.json and the2328 build/test
+logs. A separately pinned shim2328-trials-run-once.py and restoration plan
+are prepared. Only its read-only preflight has run; no journal or device
+write/reboot exists. Fresh root Recovery identity and all64MiB original
+boot_a SHA2562931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1
+are verified. No CI run or push occurred.
+
+Implementation commit5ba6301 contains the17 reviewed2328 source/test/patch
+files. Source whitespace checks pass;0126 retains required contextual patch
+whitespace and its contextual replay passes. Unrelated working-tree edits
+and inherited untracked0093 remain intact.
+
+Next requires specific confirmation of ONE normal2328 trial of imagea880c846:
+write only boot_a, verify full predicted partition hash1987a83a69676c290dca9a80c8aa95aa4502dd39982df192df6d8cd3e9cf3176,
+collect fresh2328 evidence, restore the stock prefix through one persistent
+Fastboot session if needed, then restore and independently hash the full
+original64MiB in Recovery. The latest 可以 authorized offline continuation;
+it did not name or approve this newly created image.
