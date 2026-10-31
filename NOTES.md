@@ -39,6 +39,9 @@ is included; recorded hash54f0aaa5a0390bc0678eca60e55bc192d3ebea315daab808a3c456
 That inherited patch is preserved/uncommitted, not newly introduced.
 Three modified source files freestanding ARM64/PIC relocation checks PASS.
 No new CI run, push, reboot or device partition write.
+Implementation commit5147ace; completed changes committed. Source whitespace
+checks PASS; contextual patch replay PASS (patch context whitespace is
+intentional unified-diff syntax).
 
 Prepared shim2327-trials/restoration-plan.json and a separate pinned
 shim2327-trials-run-once.py; ONLY its read-only preflight branch ran/PASS.
