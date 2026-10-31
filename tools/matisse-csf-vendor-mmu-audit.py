@@ -40,6 +40,9 @@ HOST_BOOT_TRACE = r'''
 #ifndef VENDOR_INA0
 #define VENDOR_INA0 0
 #endif
+#ifndef VENDOR_CACHED_MEMATTR
+#define VENDOR_CACHED_MEMATTR 0
+#endif
 struct model { uint32_t reg[4096]; uint64_t tick; unsigned first; };
 static uint32_t read32(void *p, uint64_t a) {
     struct model *m = p;
@@ -71,7 +74,8 @@ int main(void) {
     struct sweet_csf_boot_config c = {.gpu = 0x13000000, .root_pa = 0x40076000,
         .arena_pa = 0x40076000, .arena_bytes = 0x200000, .shared_offset = 0x50000,
         .shared_bytes = 0x94000, .timeout_ms = 1, .noncoherent = 1,
-        .pte_group_requested = 6, .pte_pages_built = 293, .vendor_ina0 = VENDOR_INA0};
+        .pte_group_requested = 6, .pte_pages_built = 293, .vendor_ina0 = VENDOR_INA0,
+        .vendor_cached_memattr = VENDOR_CACHED_MEMATTR};
     struct sweet_gpu_io io = {&m, read32, write32, ticks, barrier, 1000};
     struct sweet_csf_boot_report r;
     printf("{\"writes\":["); int rc = sweet_csf_boot(&c, &io, &r);
@@ -82,16 +86,19 @@ int main(void) {
 '''
 
 
-def probe_boot_trace(vendor_ina0=0):
+def probe_boot_trace(vendor_ina0=0, vendor_cached_memattr=0):
     """Capture actual C writes with synthetic success prerequisites/no FW IRQ."""
     if vendor_ina0 not in (0, 1):
         raise ValueError('INA diagnostic must be0/1')
+    if vendor_cached_memattr not in (0, 1):
+        raise ValueError('cached MEMATTR diagnostic must be0/1')
     with tempfile.TemporaryDirectory(prefix='csf-vendor-boot-') as directory:
         path = Path(directory)
         source, binary = path / 'trace.c', path / 'trace'
         source.write_text(HOST_BOOT_TRACE)
         subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
                         '-DVENDOR_INA0=' + str(vendor_ina0),
+                        '-DVENDOR_CACHED_MEMATTR=' + str(vendor_cached_memattr),
                         '-fsanitize=address,undefined', '-I', str(ROOT / 'xnu/gpu'),
                         str(source), str(ROOT / 'xnu/gpu/mali_csf_boot.c'), '-o', str(binary)],
                        check=True, capture_output=True, text=True)
@@ -106,6 +113,7 @@ def probe_boot_trace(vendor_ina0=0):
     else:
         raise ValueError('actual C probe did not reach MCU AUTO')
     trace.update(before_auto=before_auto, registers_before_auto=registers, vendor_ina0=vendor_ina0,
+                 vendor_cached_memattr=vendor_cached_memattr,
                  scope='Actual C boot code, synthetic powered device and AS completion; '
                        'no firmware IRQ, hardware execution or cache/MMU model.')
     return trace
@@ -168,6 +176,55 @@ def effective_leaf(descriptor, memattr):
 
 def differences(left, right):
     return {key: {'probe': left[key], 'vendor': right[key]} for key in left if left[key] != right[key]}
+
+
+def memattr_index_audit(arena, plan):
+    """Resolve bytes through actual C leaves; do not infer cache semantics.
+
+    Vendor and independent PTEs use different indices. A register literal is
+    not interchangeable unless the referring leaves are also considered.
+    The proposed diagnostic changes only the byte selected by cached pages.
+    """
+    fetch = fetch_module()
+    cached_byte, shared_byte = VENDOR_MEMATTR & 255, (VENDOR_MEMATTR >> 40) & 255
+    candidate = (PROBE_MEMATTR & ~(255 << 8)) | (cached_byte << 8)
+    cases = {'current': PROBE_MEMATTR, 'vendor_literal_only': VENDOR_MEMATTR,
+             'cached_byte_only': candidate}
+    sections, counts = [], {name: 0 for name in cases}
+    cached_pages = shared_pages = 0
+    for section in plan['sections']:
+        if section['bytes'] <= 0 or section['bytes'] % 4096:
+            raise ValueError('invalid section page span')
+        cached = (section['flags'] & 24) == 8
+        expected_index = 1 if cached else 0
+        expected_vendor_byte = cached_byte if cached else shared_byte
+        seen = {}
+        for delta in range(0, section['bytes'], 4096):
+            offset, descriptor = fetch.translate(arena, plan['root_pa'], section['va'] + delta)
+            if offset != section['arena_offset'] + delta or (descriptor >> 2) & 7 != expected_index:
+                raise ValueError('unexpected actual C leaf allocation or attribute index')
+            values = {name: (word >> (expected_index * 8)) & 255 for name, word in cases.items()}
+            if seen and seen != values:
+                raise ValueError('nonuniform actual C section attributes')
+            seen = values
+            for name, byte in values.items():
+                counts[name] += byte == expected_vendor_byte
+            cached_pages += cached
+            shared_pages += not cached
+        sections.append(dict(va=hex(section['va']), pages=section['bytes'] // 4096,
+                             cached_section_mode=cached, probe_attr_index=expected_index,
+                             vendor_attr_index=0 if cached else 5,
+                             vendor_selected_byte=hex(expected_vendor_byte),
+                             selected_bytes={name: hex(byte) for name, byte in seen.items()}))
+    return dict(scope='Raw byte/index agreement only; no cache, coherency or device execution model.',
+                memattr_words={name: hex(word) for name, word in cases.items()},
+                register_xor=hex(PROBE_MEMATTR ^ candidate),
+                cached_pages=cached_pages, shared_pages=shared_pages,
+                byte_matched_pages=counts, sections=sections,
+                candidate_changes=dict(pte_bytes=0, arena_bytes=0, low_register_writes=1,
+                                       high_register_writes=0, shared_selected_byte=False),
+                limitations=['A vendor byte with the independent SH/nG/PXN/table settings is a hybrid diagnostic.',
+                             'Byte equality does not prove effective cache behavior or a timeout cause.'])
 
 
 def validate_register_slices(cases, starts, root, memattr):
@@ -317,12 +374,14 @@ def fetch_module():
     return module
 
 
-def compare(kmd, mgm, firmware, arena_pa, memory_group=6, vendor_ina0=0):
+def compare(kmd, mgm, firmware, arena_pa, memory_group=6, vendor_ina0=0, vendor_cached_memattr=0):
     fetch = fetch_module()
     firmware_hash = hashlib.sha256(firmware.read_bytes()).hexdigest()
     if firmware_hash != fetch.FIRMWARE_SHA256:
         raise ValueError('unsupported firmware hash')
     helpers = VendorHelpers(kmd, mgm)
+    probe_memattr = (PROBE_MEMATTR & ~(255 << 8) | ((VENDOR_MEMATTR & 255) << 8)
+                     if vendor_cached_memattr else PROBE_MEMATTR)
     arena, plan = fetch.build_arena(firmware, arena_pa, memory_group=memory_group)
     root, memattr, base_transcfg = helpers.setup(plan['root_pa'])
     if root != plan['root_pa'] or memattr != VENDOR_MEMATTR or base_transcfg != 6:
@@ -335,11 +394,11 @@ def compare(kmd, mgm, firmware, arena_pa, memory_group=6, vendor_ina0=0):
         pa = descriptors[0] & PA_MASK
         bare = helpers.ate(pa, flags)
         tagged = helpers.mgm(bare)
-        probe = effective_leaf(descriptors[0], PROBE_MEMATTR)
+        probe = effective_leaf(descriptors[0], probe_memattr)
         vendor = effective_leaf(tagged, memattr)
         checked_vendor_pages = 0
         for index, descriptor in enumerate(descriptors):
-            effective = effective_leaf(descriptor, PROBE_MEMATTR)
+            effective = effective_leaf(descriptor, probe_memattr)
             effective['pa'] = probe['pa']
             if effective != probe or descriptor & PA_MASK != pa + index * 4096:
                 raise ValueError('nonuniform section attributes or unexpected PA stride')
@@ -365,7 +424,7 @@ def compare(kmd, mgm, firmware, arena_pa, memory_group=6, vendor_ina0=0):
                     for mode, slot in ((31, 0), (0, 0), (1, 0), (31, 7))]
     starts = dict(initial=helpers.start(), reload=helpers.start(reload=True))
     validate_register_slices(config_cases, starts, root, memattr)
-    probe_trace = probe_boot_trace(vendor_ina0)
+    probe_trace = probe_boot_trace(vendor_ina0, vendor_cached_memattr)
     register_differences = {item['offset']: dict(probe=probe_trace['registers_before_auto'][item['offset']],
                                                 vendor=item['value'])
                             for item in config_cases[0]['writes']
@@ -379,11 +438,14 @@ def compare(kmd, mgm, firmware, arena_pa, memory_group=6, vendor_ina0=0):
                 arena_sha256=hashlib.sha256(arena).hexdigest(),
                 memory_group=memory_group,
                 vendor_ina0=vendor_ina0,
+                vendor_cached_memattr=vendor_cached_memattr,
                 checked_pages=sum(s['checked_pages'] for s in sections),
                 setup=dict(root_pa=hex(root), vendor_memattr=hex(memattr),
                            vendor_base_transcfg=hex(base_transcfg),
                            vendor_coherency31_transcfg=hex(base_transcfg | 0x42000000),
-                           probe_memattr=hex(PROBE_MEMATTR),
+                           probe_memattr=hex(probe_memattr),
+                           programmed_probe_memattr=hex(int(probe_trace['registers_before_auto']['0x240c'], 16) << 32 |
+                                                       int(probe_trace['registers_before_auto']['0x2408'], 16)),
                            probe_transcfg=probe_trace['registers_before_auto']['0x2430']),
                 vendor_register_slices=dict(config_cases=config_cases, mcu_starts=starts,
                     scope='Relocation-free MMIO slices with synthetic device/AS structures. '
@@ -393,6 +455,7 @@ def compare(kmd, mgm, firmware, arena_pa, memory_group=6, vendor_ina0=0):
                 table=dict(vendor_descriptor=hex(table_descriptor),
                            probe_descriptor=hex((arena_pa + 4096) | 3),
                            synthetic_counter_words=counter_words),
+                memattr_index_audit=memattr_index_audit(arena, plan),
                 mgm_cases=mgm_cases, sections=sections, helper_calls=helpers.calls,
                 limitations=['MGM uses a zero-initialized synthetic override; Android runtime override was not measured.',
                              'MMIO slices use zero trace flags; full vendor startup and AS completion are not modeled.',
@@ -410,13 +473,15 @@ def main():
                         help='actual C arena leaf group; default matches the tested2328 shim')
     parser.add_argument('--vendor-ina0', type=int, choices=(0, 1), default=0,
                         help='0 replays2328 config;1 selects the opt-in2329 INA diagnostic')
+    parser.add_argument('--vendor-cached-memattr', type=int, choices=(0, 1), default=0,
+                        help='1 changes only independent cached byte1 from9f to vendor88')
     args = parser.parse_args()
     if args.python_deps:
         sys.path.insert(0, str(args.python_deps.resolve()))
     kmd = pinned_elf(args.kmd, KMD_SHA256, tuple(name for name in HELPERS if not name.startswith('mgm_')))
     mgm = pinned_elf(args.mgm, MGM_SHA256, ('mgm_update_gpu_pte',))
     print(json.dumps(compare(kmd, mgm, args.firmware.resolve(), args.arena_pa,
-                             args.memory_group, args.vendor_ina0), indent=2))
+                             args.memory_group, args.vendor_ina0, args.vendor_cached_memattr), indent=2))
     return 0
 
 

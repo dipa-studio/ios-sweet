@@ -15,7 +15,7 @@ struct model {
  uint64_t tick;unsigned reads,writes,enabled,resets,as_updates,locked,flushed,lock_low,lock_high;
  uint32_t gpu_mask,job_mask,mmu_mask,l2,raw,job,mcu,mmu,transcfg,table_low,table_high;
  uint32_t memattr_lo,memattr_hi,coherency,coherency_writes;
- int bad_coherency_readback,vendor_ina0;
+ int bad_coherency_readback,vendor_ina0,vendor_cached_memattr,bad_memattr;
  int unpowered,bad_id,bad_bits,as_busy,no_l2,no_fw,fw_fault,reset_fail,bad_iface,stale,stuck_timer,live_table,request_done,disable_fail,bad_readback,bad_irq_mask,clamp_masks,missing_gpu_irq,missing_mmu_irq;
 };
 static uint32_t rd(void *p,uint64_t a) {
@@ -52,7 +52,7 @@ static uint32_t rd(void *p,uint64_t a) {
  case 0x2000:return m->mmu;case 0x2008:return m->mmu_mask;
  case 0x2428:return m->as_busy?1:0;
  case 0x2400:return m->live_table?0x80000000:m->table_low;case 0x2404:return m->table_high;
- case 0x2408:return m->memattr_lo;case 0x240c:return m->memattr_hi;
+ case 0x2408:return m->bad_memattr==1?0x4c4c9f4c:m->memattr_lo;case 0x240c:return m->bad_memattr==2?0:m->memattr_hi;
  case 0x2430:return m->bad_readback && m->as_updates==2?(m->vendor_ina0?0x420001c6:6):m->transcfg;case 0x2434:return 0;
  case 0x241c:return m->mmu?0xc0:0;case 0x2420:case 0x2424:return 0;
  default:assert(0);return 0;
@@ -82,7 +82,7 @@ static void wr(void*p,uint64_t a,uint32_t v) {
   if(v==5){assert(m->locked);m->flushed=1;return;}
   assert(v==1);m->as_updates++;return;
  case 0x2400:assert(v==0x90000000);m->table_low=v;return;case 0x2404:assert(v==0);m->table_high=v;return;
- case 0x2408:assert(v==0x4c4c9f4c);m->memattr_lo=v;return;case 0x240c:assert(v==0x4c4c4c4c);m->memattr_hi=v;return;
+ case 0x2408:assert(v==(m->vendor_cached_memattr?0x4c4c884c:0x4c4c9f4c));m->memattr_lo=v;return;case 0x240c:assert(v==0x4c4c4c4c);m->memattr_hi=v;return;
  case 0x2430:assert(v==1||v==(m->vendor_ina0?0x42000006:0x420001c6));if(v!=1)assert(m->flushed);m->transcfg=v;return;
  case 0x2434:assert(v==0);return;
  case 0x2004:m->mmu&=~v;return;
@@ -152,6 +152,17 @@ int main(void) {
  m=model();m.vendor_ina0=1;m.bad_readback=1;assert(run(&m,&c,&r)==-52 && !m.enabled);clean(&m,&r);
  assert(r.transcfg_lo==0x420001c6 && !r.sample_flags);
  m=model();c.vendor_ina0=2;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
+ c=cfg();c.vendor_ina0=1;c.vendor_cached_memattr=1;c.noncoherent=1;
+ m=model();m.vendor_ina0=1;m.vendor_cached_memattr=1;
+ assert(!run(&m,&c,&r));clean(&m,&r);
+ assert(r.memattr_lo==0x4c4c884c && r.memattr_hi==0x4c4c4c4c && r.transcfg_lo==0x42000006);
+ m=model();m.vendor_ina0=1;m.vendor_cached_memattr=1;m.no_fw=1;
+ assert(run(&m,&c,&r)==-53 && !r.firmware_ready);clean(&m,&r);
+ for(int bad=1;bad<=2;bad++) {
+  m=model();m.vendor_ina0=1;m.vendor_cached_memattr=1;m.bad_memattr=bad;
+  assert(run(&m,&c,&r)==-52 && !m.enabled && !r.sample_flags);clean(&m,&r);
+ }
+ m=model();c.vendor_cached_memattr=2;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
  c=cfg();
  m=model();c.pte_group_requested=16;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
  m=model();c=cfg();c.pte_pages_built=513;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);

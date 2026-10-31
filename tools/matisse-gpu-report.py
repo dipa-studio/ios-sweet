@@ -50,7 +50,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -173,7 +173,7 @@ def decode(data, expected_build=0x2321):
                     core_state_after_start=bool(csf['sample_flags'] & 8))
             if expected_build >= 0x2326:
                 ready = (ready and csf['diag_flags'] == (127 if expected_build >= 0x2327 else 31) and
-                    csf['memattr_lo'] == 0x4c4c9f4c and csf['memattr_hi'] == 0x4c4c4c4c and
+                    csf['memattr_lo'] == (0x4c4c884c if expected_build >= 0x2330 else 0x4c4c9f4c) and csf['memattr_hi'] == 0x4c4c4c4c and
                     csf['private_memory_sampled'])
             if expected_build >= 0x2327:
                 ready = ready and csf['noncoherent_protocol_verified'] and csf['coherency_after'] == 31
@@ -181,6 +181,9 @@ def decode(data, expected_build=0x2321):
                 ready = ready and csf['pte_group_configuration_matches']
             if expected_build >= 0x2329:
                 csf['vendor_ina_readback_matches'] = csf['transcfg_lo'] == 0x42000006
+            if expected_build >= 0x2330:
+                csf['vendor_cached_byte_readback_matches'] = (csf['memattr_lo'] == 0x4c4c884c and
+                                                            csf['memattr_hi'] == 0x4c4c4c4c)
         csf.update(stage_name=CSF_STAGES[csf['stage']],
                    error_name=CSF_ERRORS.get(csf['error'],'firmware-format'),
                    runtime_interface_sampled=sampled,
@@ -195,7 +198,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2329)')
+                   help='expected kernel/report build (0x2321 through 0x2330)')
     a=p.parse_args()
     try:
         report=decode(a.marks.read_bytes(),a.build)

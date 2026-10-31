@@ -109,6 +109,46 @@ class ElfBoundsTests(unittest.TestCase):
                 helpers.configure(0x40076000, coherency=mode)
 
 
+class MemattrIndexTests(unittest.TestCase):
+    def fixture(self):
+        # Four actual-format table levels plus separate cached/shared pages.
+        arena = bytearray(6 * 4096)
+        root = 0x40076000
+        for page in range(3):
+            struct.pack_into('<Q', arena, page * 4096, root + (page + 1) * 4096 | 3)
+        struct.pack_into('<2Q', arena, 3 * 4096, root + 4 * 4096 | 0xfc7,
+                         root + 5 * 4096 | 0xe43)
+        sections = [dict(va=0, bytes=4096, flags=0xd, arena_offset=4 * 4096),
+                    dict(va=4096, bytes=4096, flags=0x1b, arena_offset=5 * 4096)]
+        return arena, dict(root_pa=root, sections=sections)
+
+    def test_vendor_literal_changes_wrong_indices_and_candidate_preserves_shared(self):
+        arena, plan = self.fixture()
+        report = audit.memattr_index_audit(arena, plan)
+        self.assertEqual(report['memattr_words']['cached_byte_only'], '0x4c4c4c4c4c4c884c')
+        self.assertEqual(report['register_xor'], '0x1700')
+        self.assertEqual(report['byte_matched_pages'],
+                         dict(current=1, vendor_literal_only=0, cached_byte_only=2))
+        self.assertEqual((report['cached_pages'], report['shared_pages']), (1, 1))
+        cached, shared = report['sections']
+        self.assertEqual(cached['selected_bytes'],
+                         dict(current='0x9f', vendor_literal_only='0x8f', cached_byte_only='0x88'))
+        self.assertEqual(shared['selected_bytes'],
+                         dict(current='0x4c', vendor_literal_only='0x88', cached_byte_only='0x4c'))
+
+    def test_reject_wrong_leaf_index_allocation_and_page_span(self):
+        for mutation in ('index', 'allocation', 'span'):
+            arena, plan = self.fixture()
+            if mutation == 'index':
+                struct.pack_into('<Q', arena, 3 * 4096, plan['root_pa'] + 4 * 4096 | 0xfc3)
+            elif mutation == 'allocation':
+                plan['sections'][0]['arena_offset'] += 4096
+            else:
+                plan['sections'][0]['bytes'] = 4097
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                audit.memattr_index_audit(arena, plan)
+
+
 class RegisterTraceTests(unittest.TestCase):
     def setUp(self):
         self.root, self.memattr = 0x5A40076000, audit.VENDOR_MEMATTR
@@ -191,6 +231,20 @@ class RegisterTraceTests(unittest.TestCase):
         self.assertEqual(original['reset_completed'], candidate['reset_completed'])
         with self.assertRaisesRegex(ValueError, 'INA'):
             audit.probe_boot_trace(2)
+
+    @unittest.skipUnless(shutil.which('cc'), 'requires C compiler')
+    def test_cached_byte_changes_exactly_one_actual_c_write(self):
+        original, candidate = audit.probe_boot_trace(1), audit.probe_boot_trace(1, 1)
+        self.assertEqual(len(original['writes']), len(candidate['writes']))
+        self.assertEqual([(a, b) for a, b in zip(original['writes'], candidate['writes']) if a != b],
+                         [(dict(offset='0x2408', size=4, value='0x4c4c9f4c'),
+                           dict(offset='0x2408', size=4, value='0x4c4c884c'))])
+        for name in ('return_code', 'stage', 'reset_completed'):
+            self.assertEqual(original[name], candidate[name])
+        self.assertEqual(candidate['registers_before_auto']['0x240c'], '0x4c4c4c4c')
+        self.assertEqual(candidate['registers_before_auto']['0x2430'], '0x42000006')
+        with self.assertRaisesRegex(ValueError, 'MEMATTR'):
+            audit.probe_boot_trace(1, 2)
 
 
 if __name__ == '__main__':

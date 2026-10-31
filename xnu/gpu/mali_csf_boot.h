@@ -17,6 +17,9 @@ struct sweet_csf_boot_config {
     /*2329: explicit0/1, select vendor's TRANSCFG INA=0. Zero preserves
      * the previous INA=7 sequence. Existing transcfg_lo records readback. */
     uint32_t vendor_ina0;
+    /*2330: explicit0/1, use the pinned vendor cached byte88 in our
+     * index1. Keep index0 shared byte4c and every PTE unchanged. */
+    uint32_t vendor_cached_memattr;
 };
 struct sweet_csf_boot_report {
     uint32_t stage;

@@ -74,7 +74,8 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     *r=(struct sweet_csf_boot_report){.stage=SWEET_CSF_BOOT_CONFIG};
     if(!c||!io||!io->read32||!io->write32||!io->ticks||!io->barrier||
        !io->frequency||io->frequency>1000000000||c->gpu!=0x13000000||
-       !c->timeout_ms||c->timeout_ms>1000||c->noncoherent>1||c->vendor_ina0>1||c->pte_group_requested>15||
+       !c->timeout_ms||c->timeout_ms>1000||c->noncoherent>1||c->vendor_ina0>1||
+       c->vendor_cached_memattr>1||c->pte_group_requested>15||
        c->pte_pages_built>c->arena_bytes/4096||c->root_pa!=c->arena_pa||
        c->arena_pa<0x40000000||(c->arena_pa&4095)||!c->arena_bytes||
        c->arena_bytes>0x1000000||c->arena_pa>UINT64_MAX-c->arena_bytes||
@@ -143,11 +144,14 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     if(!rc)rc=as_command(io,c->gpu,5,budget);
     if(rc) {r->error=rc;goto cleanup;}
     wr(io,c->gpu+0x2400,(uint32_t)c->root_pa);wr(io,c->gpu+0x2404,(uint32_t)(c->root_pa>>32));
-    /* index0=NC(4c), index1=WB/CPU-inner/explicit RW allocate(9f).
-     * Full hardware VA width, 4K stage1, WB/read-allocate page walks. */
-    wr(io,c->gpu+0x2408,0x4c4c9f4c);wr(io,c->gpu+0x240c,0x4c4c4c4c);
+    /* The vendor uses byte88 at index0 for cached leaves and byte4c
+     * at index5 for shared leaves. Our existing PTEs instead select1/0.
+     * Isolate cached byte only; copying the whole vendor register would
+     * select8f for cached and88 for shared. No PTE or page-walk change. */
+    uint32_t memattr_lo=c->vendor_cached_memattr?0x4c4c884c:0x4c4c9f4c;
+    wr(io,c->gpu+0x2408,memattr_lo);wr(io,c->gpu+0x240c,0x4c4c4c4c);
     /* Pinned KMD MMIO slice45e80..45fd4 writes42000006 under protocol31.
-     * Isolate INA only: keep group6 leaf bytes, cache/MEMATTR and order. */
+     * INA selection is independent of the cached MEMATTR diagnostic. */
     uint32_t transcfg=0x42000006|(c->vendor_ina0?0:((55-SWEET_CSF_VA_BITS)<<6));
     wr(io,c->gpu+0x2430,transcfg);wr(io,c->gpu+0x2434,0);
     rc=as_command(io,c->gpu,1,budget);
@@ -156,7 +160,8 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     r->transtab_lo=rd(io,c->gpu+0x2400);r->transtab_hi=rd(io,c->gpu+0x2404);
     r->memattr_lo=rd(io,c->gpu+0x2408);r->memattr_hi=rd(io,c->gpu+0x240c);r->diag_flags|=2;
     if(r->transcfg_lo!=transcfg||rd(io,c->gpu+0x2434)||
-       r->transtab_lo!=(uint32_t)c->root_pa||r->transtab_hi!=(uint32_t)(c->root_pa>>32)) {
+       r->transtab_lo!=(uint32_t)c->root_pa||r->transtab_hi!=(uint32_t)(c->root_pa>>32)||
+       (c->vendor_cached_memattr&&(r->memattr_lo!=memattr_lo||r->memattr_hi!=0x4c4c4c4c))) {
         r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
     }
     wr(io,c->gpu+0x2004,0x10001);wr(io,c->gpu+0x1004,0x80000000);
