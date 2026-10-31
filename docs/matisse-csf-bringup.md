@@ -557,9 +557,9 @@ Signature bytes are retained but not authenticated. Proprietary inputs remain
 ignored. Recovery-only readonly preflight reverified current boot_a baseline
 2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
 
-No2325 hardware trial has occurred. Next action is specific approval for
-ONE2325 Recovery-fallback boot_a trial, Recovery reboot and full baseline
-restore/hash. A separate approval is required for normal MCU execution after
+No2325 hardware trial has occurred. Implementation/tests/docs are committed
+as3f29061. Next action is specific approval for ONE2325 Recovery-fallback
+boot_a trial, Recovery reboot and full baseline restore/hash. A separate approval is required for normal MCU execution after
 same-image fallback passes. Normal XNU Recovery remains unreliable; retain
 the verified persistent fbraw stock-prefix path. No second2324 trial or
 2325 write is authorized by the2324 approval.

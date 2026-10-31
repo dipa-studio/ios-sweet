@@ -36,7 +36,7 @@ Ignored runner shim2325-trials/run-once.py pins the image/hash, baseline,
 partition prediction and recovery strategy. Next requires specific approval
 for ONE2325 Recovery-fallback write/reboot and full64MiB restore/hash. Only
 after fallback passes request separate normal MCU trial. No2325 device write
-is authorized. Implementation pending commit in this handoff; no CI run.
+is authorized. Implementation/tests/docs committed3f29061; no CI run.
 Evidence csf2325-tests.txt,csf2325-real-fw-test.txt,
 kernel-csf2325-build.txt,shim2325-build-arguments.json,
 shim2325-ready/independent-verification.json,
