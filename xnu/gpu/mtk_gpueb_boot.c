@@ -182,6 +182,8 @@ int sweet_gpu_boot(const struct sweet_gpu_boot_config *c,
         r->error = rc;
     wr(io, c->gpu + 0x24, 0x100);
     wr(io, c->gpu + 0x28, saved_mask);
+    if (!r->error && c->powered_probe)
+        r->error = c->powered_probe(c->probe_context, io, c->gpu);
 power_off:
     /* Release precisely the single reference we acquired. Never retry an
      * ambiguous POWER_ON timeout: ownership is then unknown. */

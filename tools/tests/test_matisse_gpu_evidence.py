@@ -93,5 +93,42 @@ class ReportDecodeTests(unittest.TestCase):
         struct.pack_into('<IIQQ',data,16+24*count,300,0,0,0x2321)
         with self.assertRaises(ValueError):self.module.decode(data)
 
+    def csf_marks(self, omit=None, tag=0x2322, **changes):
+        import struct
+        data=self.marks(build=0x2322)
+        values=dict(zip(self.module.CSF_KEYS,[7,0,0,0x2830,1,0,1,1,
+            0x80000000,0,0,0,0,0x01020003,0x123,0x4001000,0x4002000,8,64,0x100,1,1]))
+        values.update(changes)
+        raw=struct.pack('<I2i19I',*(values[k] for k in self.module.CSF_KEYS))
+        count=struct.unpack_from('<I',data,12)[0]
+        for i in range(11):
+            if i==omit:continue
+            struct.pack_into('<IIQQ',data,16+24*count,320+i,0,
+                             struct.unpack_from('<Q',raw,8*i)[0],tag)
+            count+=1
+        struct.pack_into('<I',data,12,count)
+        return data
+
+    def test_csf_ready_requires_fresh_complete_matching_evidence(self):
+        result=self.module.decode(self.csf_marks(),0x2322)
+        self.assertTrue(result['csf_firmware_boot_verified'])
+        self.assertTrue(result['csf']['cleanup_verified'])
+        self.assertTrue(self.module.decode(self.csf_marks(mmu_raw=0x10000),0x2322)['csf_firmware_boot_verified'])
+        for args in ({'omit':3},{'tag':0x2321}):
+            with self.assertRaises(ValueError):self.module.decode(self.csf_marks(**args),0x2322)
+        with self.assertRaises(ValueError):self.module.decode(self.csf_marks())
+
+    def test_csf_preloaded_version_fault_and_cleanup_are_not_success(self):
+        for args in ({'job_raw':0},{'mmu_raw':1},{'mcu_status':3},{'version':0},
+                     {'firmware_ready':0},{'input_va':0},{'output_va':0x4094000},
+                     {'groups':0},{'group_stride':31},{'groups':31,'group_stride':0x4c00},{'error':-53},
+                     {'cleanup_error':-53},{'reset_completed':0},{'reset_raw':0}):
+            with self.subTest(args=args):
+                result=self.module.decode(self.csf_marks(**args),0x2322)
+                self.assertFalse(result['csf_firmware_boot_verified'])
+        result=self.module.decode(self.csf_marks(stage=6,error=-53,cleanup_error=-53,reset_completed=0),0x2322)
+        self.assertTrue(result['csf']['firmware_ready_observed'])
+        self.assertFalse(result['csf']['cleanup_verified'])
+
 if __name__ == '__main__':
     unittest.main()

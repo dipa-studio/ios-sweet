@@ -90,6 +90,10 @@ static int run(struct model *m,struct sweet_gpu_boot_config *c,struct sweet_gpu_
     struct sweet_gpu_io io={m,read32,write32,ticks,barrier,1000};
     return sweet_gpu_boot(c,&io,r);
 }
+static int powered(void *p,const struct sweet_gpu_io *io,uint64_t gpu) {
+    struct model *m=p;(void)io;assert(gpu==0x13000000 && m->spm==6 && m->resets==1 && m->requests==2);
+    return -55;
+}
 int main(void) {
     struct model m=model();struct sweet_gpu_boot_config c=config();struct sweet_gpu_boot_report r;
     assert(!run(&m,&c,&r));assert(r.stage==SWEET_GPU_COMPLETE);
@@ -114,7 +118,9 @@ int main(void) {
     m=model();m.gpu_id=0x90000001;assert(run(&m,&c,&r)==SWEET_GPU_MODEL);assert(!m.resets && m.requests==3);
     m=model();m.reset_timeout=1;assert(run(&m,&c,&r)==SWEET_GPU_TIMEOUT);assert(m.requests==3 && m.mask==0x55);
     m=model();m.off_error=-9;assert(run(&m,&c,&r)==-9);assert(r.stage==SWEET_GPU_OFF && r.power_acquired);
-    m=model();m.stuck_timer=1;m.timeout_command=0;assert(run(&m,&c,&r)==SWEET_GPU_TIMEOUT);
+    m=model();c=config();c.powered_probe=powered;c.probe_context=&m;
+    assert(run(&m,&c,&r)==-55);assert(m.requests==3 && !r.power_acquired && m.spm==2);
+    c=config();m=model();m.stuck_timer=1;m.timeout_command=0;assert(run(&m,&c,&r)==SWEET_GPU_TIMEOUT);
     puts("PASS: success, mode/address/ownership gates, stale/negative/malformed replies, bounded waits, reset and cleanup");
     return 0;
 }
@@ -211,7 +217,7 @@ void con_hex(const char *a,uint64_t b){(void)a;(void)b;}
         self.assertEqual(end,len(data))
         v = parsed.children[0].prop('firmware-version').split(b'\0')[0]
         self.assertIn(b'id=a0020001',v);self.assertIn(b'rst=00000100',v)
-        self.assertTrue(v.startswith(b'sweet-shim/gpu2321'))
+        self.assertTrue(v.startswith(b'sweet-shim/gpu2322'))
         for length in (0,7,40,len(data)-128):
             self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(buf),length,report,shared),-1)
 

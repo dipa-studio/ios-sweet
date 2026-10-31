@@ -1,5 +1,50 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: CSF2322 BUILT/REVIEWED; EXACT TRIAL APPROVAL NEXT <<<
+
+No2322 partition write/reboot has occurred. Recovery online, full64MiB boot_a
+independently rehashed2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No active test/restore runner, no restore_pending duty. User asked continue;
+AGENTS.md still requires specific confirmation before each destructive step.
+Next: confirm2322 Recovery fallback boot_a write, restore full baseline/hash;
+only after success confirm/run normal CSF probe. Automatic Recovery remains
+UNRELIABLE. No hardware CSF boot claim.
+
+Independent4KiB/32-bit stage1 MCU firmware loader and bounded L2/AS0/MCU
+state machine implemented. Own2MiB shim BSS arena, live GPUEB/XNU overlap
+checks. Pinned device blob de22d2fc sanitizer replay PASS:7 ordinary sections,
+3 protected skipped,7 table pages,1228800B required,shared606208B VA04000000.
+Review fixes: explicitly establish unmapped AS0 (reset mode0/1,zero table),
+LOCK4GiB then FLUSH_MEM before root UPDATE; MMU high16 REQ_COMPLETE is not
+fault; CSG controls start+0x1000. Fresh global JOB raw IRQbit31 + valid global
+interface required. MCU disable/reset and GPUEB release; readiness/cleanup
+kept separate. No global config/doorbell, shader work, Vulkan or Metal yet.
+
+Local incremental kernel0120 session52988 exited0. Kernel2322 SHA256
+f8a78e1868f75103352167290105814444ec685987e3faf248c5dbeec996fa47,
+16724248B. No CI/push. Patch0120 adds88B CSF report marks320..330 and
+platform300..308,all2322. Decoder --build0x2322 rejects partial/stale/duplicate
+records;2321 supported.38 targeted tests PASS, ASan/UBSan plus actual blob.
+Initial image link failed because2MiB BSS exceeds ADR reach; start.S now
+ADRP+ADD for stack/BSS. Final freestanding link/component readback PASS.
+
+FINAL image (earlier build1/ready/ready2 superseded):
+research/matisse/20261031-gpu/shim2322-final/matisse-shim-gpu2322.img
+26710016B SHA2565ade1013c6cae1119d04af74db5a446c6e7401e682da6b74010bc4b4ad189e64.
+Expanded80402548B,stock Linux+32MiB,readonly root. Arena shim offset483328,
+BSSend2580576,shimend2650112,payload2650128 (offsets,not runtime PAs).
+No proprietary blob/dump committed. Frozen2313 board/UFS/display retained;
+unrelated dirty shim.c/build.sh and collector-v2 preserved.
+
+Ignored shim2322-trials/run-once.py prepared, readonly preflight PASS. Exact
+image approval token required. Baseline/image hash checks, journal before
+write, full partition readback, fresh tail+marks, full64MiB restore/hash.
+Same-image Recovery fallback required before normal trial. No official
+fastboot: one persistent fbraw session restores known20MiB stock prefix then
+requests Recovery for full restore. No blind repeated raw reopen on timeout.
+Script NOT run except preflight. Manual Fastboot may still be necessary.
+Docs: docs/matisse-csf-bringup.md. Commit recorded below after staging.
+
 ## >>> COMPLETE 2026-10-31: REAL GPU POWER + SOFT RESET VERIFIED; FULL RESTORE <<<
 
 Latest instruction fulfilled: flash original image, enter Recovery and read

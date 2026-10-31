@@ -3,6 +3,9 @@
 #include "gpu.h"
 #include "fdt.h"
 #include "console.h"
+#ifdef SHIM_CSF_PROBE
+#include "csf.h"
+#endif
 
 static int equal(const char *a, const char *b)
 {
@@ -159,6 +162,11 @@ int shim_gpu_prepare(uintptr_t dtb, uint64_t xnu_base, uint64_t xnu_bytes,
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
     const struct sweet_gpu_io io = { .read32 = native_read, .write32 = native_write,
         .ticks = native_ticks, .barrier = native_barrier, .frequency = frequency };
+    #ifdef SHIM_CSF_PROBE
+    struct shim_csf_context probe = { .xnu_base=xnu_base, .xnu_bytes=xnu_bytes,
+        .shared_base=c.shared_base, .shared_bytes=c.shared_bytes, .platform=r };
+    c.powered_probe=shim_csf_powered; c.probe_context=&probe;
+#endif
     sweet_gpu_boot(&c, &io, r);
 #else
     extern void shim_gpu_host_run(const struct sweet_gpu_boot_config *, struct sweet_gpu_boot_report *);
@@ -220,15 +228,21 @@ int shim_gpu_publish(uintptr_t adt, uint32_t bytes,
     char *a = (char *)property(adt, bytes, "firmware-version", 128);
     char *b = (char *)property(adt, bytes, "system-firmware-version", 128);
     if (!raw || !a || !b || sizeof(*r) > 128) return -1;
+#ifdef SHIM_CSF_PROBE
+    uint8_t *csf=property(adt, bytes, "sweet-csf-report", 128);
+    if (!csf || sizeof(shim_csf_report)>128) return -1;
+    for (unsigned i=0;i<128;i++) csf[i]=0;
+    for (unsigned i=0;i<sizeof(shim_csf_report);i++) csf[i]=((const uint8_t *)&shim_csf_report)[i];
+#endif
     for (unsigned i = 0; i < 128; i++) raw[i] = 0, a[i] = 0, b[i] = 0;
     for (unsigned i = 0; i < sizeof(*r); i++) raw[i] = ((const uint8_t *)r)[i];
-    char *p = text(a, "sweet-shim/gpu2321 s=");
+    char *p = text(a, "sweet-shim/gpu2322 s=");
     p = hex(p, r->stage, 2); p = text(p, " e="); p = hex(p, (uint32_t)r->error, 8);
     p = text(p, " id="); p = hex(p, r->gpu_id, 8);
     p = text(p, " rst="); p = hex(p, r->reset_rawstat, 8);
     p = text(p, " on="); p = hex(p, (uint32_t)r->on_result, 8);
     p = text(p, " off="); p = hex(p, (uint32_t)r->off_result, 8); *p = 0;
-    p = text(b, "sweet-shim/gpu2321 shared="); p = hex(p, shared, 16);
+    p = text(b, "sweet-shim/gpu2322 shared="); p = hex(p, shared, 16);
     p = text(p, " fw="); p = hex(p, r->firmware_memory, 16);
     p = text(p, " magic="); p = hex(p, r->firmware_magic, 8);
     p = text(p, " spm="); p = hex(p, r->spm_before, 8);

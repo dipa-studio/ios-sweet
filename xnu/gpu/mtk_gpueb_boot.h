@@ -21,6 +21,10 @@ struct sweet_gpu_boot_config {
     uint64_t xnu_base, xnu_bytes;
     struct sweet_gpueb_shared layout;
     uint32_t boot_mode, tx_offset, rx_offset, channel, timeout_ms;
+    /* Optional synchronous diagnostic while the exclusive power reference
+     * is held after reset. Default NULL preserves power/reset-only builds. */
+    int (*powered_probe)(void *, const struct sweet_gpu_io *, uint64_t);
+    void *probe_context;
 };
 enum sweet_gpu_stage {
     SWEET_GPU_CONFIG = 1, SWEET_GPU_POWER_DOMAIN = 2,
