@@ -22,12 +22,21 @@ struct sweet_csf_boot_config {
     uint32_t vendor_cached_memattr;
     /*2331:0/1 opt-in original MT6983 platform snapshot. Reads only. */
     uint32_t platform_snapshot;
+    /*2332:0/1 read-only AS0/L2 snapshot and pinned executable readback.
+     * Offset names an owned arena page, never an arbitrary host address. */
+    uint32_t access_snapshot, firmware_probe_offset, firmware_probe_va;
+    uint32_t firmware_probe_expected;
 };
 struct sweet_csf_platform_snapshot {
     uint32_t gpu_status, mcu_control, gpu_fault_status, gpu_fault_lo, gpu_fault_hi;
     uint32_t job_stat, spm_status, spm_status_second;
     uint32_t mfg_power0, mfg_power1, mfg_power2, mfg_power3;
     uint32_t mfg_pll_con1, mfgsc_pll_con1, topckgen_sel, rpc_slp_protect;
+};
+struct sweet_csf_access_snapshot {
+    uint32_t mmu_raw, job_raw, as_status, as_fault, as_fault_lo, as_fault_hi;
+    uint32_t l2_ready_lo, l2_ready_hi, l2_transition_lo, l2_transition_hi;
+    uint32_t firmware_word0, version;
 };
 struct sweet_csf_boot_report {
     uint32_t stage;
@@ -79,6 +88,11 @@ struct sweet_csf_boot_report {
      * after wait/before cleanup. Values are observations,not readiness. */
     uint32_t platform_sample_flags, platform_reserved;
     struct sweet_csf_platform_snapshot platform_before, platform_after;
+    /*2332 appends120 bytes (560 total), preserving the440-byte prefix.
+     * Flags bit0 before AUTO,bit1 after wait; readback is not execution. */
+    uint32_t access_sample_flags, access_reserved, firmware_probe_va;
+    uint32_t firmware_probe_pa_lo, firmware_probe_pa_hi, firmware_probe_expected;
+    struct sweet_csf_access_snapshot access_before, access_after;
 };
 enum sweet_csf_boot_stage {
     SWEET_CSF_BOOT_CONFIG=1, SWEET_CSF_BOOT_L2=2, SWEET_CSF_BOOT_AS=3,

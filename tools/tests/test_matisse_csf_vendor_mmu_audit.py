@@ -177,6 +177,11 @@ class MemattrIndexTests(unittest.TestCase):
 
 
 class RegisterTraceTests(unittest.TestCase):
+    def test_access_snapshot_adds_no_actual_c_writes(self):
+        self.assertEqual(audit.probe_boot_trace(1,1,1,0), audit.probe_boot_trace(1,1,1,1))
+        for args in ((1,1,1,2),(1,1,0,1)):
+            with self.assertRaises(ValueError):audit.probe_boot_trace(*args)
+
     def test_platform_snapshot_adds_no_actual_c_writes(self):
         baseline = audit.probe_boot_trace(1, 1, 0)
         observed = audit.probe_boot_trace(1, 1, 1)

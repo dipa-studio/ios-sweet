@@ -57,7 +57,7 @@ class PersistentReportPatchTests(unittest.TestCase):
         # locally edited build tree must not conceal a broken source patch.
         names = subprocess.check_output(['git','ls-files','--','xnu/patches/*.patch'],
                                         cwd=ROOT,text=True).splitlines()
-        latest='xnu/patches/0129-matisse-csf-platform-snapshot.patch'
+        latest='xnu/patches/0130-matisse-csf-access-snapshot.patch'
         if latest not in names:names=sorted(names+[latest])
         self.assertTrue(names)
         with tempfile.TemporaryDirectory(prefix='csf-evidence-patches-') as directory:
@@ -67,13 +67,13 @@ class PersistentReportPatchTests(unittest.TestCase):
                     cwd=directory,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,name+': '+result.stderr)
             source = (Path(directory)/'bsd/dev/sweet_ufs.c').read_text()
-        self.assertIn('#define SWEET_BUILD_ID 0x2331u',source)
+        self.assertIn('#define SWEET_BUILD_ID 0x2332u',source)
         begin = source.index('static void\nsweet_gpu_report_marks(void)\n{')
         end = source.index('\n}\n',begin)
         report = source[begin:end]
-        self.assertIn('size == 440',report)
-        self.assertIn('uint32_t csf[110];',report)
-        self.assertIn('i < 55;',report)
+        self.assertIn('size == 560',report)
+        self.assertIn('uint32_t csf[140];',report)
+        self.assertIn('i < 70;',report)
         self.assertIn('sweet_mark(320 + i, a, SWEET_BUILD_ID);',report)
         self.assertIn('for (uint32_t i = 0; i < 16; i++) {\n'
                       '\t\tsweet_mark(70 + i, i, sweet_disp_trace[i]);',source)
@@ -163,6 +163,17 @@ class ReportDecodeTests(unittest.TestCase):
         if build>=0x2331:
             raw+=struct.pack('<2I',changes.get('platform_sample_flags',3),changes.get('platform_reserved',0))
             raw+=struct.pack('<32I',*range(32))
+        if build>=0x2332:
+            raw+=struct.pack('<6I',changes.get('access_sample_flags',3),changes.get('access_reserved',0),
+                changes.get('firmware_probe_va',0x01000000),changes.get('firmware_probe_pa_lo',0x90006000),
+                changes.get('firmware_probe_pa_hi',0),changes.get('firmware_probe_expected',0x12345678))
+            for prefix in ('before','after'):
+                words=[0,0x80000000 if prefix=='after' else 0,0,0,0,0,1,0,0,0,0x12345678,
+                       values['version'] if prefix=='after' else values['version_before']]
+                words[10]=changes.get('word_'+prefix,words[10])
+                for i,key in enumerate(self.module.CSF_ACCESS_KEYS):
+                    words[i]=changes.get('access_'+prefix+'_'+key,words[i])
+                raw+=struct.pack('<12I',*words)
         count=struct.unpack_from('<I',data,12)[0]
         for i in range(len(raw)//8):
             if i==omit:continue
@@ -222,6 +233,31 @@ class ReportDecodeTests(unittest.TestCase):
             with self.subTest(changes=changes),self.assertRaises(ValueError):
                 self.module.decode(self.csf_marks(build=0x2331,**changes),0x2331)
         with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2330),0x2331)
+
+    def test_2332_access_snapshot_preserves_fault_registers_and_readback_limits(self):
+        r=self.module.decode(self.csf_marks(build=0x2332),0x2332)
+        self.assertTrue(r['csf_firmware_boot_verified'])
+        self.assertTrue(r['csf']['access_snapshot_complete'])
+        self.assertTrue(r['csf']['firmware_cpu_readback_matches'])
+        self.assertEqual(r['csf']['firmware_probe_pa'],0x90006000)
+        self.assertEqual(r['csf']['access_after']['l2_ready_lo'],1)
+        for changes in ({'word_before':0},{'word_after':0},{'access_sample_flags':0},
+                        {'access_sample_flags':1},{'version':0},{'job_raw':0},
+                        {'cleanup_error':-53},{'access_after_mmu_raw':1},
+                        {'access_after_as_fault':0xc0},{'access_after_as_status':1},
+                        {'access_after_l2_ready_lo':0},{'access_after_l2_transition_lo':1},
+                        {'access_after_job_raw':0},{'access_after_version':0}):
+            with self.subTest(changes=changes):
+                r=self.module.decode(self.csf_marks(build=0x2332,**changes),0x2332)
+                self.assertFalse(r['csf_firmware_boot_verified'])
+        for changes in ({'access_sample_flags':2},{'access_sample_flags':4},
+                        {'access_reserved':1},{'firmware_probe_va':0x04000000},
+                        {'firmware_probe_pa_lo':0x90000000},{'firmware_probe_pa_lo':0x90300000},
+                        {'firmware_probe_pa_lo':0x90006001},{'omit':69},{'tag':0x2331}):
+            with self.subTest(changes=changes),self.assertRaises(ValueError):
+                self.module.decode(self.csf_marks(build=0x2332,**changes),0x2332)
+        with self.assertRaises(ValueError):
+            self.module.decode(self.csf_marks(build=0x2331),0x2332)
 
     def test_csf_ready_requires_fresh_complete_matching_evidence(self):
         result=self.module.decode(self.csf_marks(),0x2322)

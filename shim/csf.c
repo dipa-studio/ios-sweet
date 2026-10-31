@@ -6,7 +6,7 @@
 static uint8_t arena[2u<<20] __attribute__((aligned(4096)));
 extern const uint8_t sweet_csf_blob_start[],sweet_csf_blob_end[];
 struct sweet_csf_boot_report shim_csf_report;
-_Static_assert(sizeof(struct sweet_csf_boot_report)==440, "CSF2331 platform snapshot ABI");
+_Static_assert(sizeof(struct sweet_csf_boot_report)==560, "CSF2332 access snapshot ABI");
 static int overlap(uint64_t a,uint64_t n,uint64_t b,uint64_t m)
 {
     if(!n||!m||a>UINT64_MAX-n||b>UINT64_MAX-m)return 1;
@@ -35,14 +35,23 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
     struct sweet_csf_boot_config c={.gpu=gpu,.root_pa=root,.arena_pa=pa,
         .arena_bytes=memory.required_bytes,.shared_offset=memory.shared_offset,
         .shared_bytes=memory.shared_bytes,.timeout_ms=1000,.noncoherent=1,
-        .pte_group_requested=6,.vendor_ina0=1,.vendor_cached_memattr=1,.platform_snapshot=1};
+        .pte_group_requested=6,.vendor_ina0=1,.vendor_cached_memattr=1,
+        .platform_snapshot=1,.access_snapshot=1};
     for(uint32_t i=0;i<memory.mapping_count;i++) {
         const struct sweet_csf_mapping *m=&memory.map[i];
         c.pte_pages_built+=m->bytes/4096;
         if(m->va<=0x0202c000 && (uint64_t)m->va+m->bytes>=0x0202d000 && (m->flags&3)==3)
             c.private_probe_offset=m->arena_offset+0x0202c000-m->va;
+        if(m->va==0x01000000 && (m->flags&4) && m->data_bytes>=4) {
+            const uint8_t *p=sweet_csf_blob_start+m->data_start;
+            c.firmware_probe_offset=m->arena_offset;c.firmware_probe_va=m->va;
+            c.firmware_probe_expected=(uint32_t)p[0]|(uint32_t)p[1]<<8|
+                (uint32_t)p[2]<<16|(uint32_t)p[3]<<24;
+        }
     }
-    if(!c.private_probe_offset) {shim_csf_report.error=SWEET_CSF_BOOT_ARGUMENT;return shim_csf_report.error;}
+    if(!c.private_probe_offset||!c.firmware_probe_offset) {
+        shim_csf_report.error=SWEET_CSF_BOOT_ARGUMENT;return shim_csf_report.error;
+    }
     rc=sweet_csf_boot(&c,io,&shim_csf_report);
     con_hex2("CSF","stage=",shim_csf_report.stage,"error=",(uint32_t)shim_csf_report.error);
     con_hex2("CSF","version=",shim_csf_report.version,"mcu=",shim_csf_report.mcu_status);
