@@ -1,0 +1,93 @@
+#!/matisse-collector/busybox sh
+# Standalone initramfs PID 1. Never starts Android init or mounts block media.
+C=/matisse-collector
+if [ "$1" = --snapshot-only ]; then
+    case "$0" in */*) C=${0%/*};; *) C=.;; esac
+fi
+B=$C/busybox
+export PATH=/matisse-collector/bin
+export HOME=/
+export LC_ALL=C
+umask 077
+snapshot() {
+    out=$1
+    $B mkdir -p "$out"
+    for name in cmdline version iomem modules mounts; do
+        $B cat /proc/"$name" > "$out/proc-$name.txt" 2>/dev/null
+    done
+    $B cat /sys/firmware/fdt > "$out/live.dtb" 2>/dev/null
+    $B cat /proc/pl_lk > "$out/pl_lk.bin" 2>/dev/null
+    $B dmesg > "$out/dmesg.txt" 2>/dev/null
+    $B cat "$C/modules.list" > "$out/modules-requested.txt"
+    $B cat "$C/build.json" > "$out/build.json"
+    [ ! -f /run/collector-init.log ] || $B cp /run/collector-init.log "$out/init.log"
+    $B ls -l /sys/class/udc > "$out/udc.txt" 2>&1
+    $B cat /sys/bus/platform/devices/11201000.usb0/mode > "$out/usb-mode.txt" 2>/dev/null
+    $B cat /sys/class/udc/11201000.usb0/state > "$out/usb-state.txt" 2>/dev/null
+    return 0
+}
+# Safe diagnostic mode in an already running Recovery: no mounts/modules/USB changes.
+if [ "$1" = --snapshot-only ]; then
+    case "$2" in /tmp/matisse-collector-*) snapshot "$2"; exit 0;; *) exit 64;; esac
+fi
+[ "$$" = 1 ] || exit 64
+$B mkdir -p /proc /sys /dev /run
+$B mount -t proc -o nosuid,nodev,noexec proc /proc
+$B mount -t sysfs -o nosuid,nodev,noexec sysfs /sys
+$B mount -t tmpfs -o nosuid,mode=0755,size=8m tmpfs /dev
+$B mount -t tmpfs -o nosuid,nodev,size=64m tmpfs /run
+$B mknod -m 600 /dev/console c 5 1
+$B mknod -m 666 /dev/null c 1 3
+exec > /run/collector-init.log 2>&1
+echo /matisse-collector/no-modprobe > /proc/sys/kernel/modprobe
+echo MATISSE_RAM_COLLECTOR_V1
+snapshot /run/before-modules
+# Only explicit USB/clock/PMIC prerequisites; no modprobe/autoload.
+while IFS= read -r module; do
+    echo "insmod $module"
+    $B insmod /matisse-collector/modules/"$module"
+done < /matisse-collector/modules.list
+$B mkdir -p /sys/kernel/config
+$B mount -t configfs -o nosuid,nodev,noexec configfs /sys/kernel/config
+g=/sys/kernel/config/usb_gadget/matisse_collector
+$B mkdir -p "$g"
+echo 0x18d1 > "$g/idVendor"
+echo 0x4ee7 > "$g/idProduct"
+echo 0x0200 > "$g/bcdUSB"
+echo 0x0200 > "$g/bcdDevice"
+$B mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409"
+echo ram-collector > "$g/strings/0x409/serialnumber"
+echo ios-sweet > "$g/strings/0x409/manufacturer"
+echo 'matisse RAM collector' > "$g/strings/0x409/product"
+echo 'read-only log transport' > "$g/configs/c.1/strings/0x409/configuration"
+echo 100 > "$g/configs/c.1/MaxPower"
+$B mkdir -p "$g/functions/acm.usb0"
+$B ln -s "$g/functions/acm.usb0" "$g/configs/c.1/acm.usb0"
+# MTU3 operation enum 3 = peripheral. No Type-C/charger module dependency.
+echo 3 > /sys/bus/platform/devices/11201000.usb0/mode
+echo 11201000.usb0 > "$g/UDC"
+for attempt in 1 2 3 4 5; do
+    [ -r /sys/class/tty/ttyGS0/dev ] && break
+    $B sleep 1
+done
+if [ -r /sys/class/tty/ttyGS0/dev ]; then
+    devno=$($B cat /sys/class/tty/ttyGS0/dev)
+    $B mknod -m 600 /dev/ttyGS0 c "${devno%:*}" "${devno#*:}"
+fi
+snapshot /run/after-modules
+$B tar -czf /run/collection.tar.gz -C /run before-modules after-modules
+size=$($B wc -c < /run/collection.tar.gz)
+sum=$($B sha256sum /run/collection.tar.gz)
+sum=${sum%% *}
+# No command receiver or shell on USB. Repeat the immutable RAM snapshot.
+while :; do
+    if [ -c /dev/ttyGS0 ]; then
+        (
+            $B stty raw -echo < /dev/ttyGS0
+            printf '\nMATISSE-COLLECTOR-V1 %s %s\n' "$size" "$sum"
+            $B base64 /run/collection.tar.gz
+            printf 'MATISSE-COLLECTOR-END\n'
+        ) > /dev/ttyGS0
+    fi
+    $B sleep 3
+done

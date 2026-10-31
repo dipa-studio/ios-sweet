@@ -1,5 +1,54 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: RAM COLLECTOR BUILT; BOOT_A FLASH NOT AUTHORIZED YET <<<
+
+User approved RAM-only collector development, then asked to reboot Recovery
+after testing. Current Recovery stayed online; NO reboot/partition write/
+USB rebind/insmod performed. No active runner or pending restoration.
+A specific boot_a flash confirmation is still required by AGENTS.md; the
+collector image did not exist when the earlier general approval was given.
+
+New tools/matisse-ramcollector.py reads bounded newc/ELF, selects17 explicit
+USB/PMIC/clock prerequisites, uses static Recovery BusyBox, adds separate
+rdinit PID1. tools/ramcollector/init mounts pseudo filesystems only, disables
+modprobe, excludes UFS/MMC/GPU/GPUEB, snapshots FDT/pl_lk/dmesg before/after
+modules, exports immutable hash+base64 tar via ACM. No USB command receiver.
+Tools/matisse-collector-receive.py bounds and verifies frame/archive before
+writing new host output. No firmware binaries or raw device data committed.
+
+Critical fix: actual vendor_boot platform fragment is just4B legacy LZ4
+magic02214c18. Gzip appended to that would be invalid; collector uses legacy
+LZ4, verified repeated-prefix decompression against actual fragment. Own
+/matisse-collector paths avoid Android init selection; actual normal LK
+fragment selection and minimal module closure remain BOOT-UNTESTED.
+Reference driver mode3 is peripheral, used to avoid charger/Type-C stack.
+log_store module is included for proc/pl_lk; no proc write requested.
+
+Build artifact research/matisse/20261031-gpu/matisse-gpueb-ramcollector.img
+21450752B SHA25650813edab73c4ebcb4554cb41360457f180df1df593d0325ebc76fe64f2dee6d.
+Ramdisk1867289B legacyLZ4,40 entries,17 modules; compressed kernel/signature
+identical to existing GPUEB probe, expanded48945268B. Signature retained,
+NOT re-signed/authenticated. No new full XNU build or CI run.
+
+Validation:9 new host tests + GPUEB10/entryprobe14/Android7 PASS (40 total
+this phase). Recovery --snapshot-only executed from /tmp,26 files packed
+and receiver verified; transmission used existing ADB, NOT ACM. PID1,
+module loading/USB enumeration/normal boot are NOT tested; no new GPU_ID,
+shared PA or acceleration result. Fresh boot_a read-only hash still equals
+full64MiB baseline2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1;
+local full backup independently verified. Raw evidence collector-analysis/
+under ignored GPU research. Details and pending guarded procedure are
+docs/matisse-ramcollector.md.
+
+NEXT: obtain specific authorization for temporary boot_a collector flash,
+one normal-mode collection, full64MiB boot_a restore and Recovery return.
+Only then implement a fresh dedicated guarded runner/journal, preflight
+slot/product/size/hashes, receive over exact ACM port, restore/readback.
+Do not execute historical run-ui runners or flash LK/vendor_boot/DTBO/root.
+Then audit normal GPUEB reservations versus XNU RAM before any GPU MMIO.
+Preserve unrelated dirty shim/build.sh,shim/shim.c,tools/sweet-marks.py,
+0093,.DS_Store,.workbuddy. Previous handoffs follow.
+
 ## >>> ACTIVE 2026-10-31: GPUEB RECOVERY SKIP CONFIRMED; PROTOCOL + FDT PROBE BUILT <<<
 
 Latest user authorization supersedes STATIC-only notes below: device online
