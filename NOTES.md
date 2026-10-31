@@ -1,5 +1,19 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: GPU2320 RECOVERY FALLBACK VERIFIED; NORMAL TRIAL NEXT <<<
+
+Commit3056f54 contains bounded shim GPU power/reset implementation. First
+hardware phase completed: GPU2320 recovery-mode fallback boot returned fresh
+Recovery in26.56s. Full64MiB boot_a restored with readback SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Journal research/matisse/20261031-gpu/shim2320-trials/recovery-fallback/
+journal.json status complete-restored-Recovery,restore_pending=false.
+This verifies embedded stock Linux recovery bypass, NOT normal GPU operation
+or automatic watchdog return.47 local host tests re-run PASS; no CI.
+NEXT run gpu-normal with same imagebc8ecb9f, then restore full boot_a and
+inspect only fresh gpu2320 persistent evidence. Preserve collector-v2 and
+all unrelated dirty files. No LK/vendor_boot/DTBO/root writes.
+
 ## >>> ACTIVE 2026-10-31: GPU2320 BUILT; RECOVERY FALLBACK TEST NEXT <<<
 
 User latest: keep collector-v2; prioritize GPU power/init through shim and
