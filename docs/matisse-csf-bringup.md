@@ -252,7 +252,7 @@ Expanded80402548B; stock Linux+32MiB, ramdisk/signature bytes and frozen2313
 display/UFS/board objects retain2322 component hashes. Signature bytes are
 preserved, not authenticated by this builder.
 
-No2323 hardware write/reboot has occurred. Recovery identity matisse/_a/root
+At the2323 build handoff, no hardware write/reboot had occurred. Recovery identity matisse/_a/root
 was read again without writes. Readonly runner preflight also verified the
 complete64MiB baseline SHA2562931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
 Prepared ignored shim2323-trials/run-once.py has run only preflight.
@@ -260,3 +260,31 @@ First specific confirmation must cover one
 2323 Recovery-fallback trial and full baseline restore/hash. Only after it
 passes should a separately confirmed normal MCU trial run. Automatic Recovery
 from normal XNU remains unreliable; retain the tested persistent fbraw restore.
+
+
+## Recovery fallback2323 hardware result (2026-10-31)
+
+The specifically authorized fallback trial of image23b2c8dc ran once.
+Runner85408 exited0; a new Recovery boot was observed26.53s after adb reboot
+recovery. Full candidate partition readback matched predicted SHA256
+bf7caf4432b7717002cd7dc9168914662820327b30f499454cdc6acc58c7bac7
+(candidate prefix plus unchanged original tail). No Fastboot or user USB/key
+action was needed. Recovery dmesg889488B was saved.
+
+The full67108864-byte original boot_a was restored, then independently
+read and verified SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Independent identity/geometry confirmed matisse/slot_a/root Recovery.
+Journal shim2323-trials/recovery-fallback/journal.json is
+complete-restored-Recovery, restore_pending=false. No runner/restoration
+remains active. Evidence stays ignored in that directory and the sibling
+recovery-fallback-run.txt. Before/after4198400B diagnostic tails and4096B
+marks are byte-identical, as expected for bypass; old console/marks must not
+be mistaken for fresh2323 MCU execution.
+
+This verifies Recovery entry/BSS and embedded stock Linux fallback only.
+The next normal2323 trial needs separate specific approval for the same
+image: write boot_a from Recovery, boot normal, capture fresh2323 CSF marks
+320..335 and console, then restore the full baseline/hash. Automatic Recovery
+from normal XNU remains unreliable. No firmware-ready or acceleration claim.
+No build, CI run or source-code modification was needed for this fallback.

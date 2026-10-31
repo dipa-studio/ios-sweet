@@ -1,5 +1,37 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> COMPLETE 2026-10-31: CSF2323 RECOVERY FALLBACK PASS; FULL RESTORE <<<
+
+User specifically confirmed image23b2c8dc Recovery-fallback boot_a write,
+reboot Recovery, then original restoration. Executed ONCE; runner85408 exit0.
+New Recovery observed26.53s after adb reboot recovery. Candidate full-partition
+readbackbf7caf4432b7717002cd7dc9168914662820327b30f499454cdc6acc58c7bac7
+matched predicted candidate prefix + unchanged baseline tail. No Fastboot,
+user unplug or keys needed. Fresh Recovery dmesg889488B captured.
+Full67108864B original boot_a restored, then independently rehashed
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Independent identity matisse/_a/recovery/root and geometry verified.
+No active trial/restore runner or pending restoration.
+
+Authoritative ignored shim2323-trials/recovery-fallback/journal.json:
+complete-restored-Recovery,restore_pending=false,new_recovery_observed=true,
+return_seconds26.53. Evidence before/after tail4198400B and marks4096B
+byte-identical, expected for Recovery bypass. Console history is NOT fresh
+2323 MCU evidence. Independent-post-restore.txt and recovery-dmesg.txt saved.
+Image shim2323-ready/matisse-shim-gpu2323.img26710016B SHA256
+23b2c8dc56f9a7b72a585efa9ebcf889d2979e1dca6fb58fe53dbf81eafb3137.
+This verifies2323 Recovery entry/BSS and intact stock Linux fallback ONLY;
+not normal GPU/MCU execution, firmware readiness or acceleration.
+
+NEXT: obtain specific approval for ONE normal2323 MCU trial with SAME image,
+Recovery boot_a write -> normal reboot -> fresh2323 marks320..335 and console
+-> full64MiB baseline restore/hash. Same-image fallback prerequisite PASSED.
+Normal XNU automatic Recovery remains UNRELIABLE; persistent fbraw prefix
+restore is available if Fastboot appears. No normal2323 write authorized
+by the just-completed fallback confirmation. Implementation41c0b94,
+build handoff500f36f; no CI/build/source changes this trial. Unrelated dirty
+collector-v2/shim work preserved. Older no-write notes are historical.
+
 ## >>> ACTIVE 2026-10-31: CSF2323 BUILT; NO DEVICE WRITE <<<
 
 Implementation/tests/docs committed41c0b94 on codex/matisse-xnu-screen-log.
