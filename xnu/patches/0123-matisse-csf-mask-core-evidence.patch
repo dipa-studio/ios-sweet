@@ -1,13 +1,60 @@
 --- a/bsd/dev/sweet_ufs.c
 +++ b/bsd/dev/sweet_ufs.c
-@@ -826 +826 @@
+@@ -825,4 +825,4 @@
+ /* Bumped for every locally built kernel that is flashed to the phone. */
 -#define SWEET_BUILD_ID 0x2324u
+-
 +#define SWEET_BUILD_ID 0x2325u
-@@ -906,2 +906,2 @@
++
+ struct sweet_mark_rec {
+@@ -888,27 +888,27 @@
+ static void
+ sweet_gpu_report_marks(void)
+ {
+-	DTEntry chosen;
+-	const uint32_t *report;
+-	unsigned int size;
+-	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
+-	    SecureDTGetProperty(chosen, "sweet-gpu-report",
+-	    (void const **)&report, &size) != kSuccess || size != 128) {
+-		return;
+-	}
+-	uint32_t words[18];
+-	memcpy(words, report, sizeof(words));
+-	for (uint32_t i = 0; i < 9; i++) {
+-		uint64_t a = (uint64_t)words[2 * i] | (uint64_t)words[2 * i + 1] << 32;
+-		sweet_mark(300 + i, a, SWEET_BUILD_ID);
+-	}
+-	if (SecureDTGetProperty(chosen, "sweet-csf-report",
 -	    (void const **)&report, &size) == kSuccess && size == 128) {
 -		uint32_t csf[32];
+-		memcpy(csf, report, sizeof(csf));
+-		for (uint32_t i = 0; i < 16; i++) {
+-			uint64_t a = (uint64_t)csf[2 * i] | (uint64_t)csf[2 * i + 1] << 32;
+-			sweet_mark(320 + i, a, SWEET_BUILD_ID);
+-		}
+-	}
++	DTEntry chosen;
++	const uint32_t *report;
++	unsigned int size;
++	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
++	    SecureDTGetProperty(chosen, "sweet-gpu-report",
++	    (void const **)&report, &size) != kSuccess || size != 128) {
++		return;
++	}
++	uint32_t words[18];
++	memcpy(words, report, sizeof(words));
++	for (uint32_t i = 0; i < 9; i++) {
++		uint64_t a = (uint64_t)words[2 * i] | (uint64_t)words[2 * i + 1] << 32;
++		sweet_mark(300 + i, a, SWEET_BUILD_ID);
++	}
++	if (SecureDTGetProperty(chosen, "sweet-csf-report",
 +	    (void const **)&report, &size) == kSuccess && size == 192) {
 +		uint32_t csf[48];
-@@ -909 +909 @@
--		for (uint32_t i = 0; i < 16; i++) {
++		memcpy(csf, report, sizeof(csf));
 +		for (uint32_t i = 0; i < 24; i++) {
++			uint64_t a = (uint64_t)csf[2 * i] | (uint64_t)csf[2 * i + 1] << 32;
++			sweet_mark(320 + i, a, SWEET_BUILD_ID);
++		}
++	}
+ }

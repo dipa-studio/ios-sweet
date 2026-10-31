@@ -36,9 +36,15 @@ Host-managed restoration, NOT autonomous Recovery from normal XNU.
 
 Next STATIC work: exact firmware boot/MMU/coherency prerequisites and G710
 vendor initialization; do not treat masks as the proven2323 timeout cause.
-Validate final tracked patch representation against normal patch tooling.
-No second2325 trial,new image/device write authorized. Implementation3f29061,
-handoffcb2ad31,fallback98f9438. No new build/CI/push this normal trial.
+Fixed0123 patch serialization to carry ordinary context (no zero-context
+apply flag required). Both git apply and patch replay PASS and reproduce
+exact built2325 source; full tracked evidence-patch sequence PASS,display
+trace remains16. Added CI-style patch-sequence regression. Image/kernel
+bytes unchanged; no rebuild or additional device action.
+31 targeted tests PASS (3.080s), including normal git-apply patch regression;
+git diff --check PASS. No second2325 trial,new image/device write authorized.
+Implementation3f29061,handoffcb2ad31,fallback98f9438,normal result32dbb13.
+No new build/CI/push this normal trial.
 Evidence ignored gpu-normal/{after-marks.bin,after-console.txt,gpu-result.json,
 journal.json,independent-post-restore.txt,recovery-dmesg.txt},gpu-normal-run.txt.
 Preserve unrelated collector-v2/shim work. Older2325 pretrial text historical.
@@ -83,10 +89,12 @@ all exact GPU/JOB/MMU readbacks plus AS_PRESENT. Gate now requires JOB global
 bit31, GPU fault/protected/reset bits103, and MMU page-fault mask for each
 present AS0..15 bit. Reserved/unimplemented bits may read zero. It records
 shader+tiler PRESENT/PWRTRANS/READY before MCU start and after startup wait;
-the latter snapshot identifies a persistent firmware core-state wait without
-guessing from preloaded metadata. Firmware disassembly at01002ee4 waits for
-TILER_PRESENT (GPU+110/114) & TILER_PWRTRANS (GPU+210/214) to clear, then
-powers shader cores. 2324 did not capture either core state.
+the latter snapshot measures endpoint core state but cannot identify the
+firmware program counter or prove that instructions executed. Firmware
+disassembly at01002ee4 waits for TILER_PRESENT (GPU+110/114) & TILER_PWRTRANS
+(GPU+210/214) to clear, then writes TILER_PWRON (MCU40000190/194). R8 is
+40000010; [r8,#180/184] is not SHADER_PWRON. Synthetic replay corroborates
+the effective addresses, not actual MCU execution.2324 captured neither state.
 
 2325 source, report decoder and strict models implemented.30 targeted tests
 PASS (2.478s); actual pinned firmware ASan/UBSan replay PASS:7 ordinary,

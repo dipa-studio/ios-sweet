@@ -1,14 +1,14 @@
-# MT6983 CSF MCU boot probes (2322 / 2323 / 2324)
+# MT6983 CSF MCU boot probes (2322 / 2323 / 2324 / 2325)
 
 2026-10-31. GPU2321 established actual GPUEB power ownership and Mali soft
 reset on matisse. These diagnostics install MCU firmware mappings, power
-the first L2 group, enable AS0 and start the MCU. Both2322 and2323 hardware
-2322 and2323 trials timed out at MCU start;2324 was rejected by a pre-MCU
-mask gate. All trials were fully restored.2324 Recovery fallback passed.
-2325 records the exact mask/core state and is built locally, but has NOT run
-on hardware. Firmware readiness remains unproven. The original2322 design follows, then the measured results
-and successive2323/2324 changes. There is no shader job, command queue,
-Vulkan or Metal path yet.
+the first L2 group, enable AS0 and start the MCU. Trials2322,2323 and2325
+timed out at MCU start;2324 was rejected by a pre-MCU mask gate. All trials
+were fully restored.2325 measured GPU/JOB/MMU masks and passed its revised
+gate, but still produced no fresh global-interface IRQ or shared version.
+Firmware readiness remains unproven. The original2322 design follows, then
+the measured results and successive2323/2324/2325 changes. There is no shader
+job, command queue, Vulkan or Metal path yet.
 
 ## Reference facts and firmware
 
@@ -343,8 +343,9 @@ Observed instruction locations in the blob:
   0x01002aec.
 - Loop0x01002ee4..0x01002ef2 reads TILER_PWRTRANS at MCU-view
   0x40000214/0x40000210 and TILER_PRESENT at0x40000114/0x40000110, waiting
-  until their intersection is zero. It then writes SHADER_PWRON at
-  0x40000180/0x40000184. These are GPU registers viewed through the MCU
+  until their intersection is zero. It then writes TILER_PWRON at
+  0x40000190/0x40000194 (R8 is0x40000010, so operand offsets180/184
+  resolve to190/194). These are GPU registers viewed through the MCU
   aperture; do not interpret the loop as waiting on shader transition bits.
 - At0x01003012 startup publishes version0x01010000 to shared VA0x04000000.
 - At0x0100301c it writes0x80000000 to internal MCU-view0x40001000, issuing
@@ -353,11 +354,11 @@ Observed instruction locations in the blob:
 An ignored Unicorn2.1.4 Cortex-M7 replay loads ordinary firmware sections
 with a simplified synthetic MMIO model. Baseline reaches WFI in986
 instructions, publishes0x01010000 and writes the first IRQ. Injecting
-present1/transition1 hits a500000-instruction cap in that shader-transition
+present1/transition1 hits a500000-instruction cap in that tiler-transition
 loop with version0. Clearing the injected transition after4 reads reaches
 WFI in1004 instructions. These results establish a startup dependency in
 this synthetic model, not actual GPU execution or the location of2323's
-stall. Real2323 shader present/transition values were not captured.
+stall. Real2323 tiler present/transition values were not captured.
 Optional trace-buffer pointers default0 and startup handles their absence;
 this audit does not show that skipped trace/config entries alone prevent
 initial version publication. Replay source/results remain ignored under
@@ -532,10 +533,13 @@ Before MCU start,2325 captures GPU AS_PRESENT and shader/tiler PRESENT,
 PWRTRANS and READY registers. After the firmware wait, it captures the same
 core state again, along with the existing CSF RAW/shared evidence. The exact
 pinned firmware loop at0x01002ee4 reads TILER_PRESENT and TILER_PWRTRANS,
-waiting for their intersection to clear before it powers shader cores.
+waiting for their intersection to clear before writing TILER_PWRON.
+The effective MCU addresses are0x40000190/194: R8 is0x40000010, so the
+disassembly operands [r8,#0x180/184] do not target SHADER_PWRON.
 2324 did not capture these registers, so no actual cause of its gate rejection
-or the earlier2323 firmware timeout is inferred. Post-start transition
-values will test whether the firmware's initial wait can complete.
+or the earlier2323 firmware timeout is inferred. The endpoint snapshot can
+show a current transition, but cannot locate the firmware program counter
+or exclude an earlier wait.
 
 Report grows128->192B; kernel records24 CSF qwords at marks320..343. Decoder
 retains2321..2324 layouts and verifies mask evidence only for2325. Targeted
@@ -557,12 +561,14 @@ Signature bytes are retained but not authenticated. Proprietary inputs remain
 ignored. Recovery-only readonly preflight reverified current boot_a baseline
 2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
 
-No2325 hardware trial has occurred. Implementation/tests/docs are committed
-as3f29061. Next action is specific approval for ONE2325 Recovery-fallback
+At this build milestone, no2325 hardware trial had occurred. Implementation/
+tests/docs were committed as3f29061. The next action then was specific
+approval for ONE2325 Recovery-fallback
 boot_a trial, Recovery reboot and full baseline restore/hash. A separate approval is required for normal MCU execution after
 same-image fallback passes. Normal XNU Recovery remains unreliable; retain
 the verified persistent fbraw stock-prefix path. No second2324 trial or
-2325 write is authorized by the2324 approval.
+2325 write was authorized by the2324 approval. Both subsequent2325 trials
+and full restorations are recorded below.
 
 
 ## Recovery fallback2325 hardware result (2026-10-31)

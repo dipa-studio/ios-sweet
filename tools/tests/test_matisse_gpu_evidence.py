@@ -50,6 +50,33 @@ int main(void) {
         self.assertIn('ufs_write_blocks_checked(lba, count, false)', patch)
 
 
+@unittest.skipUnless(shutil.which('git'), 'requires git')
+class PersistentReportPatchTests(unittest.TestCase):
+    def test_tracked_patch_sequence_applies_with_normal_git_flags(self):
+        # Exercise the CI-style contextual apply, not --unidiff-zero. A
+        # locally edited build tree must not conceal a broken source patch.
+        names = subprocess.check_output(['git','ls-files','--','xnu/patches/*.patch'],
+                                        cwd=ROOT,text=True).splitlines()
+        self.assertTrue(names)
+        with tempfile.TemporaryDirectory(prefix='csf-evidence-patches-') as directory:
+            for name in names:
+                result = subprocess.run(['git','apply','--whitespace=nowarn',
+                    '--include=bsd/dev/sweet_ufs.c',str(ROOT/name)],
+                    cwd=directory,capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,name+': '+result.stderr)
+            source = (Path(directory)/'bsd/dev/sweet_ufs.c').read_text()
+        self.assertIn('#define SWEET_BUILD_ID 0x2325u',source)
+        begin = source.index('static void\nsweet_gpu_report_marks(void)\n{')
+        end = source.index('\n}\n',begin)
+        report = source[begin:end]
+        self.assertIn('size == 192',report)
+        self.assertIn('uint32_t csf[48];',report)
+        self.assertIn('i < 24;',report)
+        self.assertIn('sweet_mark(320 + i, a, SWEET_BUILD_ID);',report)
+        self.assertIn('for (uint32_t i = 0; i < 16; i++) {\n'
+                      '\t\tsweet_mark(70 + i, i, sweet_disp_trace[i]);',source)
+
+
 class ReportDecodeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
