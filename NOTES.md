@@ -26,7 +26,8 @@ shim2332-access-trials/gpu-normal/. Authorization consumed;no second trial.
 Freshness/ABI/common-field audit PASS;documents updated for measured result.
 NEXT:offline audit original PDC CG/ST and EMI/memory-path initialization
 before selecting a distinct next experiment. No blind MFG/RPC writes or repeated2332. Implementation
-c2adc13/build handoff81f9fc3;no rebuild,CI run,push or repeated tests.
+c2adc13/build handoff81f9fc3;measured result committed18aaa47.
+No rebuild,CI run,push or repeated tests.
 
 ## >>> HISTORICAL 2026-10-31: CSF2332 SINGLE TRIAL AUTHORIZED <<<
 
