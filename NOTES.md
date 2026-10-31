@@ -15,6 +15,10 @@ portable xnu/gpu/mali_csf_firmware.{c,h}, and5 passing tests. C parser is
 NOT wired into a kernel patch or boot path; validates containers only, no
 firmware execution/GPU acceleration claim. Docs/matisse-gpu-static-audit.md
 contains the findings and next implementation dependencies.
+Final validation also included existing board/key regressions:18 tests
+PASS total,11 extracted artifact hashes+firmware identity PASS,git diff
+--check and documentation links/fences PASS. Static audit/docs milestone
+5749b0b and implementation c8988fd are local commits; not pushed.
 
 Source images are /Users/xiaohuasheng/Documents/{super,lk,vcp,dtbo}.img.
 super7918405960B SHA256289951fb8db34509591ada6259737b0522cc5a923f878171e9b746031e601957;
