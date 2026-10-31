@@ -14,6 +14,9 @@ struct sweet_csf_boot_config {
     uint32_t noncoherent;
     /*2328 software build metadata, not hardware translation readback. */
     uint32_t pte_group_requested, pte_pages_built;
+    /*2329: explicit0/1, select vendor's TRANSCFG INA=0. Zero preserves
+     * the previous INA=7 sequence. Existing transcfg_lo records readback. */
+    uint32_t vendor_ina0;
 };
 struct sweet_csf_boot_report {
     uint32_t stage;

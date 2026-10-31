@@ -15,7 +15,7 @@ struct model {
  uint64_t tick;unsigned reads,writes,enabled,resets,as_updates,locked,flushed,lock_low,lock_high;
  uint32_t gpu_mask,job_mask,mmu_mask,l2,raw,job,mcu,mmu,transcfg,table_low,table_high;
  uint32_t memattr_lo,memattr_hi,coherency,coherency_writes;
- int bad_coherency_readback;
+ int bad_coherency_readback,vendor_ina0;
  int unpowered,bad_id,bad_bits,as_busy,no_l2,no_fw,fw_fault,reset_fail,bad_iface,stale,stuck_timer,live_table,request_done,disable_fail,bad_readback,bad_irq_mask,clamp_masks,missing_gpu_irq,missing_mmu_irq;
 };
 static uint32_t rd(void *p,uint64_t a) {
@@ -53,7 +53,7 @@ static uint32_t rd(void *p,uint64_t a) {
  case 0x2428:return m->as_busy?1:0;
  case 0x2400:return m->live_table?0x80000000:m->table_low;case 0x2404:return m->table_high;
  case 0x2408:return m->memattr_lo;case 0x240c:return m->memattr_hi;
- case 0x2430:return m->bad_readback && m->as_updates==2?6:m->transcfg;case 0x2434:return 0;
+ case 0x2430:return m->bad_readback && m->as_updates==2?(m->vendor_ina0?0x420001c6:6):m->transcfg;case 0x2434:return 0;
  case 0x241c:return m->mmu?0xc0:0;case 0x2420:case 0x2424:return 0;
  default:assert(0);return 0;
  }
@@ -83,13 +83,13 @@ static void wr(void*p,uint64_t a,uint32_t v) {
   assert(v==1);m->as_updates++;return;
  case 0x2400:assert(v==0x90000000);m->table_low=v;return;case 0x2404:assert(v==0);m->table_high=v;return;
  case 0x2408:assert(v==0x4c4c9f4c);m->memattr_lo=v;return;case 0x240c:assert(v==0x4c4c4c4c);m->memattr_hi=v;return;
- case 0x2430:assert(v==1||v==0x420001c6);if(v!=1)assert(m->flushed);m->transcfg=v;return;
+ case 0x2430:assert(v==1||v==(m->vendor_ina0?0x42000006:0x420001c6));if(v!=1)assert(m->flushed);m->transcfg=v;return;
  case 0x2434:assert(v==0);return;
  case 0x2004:m->mmu&=~v;return;
  case 0x1004:m->job&=~v;return;
  case 0x700:
   if(v==0){if(!m->disable_fail)m->mcu=0;return;}
-  assert(v==2 && m->l2 && m->as_updates==2 && m->transcfg==0x420001c6);
+  assert(v==2 && m->l2 && m->as_updates==2 && m->transcfg==(m->vendor_ina0?0x42000006:0x420001c6));
   assert((m->gpu_mask&0x103)==0x103 && m->job_mask==UINT32_MAX && (m->mmu_mask&0xff)==0xff);
   m->enabled++;m->mcu=1;
   if(m->request_done)m->mmu=0x10000;
@@ -142,6 +142,17 @@ int main(void) {
  c=cfg();c.pte_group_requested=6;c.pte_pages_built=293;
  m=model();assert(!run(&m,&c,&r));clean(&m,&r);
  assert(r.pte_group_requested==6 && r.pte_pages_built==293);
+ m=model();c=cfg();c.vendor_ina0=1;m.vendor_ina0=1;c.noncoherent=1;
+ c.pte_group_requested=6;c.pte_pages_built=293;
+ assert(!run(&m,&c,&r));clean(&m,&r);
+ assert(r.transcfg_lo==0x42000006 && r.memattr_lo==0x4c4c9f4c && r.memattr_hi==0x4c4c4c4c);
+ assert(r.pte_group_requested==6 && r.pte_pages_built==293 && r.diag_flags==127);
+ m=model();m.vendor_ina0=1;m.no_fw=1;assert(run(&m,&c,&r)==-53 && !r.firmware_ready);clean(&m,&r);
+ assert(r.transcfg_lo==0x42000006 && r.sample_flags==15);
+ m=model();m.vendor_ina0=1;m.bad_readback=1;assert(run(&m,&c,&r)==-52 && !m.enabled);clean(&m,&r);
+ assert(r.transcfg_lo==0x420001c6 && !r.sample_flags);
+ m=model();c.vendor_ina0=2;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
+ c=cfg();
  m=model();c.pte_group_requested=16;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
  m=model();c=cfg();c.pte_pages_built=513;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
  c=cfg();

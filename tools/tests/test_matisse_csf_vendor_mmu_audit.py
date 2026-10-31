@@ -179,6 +179,19 @@ class RegisterTraceTests(unittest.TestCase):
                          ['0x2', '0x0'])
         self.assertEqual([trace['return_code'], trace['stage'], trace['reset_completed']], [-53, 4, 1])
 
+    @unittest.skipUnless(shutil.which('cc'), 'requires C compiler')
+    def test_ina_diagnostic_changes_exactly_one_actual_c_write(self):
+        original, candidate = audit.probe_boot_trace(), audit.probe_boot_trace(1)
+        self.assertEqual(len(original['writes']), len(candidate['writes']))
+        changes = [(a, b) for a, b in zip(original['writes'], candidate['writes']) if a != b]
+        self.assertEqual(changes, [(dict(offset='0x2430', size=4, value='0x420001c6'),
+                                    dict(offset='0x2430', size=4, value='0x42000006'))])
+        self.assertEqual(original['return_code'], candidate['return_code'])
+        self.assertEqual(original['stage'], candidate['stage'])
+        self.assertEqual(original['reset_completed'], candidate['reset_completed'])
+        with self.assertRaisesRegex(ValueError, 'INA'):
+            audit.probe_boot_trace(2)
+
 
 if __name__ == '__main__':
     unittest.main()

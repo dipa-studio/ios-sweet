@@ -37,6 +37,9 @@ HOST_BOOT_TRACE = r'''
 #include <stdint.h>
 #include <stdio.h>
 #include "mali_csf_boot.h"
+#ifndef VENDOR_INA0
+#define VENDOR_INA0 0
+#endif
 struct model { uint32_t reg[4096]; uint64_t tick; unsigned first; };
 static uint32_t read32(void *p, uint64_t a) {
     struct model *m = p;
@@ -68,7 +71,7 @@ int main(void) {
     struct sweet_csf_boot_config c = {.gpu = 0x13000000, .root_pa = 0x40076000,
         .arena_pa = 0x40076000, .arena_bytes = 0x200000, .shared_offset = 0x50000,
         .shared_bytes = 0x94000, .timeout_ms = 1, .noncoherent = 1,
-        .pte_group_requested = 6, .pte_pages_built = 293};
+        .pte_group_requested = 6, .pte_pages_built = 293, .vendor_ina0 = VENDOR_INA0};
     struct sweet_gpu_io io = {&m, read32, write32, ticks, barrier, 1000};
     struct sweet_csf_boot_report r;
     printf("{\"writes\":["); int rc = sweet_csf_boot(&c, &io, &r);
@@ -79,13 +82,16 @@ int main(void) {
 '''
 
 
-def probe_boot_trace():
+def probe_boot_trace(vendor_ina0=0):
     """Capture actual C writes with synthetic success prerequisites/no FW IRQ."""
+    if vendor_ina0 not in (0, 1):
+        raise ValueError('INA diagnostic must be0/1')
     with tempfile.TemporaryDirectory(prefix='csf-vendor-boot-') as directory:
         path = Path(directory)
         source, binary = path / 'trace.c', path / 'trace'
         source.write_text(HOST_BOOT_TRACE)
         subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                        '-DVENDOR_INA0=' + str(vendor_ina0),
                         '-fsanitize=address,undefined', '-I', str(ROOT / 'xnu/gpu'),
                         str(source), str(ROOT / 'xnu/gpu/mali_csf_boot.c'), '-o', str(binary)],
                        check=True, capture_output=True, text=True)
@@ -99,7 +105,7 @@ def probe_boot_trace():
         before_auto.append(write)
     else:
         raise ValueError('actual C probe did not reach MCU AUTO')
-    trace.update(before_auto=before_auto, registers_before_auto=registers,
+    trace.update(before_auto=before_auto, registers_before_auto=registers, vendor_ina0=vendor_ina0,
                  scope='Actual C boot code, synthetic powered device and AS completion; '
                        'no firmware IRQ, hardware execution or cache/MMU model.')
     return trace
@@ -311,7 +317,7 @@ def fetch_module():
     return module
 
 
-def compare(kmd, mgm, firmware, arena_pa, memory_group=6):
+def compare(kmd, mgm, firmware, arena_pa, memory_group=6, vendor_ina0=0):
     fetch = fetch_module()
     firmware_hash = hashlib.sha256(firmware.read_bytes()).hexdigest()
     if firmware_hash != fetch.FIRMWARE_SHA256:
@@ -359,7 +365,7 @@ def compare(kmd, mgm, firmware, arena_pa, memory_group=6):
                     for mode, slot in ((31, 0), (0, 0), (1, 0), (31, 7))]
     starts = dict(initial=helpers.start(), reload=helpers.start(reload=True))
     validate_register_slices(config_cases, starts, root, memattr)
-    probe_trace = probe_boot_trace()
+    probe_trace = probe_boot_trace(vendor_ina0)
     register_differences = {item['offset']: dict(probe=probe_trace['registers_before_auto'][item['offset']],
                                                 vendor=item['value'])
                             for item in config_cases[0]['writes']
@@ -372,11 +378,13 @@ def compare(kmd, mgm, firmware, arena_pa, memory_group=6):
                                             'xnu/gpu/mali_csf_boot.c')},
                 arena_sha256=hashlib.sha256(arena).hexdigest(),
                 memory_group=memory_group,
+                vendor_ina0=vendor_ina0,
                 checked_pages=sum(s['checked_pages'] for s in sections),
                 setup=dict(root_pa=hex(root), vendor_memattr=hex(memattr),
                            vendor_base_transcfg=hex(base_transcfg),
                            vendor_coherency31_transcfg=hex(base_transcfg | 0x42000000),
-                           probe_memattr=hex(PROBE_MEMATTR), probe_transcfg='0x420001c6'),
+                           probe_memattr=hex(PROBE_MEMATTR),
+                           probe_transcfg=probe_trace['registers_before_auto']['0x2430']),
                 vendor_register_slices=dict(config_cases=config_cases, mcu_starts=starts,
                     scope='Relocation-free MMIO slices with synthetic device/AS structures. '
                           'AS status polling, surrounding Linux code and real hardware are not executed.'),
@@ -400,12 +408,15 @@ def main():
     parser.add_argument('--arena-pa', type=lambda value: int(value, 0), default=0x40076000)
     parser.add_argument('--memory-group', type=int, choices=range(16), default=6,
                         help='actual C arena leaf group; default matches the tested2328 shim')
+    parser.add_argument('--vendor-ina0', type=int, choices=(0, 1), default=0,
+                        help='0 replays2328 config;1 selects the opt-in2329 INA diagnostic')
     args = parser.parse_args()
     if args.python_deps:
         sys.path.insert(0, str(args.python_deps.resolve()))
     kmd = pinned_elf(args.kmd, KMD_SHA256, tuple(name for name in HELPERS if not name.startswith('mgm_')))
     mgm = pinned_elf(args.mgm, MGM_SHA256, ('mgm_update_gpu_pte',))
-    print(json.dumps(compare(kmd, mgm, args.firmware.resolve(), args.arena_pa, args.memory_group), indent=2))
+    print(json.dumps(compare(kmd, mgm, args.firmware.resolve(), args.arena_pa,
+                             args.memory_group, args.vendor_ina0), indent=2))
     return 0
 
 

@@ -74,7 +74,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     *r=(struct sweet_csf_boot_report){.stage=SWEET_CSF_BOOT_CONFIG};
     if(!c||!io||!io->read32||!io->write32||!io->ticks||!io->barrier||
        !io->frequency||io->frequency>1000000000||c->gpu!=0x13000000||
-       !c->timeout_ms||c->timeout_ms>1000||c->noncoherent>1||c->pte_group_requested>15||
+       !c->timeout_ms||c->timeout_ms>1000||c->noncoherent>1||c->vendor_ina0>1||c->pte_group_requested>15||
        c->pte_pages_built>c->arena_bytes/4096||c->root_pa!=c->arena_pa||
        c->arena_pa<0x40000000||(c->arena_pa&4095)||!c->arena_bytes||
        c->arena_bytes>0x1000000||c->arena_pa>UINT64_MAX-c->arena_bytes||
@@ -146,7 +146,9 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     /* index0=NC(4c), index1=WB/CPU-inner/explicit RW allocate(9f).
      * Full hardware VA width, 4K stage1, WB/read-allocate page walks. */
     wr(io,c->gpu+0x2408,0x4c4c9f4c);wr(io,c->gpu+0x240c,0x4c4c4c4c);
-    uint32_t transcfg=0x42000006|((55-SWEET_CSF_VA_BITS)<<6);
+    /* Pinned KMD MMIO slice45e80..45fd4 writes42000006 under protocol31.
+     * Isolate INA only: keep group6 leaf bytes, cache/MEMATTR and order. */
+    uint32_t transcfg=0x42000006|(c->vendor_ina0?0:((55-SWEET_CSF_VA_BITS)<<6));
     wr(io,c->gpu+0x2430,transcfg);wr(io,c->gpu+0x2434,0);
     rc=as_command(io,c->gpu,1,budget);
     if(rc) {r->error=rc;goto cleanup;}

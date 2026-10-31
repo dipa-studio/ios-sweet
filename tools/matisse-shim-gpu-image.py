@@ -31,7 +31,7 @@ def pinned(path, expected):
         raise ValueError('SHA256 mismatch: ' + str(path))
     return data
 
-def diagnostic_adt(data, build_id=0x2328):
+def diagnostic_adt(data, build_id=0x2329):
     root, end = adt.parse(data)
     if end != len(data):
         raise ValueError('trailing ADT bytes')
@@ -164,7 +164,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2328,), default=0x2328)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2329,), default=0x2329)
     for key in ('firmware','firmware-sha256','kernel','kernel-sha256','template','template-sha256','adt','adt-sha256',
                 'stock','stock-sha256','frozen','cmdline','ndk','out'):
         p.add_argument('--' + key, required=True)

@@ -223,7 +223,7 @@ void con_hex(const char *a,uint64_t b){(void)a;(void)b;}
         self.assertEqual(end,len(data))
         v = parsed.children[0].prop('firmware-version').split(b'\0')[0]
         self.assertIn(b'id=a0020001',v);self.assertIn(b'rst=00000100',v)
-        self.assertTrue(v.startswith(b'sweet-shim/gpu2328'))
+        self.assertTrue(v.startswith(b'sweet-shim/gpu2329'))
         csf=parsed.children[0].prop('sweet-csf-report')
         self.assertEqual(len(csf),304)
         self.assertEqual(struct.unpack_from('<2I',csf,288),(31,31))

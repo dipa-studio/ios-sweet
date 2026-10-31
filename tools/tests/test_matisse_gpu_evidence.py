@@ -57,7 +57,7 @@ class PersistentReportPatchTests(unittest.TestCase):
         # locally edited build tree must not conceal a broken source patch.
         names = subprocess.check_output(['git','ls-files','--','xnu/patches/*.patch'],
                                         cwd=ROOT,text=True).splitlines()
-        latest='xnu/patches/0126-matisse-csf-leaf-memory-group.patch'
+        latest='xnu/patches/0127-matisse-csf-vendor-ina.patch'
         if latest not in names:names=sorted(names+[latest])
         self.assertTrue(names)
         with tempfile.TemporaryDirectory(prefix='csf-evidence-patches-') as directory:
@@ -67,7 +67,7 @@ class PersistentReportPatchTests(unittest.TestCase):
                     cwd=directory,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,name+': '+result.stderr)
             source = (Path(directory)/'bsd/dev/sweet_ufs.c').read_text()
-        self.assertIn('#define SWEET_BUILD_ID 0x2328u',source)
+        self.assertIn('#define SWEET_BUILD_ID 0x2329u',source)
         begin = source.index('static void\nsweet_gpu_report_marks(void)\n{')
         end = source.index('\n}\n',begin)
         report = source[begin:end]
@@ -131,7 +131,7 @@ class ReportDecodeTests(unittest.TestCase):
         values.update(changes)
         if build>=0x2323:
             values.update(zip(self.module.CSF_DIAGNOSTIC_KEYS,
-                [3,0x600,0,0x420001c6,0x90000000,0,0,0,0x01020003,0]))
+                [3,0x600,0,0x42000006 if build>=0x2329 else 0x420001c6,0x90000000,0,0,0,0x01020003,0]))
             values.update(changes)
         raw=struct.pack('<I2i19I',*(values[k] for k in self.module.CSF_KEYS))
         if build>=0x2323:
@@ -304,6 +304,24 @@ class ReportDecodeTests(unittest.TestCase):
         for args in ({'omit':37},{'tag':0x2327},{'pte_group_requested':16},{'pte_pages_built':4097}):
             with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2328,**args),0x2328)
         with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2328),0x2327)
+
+    def test_2329_vendor_ina_readback_does_not_replace_fresh_firmware_evidence(self):
+        result=self.module.decode(self.csf_marks(build=0x2329),0x2329)
+        self.assertTrue(result['csf']['vendor_ina_readback_matches'])
+        self.assertTrue(result['csf_firmware_boot_verified'])
+        for args in ({'transcfg_lo':0x420001c6},{'transcfg_lo':6},
+                     {'version':0},{'job_raw':0},{'pte_group_requested':0},
+                     {'memattr_lo':0x888d8f88},{'cleanup_error':-53},{'reset_completed':0}):
+            with self.subTest(args=args):
+                self.assertFalse(self.module.decode(self.csf_marks(build=0x2329,**args),0x2329)['csf_firmware_boot_verified'])
+        stalled=self.module.decode(self.csf_marks(build=0x2329,stage=4,error=-53,
+            version=0,job_raw=0,firmware_ready=0),0x2329)
+        self.assertTrue(stalled['csf']['vendor_ina_readback_matches'])
+        self.assertFalse(stalled['csf_firmware_boot_verified'])
+        for args in ({'omit':37},{'tag':0x2328}):
+            with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2329,**args),0x2329)
+        with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2328),0x2329)
+        with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2329),0x2328)
 
 if __name__ == '__main__':
     unittest.main()

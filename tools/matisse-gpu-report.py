@@ -50,7 +50,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -86,7 +86,7 @@ def decode(data, expected_build=0x2321):
         fields['gpu_id'] >> 28 == 10 and fields['as_present'] not in (0,0xffffffff) and
         fields['reset_rawstat'] & 0x100 != 0)
     if expected_build >= 0x2322:
-        count = 38 if expected_build == 0x2328 else (37 if expected_build == 0x2327 else (36 if expected_build == 0x2326 else (24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11))))
+        count = 38 if expected_build >= 0x2328 else (37 if expected_build == 0x2327 else (36 if expected_build == 0x2326 else (24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11))))
         raw = report_bytes(records,320,count,expected_build,'CSF')
         csf = dict(zip(CSF_KEYS,struct.unpack('<I2i19I',raw[:88])))
         if expected_build >= 0x2323:
@@ -152,7 +152,8 @@ def decode(data, expected_build=0x2321):
             sampled = bool(csf['sample_flags'] & 2)
             expected_flags = 15 if expected_build >= 0x2325 else 3
             ready = (ready and csf['sample_flags'] == expected_flags and csf['gpu_raw'] & 3 == 0 and
-                     csf['as_status'] & 1 == 0 and csf['transcfg_lo'] == 0x420001c6 and
+                     csf['as_status'] & 1 == 0 and
+                     csf['transcfg_lo'] == (0x42000006 if expected_build >= 0x2329 else 0x420001c6) and
                      (csf['transtab_hi'] << 32 | csf['transtab_lo']) >= 0x40000000 and
                      csf['transtab_lo'] & 4095 == 0)
             cleanup = cleanup and csf['disable_error'] == 0 and csf['disable_status'] == 0
@@ -178,6 +179,8 @@ def decode(data, expected_build=0x2321):
                 ready = ready and csf['noncoherent_protocol_verified'] and csf['coherency_after'] == 31
             if expected_build >= 0x2328:
                 ready = ready and csf['pte_group_configuration_matches']
+            if expected_build >= 0x2329:
+                csf['vendor_ina_readback_matches'] = csf['transcfg_lo'] == 0x42000006
         csf.update(stage_name=CSF_STAGES[csf['stage']],
                    error_name=CSF_ERRORS.get(csf['error'],'firmware-format'),
                    runtime_interface_sampled=sampled,
@@ -192,7 +195,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2328)')
+                   help='expected kernel/report build (0x2321 through 0x2329)')
     a=p.parse_args()
     try:
         report=decode(a.marks.read_bytes(),a.build)
