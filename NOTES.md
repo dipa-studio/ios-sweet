@@ -1,5 +1,48 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> COMPLETE 2026-10-31: CSF2326 HARDWARE STARTUP EVIDENCE; FULL RESTORE <<<
+
+User approved one normal CSF2326 GPU/MCU trial with complete restoration.
+The device started in root Recovery and read-only preflight passed. Candidate
+image `matisse-shim-gpu2326.img` SHA256
+2b55baf18e88a68f4e642ab35bda1cdb95987452710bc1b56a964aa99d544b87 was
+written to boot_a and full-partition readback matched predicted
+b585e5f36c09081670118aec1f0468020e3ca5c62b37e62732579b115986ea91.
+
+Normal boot reached Fastboot after93.73s. One persistent fbraw session
+flashed the known stock20MiB prefix (download013e8000 and flash OKAY),
+requested reboot-recovery OKAY, and Recovery then restored the complete
+67108864-byte original boot_a. Final device is root Recovery,
+`matisse/_a/recovery`, and independent hash verification passed:
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Journal `shim2326-trials/gpu-normal/journal.json` is
+`complete-restored-Recovery`, `restore_pending=false`; no active runner or
+pending restoration remains. Fresh Recovery dmesg is873828B.
+
+Fresh marks use build2326/count97 and decode successfully. Platform remains
+INIT0/ON1/OFF0, SPM3->7, GPU_IDa8620004, initial reset100, AS_PRESENTff.
+CSF passes the mask gate: GPU mask80503, JOB maskffffffff, MMU maskff,
+`irq_gate_passed=1`; L2_READY1, TRANSCFG420001c6, rootPA40076000. MCU still
+times out at stage4/error-53 with MCU_STATUS1, JOB_RAW0, MMU_RAW0, AS fault/
+status0, version0 and no fresh global interface IRQ. Poststart core state is
+shader PRESENT770017/transition0/ready0 and tiler PRESENT1/transition0/
+ready1. Cleanup reports disable timeout-53, reset_raw600 and
+reset_completed0, so firmware-ready remains false.
+
+New evidence fields are complete (`diag_flags=31`): coherency features1,
+COHERENCY_ENABLE before/after0, CSF/SHADER/TILER/L2_MMU_CONFIG all0 before/
+after, AS_MEMATTR `0x4c4c9f4c/0x4c4c4c4c`, private probe page400bb000.
+Private early/feature/late words remain0->0. Shared VA04000018 changes
+0->0x1d. This is the only sampled mutation; the read-only probe cannot
+identify the writer or map it to a firmware PC, so it is evidence of startup
+activity only, not proof of full firmware execution.
+
+Ignored evidence is under
+`research/matisse/20261031-gpu/shim2326-trials/gpu-normal/` including
+after marks/console, decoded report, Recovery dmesg and journal. No Android
+partitions besides the temporary boot_a write were changed; full restoration
+and hash verification passed. No further flash is authorized by this result.
+
 ## >>> ACTIVE 2026-10-31: CSF2326 STARTUP EVIDENCE BUILD; NO DEVICE TRIAL <<<
 
 The next diagnostic is built and has not been flashed. Device remains the

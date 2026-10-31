@@ -775,3 +775,43 @@ SHA256 `2b55baf18e88a68f4e642ab35bda1cdb95987452710bc1b56a964aa99d544b87`.
 The 40-test targeted suite passed in 3.111 seconds. No CI run or push was
 performed. A 2326 hardware trial requires separate approval and must use the
 same restoration journal/full-boot hash procedure as earlier trials.
+
+## CSF2326 hardware result (2026-10-31)
+
+The specifically approved normal CSF2326 trial ran once and was fully
+restored. The candidate image hash was
+`2b55baf18e88a68f4e642ab35bda1cdb95987452710bc1b56a964aa99d544b87`; the
+temporary full-partition hash was
+`b585e5f36c09081670118aec1f0468020e3ca5c62b37e62732579b115986ea91`.
+Normal boot reached Fastboot after 93.73 seconds. The single persistent
+`fbraw` session flashed the 20 MiB stock prefix with `OKAY`, requested
+Recovery with `OKAY`, and the Recovery-side full restore returned boot_a to
+67108864 bytes and SHA256
+`2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1`.
+The journal is `complete-restored-Recovery` with `restore_pending=false`.
+
+The fresh build2326 marks contain97 records and decode as platform
+INIT0/ON1/OFF0, SPM3->7, GPU_ID `0xa8620004`, reset `0x100`, AS_PRESENT
+`0xff`. CSF mask setup passes with GPU `0x80503`, JOB `0xffffffff`, MMU
+`0xff`; L2 is ready and the programmed address-space state remains
+TRANSCFG `0x420001c6`, root PA `0x40076000`. The MCU still ends at stage4
+with timeout `-53`, MCU status1, raw JOB/MMU0, AS fault/status0, version0 and
+no fresh global-interface IRQ. The endpoint snapshot is shader
+PRESENT`0x770017`/transition0/ready0 and tiler PRESENT1/transition0/ready1.
+Cleanup again times out (`disable_error=-53`, reset raw `0x600`, reset not
+completed), so firmware readiness is unproven.
+
+The new read-only startup sample completed (`diag_flags=31`). It observed
+coherency features1; `COHERENCY_ENABLE`, `CSF_CONFIG`, `SHADER_CONFIG`,
+`TILER_CONFIG` and `L2_MMU_CONFIG` all read0 before and after, while the
+programmed AS_MEMATTR pair was `0x4c4c9f4c/0x4c4c4c4c`. The private probe page
+was PA `0x400bb000`; the three private marker words stayed0->0. The shared
+word at VA `0x04000018` changed0->`0x1d`. This sampled mutation proves only
+that the observed memory state changed during the transaction; the probe has
+no writer trace and cannot identify a firmware PC or establish complete MCU
+execution. No new global IRQ or version publication was observed.
+
+Ignored evidence is under
+`research/matisse/20261031-gpu/shim2326-trials/gpu-normal/`. This result
+does not authorize another write. Any next test needs a new image and a
+separate concrete approval, with the same full restore/hash procedure.
