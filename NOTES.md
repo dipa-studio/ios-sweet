@@ -1,6 +1,93 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-10-31: CSF2330 CACHED-BYTE TRIAL; MCU TIMEOUT; FULL RESTORE <<<
+## >>> ACTIVE 2026-10-31: CSF2331 PLATFORM SNAPSHOT BUILT; NO TRIAL AUTHORIZATION <<<
+
+Implementation committed8ea682a (bounded platform snapshots,440B evidence,
+error provenance,original vendor_boot DT inventory,pinned pairing controls
+and regression tests/docs). Resumed from the previous agent's completed
+build artifacts; did not rebuild
+or repeat the completed suite. Re-read the pasted Panthor guidance and
+reviewed the actual independent shim/MMIO code. The requested Linux DT/DMA
+changes are not directly applicable here. No new device write/reboot/trial.
+
+Existing platform2331-tests-final.txt records71 tests PASS in8.446s, including
+ASan/UBSan C boot/state/cleanup, complete440B ABI publication/decoding,
+normal contextual patch application, vendor write isolation and v3/v4 DT
+parsing. The snapshot on/off traces have exactly identical MMIO writes.
+Three freestanding ARM64 objects and no-ABS64 checks PASS. Existing local
+CLT full kernel build completed successfully:16724248B SHA256
+75c4fa7171ab9f26cedabf992f4c8e63431f5742c819fb7e1b1c505bb05c6dcc.
+128-patch contextual sweet_ufs replay matches source SHA256
+6ab87350d5d41ec374052102167116703c974e816c03125644fdfca509c965bb,
+including inherited untracked0093 SHA25654f0aaa5a0390bc0678eca60e55bc192d3ebea315daab808a3c456a1ce65365b.
+No new CI run or push; gh lists prior action_required runs only.
+
+Build-only candidate:research/matisse/20261031-gpu/shim2331-platform-ready/
+matisse-shim-gpu2331.img,26714112B SHA256
+e1920561234a68e4472b91ffa2e724385940c6f7c441fc237b80b1a3b4746ad2.
+Independent verifier rerun PASS:expanded80402548B, stock Linux at+32MiB,
+intact ramdisk/signature bytes, source/frozen pins,440B/55 qwords320..374,
+rootrw0/ufsrw0/PIC. Signature retained, NOT authenticated; automatic Recovery
+is NOT verified. Firmware and memory objects byte-equal2330,arena PA40076000
+unchanged. Read-only snapshots do not trace MCU instruction execution or
+measure PLL frequency/lock. No firmware-ready or acceleration claim.
+
+Fresh independent read-only runner preflight PASS again:root Recovery,
+matisse/_a,boot_a67108864B,full original SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Runner shim2331-platform-trials-run-once.py SHA256
+815b1c075bafb0f1dfd292ceb500a5de02eda210df0b6c2b18fdcb54c4d627c3.
+Plan remains prepared-unapproved,authorization=null,trial_count_executed0,
+restore_pending=false; no journal or active runner. Predicted candidate
+full boot_a SHA256efa6122218e60edd6b515281be3a2b8319ab3910b329a99c3cabee2b5ec799ff.
+Re-decoded actual2326..2330 captures: only error_name,error_domain and
+error_source change; all hardware fields and readiness outcomes unchanged.
+Runner/image/backup pins and unconsumed plan/no journal rechecked PASS.
+NEXT: request specific confirmation for ONE normal2331 imagee1920561 trial,
+fresh evidence, complete64MiB original restoration and independent hash.
+Do not start the runner's write branch without that confirmation. Preserve
+unrelated shim/ramcollector/sweet-marks changes,untracked0093 and device data.
+No2331 device write/boot result exists yet. The project AGENTS.md requires
+confirmation for each destructive step; earlier2330 authorization was
+consumed and cannot be reused for this distinct image.
+
+## >>> HISTORICAL 2026-10-31: POST2330 PLATFORM AUDIT; SNAPSHOT IMPLEMENTATION <<<
+
+Latest user guidance redirects to original DT, GPUEB, clocks and power before
+more descriptor changes. Confirmed project-local SWEET_CSF_BOOT_TIMEOUT=-53;
+it is not Linux errno.2330 INIT0/ON1/OFF0,initial reset100 and matching CSF
+stage4/error-53 trace top-level stage8 to powered_probe. Decoder now reports
+error_domain/source and preserves colliding negative GPUEB reply values.
+2326..2330 re-decode changes only error_name plus two provenance fields.
+
+Package vendor_boot v4 DT table at44339200 contains one FDT at+64,335048B
+SHA256783b7fb871087991e97d0d944932981d7b11e207deef2f74d67e8a20cc12ffae,byte-equal
+device LK DTB. GPU/GPUEB/gpufreq/wrapper properties equal Recovery live6.
+GPU compatible mediatek,mali + arm,mali-valhall;IRQ names GPU/MMU/JOB/EVENT/
+PWR. No GPU iommus,dma-coherent,clocks,power-domains or assigned-clock-parents.
+FHCTL gpu0/2/3 uses fhctl-gpueb. Channel1 TX10/RXbc,8 send/recv pins,276/640
+bytes validate. Missing runtime memory in Recovery/static DT is mode2,not
+normal-boot failure. Inventory now inspects bounded v3/v4 vendor_boot DTBs.
+
+Deferred SH2331 draft saved ignored firmware-static/deferred2331-pre-platform-
+audit.patch;memory.c/.h and fetch-audit.py restored exactly2330. No SH change.
+12-case vendor controls retained;full pinned audit passes293 pages/647 helper
+calls,unchanged arena hash.51 targeted plus6 inventory tests PASS before
+snapshot edits. Fresh read-only root/matisse/_a/Recovery boot_a67108864B hash
+2931647a...86b1 PASS. No device writes/reboot;prior trial approval consumed.
+
+New pasted guidance applied to this independent shim,not Linux:opt-in read-only
+platform/fault snapshots before/after AUTO,keeping2330 writes/mapping policy.
+2331 now means snapshot diagnostic,NOT deferred SH candidate. Report extends
+304->440B/55 qwords;tests/build in progress. Do not install example IRQs,
+mutate DT,mask SHADER_PRESENT or write rails/clocks. Version0/no IRQ proves
+no readiness,not no execution. GPU_STATUS bits0/1 are activity;L2_READY is
+160,not140. Shader mask770017 has10 bits;arena40076000..401a2000 below4GiB.
+NEXT: finish regression tests,freestanding compile,contextual kernel build,
+build-only candidate and independent verification;update docs and commit.
+No new device flash/trial authorized. Preserve unrelated dirt/untracked0093.
+
+## >>> HISTORICAL 2026-10-31: CSF2330 CACHED-BYTE TRIAL; MCU TIMEOUT; FULL RESTORE <<<
 
 User specifically approved ONE normal2330 image2acb4014 boot_a trial,fresh
 evidence and complete original restoration. Executed exactly once; runner
