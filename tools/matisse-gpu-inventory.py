@@ -247,10 +247,29 @@ def gpueb_handoff(nodes):
     return report
 
 
-def inspect_image(path):
-    data = path.read_bytes()
-    result = {'name': path.name, 'bytes': len(data), 'sha256': sha256(data), 'magic_hex': data[:16].hex()}
-    if data[:4] == b'\xd0\x0d\xfe\xed':
+def inspect_blob(data, name):
+    result = {'name': name, 'bytes': len(data), 'sha256': sha256(data), 'magic_hex': data[:16].hex()}
+    if data[:8] == b'VNDRBOOT':
+        if len(data) < 2112:
+            raise ValueError('truncated vendor boot header')
+        version, page = struct.unpack_from('<II', data, 8)
+        ramdisk_bytes, = struct.unpack_from('<I', data, 24)
+        header_bytes, dtb_bytes = struct.unpack_from('<II', data, 2096)
+        expected = {3: 2112, 4: 2128}.get(version)
+        if (expected is None or header_bytes != expected or len(data) < header_bytes or
+                page < 2048 or page > 65536 or page & (page - 1) or header_bytes > page):
+            raise ValueError('invalid vendor boot version/header/page size')
+        dtb_offset = page + (ramdisk_bytes + page - 1) // page * page
+        if not dtb_bytes or dtb_offset + dtb_bytes > len(data):
+            raise ValueError('invalid vendor boot DTB bounds')
+        payload = data[dtb_offset:dtb_offset + dtb_bytes]
+        if payload[:4] not in (b'\xd0\x0d\xfe\xed', b'\xd7\xb7\xab\x1e'):
+            raise ValueError('unsupported vendor boot DTB format')
+        dtb = inspect_blob(payload, 'vendor-dtb')
+        result.update(type='android-vendor-boot', header_version=version, page_size=page,
+                      header_bytes=header_bytes, vendor_ramdisk_bytes=ramdisk_bytes,
+                      dtb_offset=dtb_offset, dtb=dtb)
+    elif data[:4] == b'\xd0\x0d\xfe\xed':
         nodes = parse_fdt(data)
         result.update(type='fdt', gpu_nodes=gpu_nodes(nodes), gpueb_handoff=gpueb_handoff(nodes))
     elif len(data) >= 32 and struct.unpack_from('>I', data)[0] == 0xd7b7ab1e:
@@ -270,8 +289,13 @@ def inspect_image(path):
                       for p, props in nodes.items() if p == '/__fixups__'}
             result['overlays'].append({'index': i, 'id': ident, 'revision': rev, 'custom': custom,
                                        'bytes': size, 'sha256': sha256(blob),
-                                       'fragment_targets': fragments, 'fixups': fixups, 'gpu_nodes': gpu_nodes(nodes)})
+                                       'fragment_targets': fragments, 'fixups': fixups, 'gpu_nodes': gpu_nodes(nodes),
+                                       'gpueb_handoff': gpueb_handoff(nodes)})
     return result
+
+
+def inspect_image(path):
+    return inspect_blob(path.read_bytes(), path.name)
 
 
 class Recovery:

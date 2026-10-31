@@ -20,6 +20,14 @@ struct sweet_csf_boot_config {
     /*2330: explicit0/1, use the pinned vendor cached byte88 in our
      * index1. Keep index0 shared byte4c and every PTE unchanged. */
     uint32_t vendor_cached_memattr;
+    /*2331:0/1 opt-in original MT6983 platform snapshot. Reads only. */
+    uint32_t platform_snapshot;
+};
+struct sweet_csf_platform_snapshot {
+    uint32_t gpu_status, mcu_control, gpu_fault_status, gpu_fault_lo, gpu_fault_hi;
+    uint32_t job_stat, spm_status, spm_status_second;
+    uint32_t mfg_power0, mfg_power1, mfg_power2, mfg_power3;
+    uint32_t mfg_pll_con1, mfgsc_pll_con1, topckgen_sel, rpc_slp_protect;
 };
 struct sweet_csf_boot_report {
     uint32_t stage;
@@ -67,6 +75,10 @@ struct sweet_csf_boot_report {
     /*2328 appends8 bytes (304 total). Canonical loader inputs/count only;
      * these do not prove memory routing or firmware execution. */
     uint32_t pte_group_requested, pte_pages_built;
+    /*2331 appends136 bytes (440 total). Flags bit0 before AUTO,bit1
+     * after wait/before cleanup. Values are observations,not readiness. */
+    uint32_t platform_sample_flags, platform_reserved;
+    struct sweet_csf_platform_snapshot platform_before, platform_after;
 };
 enum sweet_csf_boot_stage {
     SWEET_CSF_BOOT_CONFIG=1, SWEET_CSF_BOOT_L2=2, SWEET_CSF_BOOT_AS=3,

@@ -43,6 +43,9 @@ HOST_BOOT_TRACE = r'''
 #ifndef VENDOR_CACHED_MEMATTR
 #define VENDOR_CACHED_MEMATTR 0
 #endif
+#ifndef PLATFORM_SNAPSHOT
+#define PLATFORM_SNAPSHOT 0
+#endif
 struct model { uint32_t reg[4096]; uint64_t tick; unsigned first; };
 static uint32_t read32(void *p, uint64_t a) {
     struct model *m = p;
@@ -75,7 +78,7 @@ int main(void) {
         .arena_pa = 0x40076000, .arena_bytes = 0x200000, .shared_offset = 0x50000,
         .shared_bytes = 0x94000, .timeout_ms = 1, .noncoherent = 1,
         .pte_group_requested = 6, .pte_pages_built = 293, .vendor_ina0 = VENDOR_INA0,
-        .vendor_cached_memattr = VENDOR_CACHED_MEMATTR};
+        .vendor_cached_memattr = VENDOR_CACHED_MEMATTR, .platform_snapshot = PLATFORM_SNAPSHOT};
     struct sweet_gpu_io io = {&m, read32, write32, ticks, barrier, 1000};
     struct sweet_csf_boot_report r;
     printf("{\"writes\":["); int rc = sweet_csf_boot(&c, &io, &r);
@@ -86,12 +89,14 @@ int main(void) {
 '''
 
 
-def probe_boot_trace(vendor_ina0=0, vendor_cached_memattr=0):
+def probe_boot_trace(vendor_ina0=0, vendor_cached_memattr=0, platform_snapshot=0):
     """Capture actual C writes with synthetic success prerequisites/no FW IRQ."""
     if vendor_ina0 not in (0, 1):
         raise ValueError('INA diagnostic must be0/1')
     if vendor_cached_memattr not in (0, 1):
         raise ValueError('cached MEMATTR diagnostic must be0/1')
+    if platform_snapshot not in (0, 1):
+        raise ValueError('platform snapshot must be0/1')
     with tempfile.TemporaryDirectory(prefix='csf-vendor-boot-') as directory:
         path = Path(directory)
         source, binary = path / 'trace.c', path / 'trace'
@@ -99,6 +104,7 @@ def probe_boot_trace(vendor_ina0=0, vendor_cached_memattr=0):
         subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
                         '-DVENDOR_INA0=' + str(vendor_ina0),
                         '-DVENDOR_CACHED_MEMATTR=' + str(vendor_cached_memattr),
+                        '-DPLATFORM_SNAPSHOT=' + str(platform_snapshot),
                         '-fsanitize=address,undefined', '-I', str(ROOT / 'xnu/gpu'),
                         str(source), str(ROOT / 'xnu/gpu/mali_csf_boot.c'), '-o', str(binary)],
                        check=True, capture_output=True, text=True)
@@ -252,6 +258,18 @@ def validate_register_slices(cases, starts, root, memattr):
             raise ValueError('unexpected vendor MCU AUTO write')
 
 
+def validate_pairing_controls(cases):
+    expected = [(protocol, mode) for protocol in (31, 0, 1) for mode in range(4)]
+    if [(case['protocol'], case['cache_mode']) for case in cases] != expected:
+        raise ValueError('incomplete vendor cache/shareability controls')
+    for case in cases:
+        coherent = case['protocol'] != 31 and case['cache_mode'] in (2, 3)
+        index, byte, sh = ((6, '0x8', 2) if coherent else
+                           (0, '0x88', 0) if case['cache_mode'] == 1 else (5, '0x4c', 0))
+        if (case['attr_index'], case['byte'], case['sh']) != (index, byte, sh):
+            raise ValueError('unexpected vendor cache/shareability pairing')
+
+
 class VendorHelpers:
     CODE, DATA, DATA_BYTES = 0x1000000, 0x2000000, 0x10000
     MMIO, MMIO_BYTES = 0x3000000, 0x4000
@@ -308,6 +326,8 @@ class VendorHelpers:
         return result, [bytes(u.mem_read(address, size)) for address, size in reads]
 
     def flags(self, flags, coherency=31):
+        if not isinstance(flags, int) or not 0 <= flags < 1 << 32 or coherency not in (0, 1, 31):
+            raise ValueError('unsupported synthetic flags/coherency input')
         registers = {19: self.DATA, 12: self.DATA + 0x4000,
                      26: flags, 28: self.DATA + 0x5000}
         result, _ = self.call('convert_section_flags', registers,
@@ -318,6 +338,24 @@ class VendorHelpers:
         _, output = self.call('entry_set_ate', {0: self.DATA, 1: pa, 2: flags, 3: 3},
                               reads=[(self.DATA, 8)])
         return struct.unpack('<Q', output[0])[0]
+
+    def pairing_controls(self):
+        cases = []
+        for protocol in (31, 0, 1):
+            for mode in range(4):
+                # Shared bit30 keeps coherent cache-mode branches in the
+                # audited slice. Nonshared coherent branches leave its bounds
+                # and remain rejected, rather than silently broadening replay.
+                section_flags = 0xc0000003 | mode << 3
+                flags = self.flags(section_flags, protocol)
+                leaf = self.ate(0x4008f000, flags)
+                fields = effective_leaf(leaf, VENDOR_MEMATTR)
+                cases.append(dict(protocol=protocol, cache_mode=mode,
+                    synthetic_section_flags=hex(section_flags), mem_flags=hex(flags),
+                    attr_index=fields['attr_index'], byte=fields['attr_value'],
+                    sh=fields['shareability']))
+        validate_pairing_controls(cases)
+        return cases
 
     def mgm(self, descriptor, requested_group=0, override=0):
         result, _ = self.call('mgm_update_gpu_pte',
@@ -456,6 +494,7 @@ def compare(kmd, mgm, firmware, arena_pa, memory_group=6, vendor_ina0=0, vendor_
                            probe_descriptor=hex((arena_pa + 4096) | 3),
                            synthetic_counter_words=counter_words),
                 memattr_index_audit=memattr_index_audit(arena, plan),
+                vendor_pairing_controls=helpers.pairing_controls(),
                 mgm_cases=mgm_cases, sections=sections, helper_calls=helpers.calls,
                 limitations=['MGM uses a zero-initialized synthetic override; Android runtime override was not measured.',
                              'MMIO slices use zero trace flags; full vendor startup and AS completion are not modeled.',

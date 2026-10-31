@@ -57,7 +57,7 @@ class PersistentReportPatchTests(unittest.TestCase):
         # locally edited build tree must not conceal a broken source patch.
         names = subprocess.check_output(['git','ls-files','--','xnu/patches/*.patch'],
                                         cwd=ROOT,text=True).splitlines()
-        latest='xnu/patches/0128-matisse-csf-cached-memattr.patch'
+        latest='xnu/patches/0129-matisse-csf-platform-snapshot.patch'
         if latest not in names:names=sorted(names+[latest])
         self.assertTrue(names)
         with tempfile.TemporaryDirectory(prefix='csf-evidence-patches-') as directory:
@@ -67,13 +67,13 @@ class PersistentReportPatchTests(unittest.TestCase):
                     cwd=directory,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,name+': '+result.stderr)
             source = (Path(directory)/'bsd/dev/sweet_ufs.c').read_text()
-        self.assertIn('#define SWEET_BUILD_ID 0x2330u',source)
+        self.assertIn('#define SWEET_BUILD_ID 0x2331u',source)
         begin = source.index('static void\nsweet_gpu_report_marks(void)\n{')
         end = source.index('\n}\n',begin)
         report = source[begin:end]
-        self.assertIn('size == 304',report)
-        self.assertIn('uint32_t csf[76];',report)
-        self.assertIn('i < 38;',report)
+        self.assertIn('size == 440',report)
+        self.assertIn('uint32_t csf[110];',report)
+        self.assertIn('i < 55;',report)
         self.assertIn('sweet_mark(320 + i, a, SWEET_BUILD_ID);',report)
         self.assertIn('for (uint32_t i = 0; i < 16; i++) {\n'
                       '\t\tsweet_mark(70 + i, i, sweet_disp_trace[i]);',source)
@@ -87,9 +87,10 @@ class ReportDecodeTests(unittest.TestCase):
         cls.module=importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.module)
 
-    def marks(self, error=0, omit=None, build=0x2321, reset=0x100, init=0, spm=6):
+    def marks(self, error=0, omit=None, build=0x2321, reset=0x100, init=0, spm=6,
+              stage=10, on=1, off=0):
         import struct
-        raw=struct.pack('<I4i8I4xQ2I',10,error,init,1,0,2,spm,2,0x55667788,
+        raw=struct.pack('<I4i8I4xQ2I',stage,error,init,on,off,2,spm,2,0x55667788,
                         0xa0020001,0,reset,0xff,0x250000000,0,1)
         records=[(99,0,build,0)]
         records += [(300+i,0,struct.unpack_from('<Q',raw,i*8)[0],build)
@@ -122,9 +123,9 @@ class ReportDecodeTests(unittest.TestCase):
         struct.pack_into('<IIQQ',data,16+24*count,300,0,0,0x2321)
         with self.assertRaises(ValueError):self.module.decode(data)
 
-    def csf_marks(self, omit=None, tag=None, build=0x2322, **changes):
+    def csf_marks(self, omit=None, tag=None, build=0x2322, platform=None, **changes):
         import struct
-        data=self.marks(build=build)
+        data=self.marks(build=build, **(platform or {}))
         if tag is None:tag=build
         values=dict(zip(self.module.CSF_KEYS,[7,0,0,0x2830,1,0,1,1,
             0x80000000,0,0,0,0,0x01020003,0x123,0x4001000,0x4002000,8,64,0x100,1,1]))
@@ -159,6 +160,9 @@ class ReportDecodeTests(unittest.TestCase):
                              changes.get('coherency_readback',31))
         if build>=0x2328:
             raw+=struct.pack('<2I',changes.get('pte_group_requested',6),changes.get('pte_pages_built',293))
+        if build>=0x2331:
+            raw+=struct.pack('<2I',changes.get('platform_sample_flags',3),changes.get('platform_reserved',0))
+            raw+=struct.pack('<32I',*range(32))
         count=struct.unpack_from('<I',data,12)[0]
         for i in range(len(raw)//8):
             if i==omit:continue
@@ -167,6 +171,57 @@ class ReportDecodeTests(unittest.TestCase):
             count+=1
         struct.pack_into('<I',data,12,count)
         return data
+
+    def test_csf_timeout_provenance_requires_matching_callback_evidence(self):
+        platform = dict(stage=8, error=-53)
+        result = self.module.decode(self.csf_marks(build=0x2330, platform=platform,
+            stage=4, error=-53, cleanup_error=-53, version=0, job_raw=0,
+            firmware_ready=0, reset_completed=0), 0x2330)
+        self.assertEqual((result['error_name'], result['error_domain'], result['error_source']),
+                         ('csf-timeout', 'sweet-csf', 'powered-probe'))
+        self.assertFalse(result['csf_firmware_boot_verified'])
+        for changes in ({'stage':0}, {'error':-54}):
+            args = dict(stage=4, error=-53); args.update(changes)
+            r = self.module.decode(self.csf_marks(platform=platform, **args), 0x2322)
+            self.assertEqual(r['error_domain'], 'unknown')
+        for changes in ({'reset':0}, {'stage':7}, {'init':-1}, {'on':0}):
+            p = dict(platform); p.update(changes)
+            r = self.module.decode(self.csf_marks(platform=p, stage=4, error=-53), 0x2322)
+            self.assertNotEqual(r['error_domain'], 'sweet-csf')
+        r = self.module.decode(self.marks(stage=8, error=-53))
+        self.assertEqual(r['error_name'], 'unclassified-error')
+
+    def test_gpueb_reply_and_transport_namespaces_do_not_collide(self):
+        for stage, key, source in ((5, 'init', 'init'), (6, 'on', 'power-on'),
+                                   (9, 'off', 'power-off')):
+            for error in (-53, -23):
+                with self.subTest(stage=stage, error=error):
+                    r = self.module.decode(self.marks(stage=stage, error=error, **{key:error}))
+                    self.assertEqual(r['error_domain'], 'gpueb-firmware')
+                    self.assertEqual(r['error_source'], source + '-reply')
+            r = self.module.decode(self.marks(stage=stage, error=-23))
+            self.assertEqual(r['error_domain'], 'sweet-gpueb')
+            self.assertEqual(r['error_source'], source + '-transport')
+        r = self.module.decode(self.marks(stage=8, error=-23, reset=0))
+        self.assertEqual(r['error_domain'], 'sweet-gpu')
+        self.assertEqual(r['error_source'], 'soft-reset')
+
+    def test_2331_platform_snapshots_require_complete_fresh_records(self):
+        r=self.module.decode(self.csf_marks(build=0x2331),0x2331)
+        self.assertTrue(r['csf_firmware_boot_verified'])
+        self.assertEqual(r['csf']['platform_before']['mfg_pll_con1'],12)
+        self.assertEqual(r['csf']['platform_after']['mfg_pll_con1'],28)
+        for field in ('version','job_raw'):
+            r=self.module.decode(self.csf_marks(build=0x2331,**{field:0}),0x2331)
+            self.assertFalse(r['csf_firmware_boot_verified'])
+        for flags in (0,1):
+            r=self.module.decode(self.csf_marks(build=0x2331,platform_sample_flags=flags),0x2331)
+            self.assertFalse(r['csf_firmware_boot_verified'])
+        for changes in ({'platform_sample_flags':2},{'platform_sample_flags':4},
+                        {'platform_reserved':1},{'omit':54},{'tag':0x2330}):
+            with self.subTest(changes=changes),self.assertRaises(ValueError):
+                self.module.decode(self.csf_marks(build=0x2331,**changes),0x2331)
+        with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2330),0x2331)
 
     def test_csf_ready_requires_fresh_complete_matching_evidence(self):
         result=self.module.decode(self.csf_marks(),0x2322)

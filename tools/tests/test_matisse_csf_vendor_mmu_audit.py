@@ -109,6 +109,33 @@ class ElfBoundsTests(unittest.TestCase):
                 helpers.configure(0x40076000, coherency=mode)
 
 
+class PairingControlTests(unittest.TestCase):
+    def cases(self):
+        cases = []
+        for protocol in (31, 0, 1):
+            for mode in range(4):
+                index, byte, sh = ((6, '0x8', 2) if protocol != 31 and mode >= 2 else
+                                   (0, '0x88', 0) if mode == 1 else (5, '0x4c', 0))
+                cases.append(dict(protocol=protocol, cache_mode=mode,
+                                  attr_index=index, byte=byte, sh=sh))
+        return cases
+
+    def test_require_complete_controls_and_raw_pairing(self):
+        audit.validate_pairing_controls(self.cases())
+        for field, wrong in (('sh', 3), ('byte', '0x9f'), ('attr_index', 1)):
+            cases = self.cases();cases[1][field] = wrong
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'pairing'):
+                audit.validate_pairing_controls(cases)
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            audit.validate_pairing_controls(self.cases()[:-1])
+
+    def test_bad_flag_inputs_reject_before_emulator(self):
+        helpers = object.__new__(audit.VendorHelpers)
+        for flags, mode in ((-1, 31), (1 << 32, 31), (0xb, 2)):
+            with self.subTest(flags=flags, mode=mode), self.assertRaises(ValueError):
+                helpers.flags(flags, mode)
+
+
 class MemattrIndexTests(unittest.TestCase):
     def fixture(self):
         # Four actual-format table levels plus separate cached/shared pages.
@@ -150,6 +177,13 @@ class MemattrIndexTests(unittest.TestCase):
 
 
 class RegisterTraceTests(unittest.TestCase):
+    def test_platform_snapshot_adds_no_actual_c_writes(self):
+        baseline = audit.probe_boot_trace(1, 1, 0)
+        observed = audit.probe_boot_trace(1, 1, 1)
+        self.assertEqual(baseline, observed)
+        with self.assertRaises(ValueError):
+            audit.probe_boot_trace(1, 1, 2)
+
     def setUp(self):
         self.root, self.memattr = 0x5A40076000, audit.VENDOR_MEMATTR
         self.cases = []

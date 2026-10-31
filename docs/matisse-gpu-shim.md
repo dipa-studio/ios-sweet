@@ -1,5 +1,8 @@
 # MT6983 shim GPU power/reset probe
 
+The opening sections describe the original power/reset probe. The latest
+CSF2331 diagnostic and its current validation boundary are recorded below.
+
 2026-10-31. This independently written probe executes GPUEB INIT_SHARED_MEM,
 POWER_ON, verifies both MFG power status registers, reads GPU_ID and performs
 one CSF GPU soft reset, then releases its single power reference. It does not
@@ -133,3 +136,77 @@ shim2321-trials/restore-fbraw-log.txt. Local build PASS;51 host tests PASS;
 no GitHub Actions run was required. The next GPU milestone is CSF MCU
 firmware memory/page-table preparation and a bounded firmware-ready check,
 using the already parsed device firmware; it has not yet been implemented.
+
+## CSF2331 platform snapshots, built but not booted (2026-10-31)
+
+The independent shim now includes the bounded CSF boot path; the preceding
+2321-only next-step description is historical. Trials2322..2330 and their
+exact outcomes remain in NOTES.md. In2330 the MCU-ready wait timed out with
+MCU_STATUS1,JOB_RAW0,version0,AS0 status/fault0. GPUEB INIT0/ON1/OFF0 and
+the initial GPU reset completion were observed. These establish neither
+firmware readiness nor the MCU's program counter.
+
+`SWEET_CSF_BOOT_TIMEOUT` is a project enum with value-53, not Linux errno.
+The report decoder now resolves the return site: a matching CSF report,
+top-level stage8 and the observed initial reset identify powered-probe
+failure. A negative GPUEB reply retains its separate firmware namespace,
+including when the numeric value is also-53. Missing evidence stays
+unclassified rather than being attributed to a mailbox failure.
+
+The package vendor_boot v4 DT table contains the335048B FDT with SHA256
+783b7fb871087991e97d0d944932981d7b11e207deef2f74d67e8a20cc12ffae,
+byte-equal to the extracted LK DTB. GPU/GPUEB/gpufreq/wrapper properties
+also match the recorded Recovery live DT. The GPU compatible strings are
+`mediatek,mali` and `arm,mali-valhall`; five IRQ names are GPU/MMU/JOB/EVENT/
+PWR, with SPI cells544/545/546/547/548. The node already has no `iommus`,
+`dma-coherent`,clocks,power-domains or assigned-clock-parents properties.
+The shim polls GPU RAW status and does not use Linux IRQ name matching or
+Linux DMA/IOMMU allocation. It must not adopt the pasted example IRQs.
+The measured shader-present mask0x770017 contains10 set bits; no damaged
+core is identified. Firmware backing/page tables are already below4GiB.
+L2_READY is GPU+0x160; GPU+0x140 is SHADER_READY. GPU_STATUS bits0/1 are
+activity, so their being clear does not establish that a rail is off.
+
+2331 adds an explicit0/1 `platform_snapshot` option, default off. The shim
+enables it only after the existing GPUEB/power/L2/AS/IRQ prerequisites pass.
+It samples immediately before MCU AUTO and after the bounded wait, before
+cleanup. Each snapshot is16 raw u32 words:
+
+| Fields | Addresses |
+| --- | --- |
+| GPU_STATUS,MCU_CONTROL | GPU+0x34,+0x700 |
+| GPU_FAULT_STATUS,address low/high | GPU+0x3c,+0x40,+0x44 |
+| JOB_INT_STAT | GPU+0x100c |
+| SPM primary/secondary status | 0x1c001f3c,0x1c001f40 |
+| MFG power control0..3 | 0x1c001eb8..0x1c001ec4 |
+| MFG/MFGSC PLL_CON1 | 0x13fa000c,0x13fa0c0c |
+| TOPCKGEN selection,RPC sleep protection | 0x100001f0,0x13f91048 |
+
+Platform addresses were cross-checked against original DT reg-names and
+the pinned MT6983 gpufreq module's register readers. The vendor dump
+routine itself is not called because it also writes debug selectors.
+No PMIC,PLL,clock,domain,descriptor,firmware,coherency or IRQ programming
+change accompanies these reads. A successful synthetic C MMIO-write
+comparison proves write-sequence isolation only; extra reads can alter
+timing and real hardware has not yet been tested with this diagnostic.
+PLL programming words do not prove measured frequency or lock.
+
+The report appends136B to the2330 ABI, total440B, tagged55 qwords320..374.
+Flags distinguish the before/after samples; invalid flags/reserved words
+and missing,duplicate or stale qwords fail decoding. Valid partial sample
+flags prevent a success claim. Existing version/IRQ/interface/cleanup
+gates remain mandatory for a success claim. Host tests cover
+success,timeout and failure before sampling,invalid option values,ABI
+publication and exact write isolation. The completed71-test suite passed
+in8.446s with sanitizers; the full local kernel build also passed.
+
+Candidate `research/matisse/20261031-gpu/shim2331-platform-ready/
+matisse-shim-gpu2331.img` is26714112B,SHA256
+e1920561234a68e4472b91ffa2e724385940c6f7c441fc237b80b1a3b4746ad2.
+Independent component/source/frozen-object/PIC/ABI verification passed.
+Firmware/memory objects and arena PA0x40076000 remain identical to2330.
+No2331 hardware trial is authorized or performed. A read-only Recovery
+preflight again confirmed the original full64MiB boot_a SHA2562931647a
+through86b1. The prepared one-shot runner requires specific image approval
+before its write branch; automatic Recovery remains unverified, and full
+original restoration with an independent hash is part of any approved trial.

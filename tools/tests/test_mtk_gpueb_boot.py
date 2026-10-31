@@ -27,7 +27,7 @@ struct model {
     uint32_t tx[8], rx[8], pending, spm, raw, mask;
     uint32_t magic, fw, gpu_id, as_present;
     int init_error, on_error, off_error, timeout_command;
-    int stale, bad_reply, reset_timeout, stuck_timer, on_count;
+    int stale, bad_reply, reset_timeout, stuck_timer, on_count, probe_error;
 };
 static uint32_t read32(void *p, uint64_t at) {
     struct model *m=p; m->reads++;
@@ -92,7 +92,7 @@ static int run(struct model *m,struct sweet_gpu_boot_config *c,struct sweet_gpu_
 }
 static int powered(void *p,const struct sweet_gpu_io *io,uint64_t gpu) {
     struct model *m=p;(void)io;assert(gpu==0x13000000 && m->spm==6 && m->resets==1 && m->requests==2);
-    return -55;
+    return m->probe_error;
 }
 int main(void) {
     struct model m=model();struct sweet_gpu_boot_config c=config();struct sweet_gpu_boot_report r;
@@ -109,6 +109,8 @@ int main(void) {
     m=model();m.fw=0x110000;assert(run(&m,&c,&r)==SWEET_GPU_OVERLAP);assert(!m.writes);
     m=model();m.stale=1;assert(run(&m,&c,&r)==SWEET_GPU_STALE);assert(!m.writes && !m.gpu_reads);
     m=model();m.init_error=-5;assert(run(&m,&c,&r)==-5);assert(m.requests==1 && !m.gpu_reads);
+    m=model();m.init_error=-53;assert(run(&m,&c,&r)==-53);
+    assert(r.stage==SWEET_GPU_INIT && r.init_result==-53 && m.requests==1 && !m.gpu_reads);
     m=model();m.on_error=-7;assert(run(&m,&c,&r)==-7);assert(m.requests==2 && !m.gpu_reads && !r.cleanup_attempted);
     m=model();m.timeout_command=0;assert(run(&m,&c,&r)==SWEET_GPU_TIMEOUT);assert(m.requests==1 && !m.gpu_reads);
     m=model();m.timeout_command=6;assert(run(&m,&c,&r)==SWEET_GPU_TIMEOUT);assert(m.requests==2 && !r.cleanup_attempted);
@@ -118,8 +120,12 @@ int main(void) {
     m=model();m.gpu_id=0x90000001;assert(run(&m,&c,&r)==SWEET_GPU_MODEL);assert(!m.resets && m.requests==3);
     m=model();m.reset_timeout=1;assert(run(&m,&c,&r)==SWEET_GPU_TIMEOUT);assert(m.requests==3 && m.mask==0x55);
     m=model();m.off_error=-9;assert(run(&m,&c,&r)==-9);assert(r.stage==SWEET_GPU_OFF && r.power_acquired);
-    m=model();c=config();c.powered_probe=powered;c.probe_context=&m;
-    assert(run(&m,&c,&r)==-55);assert(m.requests==3 && !r.power_acquired && m.spm==2);
+    for(int error=-55;error<=-53;error+=2) {
+        m=model();c=config();m.probe_error=error;c.powered_probe=powered;c.probe_context=&m;
+        assert(run(&m,&c,&r)==error);assert(m.requests==3 && !r.power_acquired && m.spm==2);
+        assert(r.stage==SWEET_GPU_RESET && r.init_result==0 && r.on_result==1 && r.off_result==0);
+        assert(r.reset_rawstat==0x100);
+    }
     c=config();m=model();m.stuck_timer=1;m.timeout_command=0;assert(run(&m,&c,&r)==SWEET_GPU_TIMEOUT);
     puts("PASS: success, mode/address/ownership gates, stale/negative/malformed replies, bounded waits, reset and cleanup");
     return 0;
@@ -155,7 +161,9 @@ struct sweet_csf_boot_report shim_csf_report = {
     .disable_error=-53,.disable_status=1,.gpu_irq_mask=0x80503,
     .mmu_irq_mask=0xff,.as_present=0xff,.irq_gate_passed=1,
     .shader_present_lo=0x1234,.tiler_transition_lo=1,
-    .coherency_requested=31,.coherency_readback=31 };
+    .coherency_requested=31,.coherency_readback=31,.platform_sample_flags=3,
+    .platform_before={.mfg_pll_con1=0x12345678},
+    .platform_after={.mcu_control=2,.rpc_slp_protect=0x87654321} };
 unsigned calls;
 void shim_gpu_host_run(const struct sweet_gpu_boot_config *c,struct sweet_gpu_boot_report *r) {
     calls++;
@@ -215,7 +223,7 @@ void con_hex(const char *a,uint64_t b){(void)a;(void)b;}
         root = adt.Node(); root.props = [('name',0,b'device-tree\0')]
         chosen = adt.Node(); chosen.props = [('name',0,b'chosen\0'),
              ('firmware-version',0,bytes(128)),('system-firmware-version',0,bytes(128)),
-             ('sweet-gpu-report',0,bytes(128)),('sweet-csf-report',0,bytes(304))]; root.children=[chosen]
+             ('sweet-gpu-report',0,bytes(128)),('sweet-csf-report',0,bytes(440))]; root.children=[chosen]
         data = adt.serialize(root)
         buf = ctypes.create_string_buffer(data)
         self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(buf),len(data),report,shared),0)
@@ -223,20 +231,27 @@ void con_hex(const char *a,uint64_t b){(void)a;(void)b;}
         self.assertEqual(end,len(data))
         v = parsed.children[0].prop('firmware-version').split(b'\0')[0]
         self.assertIn(b'id=a0020001',v);self.assertIn(b'rst=00000100',v)
-        self.assertTrue(v.startswith(b'sweet-shim/gpu2330'))
+        self.assertTrue(v.startswith(b'sweet-shim/gpu2331'))
         csf=parsed.children[0].prop('sweet-csf-report')
-        self.assertEqual(len(csf),304)
+        self.assertEqual(len(csf),440)
         self.assertEqual(struct.unpack_from('<2I',csf,288),(31,31))
         self.assertEqual(struct.unpack_from('<I',csf,88)[0],3)
         self.assertEqual(struct.unpack_from('<IiI',csf,112),(1,-53,0x01020304))
         self.assertEqual(struct.unpack_from('<4I',csf,128),(0x80503,0xff,0xff,1))
         self.assertEqual(struct.unpack_from('<I',csf,144)[0],0x1234)
         self.assertEqual(struct.unpack_from('<I',csf,176)[0],1)
+        self.assertEqual(struct.unpack_from('<2I',csf,304),(3,0))
+        self.assertEqual(struct.unpack_from('<I',csf,360)[0],0x12345678)
+        self.assertEqual(struct.unpack_from('<I',csf,380)[0],2)
+        self.assertEqual(struct.unpack_from('<I',csf,436)[0],0x87654321)
         # A2324-sized report must be rejected, never overrun.
         chosen.props[-1]=('sweet-csf-report',0,bytes(128))
         short=adt.serialize(root);short_buf=ctypes.create_string_buffer(short)
         self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(short_buf),len(short),report,shared),-1)
         chosen.props[-1]=('sweet-csf-report',0,bytes(288))
+        previous=adt.serialize(root);previous_buf=ctypes.create_string_buffer(previous)
+        self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(previous_buf),len(previous),report,shared),-1)
+        chosen.props[-1]=('sweet-csf-report',0,bytes(304))
         previous=adt.serialize(root);previous_buf=ctypes.create_string_buffer(previous)
         self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(previous_buf),len(previous),report,shared),-1)
         del chosen.props[-1]

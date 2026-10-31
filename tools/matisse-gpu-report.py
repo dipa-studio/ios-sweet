@@ -30,11 +30,44 @@ CSF_STARTUP_KEYS = ['diag_flags','coherency_features','coherency_before','cohere
     'private_feature_before','private_feature_after','private_late_before','private_late_after',
     'shared_alloc_before','shared_alloc_after','private_page_lo','private_page_hi']
 CSF_COHERENCY_KEYS = ['coherency_requested','coherency_readback']
+CSF_PLATFORM_KEYS = ['gpu_status','mcu_control','gpu_fault_status','gpu_fault_lo','gpu_fault_hi',
+    'job_stat','spm_status','spm_status_second','mfg_power0','mfg_power1','mfg_power2','mfg_power3',
+    'mfg_pll_con1','mfgsc_pll_con1','topckgen_sel','rpc_slp_protect']
 CSF_STAGES = {0:'not-run',1:'config',2:'l2',3:'address-space',4:'mcu',
               5:'interface',6:'cleanup',7:'complete'}
 CSF_ERRORS = {0:'success',-40:'memory-argument',-41:'memory-capacity',
               -42:'memory-physical',-50:'argument',-51:'model',-52:'state',
               -53:'timeout',-54:'fault',-55:'interface'}
+
+
+def error_details(fields, csf=None):
+    """Resolve the return site before interpreting a numeric error namespace.
+
+    The platform report retains stage8 when powered_probe fails. A fresh
+    matching CSF report and observed initial reset distinguish that callback
+    from the preceding reset wait. GPUEB negative replies have their own
+    namespace even when their number collides with a local enum.
+    """
+    error = fields['error']
+    if not error:
+        return dict(error_name='success', error_domain='none', error_source='none')
+    reply = {5: ('init', 'init_result'), 6: ('power-on', 'on_result'),
+             9: ('power-off', 'off_result')}.get(fields['stage'])
+    if reply:
+        operation, key = reply
+        if fields[key] < 0 and fields[key] == error:
+            return dict(error_name='firmware-error', error_domain='gpueb-firmware',
+                        error_source=operation + '-reply')
+        if error in (-23, -24, -25):
+            return dict(error_name=ERRORS[error], error_domain='sweet-gpueb',
+                        error_source=operation + '-transport')
+    if (csf and fields['stage'] == 8 and fields['initial_power_reset_observed'] and
+            csf['stage'] != 0 and csf['error'] == error):
+        return dict(error_name='csf-' + CSF_ERRORS.get(error, 'firmware-format'),
+                    error_domain='sweet-csf', error_source='powered-probe')
+    return dict(error_name=ERRORS.get(error, 'unclassified-error'),
+                error_domain='sweet-gpu' if error in ERRORS else 'unknown',
+                error_source=STAGES[fields['stage']])
 
 
 def report_bytes(records, first, count, expected_build, name):
@@ -50,7 +83,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -75,7 +108,7 @@ def decode(data, expected_build=0x2321):
                fields['reset_rawstat'] & 0x100 != 0 and
                fields['power_acquired'] == 0 and fields['cleanup_attempted'] == 1)
     result = dict(kernel_build=hex(expected_build),stage_name=STAGES[fields['stage']],
-                error_name=ERRORS.get(fields['error'],'firmware-error'),
+                error_name=ERRORS.get(fields['error'],'unclassified-error'),
                 power_reset_verified=success,csf_firmware_boot_verified=False,**fields)
     # Keep aggregate success strict, expose the observed earlier power/reset
     # separately when a later CSF callback fails. Never infer it from zeros.
@@ -86,7 +119,7 @@ def decode(data, expected_build=0x2321):
         fields['gpu_id'] >> 28 == 10 and fields['as_present'] not in (0,0xffffffff) and
         fields['reset_rawstat'] & 0x100 != 0)
     if expected_build >= 0x2322:
-        count = 38 if expected_build >= 0x2328 else (37 if expected_build == 0x2327 else (36 if expected_build == 0x2326 else (24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11))))
+        count = 55 if expected_build >= 0x2331 else (38 if expected_build >= 0x2328 else (37 if expected_build == 0x2327 else (36 if expected_build == 0x2326 else (24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11)))))
         raw = report_bytes(records,320,count,expected_build,'CSF')
         csf = dict(zip(CSF_KEYS,struct.unpack('<I2i19I',raw[:88])))
         if expected_build >= 0x2323:
@@ -135,6 +168,17 @@ def decode(data, expected_build=0x2321):
                 'not hardware translation or memory-routing readback.')
         if csf['stage'] not in CSF_STAGES:
             raise ValueError('invalid CSF report stage')
+        if expected_build >= 0x2331:
+            flags, reserved = struct.unpack_from('<2I', raw, 304)
+            if flags & ~3 or reserved or flags == 2:
+                raise ValueError('invalid CSF platform snapshot flags/reserved word')
+            csf['platform_sample_flags'] = flags
+            for name, offset in (('before', 312), ('after', 376)):
+                values = dict(zip(CSF_PLATFORM_KEYS, struct.unpack_from('<16I', raw, offset)))
+                csf['platform_' + name] = values
+            csf['platform_snapshot_complete'] = flags == 3
+            csf['platform_snapshot_note'] = ('Raw register snapshots only; PLL programming words '
+                'do not measure clock rate or lock, MCU enabled does not trace execution.')
         end = 0x4094000  # shared VA + measured pinned firmware shared size
         ready = (csf['firmware_ready'] == 1 and csf['mcu_status'] == 1 and
                  csf['job_raw'] & 0x80000000 != 0 and csf['mmu_raw'] & 0xffff == 0 and
@@ -189,8 +233,12 @@ def decode(data, expected_build=0x2321):
                    runtime_interface_sampled=sampled,
                    firmware_ready_observed=ready,cleanup_verified=cleanup)
         result['csf'] = csf
+        if expected_build >= 0x2331:
+            ready = ready and csf['platform_snapshot_complete']
+            csf['firmware_ready_observed'] = ready
         result['csf_firmware_boot_verified'] = (success and ready and cleanup and
                                                csf['stage'] == 7 and csf['error'] == 0)
+    result.update(error_details(result, result.get('csf')))
     return result
 
 
@@ -198,7 +246,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2330)')
+                   help='expected kernel/report build (0x2321 through 0x2331)')
     a=p.parse_args()
     try:
         report=decode(a.marks.read_bytes(),a.build)

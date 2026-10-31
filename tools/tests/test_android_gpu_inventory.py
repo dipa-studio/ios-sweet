@@ -146,6 +146,41 @@ class StaticImageTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 inventory.inspect_image(p)
 
+    def vendor_boot(self, dtb, version=4):
+        data = bytearray(8192)
+        data[:8] = b'VNDRBOOT'
+        struct.pack_into('<II', data, 8, version, 4096)
+        struct.pack_into('<I', data, 24, 7)
+        struct.pack_into('<II', data, 2096, 2128 if version == 4 else 2112, len(dtb))
+        return data + dtb
+
+    def test_vendor_boot_raw_and_dt_table(self):
+        blob = fdt()
+        table = struct.pack('>8I', 0xd7b7ab1e, 64 + len(blob), 32, 32, 1, 32, 4096, 0)
+        table += struct.pack('>8I', len(blob), 64, 0, 0, 0, 0, 0, 0) + blob
+        for version, payload in ((3, blob), (4, table)):
+            with self.subTest(version=version):
+                result = inventory.inspect_blob(self.vendor_boot(payload, version), 'vendor_boot.img')
+                self.assertEqual(result['type'], 'android-vendor-boot')
+                self.assertEqual(result['dtb_offset'], 8192)
+                dtb = result['dtb']
+                if version == 4:
+                    dtb = dtb['overlays'][0]
+                self.assertIn('/soc/mali@13000000', dtb['gpu_nodes'])
+
+    def test_vendor_boot_rejects_header_bounds_and_nested_payload(self):
+        good = self.vendor_boot(fdt())
+        for offset, value in ((8, 2), (12, 0), (12, 4095), (12, 2048),
+                              (24, 0xffffffff), (2096, 2112), (2100, 0),
+                              (2100, 0xffffffff)):
+            bad = good.copy(); struct.pack_into('<I', bad, offset, value)
+            with self.subTest(offset=offset, value=value), self.assertRaises(ValueError):
+                inventory.inspect_blob(bad, 'vendor_boot.img')
+        for bad in (good[:100], good[:-1], self.vendor_boot(b'not a DTB'),
+                    self.vendor_boot(good)):
+            with self.assertRaises(ValueError):
+                inventory.inspect_blob(bad, 'vendor_boot.img')
+
 
 if __name__ == '__main__':
     unittest.main()

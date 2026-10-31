@@ -64,6 +64,25 @@ static void startup_memory(const struct sweet_csf_boot_config *c,const struct sw
     if(after) {r->shared_alloc_after=value;r->diag_flags|=8;}
     else {r->shared_alloc_before=value;r->diag_flags|=4;}
 }
+static void platform_state(const struct sweet_csf_boot_config *c,const struct sweet_gpu_io *io,
+                            struct sweet_csf_boot_report *r,int after)
+{
+    if(!c->platform_snapshot)return;
+    struct sweet_csf_platform_snapshot *s=after?&r->platform_after:&r->platform_before;
+    s->gpu_status=rd(io,c->gpu+0x34);s->mcu_control=rd(io,c->gpu+0x700);
+    s->gpu_fault_status=rd(io,c->gpu+0x3c);
+    s->gpu_fault_lo=rd(io,c->gpu+0x40);s->gpu_fault_hi=rd(io,c->gpu+0x44);
+    s->job_stat=rd(io,c->gpu+0x100c);
+    /* Original vendor_boot/LK DT reg-names plus pinned MT6983 KMD dump
+     * readers. Do not call the vendor dump routine:it also writes debug
+     * selectors. No frequency-meter,rail,clock or power-domain writes. */
+    s->spm_status=rd(io,0x1c001f3c);s->spm_status_second=rd(io,0x1c001f40);
+    s->mfg_power0=rd(io,0x1c001eb8);s->mfg_power1=rd(io,0x1c001ebc);
+    s->mfg_power2=rd(io,0x1c001ec0);s->mfg_power3=rd(io,0x1c001ec4);
+    s->mfg_pll_con1=rd(io,0x13fa000c);s->mfgsc_pll_con1=rd(io,0x13fa0c0c);
+    s->topckgen_sel=rd(io,0x100001f0);s->rpc_slp_protect=rd(io,0x13f91048);
+    r->platform_sample_flags|=after?2:1;
+}
 int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_io *io,
                    struct sweet_csf_boot_report *r)
 {
@@ -75,7 +94,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     if(!c||!io||!io->read32||!io->write32||!io->ticks||!io->barrier||
        !io->frequency||io->frequency>1000000000||c->gpu!=0x13000000||
        !c->timeout_ms||c->timeout_ms>1000||c->noncoherent>1||c->vendor_ina0>1||
-       c->vendor_cached_memattr>1||c->pte_group_requested>15||
+       c->vendor_cached_memattr>1||c->platform_snapshot>1||c->pte_group_requested>15||
        c->pte_pages_built>c->arena_bytes/4096||c->root_pa!=c->arena_pa||
        c->arena_pa<0x40000000||(c->arena_pa&4095)||!c->arena_bytes||
        c->arena_bytes>0x1000000||c->arena_pa>UINT64_MAX-c->arena_bytes||
@@ -190,6 +209,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     }
     r->irq_gate_passed=1;
     r->stage=SWEET_CSF_BOOT_MCU;
+    platform_state(c,io,r,0);
     wr(io,c->gpu+0x700,2); /* AUTO is2; ENABLE is1. */
     uint64_t begin=io->ticks(io->context);
     rc=SWEET_CSF_BOOT_TIMEOUT;
@@ -213,6 +233,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     startup_memory(c,io,r,1);
     init_registers(io,c->gpu,r,1);
     core_state(io,c->gpu,r,8);
+    platform_state(c,io,r,1);
     if(rc) {r->error=rc;goto cleanup;}
     r->stage=SWEET_CSF_BOOT_IFACE;
     /* An input/output page and every CSG control block must fit shared. */
