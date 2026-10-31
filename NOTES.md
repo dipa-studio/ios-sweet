@@ -1,6 +1,59 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-10-31: CSF2328 LEAF GROUP6 BUILT; TRIAL APPROVAL NEEDED <<<
+## >>> COMPLETE 2026-10-31: CSF2328 GROUP6 TRIAL; MCU TIMEOUT; FULL RESTORE <<<
+
+User explicitly replied 可以 to ONE normal2328 trial of imagea880c846 and
+full original boot_a restoration. Executed exactly once; runner session89703
+exited0. Candidate26714112B SHA256
+a880c8465cbc02deaa287a4925e54a911722e938fde1685fecf0410d733959a6.
+Full temporary boot_a readback matched predicted
+1987a83a69676c290dca9a80c8aa95aa4502dd39982df192df6d8cd3e9cf3176.
+Normal boot reached Fastboot after83.54s. One persistent raw USB session
+returned OKAY for stock-prefix download013e8000,flash:boot_a and
+reboot-recovery. Recovery then restored all67108864B original boot_a.
+Separate post-restore root/matisse/_a/recovery/geometry and SHA256 PASS:
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Journal complete-restored-Recovery,restore_pending=false,evidence_decoded=true.
+No active runner or pending restore. No user USB/key intervention.
+Fresh Recovery dmesg890576B. No new build/CI/push in this trial.
+
+Fresh marks build2328/count99 contain38 complete CSF qwords320..357,
+matching the captured4198400B tail. Before marks build2327/count98 exactly
+match the previous trial; old marks reject expected2328. The18657B console
+independently names gpu2328/sweettrial=2328. New software metadata reports
+group6/293 leaves; this is NOT hardware translation/routing readback.
+Every common decoded GPU/CSF field is identical to2327: platform INIT0/ON1/
+OFF0,SPM3->7,GPU_IDa8620004,initial reset100,AS_PRESENTff; coherency request/
+immediate readback/after31,diag_flags127,IRQ mask gate PASS. MCU remains
+stage4/error-53,MCU_STATUS1,JOB_RAW0,MMU_RAW0,version0,AS fault/status0.
+L2_READY1,TRANSCFG420001c6,rootPA40076000,MEMATTR4c4c9f4c/4c4c4c4c.
+Private marker words stay0; shared04000018 changes0->1d. Disable timeout-53,
+reset_raw600/reset_completed0,cleanup_error-53. Firmware-ready remains false.
+
+Group6 leaf tagging alone did not establish the handshake in this trial.
+This does not prove hardware consumed the tag or identify the timeout cause.
+Return83.54s versus2327's180.34s is an observation, not attributable to the
+tag from single runs. No firmware-ready or GPU acceleration claim.
+Ignored evidence: shim2328-trials/gpu-normal/{journal.json,gpu-result.json,
+comparison-2327-2328.json,independent-post-restore.txt,before/after-marks.bin,
+before/after-tail.bin,after-console.txt,recovery-dmesg.txt} and
+shim2328-trials/gpu-normal-run.txt. Restoration plan records one consumed
+authorization and independently verified full restoration.
+Implementation5ba6301/build handoff4b4c524;48-test/build results unchanged.
+Freshness/report completeness/previous-trial alignment/comparison checks PASS.
+NEXT: continue offline pinned vendor cache/AS/PTE and MCU startup comparison,
+selecting any next diagnostic from evidence. Do not repeat2328 blindly.
+This approval is consumed; another concrete image/write needs confirmation.
+Preserve unrelated dirt and inherited untracked0093.
+
+## >>> HISTORICAL 2026-10-31: CSF2328 BUILD AND SINGLE-TRIAL AUTHORIZATION <<<
+
+User specifically replied 可以 to ONE normal2328 imagea880c846 boot_a
+trial, fresh evidence collection and full64MiB original restoration.
+Read-only preflight repeated PASS; runner hashbf0cf466 and prefixfe6e8fbf
+match the prepared restoration plan. This authorization covers this one
+trial and its restoration only. Follow shim2328-trials/gpu-normal/journal.json
+once started; prioritize full restore and independent hash before analysis.
 
 User replied 可以 to offline continuation after restored2327 (cf5024d).
 New pinned vendor-helper audit found omitted MGM transformation: actual
@@ -46,10 +99,8 @@ ONLY read-only preflight ran/PASS. No active journal,restore_pending=false.
 Ignored firmware-static/{vendor-mmu2328-audit,group6-isolation2328,
 fetch-audit-group6-2328,kernel2328-source-replay}.json and build/test logs
 record evidence. Full original/prefix pins are unchanged.
-NEXT: ask specific approval for ONE normal2328 imagea880c846 boot_a trial,
-full readback expected1987a83a69676c290dca9a80c8aa95aa4502dd39982df192df6d8cd3e9cf3176,
-fresh2328 capture and full64MiB restore/independent hash2931647a. No approval
-for this new image yet; don't execute the runner write branch.
+The authorized trial and full restoration are now complete as recorded
+above. This historical preparation entry does not authorize another write.
 
 ## >>> COMPLETE 2026-10-31: CSF2327 PROTOCOL31 VERIFIED; MCU TIMEOUT; FULL RESTORE <<<
 

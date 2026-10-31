@@ -1032,3 +1032,53 @@ collect fresh2328 evidence, restore the stock prefix through one persistent
 Fastboot session if needed, then restore and independently hash the full
 original64MiB in Recovery. The latest 可以 authorized offline continuation;
 it did not name or approve this newly created image.
+
+## CSF2328 approved hardware trial and full restoration (2026-10-31)
+
+After the specific image-and-restoration prompt, the user replied 可以.
+Exactly one normal2328 trial ran in runner session89703, exit0. The
+26714112-byte image SHA256a880c8465cbc02deaa287a4925e54a911722e938fde1685fecf0410d733959a6
+was written to boot_a; full partition readback matched predicted
+1987a83a69676c290dca9a80c8aa95aa4502dd39982df192df6d8cd3e9cf3176.
+The device reached Fastboot after83.54 seconds. A single persistent raw
+USB session returned OKAY for stock-prefix download013e8000,flash:boot_a
+and reboot-recovery. Root Recovery then restored the complete67108864-byte
+original boot_a. A separate identity/geometry/hash check confirmed
+matisse,_a,recovery,uid0 and SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No manual USB/key intervention was needed. Journal status is
+complete-restored-Recovery,restore_pending=false,evidence_decoded=true;
+there is no running trial or pending restoration. Recovery dmesg is890576B.
+
+Fresh marks identify build2328,count99,with all38 CSF qwords320..357.
+The4198400-byte tail ends in the identical marks block. Before marks identify
+2327,count98 and exactly match the prior trial; the2328 decoder rejects
+them. The18657-byte after-console independently names gpu2328 and
+sweettrial=2328. These checks distinguish the new capture from stale data.
+
+The new fields show requested group6 and293 built leaf pages, as expected.
+They are software builder metadata, not hardware translation or routing
+readback. Every common decoded GPU and CSF field is unchanged from2327.
+Platform power/init/reset evidence, coherency31 write/readback, IRQ mask gate
+and L2 readiness remain present. MCU is still stage4/error-53,MCU_STATUS1,
+JOB_RAW0,MMU_RAW0,version0,AS fault/status0. TRANSCFG420001c6,rootPA40076000
+and MEMATTR4c4c9f4c/4c4c4c4c are unchanged. Private marker words remain0;
+shared04000018 changes0->1d. Disable still times out-53,cleanup reset_raw600
+with reset_completed0 and cleanup_error-53. Firmware readiness remains false.
+
+Thus adding group6 alone did not establish the firmware handshake under
+this configuration. This does not show whether hardware consumed that tag,
+identify firmware PC or diagnose the timeout. The83.54-second Fastboot return
+versus2327's180.34 seconds is an observed single-run difference with no
+causal attribution. No GPU acceleration or firmware-ready result is claimed.
+
+Ignored evidence under shim2328-trials/gpu-normal includes journal.json,
+gpu-result.json,comparison-2327-2328.json,independent-post-restore.txt,
+before/after marks and tails,after-console.txt and recovery-dmesg.txt;
+gpu-normal-run.txt records transport/restoration output. The restoration
+plan records the consumed single-trial authorization and verified restore.
+Implementation5ba6301 and build handoff4b4c524 are unchanged; prior48 tests
+and complete kernel/image checks remain applicable. No new build,CI run or
+push occurred. Next is offline pinned vendor cache/AS/PTE and MCU sequence
+comparison; repeating2328 is not justified by this result. Any further
+candidate device write requires a new specific confirmation.
