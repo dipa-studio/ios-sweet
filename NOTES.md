@@ -2,6 +2,7 @@
 
 ## >>> COMPLETE 2026-10-31: ONE RAM COLLECTOR TRIAL; FULL BOOT_A RESTORED; RECOVERY ONLINE <<<
 
+Result and receiver fix commit b422c33 is local (not pushed). No CI run.
 The single specifically authorized collector trial is COMPLETE. User preferred
 Recovery write; no fastboot flash occurred. First fastboot getvar attempt
 failed before write, USB replug+fastboot reboot recovery worked. The new
