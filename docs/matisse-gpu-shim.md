@@ -210,3 +210,57 @@ preflight again confirmed the original full64MiB boot_a SHA2562931647a
 through86b1. The prepared one-shot runner requires specific image approval
 before its write branch; automatic Recovery remains unverified, and full
 original restoration with an independent hash is part of any approved trial.
+
+## CSF2331 measured trial and restoration (2026-10-31)
+
+The user subsequently authorized exactly one normal2331 trial and complete
+original restoration. Runner session62578 exited0. The candidate's full
+boot_a readback matched predicted SHA256
+efa6122218e60edd6b515281be3a2b8319ab3910b329a99c3cabee2b5ec799ff.
+The device reached Fastboot after82.54s. One persistent raw USB session
+restored the stock prefix and rebooted Recovery; Recovery then restored
+all67108864B original boot_a. A separate independent device/slot/root/
+Recovery/geometry check confirmed the full original SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No restore is pending and the one-trial authorization is consumed.
+
+Fresh marks identify2331 and contain all55 CSF qwords; they match the
+captured userdata tail exactly. Before-capture marks/tail equal the previous
+2330 after-capture,stale2330 evidence is rejected as2331,and the new console
+independently names gpu2331/sweettrial2331. Every common GPU/CSF field
+matches2330. Both new snapshots were sampled,with these raw measurements:
+
+| Measurement | Before AUTO | After wait,before cleanup |
+| --- | --- | --- |
+| GPU_STATUS | 0x100 | 0x101 |
+| MCU_CONTROL | 0 | 2 |
+| GPU_FAULT_STATUS/address | 0 | 0 |
+| JOB_INT_STAT | 0 | 0 |
+| SPM status primary/secondary | 0xf / 0xf | 0xf / 0xf |
+| MFG power0..3 | c000224d/c0000112/c0000112/1112 | same |
+| MFG/MFGSC PLL_CON1 | 82177627/832013b1 | same |
+| TOPCKGEN_SEL | ff030000 | same |
+| RPC_SLP_PROTECT | fff0fff0 | same |
+
+MCU_STATUS remains1,version0,JOB_RAW0,MMU_RAW0,AS0 status/fault0,L2_READY1.
+The CSF stage4 wait returns the local-53 timeout. Disable also times out,
+MCU status remains1,and cleanup reset does not complete (RAW0x200). GPUEB
+INIT0/ON1/OFF0 and the initial GPU reset0x100 remain independently observed.
+The CSF firmware handshake has not succeeded.
+
+Offline comparison verifies gpufreq_mt6983.c/.h against original pinned
+commit270b84910b941bf75490fccdb5fb2b3021dd7cbf. Under those definitions,
+CLK_CFG30 bits16/17 are both MAIN selections; GPU_STATUS ACTIVE is set and
+PROTM is clear. This does not measure actual clock frequency,PLL lock or
+MCU instruction fetch. The reference uses PDCv2 and conditionally skips
+manual MFG2..18 power-on; it also contains fake SPM power-control APIs.
+Thus shader-domain status bits alone are insufficient to diagnose a rail
+failure. No PDC CG/ST state or EMI-path state was captured. The next offline
+comparison should examine those vendor/binary initialization paths before
+selecting another diagnostic. No direct rail/PLL/clock writes are selected.
+
+Evidence stays ignored under `research/matisse/20261031-gpu/
+shim2331-platform-trials/gpu-normal/`:fresh marks/tail/console,decoded report,
+comparison-2330-2331.json,platform-field-analysis.json,journal.json and
+independent-post-restore.txt. No new build,CI run or push occurred for this
+trial; implementation8ea682a and build handoff5862456 remain applicable.

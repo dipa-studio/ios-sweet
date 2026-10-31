@@ -1,6 +1,72 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-10-31: CSF2331 PLATFORM SNAPSHOT BUILT; NO TRIAL AUTHORIZATION <<<
+## >>> ACTIVE 2026-10-31: CSF2331 SNAPSHOT TRIAL; MCU TIMEOUT; FULL RESTORE <<<
+
+User approved ONE normal2331 imagee1920561 boot_a trial,fresh evidence and
+complete original restoration. Executed exactly once;runner session62578
+exited0. Candidate26714112B SHA256
+e1920561234a68e4472b91ffa2e724385940c6f7c441fc237b80b1a3b4746ad2.
+Full candidate boot_a readback matched predicted SHA256
+efa6122218e60edd6b515281be3a2b8319ab3910b329a99c3cabee2b5ec799ff.
+Normal boot reached Fastboot after82.54s;one persistent raw USB session
+returned OKAY for stock-prefix download013e8000,flash:boot_a,reboot-recovery.
+Recovery captured evidence then restored ALL67108864B original boot_a.
+Separate independent root/matisse/_a/Recovery/geometry/full SHA256 PASS:
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Journal/plan complete-restored-Recovery,restore_pending=false,one consumed
+authorization,evidence_decoded=true. No active runner or pending restore;
+no user USB/key intervention. No rebuild,CI run,push or repeated test suite.
+
+Fresh marks build2331/count116 include55 CSF qwords320..374 and exactly
+match the4198400B tail. Before marks/tail byte-equal2330 previous after;
+stale2330 rejects expected2331. Fresh18657B console independently names
+gpu2331/sweettrial2331. All common CSF and GPU fields exactly equal2330;
+new platform flags3 confirm both before/after samples. MCU staysstage4,
+error-53,status1,JOB_RAW0,MMU_RAW0,AS status/fault0,version0,L2_READY1;
+disable still times out-53,status1;reset_raw200/reset_completed0,cleanup-53.
+GPUEB INIT0/ON1/OFF0 and initial reset100 remain observed. Firmware-ready
+and acceleration remain false.82.54s vs2330's84.57s is one-run timing only.
+
+Measured before->after AUTO:GPU_STATUS100->101,MCU_CONTROL0->2. GPU fault
+status/address and JOB_INT_STAT remain0. Both SPM status words stayf;
+MFG power0..3 stayc000224d/c0000112/c0000112/1112;PLL words82177627/832013b1,
+TOPCKGEN_SELff030000,RPC_SLP_PROTECTfff0fff0 remain unchanged. These raw
+words are not yet a power-tree/clock-lock diagnosis;MCU enabled does not
+prove firmware PC. No fault does not exclude blocked memory transactions.
+Offline field decode byte-compared gpufreq_mt6983.c/.h to pinned original
+xiaomi-rubens270b84910b941bf75490fccdb5fb2b3021dd7cbf. CLK_CFG30 bits16/17
+both select MAIN;this does not prove frequency/lock/downstream gates.
+GPU_STATUS after has ACTIVE1,PROTM0. Both SPM words maskedffffe aree.
+Reference PDCv2 is enabled,manual MFG2..18 power-on is conditional on its
+being disabled,and fake SPM PWR_CON APIs exist. Therefore missing shader
+domain bits alone do not diagnose a missing rail. PDC CG/ST and EMI state
+were not sampled. Further platform interpretation is in ignored
+platform-field-analysis.json;no extra device register access was made.
+
+Ignored evidence:shim2331-platform-trials/gpu-normal/{journal.json,
+gpu-result.json,comparison-2330-2331.json,platform-field-analysis.json,
+independent-post-restore.txt,
+before/after-marks.bin,before/after-tail.bin,after-console.txt,recovery-dmesg.txt}
+and gpu-normal-run.txt. Dmesg891592B. Implementation8ea682a/build handoff
+5862456 remain applicable. NEXT: offline compare pinned vendor/binary PDC
+CG/ST and EMI/memory-path initialization against the shim to choose a
+discriminating next check. Do not blindly repeat2331 or directly write
+rails/clocks;another concrete image/write needs specific confirmation.
+Preserve unrelated dirt/untracked0093 and keep device data out of git.
+
+## >>> HISTORICAL 2026-10-31: CSF2331 SINGLE TRIAL AUTHORIZED <<<
+
+User specifically replied 可以 to ONE normal2331 imagee1920561 boot_a
+trial,fresh evidence and complete64MiB original restoration with independent
+SHA256 verification. Fresh root/matisse/_a/Recovery preflight PASS; full
+boot_a SHA2562931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Candidate,backup,stock-prefix and runner815b1c07 pins match. No prior2331
+journal or active runner. Authorization covers this one trial and its
+restoration only. Once started, follow shim2331-platform-trials/gpu-normal/
+journal.json and prioritize full original restoration and independent hash
+before interpreting GPU evidence. Do not launch a second trial.
+
+## >>> HISTORICAL 2026-10-31: CSF2331 PLATFORM SNAPSHOT BUILT AND VERIFIED <<<
 
 Implementation committed8ea682a (bounded platform snapshots,440B evidence,
 error provenance,original vendor_boot DT inventory,pinned pairing controls
