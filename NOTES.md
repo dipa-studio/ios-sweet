@@ -34,8 +34,17 @@ Journal shim2325-trials/gpu-normal/journal.json complete-restored-Recovery,
 restore_pending=false,evidence_decoded=true. No active runner/restore duty.
 Host-managed restoration, NOT autonomous Recovery from normal XNU.
 
-Next STATIC work: exact firmware boot/MMU/coherency prerequisites and G710
-vendor initialization; do not treat masks as the proven2323 timeout cause.
+Posttrial STATIC audit: exact vendor KMD22b26f30/live Recovery DTB4fa4d9fe.
+Full /soc/mali node lacks system-coherency and quirks_gpu/sc/tiler/mmu.
+Vendor default31 flows to COHERENCY_ENABLE+304 via feature19 (present in
+modela0020000 feature list); probe does not record/program its actual value.
+Vendor derives/writes CSF_CONFIGf00,SHADER_CONFIGf04,TILER_CONFIGf08,
+L2_MMU_CONFIGf0c. Default MMU-quirk path clears0f000000; no model table entry
+for this G710. Effective PTE/cache and firmware-fetch audit remains NEXT;
+register differences are observations, NOT demonstrated timeout causes.
+No speculative hardware changes. Ignored firmware-static/{vendor-init-audit.txt,
+post2325-vendor-audit.json}. Corrected firmware effective TILER_PWRON190/194
+(R8=40000010), not shader180/184; synthetic replay is not hardware execution.
 Fixed0123 patch serialization to carry ordinary context (no zero-context
 apply flag required). Both git apply and patch replay PASS and reproduce
 exact built2325 source; full tracked evidence-patch sequence PASS,display
@@ -43,7 +52,9 @@ trace remains16. Added CI-style patch-sequence regression. Image/kernel
 bytes unchanged; no rebuild or additional device action.
 31 targeted tests PASS (3.080s), including normal git-apply patch regression;
 git diff --check PASS. No second2325 trial,new image/device write authorized.
-Implementation3f29061,handoffcb2ad31,fallback98f9438,normal result32dbb13.
+Implementation3f29061,handoffcb2ad31,fallback98f9438,normal result32dbb13;
+patch/tooling regression and documentation correction committed5bbd6b6.
+Fresh11-test module PASS (0.826s);31-test suite above remains PASS.
 No new build/CI/push this normal trial.
 Evidence ignored gpu-normal/{after-marks.bin,after-console.txt,gpu-result.json,
 journal.json,independent-post-restore.txt,recovery-dmesg.txt},gpu-normal-run.txt.

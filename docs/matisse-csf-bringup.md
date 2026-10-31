@@ -635,3 +635,43 @@ Evidence stays ignored under shim2325-trials/gpu-normal/ and sibling
 gpu-normal-run.txt. No second trial,new image or device write is authorized.
 Further static analysis must compare firmware boot/MMU/coherency prerequisites
 and G710 vendor initialization, without claiming the timeout root cause.
+
+## Post2325 vendor initialization audit (2026-10-31)
+
+This bounded audit uses the same extracted KMD hash22b26f30 and the saved
+live Recovery DTB hash4fa4d9fe. It does not execute firmware or read new GPU
+registers. Full GPU-node properties, rather than a filtered inventory, contain
+none of system-coherency, quirks_gpu, quirks_sc, quirks_tiler or quirks_mmu.
+These are the exact property names resolved from KMD ELF relocations and
+rodata. The live DT is evidence of LK's Recovery configuration; a normal
+Android runtime has not been observed.
+
+- kbase_device_coherency_init0x2374c stores default31 at device+0x2dfc.
+  kbase_pm_init_hw calls kbase_cache_set_coherency_mode at0x3be0c with that
+  field. The setter0x3678c writes GPU+0x304 when feature19 is set. The model
+  key for GPU_ID0xa8620004 is0xa0020000 (mask0xf00f0000); its feature array
+  at rodata+0x12084 includes19. The current probe neither programs nor
+  records COHERENCY_ENABLE, so its actual post-reset value remains unknown.
+- In the no-DT-override path, vendor initialization derives values for
+  SHADER_CONFIG+0xf04, TILER_CONFIG+0xf08, L2_MMU_CONFIG+0xf0c and
+  CSF_CONFIG+0xf00 before writing them at0x3bd84..0x3bdf8. Shader/tiler
+  defaults also depend on model/feature/issue bits; do not invent literals.
+  kbase_set_mmu_quirks0x4045c has no model-table entry for0xa0020000; its
+  default path clears0x0f000000 in the existing L2_MMU_CONFIG value. The
+  separate coherency==1 addition does not apply to default31. No actual
+  quirk-register readback is available from2325.
+- Vendor MMU setup supplies MEMATTR0x00084c8d888d8f88 and mode6. Its default31
+  path adds WB/RA walks without outer-shareability or observed INA bits,
+  yielding0x42000006. Probe2325 instead measures0x420001c6 and uses its
+  own attribute-index assignments. Compare effective PTE attributes and
+  table-level semantics, not raw index numbers alone. Different register
+  values do not establish that either configuration caused the timeout.
+
+Ignored evidence firmware-static/post2325-vendor-audit.json records source
+hashes, property absence, model/features and exact register/function offsets;
+vendor-init-audit.txt holds bounded local disassembly extracts. Before a
+behavioral successor, finish the MCU fetch/address-space audit and select
+one evidence-backed difference. A future probe can record COHERENCY_ENABLE,
+CSF_CONFIG, SHADER_CONFIG, TILER_CONFIG, L2_MMU_CONFIG and AS_MEMATTR alongside
+existing diagnostics. No speculative register writes, new build or device
+action were performed by this audit.
