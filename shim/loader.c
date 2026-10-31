@@ -21,6 +21,9 @@
 #endif
 #include "fdt.h"
 #include "loader.h"
+#ifdef SHIM_GPU_PROBE
+#include "gpu.h"
+#endif
 
 #define BOOT_LINE_LENGTH	608
 #define PAGE_16K		0x4000UL
@@ -168,6 +171,15 @@ const char *loader_boot(uintptr_t dtb)
 	if (!embedded && rd_end > p->phys_base && rd_start < p->phys_base + p->mem_size)
 		return "ramdisk overlaps kernel memory";
 
+#ifdef SHIM_GPU_PROBE
+	struct sweet_gpu_boot_report gpu_report;
+	uint64_t gpu_shared = 0;
+	if (shim_gpu_arm_recovery(dtb))
+		return "GPU automatic Recovery return could not be armed";
+	if (shim_gpu_prepare(dtb, p->phys_base, p->mem_size, &gpu_report, &gpu_shared))
+		return "GPU handoff/ownership unsafe; XNU copy refused";
+#endif
+
 	for (uint32_t i = 0; i < p->nsegs; i++) {
 		const struct payload_seg *s = &p->segs[i];
 		uintptr_t dst = s->vmaddr + pa_of_va_base;
@@ -181,6 +193,11 @@ const char *loader_boot(uintptr_t dtb)
 	/* ADT, then boot_args, behind the kernel; everything below topOfKernelData is ours. */
 	uintptr_t adt_pa = p->kernel_end + pa_of_va_base;
 	copy64(adt_pa, (uintptr_t)p + p->adt_off, p->adt_size);
+#ifdef SHIM_GPU_PROBE
+	if (p->adt_size > UINT32_MAX ||
+	    shim_gpu_publish(adt_pa, (uint32_t)p->adt_size, &gpu_report, gpu_shared))
+		return "GPU ADT diagnostic slots missing";
+#endif
 	uintptr_t ba_pa = (adt_pa + p->adt_size + PAGE_16K - 1) & ~(PAGE_16K - 1);
 	uintptr_t top = ba_pa + PAGE_16K;
 

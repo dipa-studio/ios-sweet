@@ -1,5 +1,54 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: GPU2320 BUILT; RECOVERY FALLBACK TEST NEXT <<<
+
+User latest: keep collector-v2; prioritize GPU power/init through shim and
+continue tests without repeated prompts. No GPU hardware claim yet.
+Implemented independent GPUEB transport/power/reset core and optional shim
+live-FDT adapter, with bounded replies, ownership, SPM gates, memory-conflict
+refusal and CSF soft-reset0x101.47 host tests PASS including ASan/UBSan.
+New kernel0118 only adds ADT-controlled automatic Recovery window; local
+incremental build PASS, no CI. Kernel SHA2567c16716c6a047bdd0615011cbb66862ce452259ca3f573220cf261c2cf975f8c.
+Image research/matisse/20261031-gpu/shim2320-ready/matisse-shim-gpu2320.img
+26652672B SHA256bc8ecb9fa343de62f5554bda69fbe10549e90fef5ba637d4c390d9449cb12f04.
+Expanded80402548B under measured DTB limit. Original package Linux intact
+at+32MiB for mode2/unknown fallback before shim_main. Frozen2313 board/UFS/
+display objects retained; current dirty shim.c/build.sh excluded. Root
+ufsrw=0/rootrw=0; diagnostic summary via existing version print/SWEETLOG.
+WDT31s armed by shim, normal XNU feed stops after60s only for this ADT.
+
+Fresh Recovery preflight confirmed matisse/_a/root; full64MiB boot_a still
+baseline2931647a. NEXT one Recovery-only fallback verification with fresh
+runner research/matisse/20261031-gpu/shim2320-trials/run-once.py; then full
+restore/readback. Only if that passes run normal GPU trial. Journal in
+{recovery-fallback,gpu-normal}/journal.json is authoritative restoration
+state. No write at this handoff save. Preserve pre-existing unrelated dirty
+files and collector-v2. Never execute/import historical run-ui runners.
+
+## >>> ACTIVE 2026-10-31: SHIM GPU POWER/INIT; COLLECTOR CHANGES RETAINED <<<
+
+Latest user steering: keep collector-v2 work (do NOT revert it), prioritize
+MT6983 GPU power and initialization through the existing shim/XNU path.
+Continue without repeated unplug/permission prompts; report substantial
+progress. No new boot test or partition write in this phase yet.
+Recovery is online, boot_a was fully restored (baseline2931647a); no active
+runner or pending restore. Preserve existing unrelated dirty shim files.
+
+Fresh read-only userdata tail capture independently verifies established
+SWEETLOG works: userdata114319917056B, log offset114315718656B,4198400B
+capture, version1,size4194304,total317844,seq116 plus SWEETMRK. Decoded
+console is HISTORICAL successful2317 XNU boot, not a new GPU test. Artifacts:
+research/matisse/20261031-gpu/shim-handoff/{existing-log.bin,
+existing-log-manifest.json,existing-console.txt}. Do not repeat old claims
+that persistent logging is broken or use legacy boot+4MiB SWLG offsets.
+
+Next implement independently written, bounded shim GPUEB mailbox/power
+initialization with explicit handoff, memory-ownership and timeout checks;
+first validate host and freestanding compilation. Reuse frozen2313 shim
+objects/2317 payload, not the current dirty shim.c/build.sh. GPUEB runtime
+reservations and GPU_ID remain UNMEASURED. Firmware parsing and IPI wire
+encoding alone do not establish power-on or CSF readiness.
+
 ## >>> COMPLETE 2026-10-31: ONE RAM COLLECTOR TRIAL; FULL BOOT_A RESTORED; RECOVERY ONLINE <<<
 
 Result and receiver fix commit b422c33 is local (not pushed). No CI run.

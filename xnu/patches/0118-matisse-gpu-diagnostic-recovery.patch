@@ -1,0 +1,52 @@
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -24,6 +24,7 @@
+ #include <IOKit/IOMemoryDescriptor.h>
+ #include <kern/thread.h>
+ #include <sys/proc.h>
++#include <pexpert/device_tree.h>
+ 
+ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+ 
+@@ -36,11 +37,25 @@
+ #define MTK_WDT_KEY     0x1971
+ 
+ static volatile uint32_t *sweet_mtk_wdt;
++static uint32_t sweet_gpu_return_seconds;
+ 
+ static void
+ sweet_mtk_wdt_feed(void *arg __unused, wait_result_t result __unused)
+ {
++	uint32_t elapsed = 0;
+ 	while (true) {
++		if (sweet_gpu_return_seconds && elapsed++ >= sweet_gpu_return_seconds) {
++			/* Diagnostic image only: the shim already armed the hardware
++			 * watchdog and reserved an intact stock Linux fallback. */
++			IOLog("SWEET GPU: diagnostic window ended; watchdog returns to Recovery\n");
++			sweet_mtk_wdt[0x24 / 4] =
++			    (sweet_mtk_wdt[0x24 / 4] & ~15u) | 2u;
++			__asm__ volatile("dsb sy" ::: "memory");
++			/* Leave the final console flush time, then the hardware expires. */
++			for (;;) {
++				IOSleep(1000);
++			}
++		}
+ 		sweet_mtk_wdt[MTK_WDT_RESTART / 4] = MTK_WDT_KEY;
+ 		IOSleep(1000);
+ 	}
+@@ -50,6 +65,15 @@
+ sweet_mtk_wdt_start(void)
+ {
+ 	thread_t thread;
++	DTEntry chosen;
++	const uint32_t *seconds;
++	unsigned int size;
++	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) == kSuccess &&
++	    SecureDTGetProperty(chosen, "sweet-gpu-autorecovery-seconds",
++	    (void const **)&seconds, &size) == kSuccess && size == sizeof(*seconds) &&
++	    *seconds >= 15 && *seconds <= 180) {
++		sweet_gpu_return_seconds = *seconds;
++	}
+ 
+ 	sweet_mtk_wdt = (volatile uint32_t *)ml_io_map(MTK_WDT_PA, 0x1000);
+ 	IOLog("SWEET WDT: MTK WDT mode=0x%08x length=0x%x status=0x%08x\n",

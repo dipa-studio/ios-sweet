@@ -93,6 +93,24 @@ el1_entry:
 	str	xzr, [x1], #8
 	b	1b
 2:	mov	x0, x19
+#ifdef SHIM_RECOVERY_FALLBACK
+	/* Diagnostic images embed stock Linux after the XNU payload. Recovery
+	 * bypass happens before shim_main touches display/UFS/watchdog. Linux
+	 * supports this EL1, MMU-off entry; x0 retains LK's live tree. */
+	bl	shim_recovery_target
+	cbz	x0, 6f
+	mov	x4, x0
+	mov	x0, x19
+	mov	x1, xzr
+	mov	x2, xzr
+	mov	x3, xzr
+	dsb	sy
+	ic	iallu
+	dsb	sy
+	isb
+	br	x4
+6:	mov	x0, x19
+#endif
 	bl	shim_main
 3:	wfe
 	b	3b
