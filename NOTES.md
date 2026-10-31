@@ -1,5 +1,37 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: GPU2321 LOG FIX BUILT; SECOND NORMAL TRIAL NEXT <<<
+
+Local build and48 host tests PASS; no CI.0119 fixes actual read-only raw
+console writes (only last1025 blocks exception), adds ADT report marks300..308
+and bumps kernel mark2321. GPU state machine unchanged. New kernel SHA256
+e733b11f51c7194d44e765d2a79866fd876d6a013d0af846188a8ccab2e68656.
+Image shim2321-ready/matisse-shim-gpu2321.img26656768B SHA256
+32a9768f580d0a67b677f260cc9f5007a4c55ec9edd07b06fe49ca19cfd054a3.
+Fallback Linux+32MiB and generic ramdisk identical to tested2320. Root read-only.
+Fresh runner shim2321-trials/run-once.py retains tested2320 fallback journal
+as prerequisite. NEXT one normal GPU trial, full baseline boot_a restore,
+then decode gpu2321 console and independent report marks. No pending restore
+at this save; device Recovery. Preserve pre-existing dirty files/collector.
+
+## >>> ACTIVE 2026-10-31: GPU2320 NORMAL RETURNED; READONLY LOG GUARD FIX IN PROGRESS <<<
+
+Recovery fallback commit87ad680. Normal gpu2320 trial returned fresh
+Recovery automatically in121.41s. Full boot_a restored/readback2931647a,
+journal shim2320-trials/gpu-normal/journal.json restore_pending=false.
+Only tail block1024 changed; historical2317 console bytes/header unchanged.
+Fresh SWEETMRK count52 proves XNU reached root mount and launchd exec;
+old kernel build mark still2316 because that constant was not bumped.
+NO GPU_ID/power/reset result recovered; do not claim GPU success.
+
+Root cause observed in local source:0093 removed su.writable guard only
+in sweet_log_start, while ufs_write_blocks still rejects read-only writes.
+New0119 bounds the diagnostic exception to last1025 blocks, keeps all VFS
+writes blocked, and records ADT sweet-gpu-report as9 independent progress
+marks300..308. Build ID bumped2321. Local incremental kernel build running;
+no new CI or further partition write. New image will retain tested stock
+Linux fallback and readonly root. Preserve unrelated dirty files/collector.
+
 ## >>> ACTIVE 2026-10-31: GPU2320 RECOVERY FALLBACK VERIFIED; NORMAL TRIAL NEXT <<<
 
 Commit3056f54 contains bounded shim GPU power/reset implementation. First

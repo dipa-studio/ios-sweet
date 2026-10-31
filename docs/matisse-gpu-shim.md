@@ -71,3 +71,21 @@ power off, wrong magic, stale/negative/bad replies, bounded waits, stopped
 timer, unexpected reference count/model, reset timeout and cleanup failure.
 Actual FDT reader/ADT publication have regression tests. Hardware outcomes,
 image hashes and restoration duty are recorded in NOTES and a fresh journal.
+
+## Hardware trial and evidence correction (2026-10-31)
+
+GPU2320 Recovery bypass returned in26.56s, and its normal boot returned to
+Recovery automatically in121.41s. Each trial fully restored and SHA256
+verified boot_a2931647a. New progress marks reached launchd; however the
+console ring stayed byte-identical to old2317. No GPU result can be inferred.
+
+The initial0093 exception only covered sweet_log_start. WRITE(10) still
+rejected read-only logging. Patch0119 adds a separately requested diagnostic
+write path bounded to the established last1025 blocks; normal VFS writes
+still require ufsrw=1. Bounds are tested with the exact C predicate and
+ASan/UBSan. A second independent channel copies the72-byte ADT GPU report
+into progress marks300..308 at UFS init, each tagged2321. Build ID2321
+identifies this kernel. GPU2321 retains the already tested Linux fallback
+and the unchanged GPU state machine; only report tags and kernel evidence
+collection changed. Root remains read-only. Firmware/ID/reset hardware
+success still requires a fresh decoded result.

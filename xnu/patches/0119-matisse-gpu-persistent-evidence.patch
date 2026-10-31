@@ -1,0 +1,141 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -14,7 +14,8 @@
+  * a 1 MiB bounce buffer); the host is not cache coherent, so caches are
+  * cleaned/invalidated around each command.
+  *
+- * Writes are refused unless boot-arg ufsrw=1 is set. Every write is checked
++ * Filesystem writes require ufsrw=1; diagnostic writes are restricted to
++ * the reserved userdata tail. Every write is checked
+  * against the partition bounds again right before it is issued, so nothing
+  * outside the named partition can be written.
+  */
+@@ -766,12 +767,27 @@
+  * WRITE(10) of count device blocks from the bounce buffer to lba. The range
+  * must lie inside the partition: this is the only place data goes out.
+  */
+-static int
+-ufs_write_blocks(uint64_t lba, uint32_t count)
+-{
+-	if (!su.writable || !su.nblocks || count == 0 || count > BOUNCE_SIZE / UFS_BLOCK ||
+-	    lba < su.first_block || lba - su.first_block >= su.nblocks ||
+-	    count > su.nblocks - (lba - su.first_block) || lba + count - 1 > UINT32_MAX) {
++static bool
++sweet_ufs_write_allowed(bool writable, bool diagnostic, uint64_t first,
++    uint64_t blocks, uint64_t lba, uint32_t count, uint32_t max_count)
++{
++	/* Subtractions follow their lower-bound checks; no wrapping end-LBA. */
++	if (!blocks || !count || count > max_count || lba < first ||
++	    lba - first >= blocks || count > blocks - (lba - first) ||
++	    lba > UINT32_MAX || count - 1 > UINT32_MAX - lba) {
++		return false;
++	}
++	/* Exactly the established 4 MiB console ring plus header. Only the
++	 * log caller requests this exception; the VFS remains read-only. */
++	return writable || (diagnostic && blocks >= 2050 &&
++	       lba - first >= blocks - 1025);
++}
++
++static int
++ufs_write_blocks_checked(uint64_t lba, uint32_t count, bool diagnostic)
++{
++	if (!sweet_ufs_write_allowed(su.writable, diagnostic, su.first_block,
++	    su.nblocks, lba, count, BOUNCE_SIZE / UFS_BLOCK)) {
+ 		printf("SWEET UFS: refusing write of %u blocks at 0x%llx\n", count, lba);
+ 		return EPERM;
+ 	}
+@@ -783,28 +799,31 @@
+ 	return ufs_scsi(cdb, sizeof(cdb), count * UFS_BLOCK, true);
+ }
+ 
++static int
++ufs_write_blocks(uint64_t lba, uint32_t count)
++{
++	return ufs_write_blocks_checked(lba, count, false);
++}
++
+ /*
+  * Boot progress marks.
+  *
+  * The only console on this board is a framebuffer that stays dark, and the
+- * persistent log ring cannot help: it is fed from _cnputs(), which is never
+- * called before a console exists, and its writes go through
+- * ufs_write_blocks(), which refuses everything while the partition is
+- * read-only (ufsrw=0). A bring-up that hangs therefore leaves no evidence
+- * at all - the phone just resets on the watchdog.
++ * console ring may not yet be flushing during early device initialization.
++ * Marks also retain a small independent copy of the shim GPU report before
++ * userland starts, even when the VFS is read-only.
+  *
+  * This is the minimal evidence channel that does not depend on any of that:
+  * a 2.3 KiB record kept in BSS and rewritten, one block at a time, into the
+  * LAST block of the partition (inside the log ring area, so no filesystem
+  * block is touched). The write bypasses su.writable on purpose - it is the
+- * only writer that may run on a read-only boot, and it only ever touches
+- * that one block. After the phone resets, a recovery `dd` of the last block
++ * mark writer only ever touches that one block. After the phone resets, a recovery `dd` of the last block
+  * shows how far the kernel got.
+  */
+ #define SWEET_MARK_MAX  160
+ 
+ /* Bumped for every locally built kernel that is flashed to the phone. */
+-#define SWEET_BUILD_ID 0x2316u
++#define SWEET_BUILD_ID 0x2321u
+ 
+ struct sweet_mark_rec {
+ 	uint32_t code;
+@@ -861,6 +880,28 @@
+ 	cdb[9] = 0;
+ 	(void)ufs_scsi(cdb, sizeof(cdb), UFS_BLOCK, true);
+ 	lck_mtx_unlock(&sweet_ufs_lock);
++}
++
++/* Preserve the shim report independently from console setup and userland.
++ * ABI: 13 u32 fields, 4 bytes alignment padding, u64 firmware PA, 2 u32.
++ * No MMIO is performed here; only the preallocated ADT report is copied. */
++static void
++sweet_gpu_report_marks(void)
++{
++	DTEntry chosen;
++	const uint32_t *report;
++	unsigned int size;
++	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
++	    SecureDTGetProperty(chosen, "sweet-gpu-report",
++	    (void const **)&report, &size) != kSuccess || size != 128) {
++		return;
++	}
++	uint32_t words[18];
++	memcpy(words, report, sizeof(words));
++	for (uint32_t i = 0; i < 9; i++) {
++		uint64_t a = (uint64_t)words[2 * i] | (uint64_t)words[2 * i + 1] << 32;
++		sweet_mark(300 + i, a, 0x2321);
++	}
+ }
+ 
+ static int
+@@ -1301,6 +1342,7 @@
+ 	 * unchanged boot path is indistinguishable from a stale record left by
+ 	 * the previous run. Bump SWEET_BUILD_ID with every flashed kernel. */
+ 	sweet_mark(99, SWEET_BUILD_ID, __LINE__);
++	sweet_gpu_report_marks();
+ 	/* The panel decision was made long before this point; replay it. */
+ 	for (uint32_t i = 0; i < 16; i++) {
+ 		sweet_mark(70 + i, i, sweet_disp_trace[i]);
+@@ -1480,7 +1522,7 @@
+ 			uint32_t n = (uint32_t)MIN(MIN(need, (uint64_t)(SWEET_LOG_SIZE / UFS_BLOCK - blk)),
+ 			    (uint64_t)(BOUNCE_SIZE / UFS_BLOCK));
+ 			memcpy(bounce, sweet_log_ring + (uint64_t)blk * UFS_BLOCK, n * UFS_BLOCK);
+-			error = ufs_write_blocks(base + 1 + blk, n);
++			error = ufs_write_blocks_checked(base + 1 + blk, n, true);
+ 			pos += (uint64_t)(blk + n) * UFS_BLOCK - off;
+ 		}
+ 		if (!error) {
+@@ -1490,7 +1532,7 @@
+ 			};
+ 			bzero(bounce, UFS_BLOCK);
+ 			memcpy(bounce, &h, sizeof(h));
+-			error = ufs_write_blocks(base, 1);
++			error = ufs_write_blocks_checked(base, 1, true);
+ 		}
+ 		if (!error) {
+ 			error = ufs_sync_cache();

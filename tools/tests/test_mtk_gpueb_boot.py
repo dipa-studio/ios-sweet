@@ -211,7 +211,7 @@ void con_hex(const char *a,uint64_t b){(void)a;(void)b;}
         self.assertEqual(end,len(data))
         v = parsed.children[0].prop('firmware-version').split(b'\0')[0]
         self.assertIn(b'id=a0020001',v);self.assertIn(b'rst=00000100',v)
-        self.assertTrue(v.startswith(b'sweet-shim/gpu2320'))
+        self.assertTrue(v.startswith(b'sweet-shim/gpu2321'))
         for length in (0,7,40,len(data)-128):
             self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(buf),length,report,shared),-1)
 
