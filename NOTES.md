@@ -1,5 +1,20 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> RESTORE PENDING 2026-10-31: ACM APPEARED THEN DISCONNECTED; AWAIT RECOVERY <<<
+
+New Recovery runner session24278 remains ACTIVE, waiting for Recovery to
+restore full boot_a. journal.json in collector-trial-recovery-20261031 is
+authoritative: restore_pending=true,collection_received=false.
+ACM enumerated once within7s of adb normal reboot, then receiver read
+failed ENXIO Device not configured; tty cleanup also raised ENXIO. No valid
+collection was saved. This proves some USB ACM enumeration, NOT successful
+GPUEB handoff capture or a diagnosed panic/reboot cause. ADB/fastboot/ACM
+were then absent. User asked via async input to hold Power+Volume Up and
+enter Recovery (or report Fastboot). No second test is planned/authorized.
+NEXT finish full original64MiB restoration and SHA256 readback before any
+further work, then pull read-only pstore/last_kmsg if available. Preserve
+user/root/LK/vendor_boot. Do not stop with restore_pending=true.
+
 ## >>> RUNNING 2026-10-31: COLLECTOR WRITTEN IN RECOVERY; RESTORE_PENDING=TRUE <<<
 
 User explicitly preferred Recovery write over fastboot flash. First fastboot
