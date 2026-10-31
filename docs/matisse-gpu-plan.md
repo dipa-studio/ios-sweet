@@ -6,9 +6,11 @@
 ## 当前基线
 
 本轮已推进到 [本地镜像静态审计与固件解析器实现](matisse-gpu-static-audit.md)。
-用户确认 Android 不能启动，后续只做静态分析；不再等待 Android
-GPU_ID 采集。已取得 super 中的 r32p1 KMD/CSF 固件，但未验证 GPU
-执行。下面保留架构选择和验收要求。
+Android 不能启动；用户随后确认 Recovery 在线，可继续采集和测试。
+已取得新 live DT、实机 LK/GPUEB 分区和完整 OS2.0.2.0 刷机包，
+并确认 Recovery 的 LK 分支跳过 GPUEB。交接校验/消息编码和只读
+启动探针已实现；尚未刷入探针、读取 GPU_ID 或验证 GPU 执行。
+详见 [GPUEB 启动交接](matisse-gpueb-handoff.md)。
 
 - 本项目的 0x2317 实机已验证原生 1440×3200、触摸和三个实体键。
   显示仍走现有 IOSurface / AppleCLCD / framebuffer 路径；这不是 GPU 验证。

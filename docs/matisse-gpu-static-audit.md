@@ -1,8 +1,9 @@
 # MT6983 GPU 静态审计：本地镜像与第一段实现
 
-日期：2026-10-31。用户确认 Android 因 userdata 改动不能正常启动，
-后续仅做静态分析。本轮没有启动 Android、加载 GPU 模块、访问 GPU
-MMIO、刷分区或修改 userdata。GPU 加速尚未实现。
+日期：2026-10-31。本页保留首轮静态审计；用户随后授权在线 Recovery
+采集并补充完整刷机包。最新证据见 [GPUEB 启动交接](matisse-gpueb-handoff.md)：
+已取得新 live DT、GPUEB 分区和实机 LK；下文「尚未找到独立 GPUEB」
+和「未取得新 live DT」仅描述首轮状态。GPU 加速尚未实现。
 
 ## 输入与来源边界
 

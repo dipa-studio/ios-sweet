@@ -124,6 +124,15 @@ class ProbeLayoutTests(unittest.TestCase):
         self.assertEqual(len(offsets), 17)
         self.assertEqual(offsets['spsr'], offsets['x16'] + 22)
 
+    def test_gpueb_snapshot_layout(self):
+        self.assertEqual(mkentryprobe.LEVELS['gpueb'], 1)
+        record, offsets = mkentryprobe.banner_record('gpueb')
+        self.assertLessEqual(len(record), 407)
+        self.assertIn('runtime memory', mkentryprobe.GPUEB_FIELDS['fb'])
+        self.assertIn('not dereferenced', mkentryprobe.GPUEB_FIELDS['far'])
+        self.assertIn('unverified', mkentryprobe.GPUEB_STATUS_CODES[0x9000])
+        self.assertEqual(set(mkentryprobe.GPUEB_FIELDS) - set(offsets), set())
+
     def test_ufs_snapshot_requires_loader_level(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'boot.img'

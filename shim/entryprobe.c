@@ -276,6 +276,9 @@ void entryprobe_display_kick(uint64_t dtb, char *banner);
 
 void entryprobe_timer(uint64_t *dctlr, uint64_t *redist, uint64_t *flags);
 void entryprobe_irq(uint64_t redist, uint64_t *count, uint64_t *last, uint64_t *rc);
+#ifdef ENTRY_GPUEB_SNAPSHOT
+void entryprobe_gpueb(uintptr_t dtb, char *banner);
+#endif
 
 void entryprobe_board(uint64_t dtb, char *banner)
 {
@@ -292,6 +295,9 @@ void entryprobe_board(uint64_t dtb, char *banner)
 	field(banner, ENTRY_STAGE, 2);
 #if defined(ENTRY_USB_SNAPSHOT)
 	entryprobe_usb_snapshot((uintptr_t)dtb, banner);
+#endif
+#if defined(ENTRY_GPUEB_SNAPSHOT)
+	entryprobe_gpueb((uintptr_t)dtb, banner);
 #endif
 #if defined(ENTRY_EL1_DISPLAY)
 	/* Exercise the full shim's console/display at EL1, then return through

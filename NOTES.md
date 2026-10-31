@@ -1,6 +1,76 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-10-31: STATIC GPU IMAGE AUDIT + CSF PARSER; Android unavailable <<<
+## >>> ACTIVE 2026-10-31: GPUEB RECOVERY SKIP CONFIRMED; PROTOCOL + FDT PROBE BUILT <<<
+
+Latest user authorization supersedes STATIC-only notes below: device online
+and available for tests. Complete package now exists in Documents/
+matisse_images_OS2.0.2.0.ULKCNXM_14.0/images. Read-only collection and
+local code/builds authorized; each partition flash still needs specific
+confirmation. Android remains unavailable after userdata changes.
+
+Fresh recovery-live-2 inventory succeeded: root Recovery, matisse/_a,
+5.10.209-android12-9-00019-g4ea09a298bb4-ab12292661. live.dtb was pulled
+and hash verified. No mali0/bound Mali/GPUEB/gpufreq drivers; SCPSYS bound.
+No gpueb_mem_addr/size in fresh DT. CONFIG_DEVMEM is not set, /dev/mem
+absent; a userspace devmem probe cannot work. No GPU_ID read.
+
+Read-only partition dumps verified before and after pull:
+gpueb_a and gpueb_b1048576B, both SHA256
+0650aa96d8df7cf98b6b63e8ebaeb02d6b323989d769b1b7ab8c4e0884ae489d;
+lk_a8388608B SHA2563520fe6bac0d3486ded623149ea7f0a95f4653c4206566fda99361f0ea52e202;
+dtbo_a33554432B SHA2567256d964d84ca2c446c8cd748589b57fd2cd48354d8a2e7cdb38000043015ce7.
+Artifacts/manifests remain ignored under research/matisse/20261031-gpu/.
+GPUEB MTK container identifies tinysys-gpueb-RV33_A; both slots match.
+User confirms actual device LK was deliberately modified; use its dump as
+authority. Component comparison: LK payload differs by59B, bl2_ext/aee/DTB
+identical; cert2 size shifts later file offsets by0x430. Actual LK DTB at
+0x27d310 (not package0x27cee0), SHA256783b7fb8...cc12ffae. Package gpueb
+and dtbo match device prefixes with all-zero partition tails. Full package
+super SHA256 matches prior loose super;33 smaller image/binary hashes saved,
+17 MTK containers parsed. No firmware or device dump committed.
+
+New read-only /proc/pl_lk140879B SHA256937ed759...14942da records mode2.
+Actual LK payload0xc998..0xca0c explicitly skips GPUEB loader in mode2;
+normal branch0xca4c calls loader0x1ff4c. Loader injects BE64 runtime memory
+at0x2005c..0x200b8. Hence missing Recovery handoff is explained, not proof
+normal boot lacks GPUEB. Do not infer readiness from a0ms profile string.
+
+Implemented tools/android-mtk.py component-aware bounded reader; GPU
+inventory validates mailbox/memory tables and reports missing handoff
+without guessing PA. xnu/gpu/mtk_gpueb_protocol.{c,h} independently encodes
+confirmed32B INIT/POWER ABI and checks memory layout/signed replies. No
+mailbox transport, MMIO, firmware execution, or kernel integration.
+shim/entryprobe_gpueb.c and mkentryprobe --level gpueb describe only live
+FDT handoff then return to Linux. Real live DT host replay gives stage9004,
+mode2, Mali13000000+480000, no shared PA; not a hardware probe result.
+
+Build-only artifact research/matisse/20261031-gpu/gpueb-handoff-probe.img:
+20963328B SHA256094d4e563a97317119cbcdab0d3f1bda34ae3b49f694e3b95ca7b671b9b7a71f.
+NDK28.2 LLVM link PASS, expanded48945268B within0x7c80000; ramdisk/signature
+identical to package boot.img8775a30a...95d9cb7, inner kernel differs only
+banner. Historical restored boot_a itself already contains2MiB old probe;
+its inner kernel also matches package except old banner. Do not nest probes.
+
+IMPORTANT: probe image is NOT ready for normal-mode hardware trial yet.
+Actual vendor_boot has4B platform fragment + type2 Recovery fragment;
+normal LK inclusion of Recovery ramdisk unverified. Normal boot of this
+image may try unavailable Android. Recovery boot would repeat skip-mode2.
+NEXT: prepare RAM-only collector (no userdata mounts) or same-boot XNU
+handoff logging, verify normal boot ramdisk selection and firmware memory
+reservation against XNU RAM window, then request specific boot_a flash
+authorization. Do not flash LK/vendor_boot or execute old trial runners.
+GPUEB loader allocates dynamic2MiB shared +20MiB extra regions; PA unknown
+in normal boot, cannot assume they avoid XNU100000000..22e000000 window.
+
+Validation53 tests PASS (GPUEB10,entryprobe14,Android7,CSF1,shim8,board9,keys4);
+ASan/UBSan CSF+GPUEB8192 mutations each PASS; freestanding arm64-apple-darwin
+protocol compile PASS. No new full XNU build, CI run, flash/boot, GPU_ID or
+GPU execution. Recovery live-3 inventory7 records PASS; full audit is
+docs/matisse-gpueb-handoff.md. Code commit recorded in followup handoff.
+Preserve unrelated shim/build.sh,shim/shim.c,tools/sweet-marks.py,0093,
+.DS_Store and .workbuddy changes. Previous handoffs follow.
+
+## >>> HISTORICAL 2026-10-31: STATIC GPU IMAGE AUDIT + CSF PARSER; Android unavailable <<<
 
 USER STEERING: Android cannot boot after userdata changes; only STATIC
 analysis from now on. Do not reboot to Android, wait for rooted Android,

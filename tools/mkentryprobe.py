@@ -33,7 +33,7 @@ DISPLAY_RECORD_FIELDS = tuple('0123456789abcdefghijk')
 DISPLAY_LEVELS = ('display', 'display-kick', 'xnu')
 LEVELS = {'entry': 0, 'board': 1, 'logstore': 2, 'mmu': 3, 'timer': 4, 'irq': 5,
           'display': 6, 'display-kick': 6, 'xnu': 6, 'el1-display': 7,
-          'el1-xnu': 7, 'el1-load': 7, 'usb': 1}
+          'el1-xnu': 7, 'el1-load': 7, 'usb': 1, 'gpueb': 1}
 UFS_QUERY_MODES = {'full': 0, 'none': 1, 'read': 2, 'set': 3, 'power': 4}
 
 # For display levels the banner holds (first u32 << 32 | second u32) per
@@ -113,6 +113,25 @@ USB_STATUS_CODES = {
     0: 'ok', 1: 'no MTU3 node', 2: 'unusable mac/ippc reg',
     3: 'device power domain down, MAC not read',
     0x5f: 'read faulted before completion',
+}
+
+GPUEB_FIELDS = {
+    'gicd': 'Mali MMIO base from DT (not read)',
+    'vtimer': 'Mali MMIO bytes from DT',
+    'fb': 'GPUEB runtime memory base from DT',
+    'x16': 'GPUEB runtime memory bytes from DT',
+    'x0': 'LK atag boot mode (UINT64_MAX if unavailable)',
+    'far': 'GPUFREQ status PA (not dereferenced)',
+    'pc': 'GPUFREQ debug PA (not dereferenced)',
+    'spsr': 'status bytes << 32 | debug bytes',
+}
+GPUEB_STATUS_CODES = {
+    0x9000: 'memory described; reservation/firmware readiness unverified',
+    0x9001: 'no GPUEB node',
+    0x9002: 'GPUEB disabled',
+    0x9003: 'GPUEB support property malformed',
+    0x9004: 'runtime memory properties missing/malformed',
+    0x9005: 'GPUFREQ region malformed or out of bounds',
 }
 
 
@@ -291,6 +310,8 @@ def build(template_path, out_path, toolchain, level, max_image_size=None, payloa
             config += f'#define ENTRY_UFS_QUERY_MODE {UFS_QUERY_MODES[ufs_query]}\n'
         if level == 'usb':
             config += '#define ENTRY_USB_SNAPSHOT 1\n'
+        if level == 'gpueb':
+            config += '#define ENTRY_GPUEB_SNAPSHOT 1\n'
         (tmp / 'entryprobe_config.h').write_text(config)
         linker = '''ENTRY(_head)
 SECTIONS {
@@ -320,6 +341,8 @@ SECTIONS {
         sources = ['entryprobe.S']
         if LEVELS[level]:
             sources += ['entryprobe.c', 'board.c', 'fdt.c', 'str.c', 'logstore.c']
+        if level == 'gpueb':
+            sources += ['entryprobe_gpueb.c', '../xnu/gpu/mtk_gpueb_protocol.c']
         if 3 <= LEVELS[level] < 6:
             sources += ['mmu.c']
         if 4 <= LEVELS[level] < 6:
@@ -344,7 +367,7 @@ SECTIONS {
         if level == 'el1-load':
             flags += ['-DLOADER_NO_JUMP']
         for source in sources:
-            obj = tmp / (source + '.o')
+            obj = tmp / (Path(source).name + '.o')
             subprocess.run([cc, *flags, '-c', str(repo / 'shim' / source), '-o', str(obj)], check=True)
             objects.append(str(obj))
         elf = tmp / 'probe.elf'
@@ -385,6 +408,8 @@ SECTIONS {
         'ufs_query': ufs_query if ufs_init else None,
         'usb_fields': USB_FIELDS if level == 'usb' else None,
         'usb_status_codes': USB_STATUS_CODES if level == 'usb' else None,
+        'gpueb_fields': GPUEB_FIELDS if level == 'gpueb' else None,
+        'gpueb_status_codes': GPUEB_STATUS_CODES if level == 'gpueb' else None,
         'display_fields': DISPLAY_FIELDS if level in DISPLAY_LEVELS else None,
         'display_secondary': DISPLAY_SECONDARY.get(level),
         'display_status_codes': DISPLAY_STATUS_CODES if level in DISPLAY_LEVELS else None,

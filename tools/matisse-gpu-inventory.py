@@ -123,10 +123,137 @@ def gpu_nodes(nodes):
     return {p: {k: property_value(v, k) for k, v in nodes[p].items()} for p in sorted(selected)}
 
 
+def gpueb_handoff(nodes):
+    """Validate MT6983 DT tables without inventing runtime memory or MMIO reads.
+
+    Offsets are bytes in the single shared mailbox, send pins then receive
+    pins. This is a description, never permission to access these addresses.
+    An embedded/static DT is not evidence of a completed LK firmware boot.
+    """
+    paths = [p for p, v in nodes.items()
+             if b'mediatek,gpueb' in v.get('compatible', b'').split(b'\0')]
+    if not paths:
+        return {'state': 'absent', 'gpu_id_hardware_read': False}
+    if len(paths) != 1:
+        raise ValueError('ambiguous GPUEB nodes')
+    path = paths[0]
+    props = nodes[path]
+
+    def cells(key, width=None):
+        raw = props.get(key, b'')
+        if not raw or len(raw) % 4 or (width and len(raw) != width * 4):
+            raise ValueError('malformed GPUEB ' + key)
+        return struct.unpack('>%dI' % (len(raw) // 4), raw)
+
+    def names(key):
+        raw = props.get(key, b'')
+        if not raw or not raw.endswith(b'\0'):
+            raise ValueError('malformed GPUEB ' + key)
+        result = raw[:-1].decode('ascii').split('\0')
+        if any(not x for x in result) or len(set(result)) != len(result):
+            raise ValueError('invalid GPUEB names: ' + key)
+        return result
+
+    enabled, = cells('gpueb-support', 1)
+    if enabled == 0:
+        return {'node': path, 'state': 'disabled', 'gpu_id_hardware_read': False}
+    if enabled != 1 or cells('mbox_count', 1) != (1,) or cells('slot_size', 1) != (4,):
+        raise ValueError('unsupported GPUEB mailbox geometry')
+    capacity, = cells('mbox_size', 1)
+    if not 0 < capacity <= 160:
+        raise ValueError('invalid GPUEB mailbox capacity')
+    channels, offset = {}, 0
+    for direction, width in (('send', 3), ('recv', 4)):
+        table = cells(direction + '_table')
+        labels = names(direction + '_name_table')
+        if len(table) % width or not 0 < len(labels) <= 20 or len(table) != len(labels) * width:
+            raise ValueError('malformed GPUEB channel table')
+        ids, rows = set(), []
+        for i, label in enumerate(labels):
+            row = table[i * width:(i + 1) * width]
+            ident, mailbox, words = row[:3]
+            if ident >= 32 or ident in ids or mailbox != 0 or not words or offset + words > capacity:
+                raise ValueError('invalid GPUEB channel geometry')
+            ids.add(ident)
+            item = {'name': label, 'id': ident, 'mailbox': mailbox,
+                    'byte_offset': offset * 4, 'bytes': words * 4}
+            if direction == 'recv':
+                if row[3] not in (0, 1):
+                    raise ValueError('invalid GPUEB receive option')
+                item['response'] = bool(row[3])
+            rows.append(item)
+            offset += words
+        channels[direction] = rows
+    for direction in channels:
+        matches = [r for r in channels[direction] if r['name'] == 'IPI_ID_GPUFREQ']
+        if len(matches) != 1 or matches[0]['bytes'] != 32 or (direction == 'recv' and not matches[0]['response']):
+            raise ValueError('missing/incompatible GPUFREQ channel')
+    tx = next(r for r in channels['send'] if r['name'] == 'IPI_ID_GPUFREQ')
+    rx = next(r for r in channels['recv'] if r['name'] == 'IPI_ID_GPUFREQ')
+    if tx['id'] != rx['id']:
+        raise ValueError('GPUFREQ request/response channel mismatch')
+
+    mem = cells('gpueb_mem_table')
+    labels = names('gpueb_mem_name_table')
+    if len(mem) % 2 or not 0 < len(labels) <= 20 or len(mem) != 2 * len(labels):
+        raise ValueError('malformed GPUEB memory table')
+    sizes = {}
+    for ident, size in zip(mem[::2], mem[1::2]):
+        if ident >= len(labels) or ident in sizes or not size or size % 4:
+            raise ValueError('invalid GPUEB memory ID/size')
+        sizes[ident] = size
+    regions, used = [], 0
+    for i, label in enumerate(labels):
+        regions.append({'name': label, 'id': i, 'offset': used, 'bytes': sizes[i]})
+        used += sizes[i]
+    freq = [r for r in regions if r['name'] == 'MEM_ID_GPUFREQ']
+    if len(freq) != 1 or freq[0]['bytes'] <= 0x400:
+        raise ValueError('invalid GPUEB GPUFREQ memory')
+    report = {'node': path, 'state': 'runtime-memory-missing',
+              'mailbox_used_bytes': offset * 4, 'mailbox_capacity_bytes': capacity * 4,
+              'channels': channels, 'memory_regions': regions, 'memory_table_bytes': used,
+              'missing_properties': [k for k in ('gpueb_mem_addr', 'gpueb_mem_size') if k not in props],
+              'gpu_id_hardware_read': False, 'firmware_running_verified': False,
+              'mmio_access_permitted': False}
+    if report['missing_properties']:
+        return report
+    for key in ('gpueb_mem_addr', 'gpueb_mem_size'):
+        cells(key, 2)
+    base = int.from_bytes(props['gpueb_mem_addr'], 'big')
+    size = int.from_bytes(props['gpueb_mem_size'], 'big')
+    if (base < 0x40000000 or base >= 0x800000000 or not size or
+            size > 0x800000000 - base or base % 4096 or size % 4096 or used > size):
+        raise ValueError('invalid GPUEB runtime memory range')
+    reservations = []
+    parent = nodes.get('/reserved-memory', {})
+    if (parent.get('#address-cells') == struct.pack('>I', 2) and
+            parent.get('#size-cells') == struct.pack('>I', 2) and
+            parent.get('ranges') == b''):
+        for p, v in nodes.items():
+            if p.rsplit('/', 1)[0] != '/reserved-memory':
+                continue
+            raw = v.get('reg', b'')
+            if not raw or len(raw) % 16:
+                continue
+            for at in range(0, len(raw), 16):
+                start, count = struct.unpack_from('>QQ', raw, at)
+                if start <= base and base + size <= start + count and start + count <= 1 << 64:
+                    reservations.append(p)
+    freq = freq[0]
+    report.update(state='described' if reservations else 'reservation-unverified',
+                  runtime_base=base, runtime_bytes=size, covering_reserved_nodes=reservations,
+                  status_pa=base + freq['offset'], status_bytes=0x400,
+                  debug_pa=base + freq['offset'] + 0x400, debug_bytes=freq['bytes'] - 0x400)
+    return report
+
+
 def inspect_image(path):
     data = path.read_bytes()
     result = {'name': path.name, 'bytes': len(data), 'sha256': sha256(data), 'magic_hex': data[:16].hex()}
-    if len(data) >= 32 and struct.unpack_from('>I', data)[0] == 0xd7b7ab1e:
+    if data[:4] == b'\xd0\x0d\xfe\xed':
+        nodes = parse_fdt(data)
+        result.update(type='fdt', gpu_nodes=gpu_nodes(nodes), gpueb_handoff=gpueb_handoff(nodes))
+    elif len(data) >= 32 and struct.unpack_from('>I', data)[0] == 0xd7b7ab1e:
         _, total, header, entry_size, count, entries, page, version = struct.unpack_from('>8I', data)
         if total > len(data) or header < 32 or entry_size < 32 or entries < header or entries + count * entry_size > total:
             raise ValueError('invalid DTBO table bounds')
@@ -228,6 +355,7 @@ def main():
         fdt = recovery.pull('/sys/firmware/fdt', 'live.dtb')
         nodes = parse_fdt(fdt)
         (output / 'gpu-dt.json').write_text(json.dumps(gpu_nodes(nodes), indent=2) + '\n')
+        (output / 'gpueb-handoff.json').write_text(json.dumps(gpueb_handoff(nodes), indent=2) + '\n')
         for i, root in enumerate(args.firmware_root):
             if not root.startswith('/') or '..' in PurePosixPath(root).parts:
                 raise ValueError('firmware root must be absolute without traversal')
