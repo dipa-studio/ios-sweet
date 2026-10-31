@@ -14,7 +14,8 @@ HARNESS=r'''
 struct model {
  uint64_t tick;unsigned reads,writes,enabled,resets,as_updates,locked,flushed,lock_low,lock_high;
  uint32_t gpu_mask,job_mask,mmu_mask,l2,raw,job,mcu,mmu,transcfg,table_low,table_high;
- uint32_t memattr_lo,memattr_hi;
+ uint32_t memattr_lo,memattr_hi,coherency,coherency_writes;
+ int bad_coherency_readback;
  int unpowered,bad_id,bad_bits,as_busy,no_l2,no_fw,fw_fault,reset_fail,bad_iface,stale,stuck_timer,live_table,request_done,disable_fail,bad_readback,bad_irq_mask,clamp_masks,missing_gpu_irq,missing_mmu_irq;
 };
 static uint32_t rd(void *p,uint64_t a) {
@@ -36,7 +37,7 @@ static uint32_t rd(void *p,uint64_t a) {
  case 0x20:return m->raw;
  case 0x28:return m->gpu_mask;
  case 0x34:return 0x100;
- case 0x300:return 0x3;case 0x304:return 0x1f;
+ case 0x300:return 1;case 0x304:return m->coherency;
  case 0xf00:return 0x44;case 0xf04:return 0x55;case 0xf08:return 0x66;case 0xf0c:return 0x77;
  case 0x100:return 0xff;case 0x104:return 0;
  case 0x110:return 1;case 0x114:return 0;
@@ -60,6 +61,10 @@ static uint32_t rd(void *p,uint64_t a) {
 static void wr(void*p,uint64_t a,uint32_t v) {
  struct model*m=p;m->writes++;assert(!m->unpowered);
  switch(a-0x13000000) {
+ case 0x304:
+  assert(v==31 && !m->l2 && !m->as_updates && !m->enabled);
+  assert(!m->gpu_mask && !m->job_mask && !m->mmu_mask);
+  m->coherency_writes++;if(!m->bad_coherency_readback)m->coherency=v;return;
  case 0x28:
   m->gpu_mask=v;
   if(v==0x80503){if(m->clamp_masks)m->gpu_mask=0x103;if(m->missing_gpu_irq)m->gpu_mask&=~1u;}
@@ -98,14 +103,15 @@ static void wr(void*p,uint64_t a,uint32_t v) {
 }
 static uint64_t ticks(void*p){struct model*m=p;return m->stuck_timer?0:m->tick++;}
 static void barrier(void*p){(void)p;}
-static struct model model(void){return (struct model){.gpu_mask=0x55,.job_mask=0xaa,.mmu_mask=0xbb,.transcfg=1};}
+static struct model model(void){return (struct model){.gpu_mask=0x55,.job_mask=0xaa,.mmu_mask=0xbb,.transcfg=1,.coherency=31};}
 static struct sweet_csf_boot_config cfg(void){return (struct sweet_csf_boot_config){.gpu=0x13000000,.root_pa=0x90000000,.arena_pa=0x90000000,.arena_bytes=0x200000,.shared_offset=0x10000,.shared_bytes=0x20000,.timeout_ms=1,.private_probe_offset=0x5000};}
 static int run(struct model*m,struct sweet_csf_boot_config*c,struct sweet_csf_boot_report*r){struct sweet_gpu_io io={m,rd,wr,ticks,barrier,1000};return sweet_csf_boot(c,&io,r);}
 static void clean(struct model*m,struct sweet_csf_boot_report*r){assert(m->gpu_mask==0x55 && m->job_mask==0xaa && m->mmu_mask==0xbb && m->resets==1);assert(r->reset_completed);}
 int main(void) {
  struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
- assert(sizeof(r)==288);assert(!run(&m,&c,&r));assert(r.stage==7 && r.firmware_ready && r.version==0x01020003);clean(&m,&r);
- assert(r.diag_flags==31 && r.coherency_features==3 && r.coherency_before==31 && r.coherency_after==31);
+ assert(sizeof(r)==296);assert(!run(&m,&c,&r));assert(r.stage==7 && r.firmware_ready && r.version==0x01020003);clean(&m,&r);
+ assert(r.diag_flags==31 && r.coherency_features==1 && r.coherency_before==31 && r.coherency_after==31);
+ assert(!m.coherency_writes && !r.coherency_requested && !r.coherency_readback);
  assert(r.csf_config_before==0x44 && r.csf_config_after==0x44);
  assert(r.shader_config_before==0x55 && r.shader_config_after==0x55);
  assert(r.tiler_config_before==0x66 && r.tiler_config_after==0x66);
@@ -122,6 +128,18 @@ int main(void) {
  assert(r.tiler_present_lo==1 && r.tiler_transition_lo==1 && r.tiler_ready_lo==1);
  assert(r.sample_flags==15 && r.version_before==r.version && !r.disable_error && !r.disable_status);
  assert(r.transcfg_lo==0x420001c6 && r.transtab_lo==0x90000000 && !r.transtab_hi);
+ m=model();m.coherency=0;c=cfg();c.noncoherent=1;assert(!run(&m,&c,&r));clean(&m,&r);
+ assert(m.coherency_writes==1 && r.diag_flags==127 && !r.coherency_before);
+ assert(r.coherency_requested==31 && r.coherency_readback==31 && r.coherency_after==31);
+ assert(r.csf_config_after==0x44 && r.shader_config_after==0x55 && r.tiler_config_after==0x66 && r.l2_mmu_config_after==0x77);
+ assert(r.memattr_lo==0x4c4c9f4c && r.memattr_hi==0x4c4c4c4c && r.transcfg_lo==0x420001c6);
+ m=model();m.coherency=0;m.no_fw=1;assert(run(&m,&c,&r)==-53 && !r.firmware_ready);clean(&m,&r);
+ assert(m.coherency_writes==1 && r.diag_flags==127 && r.coherency_after==31);
+ m=model();m.coherency=0;m.bad_coherency_readback=1;assert(run(&m,&c,&r)==-52);clean(&m,&r);
+ assert(m.coherency_writes==1 && !m.enabled && !m.as_updates && !m.l2);
+ assert(r.diag_flags==33 && r.coherency_requested==31 && !r.coherency_readback);
+ m=model();c.noncoherent=2;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
+ c=cfg();
  m=model();m.clamp_masks=1;assert(!run(&m,&c,&r));clean(&m,&r);
  assert(r.gpu_irq_mask==0x103 && r.mmu_irq_mask==0xff && r.irq_gate_passed==1);
  m=model();m.missing_gpu_irq=1;assert(run(&m,&c,&r)==-52 && !m.enabled && r.sample_flags==5);clean(&m,&r);

@@ -1,5 +1,55 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: CSF2327 BUILT/VERIFIED; CONCRETE TRIAL APPROVAL NEEDED <<<
+
+Fresh read-only Recovery preflight confirms matisse/_a/recovery, uid0,
+67108864-byte boot_a SHA2562931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Raw evidence: recovery-live-6/raw-state.txt. Official OS2.0.2.0 package is
+/Users/xiaohuasheng/Documents/matisse_images_OS2.0.2.0.ULKCNXM_14.0.
+No reboot/partition write/CI/push in this milestone; prior2326 approval is
+consumed. Current device remains root Recovery, restore_pending=false.
+
+2327 isolates GPU+304 protocol NONE=31, from pinned vendor KMD default
+and feature19. The option is explicit0/1 (zero preserves old boot behavior),
+sets the protocol before L2/AS/MCU and checks immediate exact readback.
+PTE, MEMATTR, TRANSCFG and four quirk registers are unchanged. Report296B
+appends requested/readback words; flags32/64 indicate attempt/match;
+mark320..356. Failed readback rejects before MCU and still resets.
+The decoder requires fresh IRQ/version and successful cleanup, not just
+protocol readback.41 targeted tests PASS5.173s, ASan/UBSan included.
+
+Static vendor reconstruction (KMD22b26f30, GPUa8620004/modela0020000):
+feature19 present,24 absent; production issue record12 at rodata126e0,
+revision4 selects list12e1c={1,15,19,30,31,32}; issue4/21 absent.
+corestack_driver_control is BSS0. With observed zero reset configs,
+SHADER/TILER/CSF/L2_MMU all derive0. Coherency default31 is the isolated
+nonzero difference. See firmware-static/vendor-2327-data-audit.json;
+these are static derivations, not proof of timeout cause or runtime state.
+
+Local full kernel build exited0; kernel16724248B SHA256
+3817002e5b249c9cd0efeb55ee42a9d42147422e2ce13f562ebc6f368ac655f9.
+Build-only image26714112B SHA256
+a624742667410660768dd0349a9622b73439dcfd71975edbd1918832defdd30c
+at shim2327-ready/matisse-shim-gpu2327.img. Independent verification PASS:
+manifest/source/frozen objects, expanded80402548B, intact stock Linux at
++32MiB, ramdisk/signature bytes,296B report/37 marks,rootrw0/ufsrw0.
+Signature bytes retained, not authenticated; automatic Recovery unverified.
+Kernel replay matches only when the EXISTING untracked0093 console patch
+is included; recorded hash54f0aaa5a0390bc0678eca60e55bc192d3ebea315daab808a3c456a1ce65365b.
+That inherited patch is preserved/uncommitted, not newly introduced.
+Three modified source files freestanding ARM64/PIC relocation checks PASS.
+No new CI run, push, reboot or device partition write.
+
+Prepared shim2327-trials/restoration-plan.json and a separate pinned
+shim2327-trials-run-once.py; ONLY its read-only preflight branch ran/PASS.
+No active trial journal,restore_pending=false. Full baseline backup and
+stock prefix hashes PASS. Predicted candidate full boot_a hash
+3682d6a6727d4d24157de1524e566ec8da76b6513eee4434851a987aec5afe3d.
+NEXT: ask for one concrete normal2327 trial: write imagea6247426
+to boot_a, normal boot, collect fresh2327 evidence, restore full64MiB
+baseline2931647a and independently hash. No approval granted for this
+image yet; don't execute runner's write branch. Preserve unrelated dirt.
+
 ## >>> COMPLETE 2026-10-31: CSF2326 HARDWARE STARTUP EVIDENCE; FULL RESTORE <<<
 
 User approved one normal CSF2326 GPU/MCU trial with complete restoration.

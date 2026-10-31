@@ -229,20 +229,20 @@ int shim_gpu_publish(uintptr_t adt, uint32_t bytes,
     char *b = (char *)property(adt, bytes, "system-firmware-version", 128);
     if (!raw || !a || !b || sizeof(*r) > 128) return -1;
 #ifdef SHIM_CSF_PROBE
-    uint8_t *csf=property(adt, bytes, "sweet-csf-report", 288);
-    if (!csf || sizeof(shim_csf_report)!=288) return -1;
-    for (unsigned i=0;i<288;i++) csf[i]=0;
+    uint8_t *csf=property(adt, bytes, "sweet-csf-report", 296);
+    if (!csf || sizeof(shim_csf_report)!=296) return -1;
+    for (unsigned i=0;i<296;i++) csf[i]=0;
     for (unsigned i=0;i<sizeof(shim_csf_report);i++) csf[i]=((const uint8_t *)&shim_csf_report)[i];
 #endif
     for (unsigned i = 0; i < 128; i++) raw[i] = 0, a[i] = 0, b[i] = 0;
     for (unsigned i = 0; i < sizeof(*r); i++) raw[i] = ((const uint8_t *)r)[i];
-    char *p = text(a, "sweet-shim/gpu2326 s=");
+    char *p = text(a, "sweet-shim/gpu2327 s=");
     p = hex(p, r->stage, 2); p = text(p, " e="); p = hex(p, (uint32_t)r->error, 8);
     p = text(p, " id="); p = hex(p, r->gpu_id, 8);
     p = text(p, " rst="); p = hex(p, r->reset_rawstat, 8);
     p = text(p, " on="); p = hex(p, (uint32_t)r->on_result, 8);
     p = text(p, " off="); p = hex(p, (uint32_t)r->off_result, 8); *p = 0;
-    p = text(b, "sweet-shim/gpu2325 shared="); p = hex(p, shared, 16);
+    p = text(b, "sweet-shim/gpu2327 shared="); p = hex(p, shared, 16);
     p = text(p, " fw="); p = hex(p, r->firmware_memory, 16);
     p = text(p, " magic="); p = hex(p, r->firmware_magic, 8);
     p = text(p, " spm="); p = hex(p, r->spm_before, 8);

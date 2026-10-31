@@ -154,7 +154,8 @@ struct sweet_csf_boot_report shim_csf_report = {
     .stage=4,.error=-53,.sample_flags=3,.version_before=0x01020304,
     .disable_error=-53,.disable_status=1,.gpu_irq_mask=0x80503,
     .mmu_irq_mask=0xff,.as_present=0xff,.irq_gate_passed=1,
-    .shader_present_lo=0x1234,.tiler_transition_lo=1 };
+    .shader_present_lo=0x1234,.tiler_transition_lo=1,
+    .coherency_requested=31,.coherency_readback=31 };
 unsigned calls;
 void shim_gpu_host_run(const struct sweet_gpu_boot_config *c,struct sweet_gpu_boot_report *r) {
     calls++;
@@ -214,7 +215,7 @@ void con_hex(const char *a,uint64_t b){(void)a;(void)b;}
         root = adt.Node(); root.props = [('name',0,b'device-tree\0')]
         chosen = adt.Node(); chosen.props = [('name',0,b'chosen\0'),
              ('firmware-version',0,bytes(128)),('system-firmware-version',0,bytes(128)),
-             ('sweet-gpu-report',0,bytes(128)),('sweet-csf-report',0,bytes(288))]; root.children=[chosen]
+             ('sweet-gpu-report',0,bytes(128)),('sweet-csf-report',0,bytes(296))]; root.children=[chosen]
         data = adt.serialize(root)
         buf = ctypes.create_string_buffer(data)
         self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(buf),len(data),report,shared),0)
@@ -222,9 +223,10 @@ void con_hex(const char *a,uint64_t b){(void)a;(void)b;}
         self.assertEqual(end,len(data))
         v = parsed.children[0].prop('firmware-version').split(b'\0')[0]
         self.assertIn(b'id=a0020001',v);self.assertIn(b'rst=00000100',v)
-        self.assertTrue(v.startswith(b'sweet-shim/gpu2326'))
+        self.assertTrue(v.startswith(b'sweet-shim/gpu2327'))
         csf=parsed.children[0].prop('sweet-csf-report')
-        self.assertEqual(len(csf),288)
+        self.assertEqual(len(csf),296)
+        self.assertEqual(struct.unpack_from('<2I',csf,288),(31,31))
         self.assertEqual(struct.unpack_from('<I',csf,88)[0],3)
         self.assertEqual(struct.unpack_from('<IiI',csf,112),(1,-53,0x01020304))
         self.assertEqual(struct.unpack_from('<4I',csf,128),(0x80503,0xff,0xff,1))
@@ -234,6 +236,9 @@ void con_hex(const char *a,uint64_t b){(void)a;(void)b;}
         chosen.props[-1]=('sweet-csf-report',0,bytes(128))
         short=adt.serialize(root);short_buf=ctypes.create_string_buffer(short)
         self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(short_buf),len(short),report,shared),-1)
+        chosen.props[-1]=('sweet-csf-report',0,bytes(288))
+        previous=adt.serialize(root);previous_buf=ctypes.create_string_buffer(previous)
+        self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(previous_buf),len(previous),report,shared),-1)
         del chosen.props[-1]
         missing=adt.serialize(root); missing_buf=ctypes.create_string_buffer(missing)
         self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(missing_buf),len(missing),report,shared),-1)

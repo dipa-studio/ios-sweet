@@ -74,7 +74,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     *r=(struct sweet_csf_boot_report){.stage=SWEET_CSF_BOOT_CONFIG};
     if(!c||!io||!io->read32||!io->write32||!io->ticks||!io->barrier||
        !io->frequency||io->frequency>1000000000||c->gpu!=0x13000000||
-       !c->timeout_ms||c->timeout_ms>1000||c->root_pa!=c->arena_pa||
+       !c->timeout_ms||c->timeout_ms>1000||c->noncoherent>1||c->root_pa!=c->arena_pa||
        c->arena_pa<0x40000000||(c->arena_pa&4095)||!c->arena_bytes||
        c->arena_bytes>0x1000000||c->arena_pa>UINT64_MAX-c->arena_bytes||
        c->shared_bytes<4096||(c->shared_offset&4095)||
@@ -110,6 +110,19 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     init_registers(io,c->gpu,r,0);
     gpu_mask=rd(io,c->gpu+0x28);job_mask=rd(io,c->gpu+0x1008);mmu_mask=rd(io,c->gpu+0x2008);
     wr(io,c->gpu+0x28,0);wr(io,c->gpu+0x1008,0);wr(io,c->gpu+0x2008,0);
+    if(c->noncoherent) {
+        /* Pinned vendor KMD kbase_device_coherency_init defaults to31;
+         * kbase_cache_set_coherency_mode writes it to GPU+304 for this
+         * model (feature19). NONE is a protocol selector, not a bitmask
+         * of COHERENCY_FEATURES. Keep PTE/MEMATTR/TRANSCFG unchanged. */
+        r->coherency_requested=31;r->diag_flags|=32;
+        wr(io,c->gpu+0x304,r->coherency_requested);
+        r->coherency_readback=rd(io,c->gpu+0x304);
+        if(r->coherency_readback!=r->coherency_requested) {
+            r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
+        }
+        r->diag_flags|=64;
+    }
     r->stage=SWEET_CSF_BOOT_L2;
     r->l2_present=rd(io,c->gpu+0x120);r->l2_present_hi=rd(io,c->gpu+0x124);
     if(!(r->l2_present&1)) {r->error=SWEET_CSF_BOOT_MODEL;goto cleanup;}

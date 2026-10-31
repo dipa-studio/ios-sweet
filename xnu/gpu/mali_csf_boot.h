@@ -9,6 +9,9 @@ struct sweet_csf_boot_config {
     /* Optional pinned-blob diagnostics: arena page backing MCU0202c000.
      * Zero disables private probes. Never supplies an arbitrary host PA. */
     uint32_t private_probe_offset;
+    /*2327 isolated diagnostic: select vendor's protocol NONE (31).
+     * Zero preserves the previous boot sequence; only 0/1 are accepted. */
+    uint32_t noncoherent;
 };
 struct sweet_csf_boot_report {
     uint32_t stage;
@@ -50,6 +53,9 @@ struct sweet_csf_boot_report {
     uint32_t private_late_before, private_late_after;
     uint32_t shared_alloc_before, shared_alloc_after;
     uint32_t private_page_lo, private_page_hi;
+    /*2327 appends 8 bytes (296 total). diag_flags bit5: protocol write
+     * attempted; bit6: immediate readback matched. No readiness inference. */
+    uint32_t coherency_requested, coherency_readback;
 };
 enum sweet_csf_boot_stage {
     SWEET_CSF_BOOT_CONFIG=1, SWEET_CSF_BOOT_L2=2, SWEET_CSF_BOOT_AS=3,

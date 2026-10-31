@@ -29,6 +29,7 @@ CSF_STARTUP_KEYS = ['diag_flags','coherency_features','coherency_before','cohere
     'memattr_lo','memattr_hi','private_early_before','private_early_after',
     'private_feature_before','private_feature_after','private_late_before','private_late_after',
     'shared_alloc_before','shared_alloc_after','private_page_lo','private_page_hi']
+CSF_COHERENCY_KEYS = ['coherency_requested','coherency_readback']
 CSF_STAGES = {0:'not-run',1:'config',2:'l2',3:'address-space',4:'mcu',
               5:'interface',6:'cleanup',7:'complete'}
 CSF_ERRORS = {0:'success',-40:'memory-argument',-41:'memory-capacity',
@@ -49,7 +50,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -85,7 +86,7 @@ def decode(data, expected_build=0x2321):
         fields['gpu_id'] >> 28 == 10 and fields['as_present'] not in (0,0xffffffff) and
         fields['reset_rawstat'] & 0x100 != 0)
     if expected_build >= 0x2322:
-        count = 36 if expected_build == 0x2326 else (24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11))
+        count = 37 if expected_build == 0x2327 else (36 if expected_build == 0x2326 else (24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11)))
         raw = report_bytes(records,320,count,expected_build,'CSF')
         csf = dict(zip(CSF_KEYS,struct.unpack('<I2i19I',raw[:88])))
         if expected_build >= 0x2323:
@@ -99,9 +100,9 @@ def decode(data, expected_build=0x2321):
             csf.update(zip(CSF_MASK_CORE_KEYS,struct.unpack('<16I',raw[128:192])))
             if csf['irq_gate_passed'] not in (0,1):
                 raise ValueError('invalid CSF IRQ gate state')
-        if expected_build == 0x2326:
-            csf.update(zip(CSF_STARTUP_KEYS,struct.unpack('<24I',raw[192:])))
-            if csf['diag_flags'] & ~31:
+        if expected_build >= 0x2326:
+            csf.update(zip(CSF_STARTUP_KEYS,struct.unpack('<24I',raw[192:288])))
+            if csf['diag_flags'] & ~(127 if expected_build == 0x2327 else 31):
                 raise ValueError('invalid CSF startup diagnostic flags')
             before,after=bool(csf['diag_flags'] & 4),bool(csf['diag_flags'] & 8)
             page=csf['private_page_hi'] << 32 | csf['private_page_lo']
@@ -116,6 +117,14 @@ def decode(data, expected_build=0x2321):
                         csf['startup_memory_changed'][name] = csf[name+'_before'] != csf[name+'_after']
             csf['startup_memory_note'] = ('Endpoint mutations are diagnostic evidence only; '
                 'unchanged words cannot exclude MCU execution. Fresh IRQ/version remain required.')
+        if expected_build == 0x2327:
+            csf.update(zip(CSF_COHERENCY_KEYS,struct.unpack('<2I',raw[288:296])))
+            attempted=bool(csf['diag_flags'] & 32)
+            matched=bool(csf['diag_flags'] & 64)
+            if matched and not attempted:
+                raise ValueError('coherency readback flag without a write attempt')
+            csf['noncoherent_protocol_verified'] = (attempted and matched and
+                csf['coherency_requested'] == 31 and csf['coherency_readback'] == 31)
         if csf['stage'] not in CSF_STAGES:
             raise ValueError('invalid CSF report stage')
         end = 0x4094000  # shared VA + measured pinned firmware shared size
@@ -153,10 +162,12 @@ def decode(data, expected_build=0x2321):
                 csf.update(irq_gate_verified=mask_gate,
                     core_state_sampled=bool(csf['sample_flags'] & 4),
                     core_state_after_start=bool(csf['sample_flags'] & 8))
-            if expected_build == 0x2326:
-                ready = (ready and csf['diag_flags'] == 31 and
+            if expected_build >= 0x2326:
+                ready = (ready and csf['diag_flags'] == (127 if expected_build == 0x2327 else 31) and
                     csf['memattr_lo'] == 0x4c4c9f4c and csf['memattr_hi'] == 0x4c4c4c4c and
                     csf['private_memory_sampled'])
+            if expected_build == 0x2327:
+                ready = ready and csf['noncoherent_protocol_verified'] and csf['coherency_after'] == 31
         csf.update(stage_name=CSF_STAGES[csf['stage']],
                    error_name=CSF_ERRORS.get(csf['error'],'firmware-format'),
                    runtime_interface_sampled=sampled,
@@ -171,7 +182,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2326)')
+                   help='expected kernel/report build (0x2321 through 0x2327)')
     a=p.parse_args()
     try:
         report=decode(a.marks.read_bytes(),a.build)

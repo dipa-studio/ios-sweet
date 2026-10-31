@@ -815,3 +815,74 @@ Ignored evidence is under
 `research/matisse/20261031-gpu/shim2326-trials/gpu-normal/`. This result
 does not authorize another write. Any next test needs a new image and a
 separate concrete approval, with the same full restore/hash procedure.
+
+
+## CSF2327 isolated coherency diagnostic (2026-10-31; not hardware tested)
+
+Fresh read-only Recovery collection confirms matisse, slot_a, root and the
+original 67108864-byte boot_a SHA256
+`2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1`.
+Evidence is `recovery-live-6/raw-state.txt`. The provided official image
+package resolves to `/Users/xiaohuasheng/Documents/matisse_images_OS2.0.2.0.ULKCNXM_14.0`;
+package hashes and inventory remain in ignored research. Recovery does not
+bind Mali/GPUEB/gpufreq and provides no runtime GPU register snapshot.
+
+The vendor quirk comparison is now reconstructed from the pinned local KMD
+SHA256 `22b26f30a151e9d6791f959cc1f93d1e3f4d4c564537970dadefb0ec2d742a3b`,
+its relocations, feature and production issue tables. GPU_ID `0xa8620004`
+masks to model key `0xa0020000`. Production record12 at rodata `0x126e0`
+selects revision4's issue list `0x12e1c`: 1,15,19,30,31,32. Issue4 and21
+are absent; feature19 is present and24 absent. The module's
+`corestack_driver_control` default is BSS0. With the measured zero reset
+registers and no DT overrides, the default-derived values for SHADER_CONFIG,
+TILER_CONFIG, CSF_CONFIG and L2_MMU_CONFIG are all zero. This is a static
+derivation of defaults, not a runtime trace or timeout diagnosis. The
+ignored data audit is `firmware-static/vendor-2327-data-audit.json`.
+
+The relevant vendor instructions are `kbase_pm_init_hw` at `0x3c150..0x3c35c`
+(CSF/shader/tiler derivation), `kbase_set_mmu_quirks` at `0x4045c..0x405dc`,
+`kbase_device_coherency_init` at `0x23764` (default31), and
+`kbase_cache_set_coherency_mode` at `0x367ac..0x367d4` (feature19 gates
+GPU+0x304). Linux v6.12 `panthor_regs.h` independently names selector31
+`GPU_COHERENCY_NONE`. Value31 is a protocol selector, not a mask that must
+be present in COHERENCY_FEATURES, whose measured value was1.
+
+2327 changes one behavioral input: the diagnostic shim explicitly requests
+protocol NONE through config `noncoherent=1`. The portable transaction
+accepts only0/1;0 preserves the old sequence. It snapshots reset state, masks
+interrupts, writes GPU+0x304=31 before L2/AS/MCU initialization, and immediately
+reads it back. A mismatch rejects before enabling L2 or MCU and proceeds to
+reset/cleanup. PTEs, MEMATTR, TRANSCFG and four quirk registers are unchanged.
+This is a controlled hypothesis test, not a claimed fix for the2326 timeout.
+
+The report is296 bytes, with requested/readback appended after the2326 ABI,
+and kernel patch0125 publishes37 qwords at marks320..356 under build2327.
+Flags32/64 mean attempted write/matched readback. The decoder retains all
+previous report ABIs and requires protocol readback31, post-start protocol31,
+fresh global JOB IRQ, version/interface evidence and successful cleanup
+before declaring success. A matched protocol alone cannot establish MCU
+readiness.41 targeted tests pass in5.173s, including ASan/UBSan, default-off,
+write ordering, rejected readback, timeout and stale/partial evidence cases.
+The publication fixture rejects the former288-byte buffer.
+
+Local full XNU build exited0. Kernel is16724248 bytes, SHA256
+`3817002e5b249c9cd0efeb55ee42a9d42147422e2ce13f562ebc6f368ac655f9`. The build-only image is26714112 bytes, SHA256
+`a624742667410660768dd0349a9622b73439dcfd71975edbd1918832defdd30c`, at
+`research/matisse/20261031-gpu/shim2327-ready/matisse-shim-gpu2327.img`.
+Independent image validation passed: source pins and frozen objects match,
+stock Linux remains byte-identical at+32MiB, ramdisk/signature bytes match,
+expanded size80402548, report296 bytes, and rootrw/ufsrw remain0. Retaining
+signature bytes does not authenticate the image. The local kernel source
+replays exactly with the inherited untracked0093 read-only-console patch
+included; this existing difference is recorded explicitly and preserved.
+No device boot, partition write, CI run or push occurred.
+
+`shim2327-trials/restoration-plan.json` and a separate pinned trial runner
+are prepared; only the runner's read-only preflight ran and passed. No active
+trial journal or restoration duty exists. Full backup and stock-prefix hashes
+match the previous successful restoration inputs. Predicted temporary full
+boot_a hash is `3682d6a6727d4d24157de1524e566ec8da76b6513eee4434851a987aec5afe3d`.
+A new concrete approval is required for one normal2327 boot_a trial and the
+complete64MiB restore/hash. Host-managed Fastboot/Recovery restoration is
+the established recovery path; automatic Recovery from normal XNU remains
+unverified. The device remains in root Recovery with the original hash.
