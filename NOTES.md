@@ -1,5 +1,29 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> RUNNING 2026-10-31: COLLECTOR WRITTEN IN RECOVERY; RESTORE_PENDING=TRUE <<<
+
+User explicitly preferred Recovery write over fastboot flash. First fastboot
+preflight timed out on getvar, BEFORE any flash (old collector-trial journal
+restore_pending=false). User replugged USB; fastboot reboot recovery then
+succeeded. New dedicated Recovery runner session24278 is ACTIVE:
+research/matisse/20261031-gpu/collector-trial-recovery-20261031/run-recovery-once.py
+with journal.json in same directory as restoration source of truth.
+
+Recovery preflight reverified matisse/_a/root,64MiB boot_a baseline2931647a,
+local image50813eda and full backup. Staged helper in /tmp; dd+fsync wrote
+collector21450752B to boot_a ONLY. Full64MiB partition readback equals predicted
+3b5ef7f319e3b9a56373381ae87b77aba47229e4cff74c33cb7aedbd44420c42
+(short collector prefix plus unchanged original tail). adb reboot normal
+issued successfully at2026-10-31T01:35:00Z (09:35 Asia/Shanghai).
+
+RESTORATION IS STILL REQUIRED. Runner waits120s for a new ACM port then
+waits Recovery. It can request reboot recovery if fastboot is available;
+otherwise physical keys may be necessary. It restores full67108864B backup
+with Recovery dd+fsync and clears restore_pending only after SHA2562931647a
+readback. Never cancel without continuing restoration (supports --restore-only).
+No LK/vendor_boot/DTBO/userdata writes. No collection or GPU result yet.
+NEXT monitor live runner and complete restore; do not stop with armed boot_a.
+
 ## >>> ACTIVE 2026-10-31: USER AUTHORIZED ONE COLLECTOR BOOT_A TRIAL + FULL RESTORE <<<
 
 User explicitly answered 可以 to the concrete temporary collector boot_a
