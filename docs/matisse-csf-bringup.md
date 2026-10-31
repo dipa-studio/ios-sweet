@@ -1168,3 +1168,49 @@ hash isb9626544096d47c370d2bfc3653966e51e237483ee6913127725433041a00fe1.
 No device write or reboot occurred. Next requires specific approval for one
 normal2329 trial of image83c635bb,full readback/fresh evidence collection,
 and complete64MiB original boot_a restoration with independent hash.
+
+## CSF2329 INA-only hardware trial and full restoration (2026-10-31)
+
+The user explicitly approved ONE normal2329 trial of image83c635bb and
+complete original restoration. The pinned runner284b2227 executed once,
+session77144 exited0. The26714112-byte candidate hash remained
+83c635bbd15a08bb3333105bc949fd2c9fa21caaad05920844d751875601fe25.
+Full temporary boot_a readback matched the predicted partition SHA256
+b9626544096d47c370d2bfc3653966e51e237483ee6913127725433041a00fe1.
+Normal boot reached Fastboot after99.87s. A single persistent raw USB session
+received OKAY for the stock-prefix download013e8000,flash:boot_a and
+reboot-recovery. Recovery then restored the entire67108864-byte original
+boot_a. An independent subsequent read verified root matisse/_a/Recovery,
+partition geometry and full original SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Journal is complete-restored-Recovery,restore_pending=false,evidence_decoded=true.
+The restoration plan records one consumed authorization,one executed trial
+and independent full restoration. No active runner or restoration remains.
+
+Fresh build2329 marks contain99 records with38 complete CSF qwords320..357;
+their4096-byte block matches the last block of the4198400-byte tail. Before
+marks and tail exactly match the preceding2328 after capture. The decoder
+rejects those old marks when expecting2329. The18657-byte console separately
+names gpu2329 and sweettrial=2329. Fresh Recovery dmesg is841950 bytes.
+
+Every common CSF field matches2328 except TRANSCFG420001c6->42000006; the
+new vendor_ina_readback_matches is true. All common GPU fields also match.
+Thus the intended INA register value persisted through the sampled MCU wait.
+Coherency remains requested/read back/after31,software group6/293 leaves,
+L2_READY1 and the IRQ-mask gate still pass. MCU remains stage4/error-53,
+MCU_STATUS1,JOB_RAW0,MMU_RAW0,version0 and AS fault/status0. Private marker
+words stay0; shared04000018 changes0->1d. Disable still times out-53;
+cleanup reset_raw600/reset_completed0 and cleanup_error-53. Firmware-ready
+remains false. Vendor-matching INA alone did not establish the handshake in
+this configuration and does not identify the timeout cause or MCU PC.
+99.87s versus2328's83.54s is only a single-run timing observation.
+
+Evidence stays ignored in shim2329-trials/gpu-normal/{journal.json,
+gpu-result.json,comparison-2328-2329.json,independent-post-restore.txt,
+before/after-marks.bin,before/after-tail.bin,after-console.txt,recovery-dmesg.txt}
+and shim2329-trials/gpu-normal-run.txt. Freshness,complete report alignment,
+exact common-field comparison and independent restoration checks PASS.
+Implementation b6bb9e1 and verified build handoff50f3bf3 remain applicable;
+no new build,CI run,push or repeated test suite was needed. Next is offline
+vendor MEMATTR/cache/descriptor/table and MCU startup comparison. This
+one-trial authorization is consumed; another image/write needs confirmation.

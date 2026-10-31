@@ -1,6 +1,59 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-10-31: CSF2329 INA-ONLY BUILT; SINGLE-TRIAL APPROVAL NEEDED <<<
+## >>> ACTIVE 2026-10-31: CSF2329 INA TRIAL COMPLETE; MCU TIMEOUT; FULL RESTORE <<<
+
+User specifically approved ONE normal2329 image83c635bb boot_a trial, fresh
+evidence collection and complete original restoration. Executed exactly once;
+runner session77144 exited0. Candidate26714112B SHA256
+83c635bbd15a08bb3333105bc949fd2c9fa21caaad05920844d751875601fe25.
+Full temporary boot_a readback matched predicted
+b9626544096d47c370d2bfc3653966e51e237483ee6913127725433041a00fe1.
+Normal boot reached Fastboot after99.87s. One persistent raw USB session
+returned OKAY for stock-prefix download013e8000,flash:boot_a and
+reboot-recovery. Recovery then restored all67108864B original boot_a.
+Separate post-restore matisse/_a/root/recovery/geometry and SHA256 PASS:
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Journal complete-restored-Recovery,restore_pending=false,evidence_decoded=true;
+plan records one consumed authorization and independent full restoration.
+No active runner or pending restore; no user USB/key intervention requested.
+Fresh Recovery dmesg841950B. No new build,CI run or push in this trial.
+
+Fresh marks build2329/count99 contain38 complete CSF qwords320..357 and
+match the captured4198400B tail. Before marks/tail exactly match2328's
+previous after capture; stale2328 rejects expected2329. The18657B console
+independently names gpu2329/sweettrial=2329. Every common decoded CSF
+field matches2328 except hardware TRANSCFG420001c6->42000006; the new
+vendor_ina_readback_matches is true. Every common GPU field matches2328.
+Coherency31/readback31/after31,group6/293 software leaves,IRQ gate and
+L2_READY1 persist. MCU remains stage4/error-53,status1,JOB_RAW0,MMU_RAW0,
+version0,AS status/fault0. Private marker words stay0; shared04000018
+changes0->1d. Disable error-53,reset_raw600/reset_completed0,cleanup-53.
+Firmware-ready remains false. INA matching the vendor alone did not establish
+the handshake in this configuration; it does not identify the timeout cause.
+99.87s versus2328's83.54s is a single-run observation, not attributed to INA.
+
+Ignored evidence: shim2329-trials/gpu-normal/{journal.json,gpu-result.json,
+comparison-2328-2329.json,independent-post-restore.txt,before/after-marks.bin,
+before/after-tail.bin,after-console.txt,recovery-dmesg.txt} and
+shim2329-trials/gpu-normal-run.txt. Freshness/report completeness/exact common
+field comparison and independent full restore checks PASS. Source b6bb9e1
+and build handoff50f3bf3 remain applicable; no rebuild/tests repeated.
+NEXT: offline pinned vendor MEMATTR/cache/descriptor/table differences and
+MCU startup comparison. Do not repeat2329 blindly. This trial approval is
+consumed; another concrete image/write needs specific confirmation.
+Preserve unrelated dirt and inherited untracked0093.
+
+## >>> HISTORICAL 2026-10-31: CSF2329 SINGLE TRIAL AUTHORIZED <<<
+
+User specifically replied 可以 to ONE normal2329 trial of image83c635bb,
+fresh evidence collection and complete64MiB original boot_a restoration
+with independent hash. Fresh read-only Recovery preflight PASS; exact
+runner284b2227 and image/backup pins match the prepared restoration plan.
+This authorization covers this one trial and restoration only. Once started,
+follow shim2329-trials/gpu-normal/journal.json and prioritize full restore
+plus independent hash2931647a before interpreting GPU evidence.
+
+## >>> HISTORICAL 2026-10-31: CSF2329 INA-ONLY BUILT AND VERIFIED <<<
 
 Offline continuation authorized after restored2328; no new image/write approved.
 Audit commit3f33f13; INA diagnostic implementation commitb6bb9e1.
