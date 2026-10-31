@@ -94,6 +94,18 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     uint64_t shared=c->arena_pa+c->shared_offset;
     io->barrier(io->context);
     r->version_before=rd(io,shared);r->sample_flags|=1;
+    /* Match the measured r32p1 internal interrupt enables before MCU AUTO.
+     * CPU DAIF stays masked and GIC routing is untouched: the host still
+     * polls RAW. Whether these enables fix2323 is a hardware hypothesis. */
+    wr(io,c->gpu+0x24,0x80503);
+    wr(io,c->gpu+0x28,0x80503);
+    wr(io,c->gpu+0x1008,UINT32_MAX);
+    wr(io,c->gpu+0x2008,0xffff);
+    r->job_irq_mask=rd(io,c->gpu+0x1008);
+    if(r->job_irq_mask!=UINT32_MAX || rd(io,c->gpu+0x28)!=0x80503 ||
+       rd(io,c->gpu+0x2008)!=0xffff) {
+        r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
+    }
     r->stage=SWEET_CSF_BOOT_MCU;
     wr(io,c->gpu+0x700,2); /* AUTO is2; ENABLE is1. */
     uint64_t begin=io->ticks(io->context);

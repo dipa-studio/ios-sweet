@@ -6,7 +6,7 @@
 static uint8_t arena[2u<<20] __attribute__((aligned(4096)));
 extern const uint8_t sweet_csf_blob_start[],sweet_csf_blob_end[];
 struct sweet_csf_boot_report shim_csf_report;
-_Static_assert(sizeof(struct sweet_csf_boot_report)==128, "CSF2323 report ABI");
+_Static_assert(sizeof(struct sweet_csf_boot_report)==128, "CSF2324 report ABI");
 static int overlap(uint64_t a,uint64_t n,uint64_t b,uint64_t m)
 {
     if(!n||!m||a>UINT64_MAX-n||b>UINT64_MAX-m)return 1;

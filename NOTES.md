@@ -1,5 +1,60 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: CSF2324 BUILT; STATIC STARTUP AUDIT; NO DEVICE TRIAL <<<
+
+Latest hardware evidence remains the restored2323 timeout below.2324 has
+NOT been written or booted. No restoration is pending. No new hardware trial
+is authorized at this handoff; the earlier2323 approvals were consumed.
+
+Pinned CSF reset vector Thumb010018ed (file2780) was decoded in MCLASS mode.
+Startup waits at01002ee4..01002ef2 for SHADER_PWRTRANS & SHADER_PRESENT to
+clear, publishes version01010000 at01003012 and first global IRQ80000000
+at0100301c, then reaches WFI01003032. A synthetic Unicorn Cortex-M7 replay
+reaches WFI in986 instructions; injected persistent shader transition stalls
+at the wait loop (500000 cap), clearing it after4 reads reaches WFI in1004.
+This is simplified fake MMIO, NOT hardware proof or a diagnosis of2323.
+Actual2323 shader transition state was not captured. Optional trace pointers
+are zero and handled by startup; ignored trace/config entries alone are not
+shown to block initial version publication.
+
+2324 changes only internal IRQ setup/reporting: GPU CLEAR/MASK80503,
+JOB MASKffffffff,MMU MASKffff immediately before AUTO2, exact readback gate.
+Matches measured vendor kbase_pm_enable_interrupts; CPU DAIF/GIC unchanged,
+RAW still polled. Report128B offset124 now JOB mask; old2323 reserved-zero
+ABI preserved in decoder. Original masks restored during cleanup. This is
+an untested hardware hypothesis, not an established fix. No shader queue,
+doorbell,Vulkan/Metal or new quirk-register programming.
+
+29 targeted tests PASS (including ASan/UBSan and old/new evidence decoding).
+Pinned actual-blob memory replay PASS:7 ordinary/3 protected skipped,
+8 tables/1232896B/shared606208B. Local kernel build session29800 exit0;
+no CI run/push. Kernel16724248B SHA256
+fe02cab05b52f75fa08f93098e2093dd9a1e9f3df16aab9c7091da840daa90cf.
+Builder session7673 exit0. Image26710016B:
+research/matisse/20261031-gpu/shim2324-ready/matisse-shim-gpu2324.img
+SHA256 b8214a7e5166f396db9b6e7ac42331c6c592662473347288b32e6ab5679506f1.
+Full candidate boot_a prediction8d7de4d7f5cac9a6b73f50df7f3e8da23a9bc163e9a0db34bd25bf5bbbf0b8f1.
+Independent source/image/payload verification PASS. Expanded80402548B,
+stock Linux+32MiB,frozen2313 objects,ramdisk/signature bytes unchanged;
+rootrw=0/ufsrw=0. Signature retained, not authenticated. All blobs/dumps
+remain ignored. Unrelated collector-v2 and dirty shim work preserved.
+
+Source review and git diff --check PASS. Final rerun29 tests PASS (2.563s).
+Ignored shim2324-trials/run-once.py prepared from the tested2323 runner,
+with exact2324 image and full-partition prediction pinned. Readonly
+preflight exited0: Recovery identity/slot/root/geometry matched; full64MiB
+live boot_a baseline SHA2562931647a reverified. No write/reboot, active
+trial runner or pending restoration. Evidence shim2324-trials/preflight.txt.
+
+Next: commit completed2324 sources/tests/docs and obtain specific approval
+for ONE2324 Recovery-fallback boot_a write/reboot and full64MiB restore/hash
+2931647a. Normal MCU trial needs its own approval after SAME-image fallback
+passes. No historical run-ui script,official fastboot,blind USB reopen or
+bootloader/recovery edit. The candidate has NOT run on hardware.
+Evidence: firmware-static/{startup-detail.txt,replay*.json,replay.py},
+csf2324-tests.txt,csf2324-real-fw-test.txt,kernel-csf2324-build.txt,
+shim2324-build-arguments.json,shim2324-ready/independent-verification.json.
+
 ## >>> COMPLETE 2026-10-31: CSF2323 NORMAL TIMEOUT; FULL RESTORE <<<
 
 Authorized normal2323 trial ran ONCE. Runner32766 exited0; journal

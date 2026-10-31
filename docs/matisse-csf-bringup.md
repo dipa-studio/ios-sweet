@@ -1,11 +1,13 @@
-# MT6983 CSF MCU boot probes (2322 / 2323)
+# MT6983 CSF MCU boot probes (2322 / 2323 / 2324)
 
 2026-10-31. GPU2321 established actual GPUEB power ownership and Mali soft
-reset on matisse. This next diagnostic installs MCU firmware mappings, powers
-the first L2 group, enables AS0 and starts the MCU. The2322 hardware trial
-timed out at MCU start;2323 is built but hardware-unverified. The original
-2322 design follows; the final section describes its2323 successor. There
-is no shader job, command queue, Vulkan or Metal path yet.
+reset on matisse. These diagnostics install MCU firmware mappings, power
+the first L2 group, enable AS0 and start the MCU. Both2322 and2323 hardware
+trials timed out at MCU start and were fully restored.2324 is built and
+locally validated, but has NOT been written or booted. Firmware readiness
+remains unproven. The original2322 design follows, then the measured results
+and successive2323/2324 changes. There is no shader job, command queue,
+Vulkan or Metal path yet.
 
 ## Reference facts and firmware
 
@@ -324,3 +326,102 @@ gpu-normal-run.txt. No second trial, new image, CI run or source change.
 The48-bit/cache change alone did not establish readiness. Further static
 work must examine MCU startup prerequisites/internal event delivery and
 G710 vendor initialization without claiming a diagnosed root cause.
+
+
+## Static firmware startup audit and successor2324 (2026-10-31)
+
+The exact pinned258048-byte firmware above has initial MSP0x02040000 and
+Thumb reset entry0x010018ed. The code section begins at file0xe94 / MCU
+VA0x01000000; reset entry file offset is0x2780. Capstone5.0.7 using
+THUMB|MCLASS decodes the Cortex-M system instructions that plain THUMB
+stopped on. Ignored startup-detail.txt records the disassembly.
+
+Observed instruction locations in the blob:
+
+- Reset startup0x010018ec, MPU configuration0x01003126 and main startup
+  0x01002aec.
+- Loop0x01002ee4..0x01002ef2 reads MCU-view shader power-transition words
+  0x40000214/0x40000210 and present words0x40000114/0x40000110, waiting until
+  their intersection is zero.
+- At0x01003012 startup publishes version0x01010000 to shared VA0x04000000.
+- At0x0100301c it writes0x80000000 to internal MCU-view0x40001000, issuing
+  the initial global-interface interrupt; startup WFI is0x01003032.
+
+An ignored Unicorn2.1.4 Cortex-M7 replay loads ordinary firmware sections
+with a simplified synthetic MMIO model. Baseline reaches WFI in986
+instructions, publishes0x01010000 and writes the first IRQ. Injecting
+present1/transition1 hits a500000-instruction cap in that shader-transition
+loop with version0. Clearing the injected transition after4 reads reaches
+WFI in1004 instructions. These results establish a startup dependency in
+this synthetic model, not actual GPU execution or the location of2323's
+stall. Real2323 shader present/transition values were not captured.
+Optional trace-buffer pointers default0 and startup handles their absence;
+this audit does not show that skipped trace/config entries alone prevent
+initial version publication. Replay source/results remain ignored under
+research/matisse/20261031-gpu/firmware-static/.
+
+Local vendor disassembly kbase_pm_enable_interrupts0x3a748 writes GPU
+CLEAR/MASK0x80503, JOB CLEAR/MASK0xffffffff and MMU CLEAR0xffffffff/
+MASK0xffff. Linux v6.12 Panthor also enables JOB interrupts before MCU
+startup.2323 instead kept all three internal masks zero. GPU_RAW0x600 in
+2323 denotes power-change bits, not GPU fault bits by itself. AUTO2 was
+already correct. Vendor coherency/default mode31 and all G710 quirks are
+not fully reproduced; no speculative quirk-register writes were added.
+
+2324 enables GPU0x80503/JOB0xffffffff/MMU0xffff immediately before MCU AUTO,
+clears the selected GPU sources and verifies all three mask readbacks. A
+mismatch aborts before MCU start. The earlier AS0/global clears are kept;
+CPU DAIF remains masked, GIC routing is untouched and RAW is still polled.
+Cleanup restores the saved masks as before. The effect on actual firmware
+startup is an untested hardware hypothesis. Translation, memory attributes,
+firmware mappings and shader-power handling retain2323 behavior.
+
+The report remains128 bytes. Offset124, reserved-zero in2323, records JOB
+INT_MASK readback in2324. Kernel patch0122 bumps the build to2324 and keeps
+CSF marks320..335. Decoder supports2321/2322/2323/2324, preserves2323's
+reserved-zero validation, and requires2324 JOB mask0xffffffff in addition
+to a fresh IRQ, valid interface and verified cleanup for aggregate success.
+
+## Host validation and concrete2324 artifact
+
+29 targeted tests PASS, including sanitizer firmware/memory/boot harnesses,
+mask readback rejection before MCU start, restoration of original masks,
+128-byte ADT publication and old/new evidence decoder cases. Separate actual
+pinned-blob ASan/UBSan memory replay PASS:7 ordinary sections,3 protected
+skipped,8 tables,1232896 arena bytes and606208 shared bytes.
+
+Local full incremental kernel build session29800 exited0, no CI run/push.
+Kernel16724248B SHA256
+fe02cab05b52f75fa08f93098e2093dd9a1e9f3df16aab9c7091da840daa90cf.
+Image builder session7673 exited0. Image:
+research/matisse/20261031-gpu/shim2324-ready/matisse-shim-gpu2324.img
+26710016B SHA256
+b8214a7e5166f396db9b6e7ac42331c6c592662473347288b32e6ab5679506f1.
+Predicted full boot_a candidate partition hash (candidate prefix plus
+unchanged baseline tail):
+8d7de4d7f5cac9a6b73f50df7f3e8da23a9bc163e9a0db34bd25bf5bbbf0b8f1.
+
+Independent verification passed source-manifest hashes, embedded payload/
+ADT, kernel build source, readonly cmdline, unchanged Linux fallback and
+frozen board/UFS/display objects, and the completed2323 restoration journal.
+Expanded size80402548B, arena offset483328, BSS end2580608, shim end2650112,
+payload offset2650128; these are offsets, not hardware PAs. Linux+32MiB,
+ramdisk and signature bytes remain unchanged; signature retained, not
+authenticated. rootrw=0/ufsrw=0. Local proprietary inputs stay ignored.
+
+No2324 device trial or reboot has occurred. Latest hardware evidence is
+still the2323 timeout and complete full64MiB restoration. The next hardware
+step requires specific approval for one Recovery-fallback boot_a write of
+this concrete image and full baseline restoration/hash. A normal MCU trial
+requires separate approval after that SAME-image fallback passes. Automatic
+Recovery from normal XNU remains unreliable; preserve the persistent fbraw
+stock-prefix recovery path. No firmware-ready or acceleration claim.
+
+
+The prepared ignored shim2324-trials/run-once.py pins this exact candidate
+hash and predicted full-partition hash. Its readonly preflight exited0:
+Recovery identity/slot/root and geometry matched, local candidate/backup
+hashes matched, and the live full64MiB boot_a was rehashed to baseline
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Final29-test rerun PASS (2.563s); git diff --check PASS. Preflight does not
+write a partition or reboot. No2324 trial journal or pending restoration.

@@ -100,12 +100,13 @@ class ReportDecodeTests(unittest.TestCase):
         values=dict(zip(self.module.CSF_KEYS,[7,0,0,0x2830,1,0,1,1,
             0x80000000,0,0,0,0,0x01020003,0x123,0x4001000,0x4002000,8,64,0x100,1,1]))
         values.update(changes)
-        if build==0x2323:
+        if build>=0x2323:
             values.update(zip(self.module.CSF_DIAGNOSTIC_KEYS,
                 [3,0x600,0,0x420001c6,0x90000000,0,0,0,0x01020003,0]))
             values.update(changes)
         raw=struct.pack('<I2i19I',*(values[k] for k in self.module.CSF_KEYS))
-        if build==0x2323:
+        if build>=0x2323:
+            if build==0x2324:values['reserved']=changes.get('reserved',0xffffffff)
             raw+=struct.pack('<7Ii2I',*(values[k] for k in self.module.CSF_DIAGNOSTIC_KEYS))
         count=struct.unpack_from('<I',data,12)[0]
         for i in range(len(raw)//8):
@@ -153,6 +154,19 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertFalse(self.module.decode(self.csf_marks(stage=4,error=-53),0x2322)['csf']['runtime_interface_sampled'])
         for args in ({'omit':15},{'tag':0x2322},{'reserved':1},{'sample_flags':4}):
             with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2323,**args),0x2323)
+
+    def test_2324_requires_irq_mask_readback_and_fresh_irq(self):
+        result=self.module.decode(self.csf_marks(build=0x2324),0x2324)
+        self.assertTrue(result['csf_firmware_boot_verified'])
+        self.assertEqual(result['csf']['job_irq_mask'],0xffffffff)
+        self.assertNotIn('reserved',result['csf'])
+        for args in ({'reserved':0},{'reserved':0x80000000},{'job_raw':0},
+                     {'version':0},{'cleanup_error':-53}):
+            with self.subTest(args=args):
+                self.assertFalse(self.module.decode(self.csf_marks(build=0x2324,**args),0x2324)['csf_firmware_boot_verified'])
+        for args in ({'omit':15},{'tag':0x2323},{'sample_flags':4}):
+            with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2324,**args),0x2324)
+        with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2324),0x2323)
 
     def test_initial_reset_observation_survives_later_callback_failure(self):
         result=self.module.decode(self.marks(error=-53))
