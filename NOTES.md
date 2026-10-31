@@ -43,7 +43,10 @@ Same-image Recovery fallback required before normal trial. No official
 fastboot: one persistent fbraw session restores known20MiB stock prefix then
 requests Recovery for full restore. No blind repeated raw reopen on timeout.
 Script NOT run except preflight. Manual Fastboot may still be necessary.
-Docs: docs/matisse-csf-bringup.md. Commit recorded below after staging.
+Docs: docs/matisse-csf-bringup.md. Implementation commit c806996.
+All completed source/tests/docs committed; no CI/push. Waiting only for
+the specific2322 boot_a Recovery-fallback write confirmation. Prior
+collector/unrelated work remains dirty and untouched.
 
 ## >>> COMPLETE 2026-10-31: REAL GPU POWER + SOFT RESET VERIFIED; FULL RESTORE <<<
 
