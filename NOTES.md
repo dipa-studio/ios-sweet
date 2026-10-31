@@ -1,5 +1,23 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> RESTORE PENDING 2026-10-31: GPU2321; USER REQUESTED ORIGINAL FASTBOOT RESTORE <<<
+
+User reports keys only reach Fastboot and automatic Recovery did not work.
+User explicitly directs flash ORIGINAL image then reboot Recovery and read
+logs. Do NOT start another GPU image. GPU2321 journal restore_pending=true.
+Original runner PID6369 temporarily SIGSTOP to prevent racing reboots;
+new dedicated restore-via-fastboot.py active, waits exact one device then
+checks matisse,slot a,64MiB boot_a; flashes full backup2931647a ONLY, requests
+Recovery and resumes original runner to capture tail/full restore+readback.
+No LK/vendor_boot/DTBO/root write. Fastboot enumerated but product getvar timed out (IOKit pipe errors).
+Host libusb reset completed; retrying restoration transport. New restore helper research/matisse/20261031-gpu/shim2321-trials/
+restore-via-fastboot.py; both runners must be accounted for before stopping.
+
+Correction: prior2320 fresh Recovery return121.41s is OBSERVED; autonomous
+watchdog causality was inferred, not independently established.2321 automatic
+return is FAILED per user. No fresh2321 logs recovered yet. Never claim GPU
+power/reset or automatic-return success without the new evidence.
+
 ## >>> ACTIVE 2026-10-31: GPU2321 LOG FIX BUILT; SECOND NORMAL TRIAL NEXT <<<
 
 Local build and48 host tests PASS; no CI.0119 fixes actual read-only raw

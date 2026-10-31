@@ -51,3 +51,44 @@ int main(void) {
 
 if __name__ == '__main__':
     unittest.main()
+
+class ReportDecodeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        spec=importlib.util.spec_from_file_location('gpu_report',ROOT/'tools/matisse-gpu-report.py')
+        cls.module=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.module)
+
+    def marks(self, error=0, omit=None, build=0x2321, reset=0x100):
+        import struct
+        raw=struct.pack('<I4i8I4xQ2I',10,error,0,1,0,2,6,2,0x55667788,
+                        0xa0020001,0,reset,0xff,0x250000000,0,1)
+        records=[(99,0,build,0)]
+        records += [(300+i,0,struct.unpack_from('<Q',raw,i*8)[0],build)
+                    for i in range(9) if i!=omit]
+        block=bytearray(4096)
+        struct.pack_into('<8sII',block,0,b'SWEETMRK',1,len(records))
+        for i,record in enumerate(records):
+            struct.pack_into('<IIQQ',block,16+i*24,*record)
+        return block
+
+    def test_complete_verified_report(self):
+        result=self.module.decode(self.marks())
+        self.assertTrue(result['power_reset_verified'])
+        self.assertFalse(result['csf_firmware_boot_verified'])
+        self.assertEqual(result['firmware_memory'],0x250000000)
+
+    def test_failure_is_not_success(self):
+        self.assertFalse(self.module.decode(self.marks(error=-23))['power_reset_verified'])
+        self.assertFalse(self.module.decode(self.marks(reset=0))['power_reset_verified'])
+
+    def test_stale_partial_wrong_build_and_duplicate_rejected(self):
+        import struct
+        for data in [bytes(4096),self.marks(omit=4),self.marks(build=0x2316),bytes(40)]:
+            with self.assertRaises(ValueError):self.module.decode(data)
+        data=self.marks()
+        count=struct.unpack_from('<I',data,12)[0]
+        struct.pack_into('<I',data,12,count+1)
+        struct.pack_into('<IIQQ',data,16+24*count,300,0,0,0x2321)
+        with self.assertRaises(ValueError):self.module.decode(data)
