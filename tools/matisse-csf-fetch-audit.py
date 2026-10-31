@@ -128,7 +128,28 @@ def build_arena(firmware, arena_pa, compiler='cc', memory_group=0):
         return arena_path.read_bytes(), json.loads(result.stdout)
 
 
-def replay(arena, plan, step_limit=500000, tiler_transition_reads=0):
+def synthetic_mmio_words(fw_word10=0xA8620004, shader_present=0, fw_word30004=0x2000000A):
+    if (not isinstance(fw_word10, int) or not 0 <= fw_word10 < 1 << 32 or
+            not isinstance(shader_present, int) or not 0 <= shader_present < 1 << 64 or
+            not isinstance(fw_word30004, int) or not 0 <= fw_word30004 < 1 << 32):
+        raise ValueError('synthetic MMIO values exceed register width')
+    # Raw firmware-visible addresses: their equivalence to host GPU register
+    # offsets has NOT been measured. Legacy defaults are synthetic assumptions.
+    return {0x40000010: fw_word10, 0x40000014: 0x2830,
+            0x40030004: fw_word30004, 0x40030108: 0xFF,
+            0x40000100: shader_present & 0xFFFFFFFF,
+            0x40000104: shader_present >> 32}
+
+
+def shared_allocation_word(fw_word10, shader_present):
+    """Arithmetic at pinned firmware01002f96..01002fd6, not a PC trace."""
+    synthetic_mmio_words(fw_word10, shader_present)
+    return (((fw_word10 >> 8) & 15) + shader_present.bit_length() + 3) & 0xFFFF
+
+
+def replay(arena, plan, step_limit=500000, tiler_transition_reads=0,
+           fw_word10=0xA8620004, shader_present=0, fw_word30004=0x2000000A):
+    words = synthetic_mmio_words(fw_word10, shader_present, fw_word30004)
     uc = importlib.import_module('unicorn')
     arm = importlib.import_module('unicorn.arm_const')
     u = uc.Uc(uc.UC_ARCH_ARM, uc.UC_MODE_THUMB | uc.UC_MODE_MCLASS)
@@ -144,8 +165,7 @@ def replay(arena, plan, step_limit=500000, tiler_transition_reads=0):
             u.mem_write(va, bytes(arena[off:off + PAGE]))
     u.mem_map(0x40000000, 0x40000)
     u.mem_map(0xE0000000, 0x100000)
-    for address, value in ((0x40000010, 0xA8620004), (0x40000014, 0x2830),
-                           (0x40030004, 0x2000000A), (0x40030108, 0xFF)):
+    for address, value in words.items():
         u.mem_write(address, struct.pack('<I', value))
     if tiler_transition_reads:
         u.mem_write(0x40000110, struct.pack('<I', 1))
@@ -249,6 +269,10 @@ def replay(arena, plan, step_limit=500000, tiler_transition_reads=0):
                       'after': hex(struct.unpack('<I', u.mem_read(address, 4))[0])}
                       for name, address in probes.items()},
                   'startup_probe_writes': probe_writes,
+                  'synthetic_mmio_words': {hex(a): hex(v) for a, v in words.items()},
+                  'shared_allocation_prediction': hex(shared_allocation_word(fw_word10, shader_present)),
+                  'synthetic_mmio_note': 'Raw firmware-visible inputs; host-register aliases and '
+                      'actual startup values have not been measured. An endpoint match cannot identify the writer or PC.',
                   'last_pcs': [hex(x) for x in last], 'unicorn_version': uc.__version__})
     return state
 
@@ -263,9 +287,19 @@ def main():
     parser.add_argument('--step-limit', type=int, default=500000)
     parser.add_argument('--tiler-transition-reads', type=int, default=0,
                         help='synthetic transition: 0 absent, -1 stuck, N clears after N reads')
+    parser.add_argument('--fw-word10', type=lambda value: int(value, 0), default=0xA8620004,
+                        help='synthetic raw firmware MMIO40000010; legacy default is not a measured alias')
+    parser.add_argument('--shader-present', type=lambda value: int(value, 0), default=0,
+                        help='synthetic64-bit firmware MMIO40000100/104; defaults to zero')
+    parser.add_argument('--fw-word30004', type=lambda value: int(value, 0), default=0x2000000A,
+                        help='synthetic raw firmware MMIO40030004; not measured on the MCU')
     args = parser.parse_args()
     if args.step_limit < 1 or args.step_limit > 1000000 or args.tiler_transition_reads < -1:
         parser.error('invalid bounded replay parameters')
+    try:
+        synthetic_mmio_words(args.fw_word10, args.shader_present, args.fw_word30004)
+    except ValueError as error:
+        parser.error(str(error))
     if args.python_deps:
         sys.path.insert(0, str(args.python_deps.resolve()))
     firmware_hash = hashlib.sha256(args.firmware.read_bytes()).hexdigest()
@@ -275,11 +309,15 @@ def main():
     result = {'scope': 'Offline synthetic startup; not hardware execution or timeout root-cause proof.',
               'firmware_sha256': firmware_hash,
               'synthetic_parameters': {'step_limit': args.step_limit, 'memory_group': args.memory_group,
+                                       'fw_word10': hex(args.fw_word10),
+                                       'shader_present': hex(args.shader_present),
+                                       'fw_word30004': hex(args.fw_word30004),
                                        'tiler_transition_reads': args.tiler_transition_reads},
               'arena_sha256': hashlib.sha256(arena).hexdigest(),
               'source_sha256': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
                                 for name in ('xnu/gpu/mali_csf_memory.c', 'xnu/gpu/mali_csf_firmware.c')},
-              'plan': plan, 'replay': replay(arena, plan, args.step_limit, args.tiler_transition_reads)}
+              'plan': plan, 'replay': replay(arena, plan, args.step_limit, args.tiler_transition_reads,
+                                           args.fw_word10, args.shader_present, args.fw_word30004)}
     print(json.dumps(result, indent=2))
     return 0 if result['replay']['reason'] == 'startup-wfi' and not result['replay']['violations'] else 1
 

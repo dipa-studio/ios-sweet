@@ -91,5 +91,31 @@ class FetchAccessTests(unittest.TestCase):
                 audit.check_access(self.arena, self.root, va, size, op)
 
 
+class SyntheticMmioTests(unittest.TestCase):
+    def test_raw_words_and_shader_mask_preserve_full_width(self):
+        words = audit.synthetic_mmio_words(0xA8620304, 0x1234567800770017, 0x20000000)
+        self.assertEqual(words[0x40000010], 0xA8620304)
+        self.assertEqual(words[0x40000100], 0x770017)
+        self.assertEqual(words[0x40000104], 0x12345678)
+        self.assertEqual(words[0x40030004], 0x20000000)
+        self.assertEqual(audit.synthetic_mmio_words()[0x40000010], 0xA8620004)
+
+    def test_allocation_expression_uses_highest_shader_bit_not_popcount(self):
+        for mask in (0, 1, 0x770017, 1 << 32, 1 << 63):
+            for word in (0, 0x300, 0xA8620004, 0xFFFFFFFF):
+                with self.subTest(mask=mask, word=word):
+                    self.assertEqual(audit.shared_allocation_word(word, mask),
+                                     ((word >> 8) & 15) + mask.bit_length() + 3)
+        self.assertEqual(audit.shared_allocation_word(0x300, 0x770017), 0x1D)
+        self.assertEqual(audit.shared_allocation_word(0, 0x770017), 0x1A)
+        self.assertEqual(audit.shared_allocation_word(0, 0), 3)
+
+    def test_synthetic_inputs_reject_width_overflow_and_negative_values(self):
+        for args in ((-1, 0, 0), (1 << 32, 0, 0), (0, -1, 0),
+                     (0, 1 << 64, 0), (0, 0, -1), (0, 0, 1 << 32)):
+            with self.subTest(args=args), self.assertRaisesRegex(ValueError, 'width'):
+                audit.synthetic_mmio_words(*args)
+
+
 if __name__ == '__main__':
     unittest.main()

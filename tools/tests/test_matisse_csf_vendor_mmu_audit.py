@@ -1,8 +1,10 @@
 """Offline audit validation without proprietary modules or emulator dependency."""
 import hashlib
+import copy
 import importlib.util
 from pathlib import Path
 import struct
+import shutil
 import tempfile
 import unittest
 
@@ -12,9 +14,9 @@ audit = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(audit)
 
 
-def elf_fixture(relocations=b''):
+def elf_fixture(relocations=b'', text_bytes=0xA00):
     names = b'\0.shstrtab\0.text\0.rela.text.memory_group_manager_probe\0'
-    sections = [(0, 0, b''), (1, 3, names), (11, 1, bytes(0xA00)), (17, 4, relocations)]
+    sections = [(0, 0, b''), (1, 3, names), (11, 1, bytes(text_bytes)), (17, 4, relocations)]
     data = bytearray(64 + 64 * len(sections))
     data[:7] = b'\x7fELF\x02\x01\x01'
     struct.pack_into('<Q', data, 40, 64)
@@ -79,6 +81,103 @@ class ElfBoundsTests(unittest.TestCase):
         self.assertEqual(audit.differences(plain, tagged),
                          {'high_bits_59_62': {'probe': 0, 'vendor': 6}})
         self.assertEqual(tagged['pa'], hex(baseline & audit.PA_MASK))
+
+    def test_register_slices_reject_relocations_at_both_boundaries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'synthetic.elf'
+            for name in ('as_config_registers', 'as_update_command',
+                         'mcu_initial_start', 'mcu_reload_start'):
+                begin, end = audit.HELPERS[name]
+                for offset in (begin, end - 4):
+                    data = elf_fixture(struct.pack('<QQq', offset, 0, 0), 0x71000)
+                    path.write_bytes(data)
+                    with self.subTest(name=name, offset=offset), self.assertRaisesRegex(ValueError, 'relocation'):
+                        audit.pinned_elf(path, hashlib.sha256(data).hexdigest(), (name,))
+                data = elf_fixture(struct.pack('<QQq', end, 0, 0), 0x71000)
+                path.write_bytes(data)
+                audit.pinned_elf(path, hashlib.sha256(data).hexdigest(), (name,))
+
+    def test_bad_synthetic_as_inputs_fail_before_emulation(self):
+        helpers = object.__new__(audit.VendorHelpers)
+        for slot in (-1, 16):
+            with self.subTest(slot=slot), self.assertRaisesRegex(ValueError, 'AS'):
+                helpers.configure(0x40076000, as_nr=slot)
+            with self.subTest(slot=slot), self.assertRaisesRegex(ValueError, 'AS'):
+                helpers.update(slot)
+        for mode in (-1, 32):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, 'coherency'):
+                helpers.configure(0x40076000, coherency=mode)
+
+
+class RegisterTraceTests(unittest.TestCase):
+    def setUp(self):
+        self.root, self.memattr = 0x5A40076000, audit.VENDOR_MEMATTR
+        self.cases = []
+        write = lambda offset, value: dict(offset=hex(offset), value=hex(value), size=4)
+        for mode, slot in ((31, 0), (0, 0), (1, 0), (31, 7)):
+            shift = slot * 64
+            values = ((0x2430, 0x42000006 if mode == 31 else 0x62000006), (0x2434, 0),
+                      (0x2400, 0x40076000), (0x2404, 0x5A),
+                      (0x2408, 0x888D8F88), (0x240C, 0x84C8D))
+            self.cases.append(dict(coherency=mode, as_nr=slot,
+                writes=[write(offset + shift, value) for offset, value in values],
+                update_writes=[write(0x2418 + shift, 1)]))
+        self.starts = {name: [write(0x700, 2)] for name in ('initial', 'reload')}
+
+    def validate(self, cases=None, starts=None):
+        audit.validate_register_slices(self.cases if cases is None else cases,
+                                      self.starts if starts is None else starts,
+                                      self.root, self.memattr)
+
+    def test_complete_trace_including_high_root_and_as_stride(self):
+        self.validate()
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            self.validate(cases=self.cases[:3])
+
+    def test_missing_reordered_and_wrong_width_writes_are_rejected(self):
+        for mutation in ('missing', 'reordered', 'width', 'root-high', 'transcfg'):
+            cases = copy.deepcopy(self.cases)
+            writes = cases[0]['writes']
+            if mutation == 'missing':
+                writes.pop()
+            elif mutation == 'reordered':
+                writes[0], writes[2] = writes[2], writes[0]
+            elif mutation == 'width':
+                writes[0]['size'] = 8
+            elif mutation == 'root-high':
+                writes[3]['value'] = '0x0'
+            else:
+                writes[0]['value'] = '0x420001c6'
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'register'):
+                self.validate(cases=cases)
+
+    def test_update_and_mcu_controls_require_exact_single_writes(self):
+        cases = copy.deepcopy(self.cases)
+        cases[3]['update_writes'][0]['offset'] = '0x2418'
+        with self.assertRaisesRegex(ValueError, 'UPDATE'):
+            self.validate(cases=cases)
+        for value in (0, 1, 3):
+            starts = copy.deepcopy(self.starts)
+            starts['initial'][0]['value'] = hex(value)
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'AUTO'):
+                self.validate(starts=starts)
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            self.validate(starts={})
+
+    @unittest.skipUnless(shutil.which('cc'), 'requires C compiler')
+    def test_actual_probe_trace_keeps_mask_gate_and_cleanup(self):
+        trace = audit.probe_boot_trace()
+        registers = trace['registers_before_auto']
+        self.assertEqual(registers['0x2430'], '0x420001c6')
+        self.assertEqual(registers['0x2408'], '0x4c4c9f4c')
+        self.assertEqual(registers['0x240c'], '0x4c4c4c4c')
+        self.assertEqual(registers['0x304'], '0x1f')
+        self.assertEqual(registers['0x1008'], '0xffffffff')
+        self.assertEqual(registers['0x2008'], '0xffff')
+        self.assertEqual(registers['0x28'], '0x80503')
+        self.assertEqual([item['value'] for item in trace['writes'] if item['offset'] == '0x700'],
+                         ['0x2', '0x0'])
+        self.assertEqual([trace['return_code'], trace['stage'], trace['reset_completed']], [-53, 4, 1])
 
 
 if __name__ == '__main__':
