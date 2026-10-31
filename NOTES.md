@@ -46,11 +46,14 @@ preflight exited0: Recovery identity/slot/root/geometry matched; full64MiB
 live boot_a baseline SHA2562931647a reverified. No write/reboot, active
 trial runner or pending restoration. Evidence shim2324-trials/preflight.txt.
 
-Next: commit completed2324 sources/tests/docs and obtain specific approval
-for ONE2324 Recovery-fallback boot_a write/reboot and full64MiB restore/hash
-2931647a. Normal MCU trial needs its own approval after SAME-image fallback
+Implementation/tests/docs committed6d59d9c. Build-ID patch context was
+subsequently corrected and applied to a temporary2323-source fixture,
+exactly reproducing the already-built2324 source. Candidate/source hashes
+remain unchanged. Specific approval requested for ONE2324 Recovery-fallback
+boot_a write/reboot and full64MiB restore/hash2931647a; awaiting reply, NOT
+executed. Normal MCU trial needs its own approval after SAME-image fallback
 passes. No historical run-ui script,official fastboot,blind USB reopen or
-bootloader/recovery edit. The candidate has NOT run on hardware.
+bootloader/recovery edit. The candidate has NOT run on hardware. No CI/push.
 Evidence: firmware-static/{startup-detail.txt,replay*.json,replay.py},
 csf2324-tests.txt,csf2324-real-fw-test.txt,kernel-csf2324-build.txt,
 shim2324-build-arguments.json,shim2324-ready/independent-verification.json.
