@@ -1214,3 +1214,70 @@ Implementation b6bb9e1 and verified build handoff50f3bf3 remain applicable;
 no new build,CI run,push or repeated test suite was needed. Next is offline
 vendor MEMATTR/cache/descriptor/table and MCU startup comparison. This
 one-trial authorization is consumed; another image/write needs confirmation.
+
+## Post2329 attribute-index audit and CSF2330 cached-byte candidate (2026-10-31)
+
+Offline continuation was authorized after full2329 restoration. Implementation
+ad073cf adds a page-by-page raw MEMATTR/index audit over the actual C arena.
+All293 vendor leaves still execute through pinned helper slices.145 cached
+pages use independent index1/byte9f versus vendor index0/byte88;148 shared
+pages use independent index0/byte4c versus vendor index5/byte4c. Directly
+copying vendor MEMATTR00084c8d888d8f88 into the independent tables would
+instead select8f for cached and88 for shared. Therefore an isolated cached
+byte diagnostic retains all PTEs and changes only independent byte1 to88.
+Raw byte equality is not a model of effective cache behavior,physical memory
+routing or the real timeout cause. SH/nG/PXN/table differences remain.
+
+The vendor table helper47250..472c8 was separately disassembled from the
+pinned module. It forces low403 in the stored next-table descriptor and
+separately updates packed counter nibbles in the first three table words.
+This observation does not establish their hardware meaning; no table change
+is selected for2330. Detailed proprietary disassembly remains ignored.
+
+New vendor_cached_memattr accepts0/1;0 retains2329,1 writes MEMATTR low
+4c4c884c instead of4c4c9f4c,XOR1700,while high4c4c4c4c remains unchanged.
+The shim selects1. Option2 rejects before IO. Wrong low or high readback
+rejects before MCU AUTO. Actual C ASan/UBSan write traces differ in exactly
+one write,with all remaining writes/order/cleanup equal under identical
+synthetic prerequisites. Firmware,PTE/index/SH/nG/PXN/table allocation,
+group6,coherency31,INA0,IRQ and MCU startup/disable/reset are unchanged.
+The unchanged arena SHA256 is
+e6cba8456388fe7fc2ba49aee64814478ebdc3491ba5480290b01f9ebe1c91dd.
+Built csf_memory.o,csf_firmware.o,csf_blob.o and csf.bin match2329 bytewise;
+linked arena PA remains40076000. This mixes vendor cached byte88 with the
+independent descriptor settings deliberately as one diagnostic hypothesis.
+
+Report stays304 bytes/38 qwords320..357. Decoder requires2330 MEMATTR values
+and preserves fresh IRQ/version/interface/cleanup readiness gates. A matching
+byte alone cannot prove firmware-ready. Patch0128 contextually bumps only
+the persistent build2329->2330.63 targeted tests pass4.011s,including invalid
+config/readback negatives,old and new ABI,sanitizers and exact write isolation.
+Actual2326/2327/2328/2329 captures decode identically to their saved JSON.
+Three changed files cross-compile freestanding ARM64 without ABS64 pointers.
+
+The full local CLT kernel build exits0,16724248 bytes,SHA256
+7b5519f0c5ef4e7c5474dd2cc92921469306c9b189f3ef5b1db17f0e5054b40a.
+An initial Xcode-only wrapper rejected absent Xcode before compilation; the
+existing tools/build-xnu-clt.sh then completed. No CI run or push occurred.
+Candidate shim2330-ready/matisse-shim-gpu2330.img is26714112 bytes,SHA256
+2acb401446915ff72a7b3d8ee5c9d9dcd89cd04b89062ab388a9ea275519a06f.
+Independent verification passes expanded80402548 bytes,intact stock Linux
+at+32MiB,ramdisk/signature bytes,source/frozen pins,304B ABI,rootrw0/ufsrw0
+and relocation checks. Retained signature is not authenticated; automatic
+Recovery remains unverified.127-patch contextual source replay matches
+local source SHA256cbe6a5dad1bcf5f1f57d5123ca4eace14bac41578d8316961c5e2bd92c3dbccc,
+including inherited untracked0093 hash54f0aaa5a0390bc0678eca60e55bc192d3ebea315daab808a3c456a1ce65365b.
+
+A separate runnerd49058813b781860acc928db62d51702df2fbf070db59a122b4a22521eb58ade
+was prepared;only read-only preflight ran. Root matisse/_a/Recovery and full
+67108864-byte original boot_a hash2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1
+pass. Plan is prepared-unapproved,authorization null,trial_count_executed0,
+restore_pending=false,no journal. Predicted full candidate partition hash is
+42768433ce974e59d1b0c55c1d191a36e283fd2b76dcf594026ed29c35b970cf.
+No device write or reboot occurred. Evidence stays ignored under
+firmware-static/{post2329-memattr-index-audit,post2329-table-helper,
+memattr2330-isolation,vendor-register2330-audit,kernel2330-source-replay}.json,
+shim2330-ready/{manifest,independent-verification}.json and build/test logs.
+Next requires specific approval for ONE normal2330 image2acb4014 boot_a trial,
+full readback/fresh evidence and complete original64MiB restoration with an
+independent hash. This offline continuation does not authorize that write.

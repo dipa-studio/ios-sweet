@@ -1,6 +1,70 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-10-31: CSF2329 INA TRIAL COMPLETE; MCU TIMEOUT; FULL RESTORE <<<
+## >>> ACTIVE 2026-10-31: CSF2330 CACHED-BYTE BUILT; ONE-TRIAL APPROVAL NEEDED <<<
+
+User replied 可以 to OFFLINE continuation after restored2329. No new device
+write/reboot approved or performed. Implementation committed ad073cf.
+New actual-C leaf/index audit checks all293 firmware pages:145 cached use
+probe index1/byte9f versus vendor index0/byte88;148 shared use probe
+index0/byte4c versus vendor index5/byte4c. Copying the entire vendor MEMATTR
+without changing PTE indices would select8f for cached and88 for shared.
+Do not do that. The selected opt-in2330 diagnostic changes only byte1
+9f->88 in our MEMATTR: low4c4c9f4c->4c4c884c,XOR1700; high stays4c4c4c4c.
+All293 selected raw bytes then match the vendor per-section bytes. This is
+not an effective-cache model or a diagnosed cause of the real MCU timeout.
+
+vendor_cached_memattr accepts0/1;0 preserves2329 and2 rejects before IO.
+Shim opts1. Wrong low/high MEMATTR readback rejects before MCU. Actual C
+ASan/UBSan trace differs from2329 in exactly ONE write, with all other
+writes/order/cleanup identical under the same synthetic prerequisites.
+No PTE/SH/nG/PXN/table/firmware/MGM group6/coherency31/INA0/IRQ/MCU sequence
+change. Group6 arena SHA256 remains
+e6cba8456388fe7fc2ba49aee64814478ebdc3491ba5480290b01f9ebe1c91dd.
+csf_memory.o/csf_firmware.o/csf_blob.o and csf.bin byte-equal2329; arena PA
+40076000 unchanged. Report remains304B/38 qwords320..357. Decoder requires
+2330 MEMATTR and all prior fresh IRQ/version/interface/cleanup gates; an
+attribute match alone never proves firmware-ready. Contextual patch0128
+only bumps build2329->2330. Remaining SH/nG/PXN/table differences persist.
+Pinned entry_set_pte47250..472c8 forces403 and separately updates packed
+counter nibbles in the first3 table words; no table change selected or
+hardware meaning inferred. Detailed disassembly stays ignored.
+
+63 targeted tests PASS4.011s,including exact C write isolation,ASan/UBSan,
+invalid config/low+high readback negatives,ABI and contextual patches.
+Actual2326/2327/2328/2329 captures decode byte-equal their saved JSON.
+Three changed files freestanding ARM64/no ABS64 PASS. Full local CLT kernel
+build exit0,16724248B SHA256
+7b5519f0c5ef4e7c5474dd2cc92921469306c9b189f3ef5b1db17f0e5054b40a.
+The Xcode-only wrapper rejected missing Xcode before compilation; retried
+successfully with existing tools/build-xnu-clt.sh. No CI/push.
+Build-only candidate26714112B SHA256
+2acb401446915ff72a7b3d8ee5c9d9dcd89cd04b89062ab388a9ea275519a06f,
+research/matisse/20261031-gpu/shim2330-ready/matisse-shim-gpu2330.img.
+Independent expanded80402548B/intact stock Linux+32MiB/ramdisk/signature
+bytes/source+frozen pins/304B ABI/rootrw0/ufsrw0/PIC PASS. Signature bytes
+retained,NOT authenticated; automatic Recovery remains unverified.
+127-patch contextual kernel replay matches source SHA256
+cbe6a5dad1bcf5f1f57d5123ca4eace14bac41578d8316961c5e2bd92c3dbccc,
+including preserved untracked0093 hash54f0aaa5a0390bc0678eca60e55bc192d3ebea315daab808a3c456a1ce65365b.
+
+Fresh read-only preflight PASS: root matisse/_a/Recovery,boot_a67108864B,
+full original SHA2562931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Separate shim2330-trials-run-once.py SHA256
+d49058813b781860acc928db62d51702df2fbf070db59a122b4a22521eb58ade;
+ONLY read-only preflight executed. Plan prepared-unapproved,authorization
+null,trial_count_executed0,restore_pending=false,no journal/active runner.
+Predicted candidate full boot_a SHA256
+42768433ce974e59d1b0c55c1d191a36e283fd2b76dcf594026ed29c35b970cf.
+Original backup/prefix pins unchanged. Ignored evidence: firmware-static/
+{post2329-memattr-index-audit,post2329-table-helper,memattr2330-isolation,
+vendor-register2330-audit,kernel2330-source-replay}.json;shim2330-ready/
+{manifest,independent-verification}.json and build/test/preflight logs.
+NEXT: request specific confirmation for ONE normal2330 image2acb4014 boot_a
+trial,full candidate readback/fresh2330 evidence and complete original64MiB
+restoration/independent hash2931647a. Do not run its write branch yet.
+Preserve unrelated dirt and inherited untracked0093. No GPU success claim.
+
+## >>> COMPLETE 2026-10-31: CSF2329 INA TRIAL; MCU TIMEOUT; FULL RESTORE <<<
 
 User specifically approved ONE normal2329 image83c635bb boot_a trial, fresh
 evidence collection and complete original restoration. Executed exactly once;
