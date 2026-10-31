@@ -13,6 +13,7 @@ HARNESS=r'''
 #include "mali_csf_boot.h"
 struct model {
  uint64_t tick;unsigned reads,writes,enabled,resets,as_updates,locked,flushed,lock_low,lock_high;
+ uint32_t path[16],path_after_bits;unsigned path_on,path_reads;
  uint32_t gpu_mask,job_mask,mmu_mask,l2,raw,job,mcu,mmu,transcfg,table_low,table_high;
  uint32_t memattr_lo,memattr_hi,coherency,coherency_writes,control,platform_reads;
  int bad_coherency_readback,vendor_ina0,vendor_cached_memattr,bad_memattr;
@@ -20,6 +21,15 @@ struct model {
 };
 static uint32_t rd(void *p,uint64_t a) {
  struct model*m=p;m->reads++;
+ if(m->path_on) {
+  const uint64_t addresses[]={0x13f9103c,0x13f91048,0x10001ca0,0x10001cac,
+   0x10001c60,0x10001c6c,0x10001c70,0x10001c7c,0x13fbf100,0x13fbf120,
+   0x13fbf140,0x13fbf118,0x13fbf0c0,0x13fbf098,0x13fbf1c0,0x13fbf748};
+  for(unsigned i=0;i<16;i++)if(a==addresses[i]) {
+   assert(!m->resets && m->as_updates==2 && m->l2);m->path_reads++;
+   return m->path[i]|(i==0 && m->enabled?m->path_after_bits:0);
+  }
+ }
  if(a==0x1c001eb8||a==0x1c001ebc||a==0x1c001ec0||a==0x1c001ec4||
     a==0x13fa000c||a==0x13fa0c0c||a==0x100001f0||a==0x13f91048) {
   assert(!m->unpowered && !m->resets && m->as_updates==2 && m->l2);
@@ -120,7 +130,7 @@ static int run(struct model*m,struct sweet_csf_boot_config*c,struct sweet_csf_bo
 static void clean(struct model*m,struct sweet_csf_boot_report*r){assert(m->gpu_mask==0x55 && m->job_mask==0xaa && m->mmu_mask==0xbb && m->resets==1);assert(r->reset_completed);}
 int main(void) {
  struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
- assert(sizeof(r)==560);assert(!run(&m,&c,&r));assert(r.stage==7 && r.firmware_ready && r.version==0x01020003);clean(&m,&r);
+ assert(sizeof(r)==696);assert(!run(&m,&c,&r));assert(r.stage==7 && r.firmware_ready && r.version==0x01020003);clean(&m,&r);
  assert(!r.platform_sample_flags && !m.platform_reads);
  assert(r.diag_flags==31 && r.coherency_features==1 && r.coherency_before==31 && r.coherency_after==31);
  assert(!m.coherency_writes && !r.coherency_requested && !r.coherency_readback);
@@ -208,6 +218,28 @@ int main(void) {
   else if(i==2)bad.firmware_probe_offset=1;else if(i==3)bad.firmware_probe_offset=0;
   else if(i==4)bad.firmware_probe_offset=0x200000;
   else if(i==5)bad.firmware_probe_offset=c.shared_offset;else bad.firmware_probe_va=0x04000000;
+  m=model();assert(run(&m,&bad,&r)==-50 && !m.reads && !m.writes);
+ }
+ c.platform_path=1;m=model();m.path_on=1;
+ m.path[0]=m.path[1]=0xfff0fff0;assert(!run(&m,&c,&r));clean(&m,&r);
+ assert(r.path_sample_flags==3 && !r.path_reserved && m.path_reads==34);
+ assert(r.path_before.rpc_enable==0xfff0fff0 && r.path_after.rpc_status==0xfff0fff0);
+ for(unsigned i=0;i<8;i++) {
+  uint32_t mask=i<2?0xf0000:i<4?0xf:0xc0000;
+  for(unsigned bit=0;bit<32;bit++)if(mask&(1u<<bit)) {
+   m=model();m.path_on=1;m.path[i]=1u<<bit;
+   assert(run(&m,&c,&r)==-52 && !m.enabled && r.path_sample_flags==1);
+   assert(!r.firmware_ready && !r.path_after.rpc_enable);clean(&m,&r);
+  }
+ }
+ m=model();m.path_on=1;m.path_after_bits=0x10000;
+ assert(run(&m,&c,&r)==-52 && m.enabled==1 && r.path_sample_flags==3);clean(&m,&r);
+ assert(r.path_after.rpc_enable==0x10000);
+ m=model();m.path_on=1;m.no_fw=1;m.path_after_bits=0x10000;
+ assert(run(&m,&c,&r)==-53 && r.path_sample_flags==3);clean(&m,&r);
+ for(unsigned i=0;i<2;i++) {
+  struct sweet_csf_boot_config bad=c;
+  if(i==0)bad.platform_path=2;else bad.access_snapshot=0;
   m=model();assert(run(&m,&bad,&r)==-50 && !m.reads && !m.writes);
  }
  c=cfg();c.platform_snapshot=1;

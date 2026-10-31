@@ -259,6 +259,15 @@ class RegisterTraceTests(unittest.TestCase):
         self.assertEqual([trace['return_code'], trace['stage'], trace['reset_completed']], [-53, 4, 1])
 
     @unittest.skipUnless(shutil.which('cc'), 'requires C compiler')
+    def test_unblocked_platform_path_keeps_actual_c_writes_identical(self):
+        original=audit.probe_boot_trace(1,1,1,1,0)
+        candidate=audit.probe_boot_trace(1,1,1,1,1)
+        self.assertEqual(original,candidate)
+        for args in ((1,1,1,1,2),(1,1,1,0,1)):
+            with self.assertRaisesRegex(ValueError,'platform path'):
+                audit.probe_boot_trace(*args)
+
+    @unittest.skipUnless(shutil.which('cc'), 'requires C compiler')
     def test_ina_diagnostic_changes_exactly_one_actual_c_write(self):
         original, candidate = audit.probe_boot_trace(), audit.probe_boot_trace(1)
         self.assertEqual(len(original['writes']), len(candidate['writes']))

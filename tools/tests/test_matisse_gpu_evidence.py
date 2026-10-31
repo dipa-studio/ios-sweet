@@ -57,7 +57,7 @@ class PersistentReportPatchTests(unittest.TestCase):
         # locally edited build tree must not conceal a broken source patch.
         names = subprocess.check_output(['git','ls-files','--','xnu/patches/*.patch'],
                                         cwd=ROOT,text=True).splitlines()
-        latest='xnu/patches/0130-matisse-csf-access-snapshot.patch'
+        latest='xnu/patches/0131-matisse-csf-platform-path.patch'
         if latest not in names:names=sorted(names+[latest])
         self.assertTrue(names)
         with tempfile.TemporaryDirectory(prefix='csf-evidence-patches-') as directory:
@@ -67,13 +67,13 @@ class PersistentReportPatchTests(unittest.TestCase):
                     cwd=directory,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,name+': '+result.stderr)
             source = (Path(directory)/'bsd/dev/sweet_ufs.c').read_text()
-        self.assertIn('#define SWEET_BUILD_ID 0x2332u',source)
+        self.assertIn('#define SWEET_BUILD_ID 0x2333u',source)
         begin = source.index('static void\nsweet_gpu_report_marks(void)\n{')
         end = source.index('\n}\n',begin)
         report = source[begin:end]
-        self.assertIn('size == 560',report)
-        self.assertIn('uint32_t csf[140];',report)
-        self.assertIn('i < 70;',report)
+        self.assertIn('size == 696',report)
+        self.assertIn('uint32_t csf[174];',report)
+        self.assertIn('i < 87;',report)
         self.assertIn('sweet_mark(320 + i, a, SWEET_BUILD_ID);',report)
         self.assertIn('for (uint32_t i = 0; i < 16; i++) {\n'
                       '\t\tsweet_mark(70 + i, i, sweet_disp_trace[i]);',source)
@@ -174,6 +174,13 @@ class ReportDecodeTests(unittest.TestCase):
                 for i,key in enumerate(self.module.CSF_ACCESS_KEYS):
                     words[i]=changes.get('access_'+prefix+'_'+key,words[i])
                 raw+=struct.pack('<12I',*words)
+        if build>=0x2333:
+            raw+=struct.pack('<2I',changes.get('path_sample_flags',3),changes.get('path_reserved',0))
+            for prefix in ('before','after'):
+                words=[0xfff0fff0,0xfff0fff0,0,0,0,0,0,0]+[0]*8
+                for i,key in enumerate(self.module.CSF_PATH_KEYS):
+                    words[i]=changes.get('path_'+prefix+'_'+key,words[i])
+                raw+=struct.pack('<16I',*words)
         count=struct.unpack_from('<I',data,12)[0]
         for i in range(len(raw)//8):
             if i==omit:continue
@@ -258,6 +265,38 @@ class ReportDecodeTests(unittest.TestCase):
                 self.module.decode(self.csf_marks(build=0x2332,**changes),0x2332)
         with self.assertRaises(ValueError):
             self.module.decode(self.csf_marks(build=0x2331),0x2332)
+
+    def test_2333_exact_platform_masks_and_paired_path_evidence(self):
+        r=self.module.decode(self.csf_marks(build=0x2333),0x2333)
+        self.assertTrue(r['csf_firmware_boot_verified'])
+        self.assertTrue(r['csf']['platform_path_released'])
+        self.assertEqual(r['csf']['path_before']['rpc_status'],0xfff0fff0)
+        for name,mask in self.module.CSF_PATH_MASKS.items():
+            for suffix in ('enable','status'):
+                for prefix in ('before','after'):
+                    key='path_'+prefix+'_'+name+'_'+suffix
+                    for bit in range(32):
+                        if not mask & (1<<bit):continue
+                        with self.subTest(key=key,bit=bit):
+                            r=self.module.decode(self.csf_marks(build=0x2333,**{key:1<<bit}),0x2333)
+                            self.assertFalse(r['csf_firmware_boot_verified'])
+                            self.assertFalse(r['csf']['platform_path_released'])
+        for changes in ({'path_sample_flags':2},{'path_sample_flags':4},
+                        {'path_reserved':1},{'omit':86},{'tag':0x2332},
+                        {'path_sample_flags':0}, {'path_sample_flags':1},
+                        {'access_sample_flags':1}):
+            with self.subTest(changes=changes),self.assertRaises(ValueError):
+                self.module.decode(self.csf_marks(build=0x2333,**changes),0x2333)
+        # Empty/one-sided failed paths are legitimate, never ready.
+        for flags in (0,1):
+            changes={'path_sample_flags':flags}
+            for prefix in ('before','after'):
+                if flags & (1 if prefix=='before' else 2):continue
+                for key in self.module.CSF_PATH_KEYS:changes['path_'+prefix+'_'+key]=0
+            r=self.module.decode(self.csf_marks(build=0x2333,**changes),0x2333)
+            self.assertFalse(r['csf_firmware_boot_verified'])
+        with self.assertRaises(ValueError):
+            self.module.decode(self.csf_marks(build=0x2332),0x2333)
 
     def test_csf_ready_requires_fresh_complete_matching_evidence(self):
         result=self.module.decode(self.csf_marks(),0x2322)

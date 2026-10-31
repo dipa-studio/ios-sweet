@@ -1335,3 +1335,95 @@ cache-byte/shareability and per-section descriptor/table contract comparison
 using paired2329/2330 evidence. Do not treat88 as a confirmed fix or repeat
 2330 blindly. This authorization is consumed;another image/write needs
 specific confirmation. No firmware-ready or GPU acceleration claim.
+
+## CSF2333 original platform path audit and protected startup (2026-10-31)
+
+The proposed forced MFG1/2 power writes and whole-RPC clear are not supported
+by the original MT6983 sources. The pinned Xiaomi commit is
+270b84910b941bf75490fccdb5fb2b3021dd7cbf; the new offline tool
+tools/matisse-csf-platform-audit.py verifies six source SHA256 pins before
+parsing the MFG1 protection table and checking the actual snapshot addresses.
+Public original source files remain local in platform-source; device dumps
+and proprietary binaries are not added to git.
+
+The original mtk-scpsys-mt6983.c MFG1 table uses these distinct enable/status
+registers and masks:
+
+| Path | Enable | Status | Clear | Mask |
+| --- | --- | --- | --- | --- |
+| INFRA | 0x10001ca0 | 0x10001cac | 0x10001ca8 | 0x0000000f, four steps |
+| MFGRPC | 0x13f9103c | 0x13f91048 | 0x13f91044 | 0x000f0000 |
+| EMI0 | 0x10001c60 | 0x10001c6c | 0x10001c68 | 0x000c0000 |
+| EMI1 | 0x10001c70 | 0x10001c7c | 0x10001c78 | 0x000c0000 |
+
+RPC1048 is not an enable/ack halfword pair. Observedfff0fff0 masked with
+000f0000 is zero: the measured MFG1 RPC status bits are already clear.
+Enable103c and INFRA/EMI were not measured, so the complete path is still
+unknown. scpsys_power_on releases the table in reverse order after SRAM;
+these BUS_PROT_IGN entries skip clear-ack polling in the original driver.
+This reference establishes register semantics, not permission to compete
+with the live GPUEB owner by replaying AP power sequences.
+
+mtk-pd-chk-mt6983.c maps MFG0_DORMANT/MFG1/MFG2 to SPM bits1/2/3, so
+observedSPMf includes all three status bits. MFG0 uses SRAM sleep9/13;
+MFG1 uses powerdown8/12. gpufreq_mt6983.h enables PDCv2 and the original
+implementation has fake-SPM APIs; manual MFG2..18 writes are conditional on
+PDCv2 being disabled. The torn-looking PWR_CON lows therefore do not alone
+prove missing power. MFG3..8 map shader stacks, not MFG1/2. Actual KMD
+power-on calls gpufreq_power_control; PDC/fake-SPM helpers also participate
+in protected-mode workaround transitions. No unconditional missing AP-PDC
+initialization fix has been established.
+
+2333 adds opt-in paired snapshots before MCU AUTO and after its wait:
+the eight enable/status words above; seven raw PDC CG/ST control words at
+13fbf100/120/140/118/0c0/098/1c0; SLC group6 configuration13fbf748. It
+returns CSF state-52 before AUTO if any documented MFG1 enable OR status
+bit is set. An obstruction sampled after startup also prevents success;
+an existing timeout/fault remains the primary error. PDC/SLC words have no
+inferred success/failure semantics. All added SoC accesses are reads.
+When unblocked, actual-C write traces exactly match2332, including ordering
+and cleanup. Reset already requires IRQ bit8; bit9 is not completion.
+Existing AS0 UPDATE and executableVA01000000/sharedVA04000000 mappings
+are unchanged. AS_ACTIVE0 and CPU readback do not establish absent MCU fetch.
+SHADER_READY/TILER_READY were already sampled and measured0 in2332.
+
+Report696B preserves the entire560B prefix. Path flags/reserved occupy560/
+564 and two64B snapshots start568/632. Patch0131 bumps build2332->2333 and
+publishes87 qwords320..406; the expected148 total marks fit the160 limit.
+Decoder rejects partial/stale/contradictory evidence and requires both
+exact-mask paths released in addition to all existing IRQ/version/cleanup
+gates. It never treats a whole RPC nonzero word as failure.
+
+72 targeted tests pass5.399s, including real C ASan/UBSan, each enable/status
+mask bit, pre-AUTO rejection, after-only obstruction, actual write isolation,
+old-prefix publication, source-pin negatives and contextual patch replay.
+Three changed modules compile freestanding ARM64-Werror without ABS64.
+Full local CLT kernel build exits0,16724248B SHA256
+61790395f3043744234f0363aceed595fcf35b8dcf0b18836fa4259c1df94bfa.
+130-patch normal-context replay matches local sweet_ufs source SHA256
+81775100f8f01e0e5404c60ddf29f3045ba581dbcf256df48e49f6d2ab0f3ad8,
+including preserved inherited untracked0093. No new CI run or push occurred;
+gh lists prior40262872038/40226767824/40226076666 as action_required.
+Historical2331/2332 saved reports decode identically; older2326..2330 saved
+reports differ only in error provenance labels introduced before2333.
+
+Candidate shim2333-path-ready/matisse-shim-gpu2333.img is26714112B,SHA256
+36be7135a2ffa2995a8c3e7f518d73191c4188e9ec563c9d86670d7dc16497b5.
+Independent verification passes expanded80402548B, stock Linux+32MiB,
+ramdisk/signature bytes,696B ADT,source/frozen pins,PIC and rootrw0/ufsrw0.
+Arena PA40077000,executablePA40080000 and complete arena bytes are identical
+to2332;all293 mapped pages and firmware/memory/GPUEB objects match.
+The retained signature is not authenticated; automatic Recovery remains
+unverified. No2333 hardware trial, MCU handshake or GPU acceleration claim.
+
+Separate read-only Recovery preflight at2026-10-31T08:11:39Z verifies root
+matisse/_a/recovery,67108864B boot_a and complete original SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Prepared one-shot runner SHA256
+dfe5062718f431169e7cd1b9b84804b16338c451372e86ee0a8c3be8046f8c46
+has run only its read-only preflight. Plan is prepared-unapproved,approval
+null,trial_count_executed0,no journal and no pending restoration. Predicted
+full temporary partition SHA256 is
+4dc84a77ea14e5716cb0f2a0496ac5104a2ac700eaa91e8db0be1a1bb65cc580.
+Before a write, AGENTS requires specific confirmation for this one exact
+image trial and complete64MiB original restoration plus independent hash.

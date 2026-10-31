@@ -35,6 +35,10 @@ CSF_PLATFORM_KEYS = ['gpu_status','mcu_control','gpu_fault_status','gpu_fault_lo
     'mfg_pll_con1','mfgsc_pll_con1','topckgen_sel','rpc_slp_protect']
 CSF_ACCESS_KEYS = ['mmu_raw','job_raw','as_status','as_fault','as_fault_lo','as_fault_hi',
     'l2_ready_lo','l2_ready_hi','l2_transition_lo','l2_transition_hi','firmware_word0','version']
+CSF_PATH_KEYS = ['rpc_enable','rpc_status','infra_enable','infra_status',
+    'emi0_enable','emi0_status','emi1_enable','emi1_status','pdc_cg','pdc_st0',
+    'pdc_st1','pdc_st2','pdc_st4','pdc_st5','pdc_st6','slc_group6']
+CSF_PATH_MASKS = dict(rpc=0x000f0000, infra=0xf, emi0=0xc0000, emi1=0xc0000)
 CSF_STAGES = {0:'not-run',1:'config',2:'l2',3:'address-space',4:'mcu',
               5:'interface',6:'cleanup',7:'complete'}
 CSF_ERRORS = {0:'success',-40:'memory-argument',-41:'memory-capacity',
@@ -85,7 +89,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -121,7 +125,7 @@ def decode(data, expected_build=0x2321):
         fields['gpu_id'] >> 28 == 10 and fields['as_present'] not in (0,0xffffffff) and
         fields['reset_rawstat'] & 0x100 != 0)
     if expected_build >= 0x2322:
-        count = 70 if expected_build >= 0x2332 else (55 if expected_build >= 0x2331 else (38 if expected_build >= 0x2328 else (37 if expected_build == 0x2327 else (36 if expected_build == 0x2326 else (24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11))))))
+        count = 87 if expected_build >= 0x2333 else 70 if expected_build >= 0x2332 else (55 if expected_build >= 0x2331 else (38 if expected_build >= 0x2328 else (37 if expected_build == 0x2327 else (36 if expected_build == 0x2326 else (24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11))))))
         raw = report_bytes(records,320,count,expected_build,'CSF')
         csf = dict(zip(CSF_KEYS,struct.unpack('<I2i19I',raw[:88])))
         if expected_build >= 0x2323:
@@ -201,6 +205,30 @@ def decode(data, expected_build=0x2321):
                 'L2 ready +0x160. MMU upper16 bits are request completions; '
                 'CPU executable readback does not prove MCU fetch or execution. '
                 'Native shim CPU MMU/caches are off; barriers precede readback.')
+        if expected_build >= 0x2333:
+            flags, reserved = struct.unpack_from('<2I', raw, 560)
+            if flags & ~3 or flags == 2 or reserved:
+                raise ValueError('invalid CSF platform path flags/reserved word')
+            if flags and csf['access_sample_flags'] & 1 == 0:
+                raise ValueError('platform path snapshot without preceding access snapshot')
+            if flags == 3 and csf['access_sample_flags'] != 3:
+                raise ValueError('platform path pair without access snapshot pair')
+            csf['path_sample_flags'] = flags
+            for name, offset in (('before', 568), ('after', 632)):
+                snapshot = dict(zip(CSF_PATH_KEYS, struct.unpack_from('<16I', raw, offset)))
+                csf['path_' + name] = snapshot
+                if not flags & (1 if name == 'before' else 2) and any(snapshot.values()):
+                    raise ValueError('unsampled platform path contains data')
+                csf['path_' + name + '_blocked'] = {
+                    key: (snapshot[key + '_enable'] | snapshot[key + '_status']) & mask
+                    for key, mask in CSF_PATH_MASKS.items()}
+            csf['platform_path_complete'] = flags == 3
+            csf['platform_path_released'] = flags == 3 and not any(
+                value for name in ('before', 'after')
+                for value in csf['path_' + name + '_blocked'].values())
+            csf['platform_path_note'] = ('Original MT6983 scpsys MFG1 masks: RPC bits16..19, '
+                'INFRA bits0..3, EMI0/1 bits18..19; enable and status are separate registers. '
+                'PDC/SLC words are raw observations, not power or reachability proof.')
         end = 0x4094000  # shared VA + measured pinned firmware shared size
         ready = (csf['firmware_ready'] == 1 and csf['mcu_status'] == 1 and
                  csf['job_raw'] & 0x80000000 != 0 and csf['mmu_raw'] & 0xffff == 0 and
@@ -266,6 +294,9 @@ def decode(data, expected_build=0x2321):
                 after['l2_transition_lo'] & 1 == 0 and after['job_raw'] & 0x80000000 != 0 and
                 after['version'] == csf['version'])
             csf['firmware_ready_observed'] = ready
+        if expected_build >= 0x2333:
+            ready = ready and csf['platform_path_released']
+            csf['firmware_ready_observed'] = ready
         result['csf_firmware_boot_verified'] = (success and ready and cleanup and
                                                csf['stage'] == 7 and csf['error'] == 0)
     result.update(error_details(result, result.get('csf')))
@@ -276,7 +307,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2332)')
+                   help='expected kernel/report build (0x2321 through 0x2333)')
     a=p.parse_args()
     try:
         report=decode(a.marks.read_bytes(),a.build)

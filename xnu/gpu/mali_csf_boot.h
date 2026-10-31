@@ -26,6 +26,8 @@ struct sweet_csf_boot_config {
      * Offset names an owned arena page, never an arbitrary host address. */
     uint32_t access_snapshot, firmware_probe_offset, firmware_probe_va;
     uint32_t firmware_probe_expected;
+    /*2333: check original MFG1 bus-protection masks before MCU AUTO. */
+    uint32_t platform_path;
 };
 struct sweet_csf_platform_snapshot {
     uint32_t gpu_status, mcu_control, gpu_fault_status, gpu_fault_lo, gpu_fault_hi;
@@ -37,6 +39,12 @@ struct sweet_csf_access_snapshot {
     uint32_t mmu_raw, job_raw, as_status, as_fault, as_fault_lo, as_fault_hi;
     uint32_t l2_ready_lo, l2_ready_hi, l2_transition_lo, l2_transition_hi;
     uint32_t firmware_word0, version;
+};
+struct sweet_csf_path_snapshot {
+    uint32_t rpc_enable, rpc_status, infra_enable, infra_status;
+    uint32_t emi0_enable, emi0_status, emi1_enable, emi1_status;
+    uint32_t pdc_cg, pdc_st0, pdc_st1, pdc_st2, pdc_st4, pdc_st5, pdc_st6;
+    uint32_t slc_group6;
 };
 struct sweet_csf_boot_report {
     uint32_t stage;
@@ -93,6 +101,9 @@ struct sweet_csf_boot_report {
     uint32_t access_sample_flags, access_reserved, firmware_probe_va;
     uint32_t firmware_probe_pa_lo, firmware_probe_pa_hi, firmware_probe_expected;
     struct sweet_csf_access_snapshot access_before, access_after;
+    /*2333 appends136B;696B total. Exact MFG1 masks,not a whole-word zero test. */
+    uint32_t path_sample_flags, path_reserved;
+    struct sweet_csf_path_snapshot path_before, path_after;
 };
 enum sweet_csf_boot_stage {
     SWEET_CSF_BOOT_CONFIG=1, SWEET_CSF_BOOT_L2=2, SWEET_CSF_BOOT_AS=3,

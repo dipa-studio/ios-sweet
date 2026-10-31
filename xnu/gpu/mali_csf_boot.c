@@ -101,6 +101,29 @@ static void access_state(const struct sweet_csf_boot_config *c,const struct swee
     s->version=rd(io,c->arena_pa+c->shared_offset);
     r->access_sample_flags|=after?2:1;
 }
+static int platform_path(const struct sweet_csf_boot_config *c,const struct sweet_gpu_io *io,
+                         struct sweet_csf_boot_report *r,int after)
+{
+    if(!c->platform_path)return 0;
+    struct sweet_csf_path_snapshot *s=after?&r->path_after:&r->path_before;
+    /* Original MT6983 scpsys MFG1 table: separate enable/status registers.
+     * Clear offsets are1044/ca8/c68/c78;do not write them while GPUEB owns power.
+     * Whole RPC1048 is NOT a low-enable/high-ack pair;only bits16..19 belong
+     * to this domain's protection table. Unrelated set bits are preserved. */
+    s->rpc_enable=rd(io,0x13f9103c);s->rpc_status=rd(io,0x13f91048);
+    s->infra_enable=rd(io,0x10001ca0);s->infra_status=rd(io,0x10001cac);
+    s->emi0_enable=rd(io,0x10001c60);s->emi0_status=rd(io,0x10001c6c);
+    s->emi1_enable=rd(io,0x10001c70);s->emi1_status=rd(io,0x10001c7c);
+    s->pdc_cg=rd(io,0x13fbf100);s->pdc_st0=rd(io,0x13fbf120);
+    s->pdc_st1=rd(io,0x13fbf140);s->pdc_st2=rd(io,0x13fbf118);
+    s->pdc_st4=rd(io,0x13fbf0c0);s->pdc_st5=rd(io,0x13fbf098);
+    s->pdc_st6=rd(io,0x13fbf1c0);s->slc_group6=rd(io,0x13fbf748);
+    r->path_sample_flags|=after?2:1;
+    /* Observation only for PDC/SLC: no readiness inference from those words. */
+    return ((s->rpc_enable|s->rpc_status)&0xf0000) ||
+        ((s->infra_enable|s->infra_status)&0xf) ||
+        ((s->emi0_enable|s->emi0_status|s->emi1_enable|s->emi1_status)&0xc0000);
+}
 int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_io *io,
                    struct sweet_csf_boot_report *r)
 {
@@ -112,7 +135,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     if(!c||!io||!io->read32||!io->write32||!io->ticks||!io->barrier||
        !io->frequency||io->frequency>1000000000||c->gpu!=0x13000000||
        !c->timeout_ms||c->timeout_ms>1000||c->noncoherent>1||c->vendor_ina0>1||
-       c->vendor_cached_memattr>1||c->platform_snapshot>1||c->access_snapshot>1||
+       c->vendor_cached_memattr>1||c->platform_snapshot>1||c->access_snapshot>1||c->platform_path>1||
        c->pte_group_requested>15||
        c->pte_pages_built>c->arena_bytes/4096||c->root_pa!=c->arena_pa||
        c->arena_pa<0x40000000||(c->arena_pa&4095)||!c->arena_bytes||
@@ -123,6 +146,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
         c->private_probe_offset>c->arena_bytes||4096>c->arena_bytes-c->private_probe_offset||
         (c->private_probe_offset<(uint64_t)c->shared_offset+c->shared_bytes&&
          c->shared_offset<(uint64_t)c->private_probe_offset+4096)))||
+       (c->platform_path&&!c->access_snapshot)||
        (c->access_snapshot&&(!c->platform_snapshot||c->firmware_probe_va!=0x01000000||
         c->firmware_probe_offset<4096||(c->firmware_probe_offset&4095)||
         c->firmware_probe_offset>c->arena_bytes||
@@ -241,6 +265,9 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     r->stage=SWEET_CSF_BOOT_MCU;
     platform_state(c,io,r,0);
     access_state(c,io,r,0);
+    if(platform_path(c,io,r,0)) {
+        r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
+    }
     wr(io,c->gpu+0x700,2); /* AUTO is2; ENABLE is1. */
     uint64_t begin=io->ticks(io->context);
     rc=SWEET_CSF_BOOT_TIMEOUT;
@@ -266,6 +293,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     core_state(io,c->gpu,r,8);
     platform_state(c,io,r,1);
     access_state(c,io,r,1);
+    if(platform_path(c,io,r,1)&&!rc)rc=SWEET_CSF_BOOT_STATE;
     if(rc) {r->error=rc;goto cleanup;}
     r->stage=SWEET_CSF_BOOT_IFACE;
     /* An input/output page and every CSG control block must fit shared. */

@@ -1,6 +1,55 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-10-31: CSF2332 TRIAL COMPLETE; FULL RESTORE VERIFIED <<<
+## >>> ACTIVE 2026-10-31: CSF2333 PLATFORM PATH BUILT; TRIAL UNAPPROVED <<<
+
+2332 trial and full restoration are complete below;no new device write.
+Pinned Xiaomi270b84910b941bf75490fccdb5fb2b3021dd7cbf scpsys MFG1 table
+contradicts the proposed RPC halfword decode:enable103c/status1048 are
+separate registers;MFG1 mask000f0000,so observedfff0fff0 has those STATUS
+bits clear. Enable103c,INFRAca0/cac and EMIc60/c6c/c70/c7c are not sampled.
+SPM statusf includes MFG0 bit1,MFG1 bit2,MFG2 bit3. PDCv2/fake-SPM means
+PWR_CON low bits alone do not establish off domains. MFG0 SRAM sleep9/13
+differs from MFG1 powerdown8/12;do not copy MFG0 words to other domains.
+Implemented:2333 appends paired exact-mask RPC/INFRA/EMI plus raw PDC/SLC
+snapshots;blocks MCU AUTO if a documented MFG1 protection bit remains set.
+No forced rails/clock/protection writes. Reset already waits IRQ bit8.
+ABI696B/87 qwords320..406,old560B prefix preserved;publication/decoder and
+contextual patch0131 complete.72 targeted tests PASS5.399s,including real C
+ASan/UBSan,each documented protection bit,blocked-before/no-AUTO,after-only
+obstruction,unchanged unblocked write trace,source pins and stale ABI tests.
+Three freestanding ARM64-Werror/PIC compiles PASS. Full local CLT kernel
+build exit0,16724248B SHA256
+61790395f3043744234f0363aceed595fcf35b8dcf0b18836fa4259c1df94bfa.
+130-patch contextual replay MATCH source81775100f8f01e0e5404c60ddf29f3045ba581dbcf256df48e49f6d2ab0f3ad8;
+preserved untracked0093 hash54f0aaa5...de65365b. No new CI run or push.
+gh latest40262872038/40226767824/40226076666 remain action_required.
+
+Candidate shim2333-path-ready/matisse-shim-gpu2333.img,26714112B,SHA256
+36be7135a2ffa2995a8c3e7f518d73191c4188e9ec563c9d86670d7dc16497b5.
+Independent verifier PASS:stock Linux+32MiB/ramdisk/signature bytes,pinned
+sources/frozen objects,696B ADT,PIC,rootrw0/ufsrw0,all293 mapped pages.
+Arena PA40077000/executable PA40080000 AND full arena bytes unchanged2332;
+firmware/memory/GPUEB objects byte-identical2332. Signature is retained,
+NOT authenticated;automatic Recovery and2333 hardware readiness unverified.
+Historical2331/2332 decode byte-for-JSON identical;2326..2330 differ only
+previously introduced error provenance labels,not raw CSF/GPU fields.
+
+Only read-only Recovery preflights ran at2026-10-31T08:11:39Z:root/matisse/
+_a/recovery,boot_a67108864B,full original hash2931647a...9eaf86b1 PASS.
+Prepared runner shim2333-path-trials-run-once.py SHA256
+dfe5062718f431169e7cd1b9b84804b16338c451372e86ee0a8c3be8046f8c46;
+plan prepared-unapproved,authorization null,trial_count_executed0,no journal.
+Predicted full temporary boot_a hash
+4dc84a77ea14e5716cb0f2a0496ac5104a2ac700eaa91e8db0be1a1bb65cc580.
+No new device writes/reboots/hardware results or pending restore. Prior2332
+authorization consumed. NEXT:confirm ONE exact2333 image36be7135 boot_a
+trial,fresh evidence,full64MiB original restoration and independent hash
+before entering runner write branch,as AGENTS requires. Otherwise continue
+offline source audit. Preserve unrelated dirt/untracked0093. Ignored evidence:
+firmware-static/path2333-*,kernel2333-*,shim2333-path-ready/manifest.json and
+independent-verification.json,verify2333-path.py,and prepared runner/plan.
+
+## >>> HISTORICAL 2026-10-31: CSF2332 TRIAL COMPLETE; FULL RESTORE VERIFIED <<<
 
 Executed exactly one authorized2332 trial;runner session72667 exited0.
 Full trial boot_a readback49404819...adb8cad1 matched prediction. Reached

@@ -46,6 +46,9 @@ HOST_BOOT_TRACE = r'''
 #ifndef PLATFORM_SNAPSHOT
 #define PLATFORM_SNAPSHOT 0
 #endif
+#ifndef PLATFORM_PATH
+#define PLATFORM_PATH 0
+#endif
 #ifndef ACCESS_SNAPSHOT
 #define ACCESS_SNAPSHOT 0
 #endif
@@ -82,7 +85,7 @@ int main(void) {
         .shared_bytes = 0x94000, .timeout_ms = 1, .noncoherent = 1,
         .pte_group_requested = 6, .pte_pages_built = 293, .vendor_ina0 = VENDOR_INA0,
         .vendor_cached_memattr = VENDOR_CACHED_MEMATTR, .platform_snapshot = PLATFORM_SNAPSHOT,
-        .access_snapshot=ACCESS_SNAPSHOT,.firmware_probe_va=0x01000000,
+        .platform_path=PLATFORM_PATH,.access_snapshot=ACCESS_SNAPSHOT,.firmware_probe_va=0x01000000,
         .firmware_probe_offset=0x10000};
     struct sweet_gpu_io io = {&m, read32, write32, ticks, barrier, 1000};
     struct sweet_csf_boot_report r;
@@ -94,7 +97,7 @@ int main(void) {
 '''
 
 
-def probe_boot_trace(vendor_ina0=0, vendor_cached_memattr=0, platform_snapshot=0, access_snapshot=0):
+def probe_boot_trace(vendor_ina0=0, vendor_cached_memattr=0, platform_snapshot=0, access_snapshot=0, platform_path=0):
     """Capture actual C writes with synthetic success prerequisites/no FW IRQ."""
     if vendor_ina0 not in (0, 1):
         raise ValueError('INA diagnostic must be0/1')
@@ -104,6 +107,8 @@ def probe_boot_trace(vendor_ina0=0, vendor_cached_memattr=0, platform_snapshot=0
         raise ValueError('platform snapshot must be0/1')
     if access_snapshot not in (0, 1) or access_snapshot and not platform_snapshot:
         raise ValueError('access snapshot requires platform snapshot')
+    if platform_path not in (0, 1) or platform_path and not access_snapshot:
+        raise ValueError('platform path requires access snapshot')
     with tempfile.TemporaryDirectory(prefix='csf-vendor-boot-') as directory:
         path = Path(directory)
         source, binary = path / 'trace.c', path / 'trace'
@@ -113,6 +118,7 @@ def probe_boot_trace(vendor_ina0=0, vendor_cached_memattr=0, platform_snapshot=0
                         '-DVENDOR_CACHED_MEMATTR=' + str(vendor_cached_memattr),
                         '-DPLATFORM_SNAPSHOT=' + str(platform_snapshot),
                         '-DACCESS_SNAPSHOT=' + str(access_snapshot),
+                        '-DPLATFORM_PATH=' + str(platform_path),
                         '-fsanitize=address,undefined', '-I', str(ROOT / 'xnu/gpu'),
                         str(source), str(ROOT / 'xnu/gpu/mali_csf_boot.c'), '-o', str(binary)],
                        check=True, capture_output=True, text=True)
