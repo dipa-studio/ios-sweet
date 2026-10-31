@@ -1281,3 +1281,57 @@ shim2330-ready/{manifest,independent-verification}.json and build/test logs.
 Next requires specific approval for ONE normal2330 image2acb4014 boot_a trial,
 full readback/fresh evidence and complete original64MiB restoration with an
 independent hash. This offline continuation does not authorize that write.
+
+## CSF2330 cached-byte hardware trial and full restoration (2026-10-31)
+
+The user explicitly approved ONE normal2330 image2acb4014 boot_a trial,
+fresh evidence collection and complete original restoration. The pinned
+runnerd4905881 executed once;session69961 exited0. Candidate26714112 bytes
+retained SHA256
+2acb401446915ff72a7b3d8ee5c9d9dcd89cd04b89062ab388a9ea275519a06f.
+Full temporary partition readback matched predicted SHA256
+42768433ce974e59d1b0c55c1d191a36e283fd2b76dcf594026ed29c35b970cf.
+Normal boot reached Fastboot after84.57s. A single persistent raw USB session
+received OKAY for stock-prefix download013e8000,flash:boot_a and
+reboot-recovery. Recovery restored the entire67108864-byte original boot_a.
+A separate subsequent check verified root matisse/_a/Recovery,partition
+geometry and full original SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Journal is complete-restored-Recovery,restore_pending=false,evidence_decoded=true.
+Plan records one consumed authorization and independent full restoration;
+no active runner or pending restoration remains. No user USB/key action was
+requested. No new build,CI run,push or repeated test suite in this trial.
+
+Fresh build2330 marks have99 records and38 complete CSF qwords320..357.
+The4096-byte mark block matches the last block of the4198400-byte tail.
+Before marks and tail exactly match2329's previous after capture;those old
+marks reject expected2330. The18657-byte console independently names
+gpu2330/sweettrial=2330. Fresh Recovery dmesg is818553 bytes.
+
+Hardware MEMATTR low4c4c884c/high4c4c4c4c matches the candidate. TRANSCFG
+42000006,coherency31 request/readback/after,IRQ gate and L2_READY1 persist.
+Group6/293 remain software builder metadata,not hardware routing readback.
+MCU still reports stage4/error-53,MCU_STATUS1,JOB_RAW0,MMU_RAW0,version0,
+AS status/fault0 and firmware_ready0. Disable times out-53,status1;reset
+does not complete and cleanup_error remains-53.
+
+Exact common-field comparison against2329 records MEMATTR low4c4c9f4c->
+4c4c884c,shared_alloc_after1d->0,tiler_ready_lo1->0,gpu_raw600->200 and
+reset_raw600->200. The derived shared startup_memory_changed flag becomes
+false:shared04000018 now stays0->0. Private early/feature/late words remain0.
+All other common CSF fields and all common GPU fields are identical.
+The new vendor_cached_byte_readback_matches is true. Matching the selected
+vendor byte alone did not establish the handshake. One run cannot attribute
+the other endpoint changes to the byte or identify the MCU PC/timeout cause.
+84.57s versus2329's99.87s is only a single-run timing observation.
+
+Evidence stays ignored in shim2330-trials/gpu-normal/{journal.json,
+gpu-result.json,comparison-2329-2330.json,independent-post-restore.txt,
+before/after-marks.bin,before/after-tail.bin,after-console.txt,recovery-dmesg.txt}
+and shim2330-trials/gpu-normal-run.txt. Freshness,report completeness,exact
+field comparison and independent full restoration checks PASS. Implementation
+ad073cf and verified build handofff95d603 remain applicable. Next is offline
+cache-byte/shareability and per-section descriptor/table contract comparison
+using paired2329/2330 evidence. Do not treat88 as a confirmed fix or repeat
+2330 blindly. This authorization is consumed;another image/write needs
+specific confirmation. No firmware-ready or GPU acceleration claim.

@@ -1,6 +1,66 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-10-31: CSF2330 CACHED-BYTE BUILT; ONE-TRIAL APPROVAL NEEDED <<<
+## >>> ACTIVE 2026-10-31: CSF2330 CACHED-BYTE TRIAL; MCU TIMEOUT; FULL RESTORE <<<
+
+User specifically approved ONE normal2330 image2acb4014 boot_a trial,fresh
+evidence and complete original restoration. Executed exactly once; runner
+session69961 exited0. Candidate26714112B SHA256
+2acb401446915ff72a7b3d8ee5c9d9dcd89cd04b89062ab388a9ea275519a06f.
+Full temporary boot_a readback matched predicted
+42768433ce974e59d1b0c55c1d191a36e283fd2b76dcf594026ed29c35b970cf.
+Normal boot reached Fastboot after84.57s. One persistent raw USB session
+returned OKAY for stock-prefix download013e8000,flash:boot_a and
+reboot-recovery. Recovery then restored all67108864B original boot_a.
+Independent subsequent root/matisse/_a/recovery/geometry and full SHA256 PASS:
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Journal complete-restored-Recovery,restore_pending=false,evidence_decoded=true;
+plan records one consumed authorization and independently verified full
+restoration. No active runner/pending restore or user USB/key intervention.
+Fresh Recovery dmesg818553B. No new build,CI run,push or repeated test suite.
+
+Fresh marks build2330/count99 contain38 complete CSF qwords320..357 and
+match the captured4198400B tail. Before marks/tail exactly match2329's
+previous after capture; stale2329 rejects expected2330. The18657B console
+independently names gpu2330/sweettrial=2330. MEMATTR low4c4c884c/high4c4c4c4c
+readback matches the intended cached-byte change. TRANSCFG42000006 and
+coherency31/request/readback/after remain correct; group6/293 are software
+metadata only. IRQ gate/L2_READY1 persist. MCU remains stage4/error-53,
+status1,JOB_RAW0,MMU_RAW0,version0 and AS status/fault0; no firmware-ready.
+
+Exact common-field comparison against2329 finds these endpoint differences:
+MEMATTR low4c4c9f4c->4c4c884c; shared_alloc_after1d->0,so shared word04000018
+now stays0->0; tiler_ready_lo1->0; gpu_raw600->200 and reset_raw600->200.
+The derived shared startup_memory_changed flag becomes false. Every other
+common CSF field and every common GPU field is identical. Private early/
+feature/late words remain0. Disable still times out-53,status1; reset does
+not complete and cleanup_error-53. Added vendor_cached_byte_readback_matches
+is true,not a readiness substitute. This one run does not establish that
+the byte change caused the endpoint differences or identify the MCU PC.
+84.57s versus2329's99.87s is a single-run timing observation only.
+
+Ignored evidence: shim2330-trials/gpu-normal/{journal.json,gpu-result.json,
+comparison-2329-2330.json,independent-post-restore.txt,before/after-marks.bin,
+before/after-tail.bin,after-console.txt,recovery-dmesg.txt} and
+shim2330-trials/gpu-normal-run.txt. Freshness/report completeness/common-field
+comparison and independent full restoration checks PASS. Implementation
+ad073cf/build handofff95d603 and63-test/build checks remain applicable.
+NEXT: offline investigate the vendor cache-byte/shareability pairing and
+per-section descriptor/table contract using paired2329/2330 evidence. Do
+not adopt88 as a confirmed fix or blindly repeat2330. This one-trial
+approval is consumed; another concrete image/write needs confirmation.
+Preserve unrelated dirt and inherited untracked0093. No GPU success claim.
+
+## >>> HISTORICAL 2026-10-31: CSF2330 SINGLE TRIAL AUTHORIZED <<<
+
+User specifically replied 可以 to ONE normal2330 image2acb4014 boot_a trial,
+fresh evidence collection and complete64MiB original restoration with an
+independent hash. Fresh read-only Recovery preflight PASS; exact runner
+d4905881 and image/backup/stock-prefix pins match the prepared plan.
+This authorization covers this one trial and restoration only. Once started,
+follow shim2330-trials/gpu-normal/journal.json and prioritize full restore
+plus independent hash2931647a before interpreting GPU evidence.
+
+## >>> HISTORICAL 2026-10-31: CSF2330 CACHED-BYTE BUILT AND VERIFIED <<<
 
 User replied 可以 to OFFLINE continuation after restored2329. No new device
 write/reboot approved or performed. Implementation committed ad073cf.
