@@ -5,6 +5,8 @@
 User approved RAM-only collector development, then asked to reboot Recovery
 after testing. Current Recovery stayed online; NO reboot/partition write/
 USB rebind/insmod performed. No active runner or pending restoration.
+Implementation commit2650520 is local (not pushed). Repeated independent
+build is byte-identical; no new CI run.
 A specific boot_a flash confirmation is still required by AGENTS.md; the
 collector image did not exist when the earlier general approval was given.
 
