@@ -1,0 +1,23 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -823,7 +823,7 @@
+ #define SWEET_MARK_MAX  160
+ 
+ /* Bumped for every locally built kernel that is flashed to the phone. */
+-#define SWEET_BUILD_ID 0x2322u
++#define SWEET_BUILD_ID 0x2323u
+ 
+ struct sweet_mark_rec {
+ 	uint32_t code;
+@@ -904,9 +904,9 @@
+ 	}
+ 	if (SecureDTGetProperty(chosen, "sweet-csf-report",
+ 	    (void const **)&report, &size) == kSuccess && size == 128) {
+-		uint32_t csf[22];
++		uint32_t csf[32];
+ 		memcpy(csf, report, sizeof(csf));
+-		for (uint32_t i = 0; i < 11; i++) {
++		for (uint32_t i = 0; i < 16; i++) {
+ 			uint64_t a = (uint64_t)csf[2 * i] | (uint64_t)csf[2 * i + 1] << 32;
+ 			sweet_mark(320 + i, a, SWEET_BUILD_ID);
+ 		}

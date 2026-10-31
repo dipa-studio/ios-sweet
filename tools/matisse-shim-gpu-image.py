@@ -31,7 +31,7 @@ def pinned(path, expected):
         raise ValueError('SHA256 mismatch: ' + str(path))
     return data
 
-def diagnostic_adt(data):
+def diagnostic_adt(data, build_id=0x2323):
     root, end = adt.parse(data)
     if end != len(data):
         raise ValueError('trailing ADT bytes')
@@ -39,7 +39,7 @@ def diagnostic_adt(data):
     for key in ('sweet-gpu-report', 'sweet-csf-report', 'sweet-gpu-autorecovery-seconds'):
         if chosen.prop(key) is not None:
             raise ValueError('already a GPU diagnostic ADT')
-    chosen.props = [(n, f, b'sweet-shim/gpu2322'.ljust(128, b'\0')
+    chosen.props = [(n, f, ('sweet-shim/gpu%x' % build_id).encode().ljust(128, b'\0')
                      if n in ('firmware-version', 'system-firmware-version') else v)
                     for n, f, v in chosen.props]
     chosen.props += [('sweet-gpu-report', 0, bytes(128)),
@@ -67,14 +67,15 @@ def build(a):
     command = Path(a.cmdline).read_text().strip()
     if 'sweettrial=2317' not in command:
         raise ValueError('expected known-good2317 command line')
-    command = command.replace('sweettrial=2317', 'sweettrial=2322')
+    label = 'gpu%x' % a.build_id
+    command = command.replace('sweettrial=2317', 'sweettrial=%x' % a.build_id)
     command = command.replace('rootrw=1', 'rootrw=0').replace('ufsrw=1', 'ufsrw=0')
-    tree = diagnostic_adt(original_adt)
+    tree = diagnostic_adt(original_adt, a.build_id)
     out.mkdir(parents=True)
-    (out / 'gpu2322.adt').write_bytes(tree)
-    payload, _ = mkpayload.build(Path(a.kernel), out / 'gpu2322.adt', command,
+    (out / (label + '.adt')).write_bytes(tree)
+    payload, _ = mkpayload.build(Path(a.kernel), out / (label + '.adt'), command,
                                  allow_matisse_root_write=False)
-    (out / 'gpu2322.payload').write_bytes(payload)
+    (out / (label + '.payload')).write_bytes(payload)
     ndk = Path(a.ndk)
     definitions = ['-DSHIM_GPU_PROBE', '-DSHIM_CSF_PROBE', '-DSHIM_RECOVERY_FALLBACK',
                    '-DSHIM_RECOVERY_OFFSET=' + str(FALLBACK_OFFSET),
@@ -132,7 +133,7 @@ def build(a):
         raise ValueError('requires boot v4')
     rd_offset = 4096 + mkbootimg.pad(header['kernel_size'])
     ramdisk = template[rd_offset:rd_offset + header['ramdisk_size']]
-    image = out / 'matisse-shim-gpu2322.img'
+    image = out / ('matisse-shim-' + label + '.img')
     mkbootimg.build(gzip.compress(raw, compresslevel=9, mtime=0), ramdisk,
                     header['cmdline'].decode(), image, 4, header['os_version'],
                     header['signature_size'], header['signature'])
@@ -143,7 +144,7 @@ def build(a):
     if (expanded[FALLBACK_OFFSET:] != stock_linux or expanded != raw or
             result[rd:rd + h['ramdisk_size']] != ramdisk or h['signature'] != header['signature']):
         raise ValueError('image readback/component mismatch')
-    info = dict(trial='0x2322', image_bytes=len(result), image_sha256=digest(result),
+    info = dict(trial=hex(a.build_id), image_bytes=len(result), image_sha256=digest(result),
                 kernel_sha256=digest(kernel), adt_sha256=digest(tree), payload_sha256=digest(payload),
                 expanded_bytes=len(raw), fallback_offset=FALLBACK_OFFSET,
                 fallback_linux_sha256=digest(stock_linux), stock_sha256=digest(stock),
@@ -161,6 +162,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2323,), default=0x2323)
     for key in ('firmware','firmware-sha256','kernel','kernel-sha256','template','template-sha256','adt','adt-sha256',
                 'stock','stock-sha256','frozen','cmdline','ndk','out'):
         p.add_argument('--' + key, required=True)

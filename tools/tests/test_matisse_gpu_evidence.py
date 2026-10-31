@@ -93,15 +93,22 @@ class ReportDecodeTests(unittest.TestCase):
         struct.pack_into('<IIQQ',data,16+24*count,300,0,0,0x2321)
         with self.assertRaises(ValueError):self.module.decode(data)
 
-    def csf_marks(self, omit=None, tag=0x2322, **changes):
+    def csf_marks(self, omit=None, tag=None, build=0x2322, **changes):
         import struct
-        data=self.marks(build=0x2322)
+        data=self.marks(build=build)
+        if tag is None:tag=build
         values=dict(zip(self.module.CSF_KEYS,[7,0,0,0x2830,1,0,1,1,
             0x80000000,0,0,0,0,0x01020003,0x123,0x4001000,0x4002000,8,64,0x100,1,1]))
         values.update(changes)
+        if build==0x2323:
+            values.update(zip(self.module.CSF_DIAGNOSTIC_KEYS,
+                [3,0x600,0,0x420001c6,0x90000000,0,0,0,0x01020003,0]))
+            values.update(changes)
         raw=struct.pack('<I2i19I',*(values[k] for k in self.module.CSF_KEYS))
+        if build==0x2323:
+            raw+=struct.pack('<7Ii2I',*(values[k] for k in self.module.CSF_DIAGNOSTIC_KEYS))
         count=struct.unpack_from('<I',data,12)[0]
-        for i in range(11):
+        for i in range(len(raw)//8):
             if i==omit:continue
             struct.pack_into('<IIQQ',data,16+24*count,320+i,0,
                              struct.unpack_from('<Q',raw,8*i)[0],tag)
@@ -129,6 +136,29 @@ class ReportDecodeTests(unittest.TestCase):
         result=self.module.decode(self.csf_marks(stage=6,error=-53,cleanup_error=-53,reset_completed=0),0x2322)
         self.assertTrue(result['csf']['firmware_ready_observed'])
         self.assertFalse(result['csf']['cleanup_verified'])
+
+    def test_2323_diagnostics_and_failed_disable_are_independent(self):
+        result=self.module.decode(self.csf_marks(build=0x2323),0x2323)
+        self.assertTrue(result['csf_firmware_boot_verified'])
+        self.assertTrue(result['csf']['runtime_interface_sampled'])
+        for args in ({'sample_flags':0},{'gpu_raw':1},{'as_status':1},
+                     {'transcfg_lo':0x010005c6},{'transtab_lo':0x90000001},
+                     {'disable_status':1},{'disable_error':-53}):
+            with self.subTest(args=args):
+                self.assertFalse(self.module.decode(self.csf_marks(build=0x2323,**args),0x2323)['csf_firmware_boot_verified'])
+        result=self.module.decode(self.csf_marks(build=0x2323,stage=4,error=-53,
+            job_raw=0,firmware_ready=0),0x2323)
+        self.assertTrue(result['csf']['runtime_interface_sampled'])
+        self.assertFalse(result['csf_firmware_boot_verified'])
+        self.assertFalse(self.module.decode(self.csf_marks(stage=4,error=-53),0x2322)['csf']['runtime_interface_sampled'])
+        for args in ({'omit':15},{'tag':0x2322},{'reserved':1},{'sample_flags':4}):
+            with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2323,**args),0x2323)
+
+    def test_initial_reset_observation_survives_later_callback_failure(self):
+        result=self.module.decode(self.marks(error=-53))
+        self.assertTrue(result['initial_power_reset_observed'])
+        self.assertFalse(result['power_reset_verified'])
+        self.assertFalse(self.module.decode(self.marks(reset=0))['initial_power_reset_observed'])
 
 if __name__ == '__main__':
     unittest.main()

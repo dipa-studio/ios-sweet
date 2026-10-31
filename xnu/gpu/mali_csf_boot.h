@@ -14,6 +14,12 @@ struct sweet_csf_boot_report {
     uint32_t job_raw, mmu_raw, as_fault, as_fault_lo, as_fault_hi;
     uint32_t version, features, input_va, output_va, groups, group_stride;
     uint32_t reset_raw, firmware_ready, reset_completed;
+    /* Appended2323 ABI. Flags bit0: pre-start version sampled; bit1:
+     * post-start shared fields sampled. Sampling alone never proves ready. */
+    uint32_t sample_flags, gpu_raw, as_status, transcfg_lo;
+    uint32_t transtab_lo, transtab_hi, disable_status;
+    int32_t disable_error;
+    uint32_t version_before, reserved;
 };
 enum sweet_csf_boot_stage {
     SWEET_CSF_BOOT_CONFIG=1, SWEET_CSF_BOOT_L2=2, SWEET_CSF_BOOT_AS=3,

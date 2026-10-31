@@ -4,8 +4,10 @@
 
 #define SWEET_CSF_MAX_SECTIONS 64u
 #define SWEET_CSF_PAGE 4096u
-/* MCU-only, 32-bit VA, 4 KiB stage-1 LPAE. Data and page walks are
- * non-cacheable; the host must publish the arena before GPU access. */
+/* MCU-only, 48-bit VA, 4 KiB stage-1 LPAE (level0 root). Firmware VAs
+ * remain 32-bit; cached sections use index1/WB, other sections index0/NC.
+ * Host publishes its uncached arena before GPU access. */
+#define SWEET_CSF_VA_BITS 48u
 struct sweet_csf_mapping {
     uint32_t va, bytes, flags, arena_offset, data_start, data_bytes;
 };

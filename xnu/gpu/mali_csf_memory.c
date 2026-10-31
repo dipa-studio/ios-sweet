@@ -37,7 +37,8 @@ int sweet_csf_memory_plan(const uint8_t *fw, size_t bytes, struct sweet_csf_memo
     int rc = sweet_csf_parse(fw, bytes, &layout, collect, &m);
     if (rc) return rc;
     m.firmware_bytes = (uint32_t)bytes;
-    m.table_pages = 1;
+    /* All firmware addresses are below4GiB: one L0 and one L1 table. */
+    m.table_pages = 2;
     for (uint32_t i = 0; i < m.mapping_count; i++) {
         const struct sweet_csf_mapping *p = &m.map[i];
         uint64_t end = (uint64_t)p->va + p->bytes;
@@ -101,8 +102,8 @@ int sweet_csf_memory_build(const uint8_t *fw, size_t bytes, const struct sweet_c
         for (uint64_t off = 0; off < p->bytes; off += SWEET_CSF_PAGE) {
             uint64_t va = (uint64_t)p->va + off;
             uint8_t *table = arena;
-            for (unsigned level = 1; level < 3; level++) {
-                unsigned shift = level == 1 ? 30 : 21;
+            for (unsigned level = 0; level < 3; level++) {
+                unsigned shift = 39 - 9 * level;
                 uint8_t *entry = table + ((va >> shift) & 511) * 8;
                 uint64_t desc = get64(entry);
                 if (!desc) {
@@ -111,9 +112,12 @@ int sweet_csf_memory_build(const uint8_t *fw, size_t bytes, const struct sweet_c
                 }
                 table = arena + ((desc & UINT64_C(0x0000fffffffff000)) - pa);
             }
-            /* nG, AF, outer-shareable, unprivileged access; index0 is NC.
-             * Read-only and execute-never follow each firmware section. */
-            uint64_t desc = (pa + p->arena_offset + off) | 3 | 0x800 | 0x400 | 0x200 | 0x40;
+            /* Cache-mode1 in the section ABI is cached. Match stage1
+             * SH_IS/WB for that mode and SH_OS/NC for all other modes.
+             * CPU caches remain off; this does not enable CPU coherency. */
+            int cached = (p->flags & 24) == 8;
+            uint64_t desc = (pa + p->arena_offset + off) | 3 | 0x800 | 0x400 | 0x40;
+            desc |= cached ? 0x304 : 0x200;
             if (!(p->flags & 2)) desc |= 0x80;
             if (!(p->flags & 4)) desc |= UINT64_C(3) << 53;
             put64(table + ((va >> 12) & 511) * 8, desc);

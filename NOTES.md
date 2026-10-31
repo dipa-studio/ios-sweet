@@ -1,5 +1,40 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: CSF2323 BUILT; NO DEVICE WRITE <<<
+
+2322 normal result committed703f99b; full boot_a restoration remains complete.
+Static audit: vendor AUTO2 already correct. Vendor MMU setup6 + WB/RA42000000,
+no INA observed; Panthor v6.12 hardwareVA48/WB and cached firmware sections
+differ from2322 VA32/all-NC. These are HYPOTHESES, not proved timeout causes.
+JOB mask vendorffffffff vs probe0 remains untested.
+
+2323 independent tables4KiB/L0/VA48, TRANSCFG420001c6, full lock47, cached
+mode1 WB(index1/9f), others NC(index0/4c); root/config readbacks validated.
+Pinned blob sanitizer replay7 ordinary/3 protected/8 tables/1232896B PASS.
+Report128B adds explicit sample flags, GPU RAW/AS status/root/config/disable
+result and prestart version; timeout now captures shared fields. Disable
+failure cannot be hidden by reset success. Fresh IRQ remains necessary.
+Kernel patch0121 uses build2323, CSF marks320..335. Decoder preserves2321/
+2322 and separates initial observed reset from aggregate callback failure.
+
+32 targeted tests PASS (ASan/UBSan,128B ADT, decoder, FDT/board). Local kernel
+session27382 exit0, no CI/push. Kernel16724248B SHA256
+77c7248c13d55fe4d2db365bc9cf2d728849e51eb371abfbc5b8c4304a5442f8.
+Image shim2323-ready/matisse-shim-gpu2323.img26710016B SHA256
+23b2c8dc56f9a7b72a585efa9ebcf889d2979e1dca6fb58fe53dbf81eafb3137.
+Freestanding compile/link/component readback and source manifest equality PASS.
+Expanded80402548B; Linux+32MiB, ramdisk/signature/frozen2313 objects retained.
+Recovery identity matisse/_a/recovery/root read again; no write/reboot.
+Readonly runner preflight independently rehashed full64MiB boot_a baseline
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Ignored shim2323-trials/run-once.py prepared; only preflight executed.
+No pending restore or active trial runner.
+
+Next: one specifically confirmed2323 Recovery-fallback boot_a trial, then
+full64MiB restore/hash2931647a. Normal probe needs its own confirmation
+after same-image fallback. No2323 hardware claim. Unrelated collector-v2
+and dirty shim work retained. Static facts detailed in CSF bring-up doc.
+
 ## >>> COMPLETE 2026-10-31: CSF2322 MCU START TIMEOUT; FULL RESTORE <<<
 
 Authorized normal2322 trial executed ONCE, runner63108 exited0. Fresh

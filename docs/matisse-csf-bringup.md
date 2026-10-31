@@ -1,9 +1,11 @@
-# MT6983 CSF MCU boot probe (2322)
+# MT6983 CSF MCU boot probes (2322 / 2323)
 
 2026-10-31. GPU2321 established actual GPUEB power ownership and Mali soft
 reset on matisse. This next diagnostic installs MCU firmware mappings, powers
-the first L2 group, enables AS0 and starts the MCU. Hardware CSF boot is still
-**unverified**. There is no shader job, command queue, Vulkan or Metal path yet.
+the first L2 group, enables AS0 and starts the MCU. The2322 hardware trial
+timed out at MCU start;2323 is built but hardware-unverified. The original
+2322 design follows; the final section describes its2323 successor. There
+is no shader job, command queue, Vulkan or Metal path yet.
 
 ## Reference facts and firmware
 
@@ -118,11 +120,12 @@ and payload offset2650128. These are offsets, not observed runtime PAs.
 
 ## Device trial and recovery
 
-No2322 partition write or boot has happened. Recovery is online and the full
-64 MiB boot_a baseline was independently rehashed as
+At the2322 build handoff, no partition write or boot had happened. The
+full64 MiB boot_a baseline was independently rehashed as
 2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
-The next concrete trial needs the specific boot_a-write confirmation required
-by AGENTS.md. LK/vendor_boot/recovery/modem/persist/DTBO/GPT stay untouched.
+Each concrete trial needs the specific boot_a-write confirmation required
+by AGENTS.md. Completed trial results follow.
+LK/vendor_boot/recovery/modem/persist/DTBO/GPT stay untouched.
 Root uses ufsrw=0/rootrw=0; only established userdata-tail diagnostics write.
 
 Automatic Recovery failed in2321 and remains unreliable. The embedded Linux
@@ -149,7 +152,7 @@ restore_pending=false. Before/after persistent tail and marks are identical.
 This verifies this image's Recovery entry, changed stack/BSS addressing and
 embedded stock Linux bypass only. It does not execute the normal GPU/MCU
 probe and does not establish automatic Recovery from an XNU boot. The normal
-CSF trial remains pending its own specific boot_a-write confirmation.
+CSF trial was still pending at that milestone; its later result follows.
 
 
 ## Normal CSF2322 hardware result (2026-10-31)
@@ -187,3 +190,73 @@ Next work is static comparison of MCU translation, firmware permissions/cache,
 IRQ behavior and cleanup with the actual vendor KMD. Discrepancies are
 hypotheses until tested. Any successor hardware write needs its own specific
 confirmation after a concrete image is built.
+
+## Static audit and successor2323 (2026-10-31)
+
+These are source/disassembly observations, not a demonstrated cause of the
+2322 timeout. Actual vendor KMD SHA256
+22b26f30a151e9d6791f959cc1f93d1e3f4d4c564537970dadefb0ec2d742a3b
+was disassembled with NDK28.2 llvm-objdump; copies stay ignored.
+
+- kbase_mmu_get_as_setup at0x47994 supplies MEMATTR0x00084c8d888d8f88,
+  TRANSCFG6 and a masked table PA. kbase_mmu_hw_configure at0x45e50 adds
+  WB/read-allocate walks0x42000000 and conditional outer-shareability.
+  No INA bits were observed in that setup. This suggests a full-width root;
+  it does not establish that reduced-width translation is unsupported.
+- kbase_csf_firmware_init writes MCU_CONTROL2 at0x70020; trigger_reload
+  does likewise at0x6e3dc. AUTO2 in2322 was therefore already correct.
+- kbase_pm_enable_interrupts writes JOB mask0xffffffff at0x3a818. Panthor
+  v6.12 also unmasks JOB before starting MCU;2322/2323 poll RAW with GPU,
+  JOB and MMU masks0 and CPU DAIF masked. The effect of this difference on
+  firmware remains untested. No GIC routing was changed.
+- Panthor v6.12 uses hardware VA width (48 on this device), WB/RA walks,
+  and honors cached firmware sections.2322 instead chose VA32/all-NC.
+  The reference has a G610 model entry, not this G710, so it does not prove
+  complete hardware support.
+
+2323 removes those deliberate VA/cache deviations while retaining polled
+RAW readiness. Independent4KiB stage1 tables now have a level0 root/VA48,
+still mapping only ordinary32-bit firmware section addresses. Full48-bit
+lock encodes47. TRANSCFG is0x420001c6 (INA7,mode6,WB/RA), not a verbatim
+copy of vendor6. Cached mode1 sections use AttrIdx1/WB0x9f and SH_IS; other
+modes use index0/NC0x4c and SH_OS, as in the Panthor mapping policy. CPU
+caches remain disabled. Root/config readbacks must match before MCU start.
+Pinned blob needs8 table pages/1232896B within the owned2MiB arena;7 ordinary
+sections/3 protected skipped are unchanged. These changes are untested on
+hardware and must not be described as a proven fix.
+
+The report expands88->128 bytes, appending to the original22 words: sample
+flags, GPU RAW, AS status, TRANSCFG, root PA, MCU disable status/error and
+pre-start shared version. Post-start shared fields are sampled even on
+timeout, before reset. Only a fresh global RAW interrupt and valid interface
+can assert readiness; a preloaded version remains insufficient. MCU disable
+failure remains a cleanup failure even if the next reset succeeds. No new
+hard reset, queue or doorbell was added.
+
+Kernel patch0121 changes build2323 and records16 CSF marks320..335. Decoder
+accepts2321/2322/2323, exposes initial_power_reset_observed independently of
+aggregate power_reset_verified, and labels whether the runtime interface
+was sampled. Old2322 timeout zeros remain unobserved.
+
+32 targeted tests PASS, including ASan/UBSan firmware/memory/boot harnesses,
+full128-byte ADT publication and old/new evidence decoder regressions. Real
+pinned blob sanitizer replay PASS:7 sections/3 protected/8 tables/1232896B.
+Local kernel build exited0 (no CI run/push); kernel16724248B SHA256
+77c7248c13d55fe4d2db365bc9cf2d728849e51eb371abfbc5b8c4304a5442f8.
+Freestanding compile/link, source-manifest equality and image component
+readback passed. Image:
+research/matisse/20261031-gpu/shim2323-ready/matisse-shim-gpu2323.img
+26710016B SHA256
+23b2c8dc56f9a7b72a585efa9ebcf889d2979e1dca6fb58fe53dbf81eafb3137.
+Expanded80402548B; stock Linux+32MiB, ramdisk/signature bytes and frozen2313
+display/UFS/board objects retain2322 component hashes. Signature bytes are
+preserved, not authenticated by this builder.
+
+No2323 hardware write/reboot has occurred. Recovery identity matisse/_a/root
+was read again without writes. Readonly runner preflight also verified the
+complete64MiB baseline SHA2562931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Prepared ignored shim2323-trials/run-once.py has run only preflight.
+First specific confirmation must cover one
+2323 Recovery-fallback trial and full baseline restore/hash. Only after it
+passes should a separately confirmed normal MCU trial run. Automatic Recovery
+from normal XNU remains unreliable; retain the tested persistent fbraw restore.

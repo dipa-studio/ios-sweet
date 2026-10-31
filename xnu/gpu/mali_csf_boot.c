@@ -45,7 +45,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     }
     r->mmu_features=rd(io,c->gpu+0x14);
     unsigned va_bits=r->mmu_features&255,pa_bits=(r->mmu_features>>8)&255;
-    if(va_bits<32||va_bits>48||pa_bits<32||pa_bits>48||
+    if(va_bits!=SWEET_CSF_VA_BITS||pa_bits<32||pa_bits>48||
        c->arena_pa>=(UINT64_C(1)<<pa_bits)||c->arena_bytes>(UINT64_C(1)<<pa_bits)-c->arena_pa) {
         r->error=SWEET_CSF_BOOT_MODEL;return r->error;
     }
@@ -70,21 +70,30 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     wr(io,c->gpu+0x2430,1);wr(io,c->gpu+0x2434,0);
     rc=as_command(io,c->gpu,1,budget);
     if(rc) {r->error=rc;goto cleanup;}
-    /* FLUSH_MEM must follow LOCK. Encode the entire32-bit MCU VA range
-     * as log2(4GiB)-1=31, then wait for each command to complete. */
-    wr(io,c->gpu+0x2410,31);wr(io,c->gpu+0x2414,0);
+    /* Lock the full48-bit MCU address space before FLUSH_MEM. */
+    wr(io,c->gpu+0x2410,SWEET_CSF_VA_BITS-1);wr(io,c->gpu+0x2414,0);
     rc=as_command(io,c->gpu,2,budget);
     if(!rc)rc=as_command(io,c->gpu,5,budget);
     if(rc) {r->error=rc;goto cleanup;}
     wr(io,c->gpu+0x2400,(uint32_t)c->root_pa);wr(io,c->gpu+0x2404,(uint32_t)(c->root_pa>>32));
-    /* All indices noncacheable. 32-bit VA => INA=55-32, 4K mode6,
-     * noncacheable page walks, not the CPU's 16K translation format. */
-    wr(io,c->gpu+0x2408,0x4c4c4c4c);wr(io,c->gpu+0x240c,0x4c4c4c4c);
-    wr(io,c->gpu+0x2430,0x010005c6);wr(io,c->gpu+0x2434,0);
+    /* index0=NC(4c), index1=WB/CPU-inner/explicit RW allocate(9f).
+     * Full hardware VA width, 4K stage1, WB/read-allocate page walks. */
+    wr(io,c->gpu+0x2408,0x4c4c9f4c);wr(io,c->gpu+0x240c,0x4c4c4c4c);
+    uint32_t transcfg=0x42000006|((55-SWEET_CSF_VA_BITS)<<6);
+    wr(io,c->gpu+0x2430,transcfg);wr(io,c->gpu+0x2434,0);
     rc=as_command(io,c->gpu,1,budget);
     if(rc) {r->error=rc;goto cleanup;}
+    r->transcfg_lo=rd(io,c->gpu+0x2430);
+    r->transtab_lo=rd(io,c->gpu+0x2400);r->transtab_hi=rd(io,c->gpu+0x2404);
+    if(r->transcfg_lo!=transcfg||rd(io,c->gpu+0x2434)||
+       r->transtab_lo!=(uint32_t)c->root_pa||r->transtab_hi!=(uint32_t)(c->root_pa>>32)) {
+        r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
+    }
     wr(io,c->gpu+0x2004,0x10001);wr(io,c->gpu+0x1004,0x80000000);
     if(rd(io,c->gpu+0x1000)&0x80000000) {r->error=SWEET_CSF_BOOT_STATE;goto cleanup;}
+    uint64_t shared=c->arena_pa+c->shared_offset;
+    io->barrier(io->context);
+    r->version_before=rd(io,shared);r->sample_flags|=1;
     r->stage=SWEET_CSF_BOOT_MCU;
     wr(io,c->gpu+0x700,2); /* AUTO is2; ENABLE is1. */
     uint64_t begin=io->ticks(io->context);
@@ -98,13 +107,16 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
         if(io->ticks(io->context)-begin>=budget)break;
     }
     r->as_fault=rd(io,c->gpu+0x241c);r->as_fault_lo=rd(io,c->gpu+0x2420);r->as_fault_hi=rd(io,c->gpu+0x2424);
-    if(rc) {r->error=rc;goto cleanup;}
-    r->stage=SWEET_CSF_BOOT_IFACE;
-    uint64_t shared=c->arena_pa+c->shared_offset;
+    r->gpu_raw=rd(io,c->gpu+0x20);r->as_status=rd(io,c->gpu+0x2428);
+    /* Shared host PA is validated and CPU-readable independent of GPU
+     * translation. Capture it even on timeout, before disable/reset. */
     io->barrier(io->context);
     r->version=rd(io,shared);r->features=rd(io,shared+4);
     r->input_va=rd(io,shared+8);r->output_va=rd(io,shared+12);
     r->groups=rd(io,shared+16);r->group_stride=rd(io,shared+20);
+    r->sample_flags|=2;
+    if(rc) {r->error=rc;goto cleanup;}
+    r->stage=SWEET_CSF_BOOT_IFACE;
     /* An input/output page and every CSG control block must fit shared. */
     uint64_t end=UINT64_C(0x4000000)+c->shared_bytes;
     if(!r->version||r->version==UINT32_MAX||r->mcu_status!=1||
@@ -120,7 +132,9 @@ cleanup:
     /* GPU reset stops DMA and discards AS0/L2 state before the caller
      * releases its GPUEB reference. Never reclaim arena on failed reset. */
     wr(io,c->gpu+0x700,0);
-    (void)poll(io,c->gpu+0x704,UINT32_MAX,0,budget);
+    r->disable_error=poll(io,c->gpu+0x704,UINT32_MAX,0,budget);
+    r->disable_status=rd(io,c->gpu+0x704);
+    if(r->disable_error)r->cleanup_error=r->disable_error;
     wr(io,c->gpu+0x24,0x100);wr(io,c->gpu+0x30,0x101);
     rc=poll(io,c->gpu+0x20,0x100,0x100,budget);
     r->reset_raw=rd(io,c->gpu+0x20);

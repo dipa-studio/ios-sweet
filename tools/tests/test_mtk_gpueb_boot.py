@@ -149,7 +149,10 @@ class ShimGpuTests(unittest.TestCase):
         work = Path(cls.temp.name)
         stub = work / 'stub.c'
         stub.write_text(r'''
-#include "mtk_gpueb_boot.h"
+#include "mali_csf_boot.h"
+struct sweet_csf_boot_report shim_csf_report = {
+    .stage=4,.error=-53,.sample_flags=3,.version_before=0x01020304,
+    .disable_error=-53,.disable_status=1 };
 unsigned calls;
 void shim_gpu_host_run(const struct sweet_gpu_boot_config *c,struct sweet_gpu_boot_report *r) {
     calls++;
@@ -164,7 +167,7 @@ void con_hex(const char *a,uint64_t b){(void)a;(void)b;}
 ''')
         binary = work / 'shim.dylib'
         subprocess.run(['cc', '-shared', '-fPIC', '-std=c11', '-Wall', '-Wextra', '-Werror',
-                        '-DSHIM_GPU_HOST_TEST', '-I', str(ROOT / 'xnu/gpu'), str(stub),
+                        '-DSHIM_GPU_HOST_TEST', '-DSHIM_CSF_PROBE', '-I', str(ROOT / 'xnu/gpu'), str(stub),
                         str(ROOT / 'shim/gpu.c'), str(ROOT / 'shim/fdt.c'),
                         str(ROOT / 'xnu/gpu/mtk_gpueb_protocol.c'), '-o', str(binary)],
                        check=True, capture_output=True)
@@ -209,7 +212,7 @@ void con_hex(const char *a,uint64_t b){(void)a;(void)b;}
         root = adt.Node(); root.props = [('name',0,b'device-tree\0')]
         chosen = adt.Node(); chosen.props = [('name',0,b'chosen\0'),
              ('firmware-version',0,bytes(128)),('system-firmware-version',0,bytes(128)),
-             ('sweet-gpu-report',0,bytes(128))]; root.children=[chosen]
+             ('sweet-gpu-report',0,bytes(128)),('sweet-csf-report',0,bytes(128))]; root.children=[chosen]
         data = adt.serialize(root)
         buf = ctypes.create_string_buffer(data)
         self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(buf),len(data),report,shared),0)
@@ -217,7 +220,14 @@ void con_hex(const char *a,uint64_t b){(void)a;(void)b;}
         self.assertEqual(end,len(data))
         v = parsed.children[0].prop('firmware-version').split(b'\0')[0]
         self.assertIn(b'id=a0020001',v);self.assertIn(b'rst=00000100',v)
-        self.assertTrue(v.startswith(b'sweet-shim/gpu2322'))
+        self.assertTrue(v.startswith(b'sweet-shim/gpu2323'))
+        csf=parsed.children[0].prop('sweet-csf-report')
+        self.assertEqual(len(csf),128)
+        self.assertEqual(struct.unpack_from('<I',csf,88)[0],3)
+        self.assertEqual(struct.unpack_from('<IiI',csf,112),(1,-53,0x01020304))
+        del chosen.props[-1]
+        missing=adt.serialize(root); missing_buf=ctypes.create_string_buffer(missing)
+        self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(missing_buf),len(missing),report,shared),-1)
         for length in (0,7,40,len(data)-128):
             self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(buf),length,report,shared),-1)
 

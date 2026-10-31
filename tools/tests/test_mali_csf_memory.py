@@ -28,7 +28,7 @@ static void fixture(uint8_t *b) {
 }
 static uint64_t walk(const uint8_t *a,uint64_t pa,uint32_t va) {
  const uint8_t *t=a;
- for(unsigned l=1;l<3;l++) {unsigned shift=l==1?30:21;uint64_t d=u64(t+((va>>shift)&511)*8);if((d&3)!=3)return 0;assert((d&0x0000fffffffff000ULL)>=pa);t=a+((d&0x0000fffffffff000ULL)-pa);}
+ for(unsigned l=0;l<3;l++) {unsigned shift=39-9*l;uint64_t d=u64(t+(((uint64_t)va>>shift)&511)*8);if((d&3)!=3)return 0;assert((d&0x0000fffffffff000ULL)>=pa);t=a+((d&0x0000fffffffff000ULL)-pa);}
  return u64(t+((va>>12)&511)*8);
 }
 static void checks(const uint8_t *fw,size_t size) {
@@ -46,6 +46,7 @@ static void checks(const uint8_t *fw,size_t size) {
    uint64_t d=walk(a,root,p->va+off);assert((d&3)==3);
    assert((d&0x0000fffffffff000ULL)==root+p->arena_offset+off);
    assert(!!(d&0x80)==!(p->flags&2));assert(!!(d&(3ULL<<53))==!(p->flags&4));
+   assert((d&0x31c)==((p->flags&24)==8?0x304:0x200));
   }
  }
  assert(!walk(a,root,0x3000000));
@@ -63,7 +64,7 @@ static void checks(const uint8_t *fw,size_t size) {
 }
 int main(int argc,char **argv) {
  uint8_t b[256];fixture(b);checks(b,sizeof(b));
- struct sweet_csf_memory m;assert(!sweet_csf_memory_plan(b,sizeof(b),&m));assert(m.mapping_count==2 && m.protected_skipped==1 && m.table_pages==4);
+ struct sweet_csf_memory m;assert(!sweet_csf_memory_plan(b,sizeof(b),&m));assert(m.mapping_count==2 && m.protected_skipped==1 && m.table_pages==5);
  memset(&m,0xa5,sizeof(m));struct sweet_csf_memory keep=m;b[0]=0;
  assert(sweet_csf_memory_plan(b,sizeof(b),&m));assert(!memcmp(&m,&keep,sizeof(m)));
  if(argc==2) {FILE*f=fopen(argv[1],"rb");assert(f);fseek(f,0,SEEK_END);long n=ftell(f);rewind(f);uint8_t *fw=malloc(n);assert(fread(fw,1,n,f)==(size_t)n);fclose(f);checks(fw,n);free(fw);}
