@@ -1,5 +1,42 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: CSF2326 STARTUP EVIDENCE BUILD; NO DEVICE TRIAL <<<
+
+The next diagnostic is built and has not been flashed. Device remains the
+last verified root Recovery with original64MiB boot_a hash
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1;
+restore_pending=false. No new partition-write approval was requested or
+used. The generated image is for review/testing only.
+
+CSF2326 appends a288-byte report and marks320..355. It snapshots before and
+after values for COHERENCY_ENABLE(0x304), CSF_CONFIG(0xf00), SHADER_CONFIG
+(0xf04), TILER_CONFIG(0xf08), L2_MMU_CONFIG(0xf0c), programmed AS_MEMATTR
+(0x2408/0x240c), and the pinned firmware's early private/shared words. The
+private samples are read from the shim arena while the power reference is
+held; they do not change GPU behavior and are not readiness proof.
+
+The private probe maps the ordinary section covering MCU VA0x0202c000 and
+records words at arena+0x934 (firmware writes at PC01002bce), +0x93c (writes
+around01002bea/01002c16), +0x22c (01002f14), plus shared VA0x04000018
+(01002fd6). A synthetic run shows all four words change after the modeled
+startup path; a stuck TILER transition changes only the first two. This is a
+useful endpoint marker, not a physical MCU trace.
+
+Local kernel build exited0; kernel16724248B SHA256
+b445ec59b58d7533e94e0b4dc0f3e71507426da78c9e9ec1b2cbe668d588a691.
+Build-only image:
+`research/matisse/20261031-gpu/shim2326-ready/matisse-shim-gpu2326.img`,
+26714112B SHA256
+2b55baf18e88a68f4e642ab35bda1cdb95987452710bc1b56a964aa99d544b87.
+Report decoder and 40 targeted tests PASS (3.111s); tests cover old report
+ABIs, 2326 startup fields, invalid sampling and report-size publication.
+No CI run/push/device action. Full 2326 image artifacts remain ignored.
+
+NEXT: review the diagnostic ABI and, only with a separate concrete approval,
+perform one 2326 hardware trial using its exact image, then restore/hash the
+full original boot_a. Do not infer firmware fetch or timeout cause from this
+build-only or synthetic evidence. Preserve unrelated collector/shim dirt.
+
 ## >>> ACTIVE 2026-10-31: OFFLINE CSF FETCH AUDIT PASS; HARDWARE STILL BLOCKED <<<
 
 Read this section before the historical2325 trial entries below. Device was

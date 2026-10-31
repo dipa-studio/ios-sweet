@@ -29,6 +29,41 @@ static void core_state(const struct sweet_gpu_io *io,uint64_t gpu,
     r->tiler_ready_lo=rd(io,gpu+0x150);r->tiler_ready_hi=rd(io,gpu+0x154);
     r->sample_flags|=flag;
 }
+static void init_registers(const struct sweet_gpu_io *io,uint64_t gpu,
+                           struct sweet_csf_boot_report *r,int after)
+{
+    uint32_t coherency=rd(io,gpu+0x304),csf=rd(io,gpu+0xf00);
+    uint32_t shader=rd(io,gpu+0xf04),tiler=rd(io,gpu+0xf08),mmu=rd(io,gpu+0xf0c);
+    if(after) {
+        r->coherency_after=coherency;r->csf_config_after=csf;
+        r->shader_config_after=shader;r->tiler_config_after=tiler;r->l2_mmu_config_after=mmu;
+        r->diag_flags|=16;
+    } else {
+        r->coherency_features=rd(io,gpu+0x300);
+        r->coherency_before=coherency;r->csf_config_before=csf;
+        r->shader_config_before=shader;r->tiler_config_before=tiler;r->l2_mmu_config_before=mmu;
+        r->diag_flags|=1;
+    }
+}
+static void startup_memory(const struct sweet_csf_boot_config *c,const struct sweet_gpu_io *io,
+                           struct sweet_csf_boot_report *r,int after)
+{
+    /* Exact pinned firmware writes:0202c934 @01002bce,0202c93e @01002c16,
+     *0202c22c @01002f14 and shared04000018 @01002fd6. Sample aligned words
+     * through caller-owned CPU PA, without modifying the firmware or arena. */
+    if(c->private_probe_offset) {
+        uint64_t page=c->arena_pa+c->private_probe_offset;
+        uint32_t early=rd(io,page+0x934),feature=rd(io,page+0x93c),late=rd(io,page+0x22c);
+        if(after) {r->private_early_after=early;r->private_feature_after=feature;r->private_late_after=late;}
+        else {
+            r->private_page_lo=(uint32_t)page;r->private_page_hi=(uint32_t)(page>>32);
+            r->private_early_before=early;r->private_feature_before=feature;r->private_late_before=late;
+        }
+    }
+    uint32_t value=rd(io,c->arena_pa+c->shared_offset+0x18);
+    if(after) {r->shared_alloc_after=value;r->diag_flags|=8;}
+    else {r->shared_alloc_before=value;r->diag_flags|=4;}
+}
 int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_io *io,
                    struct sweet_csf_boot_report *r)
 {
@@ -43,7 +78,11 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
        c->arena_pa<0x40000000||(c->arena_pa&4095)||!c->arena_bytes||
        c->arena_bytes>0x1000000||c->arena_pa>UINT64_MAX-c->arena_bytes||
        c->shared_bytes<4096||(c->shared_offset&4095)||
-       c->shared_offset>c->arena_bytes||c->shared_bytes>c->arena_bytes-c->shared_offset) {
+       c->shared_offset>c->arena_bytes||c->shared_bytes>c->arena_bytes-c->shared_offset||
+       (c->private_probe_offset&&((c->private_probe_offset&4095)||
+        c->private_probe_offset>c->arena_bytes||4096>c->arena_bytes-c->private_probe_offset||
+        (c->private_probe_offset<(uint64_t)c->shared_offset+c->shared_bytes&&
+         c->shared_offset<(uint64_t)c->private_probe_offset+4096)))) {
         r->error=SWEET_CSF_BOOT_ARGUMENT;return r->error;
     }
     budget=(io->frequency*c->timeout_ms+999)/1000;
@@ -68,6 +107,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
        address_mode>1 || rd(io,c->gpu+0x2400) || rd(io,c->gpu+0x2404)) {
         r->error=SWEET_CSF_BOOT_STATE;return r->error;
     }
+    init_registers(io,c->gpu,r,0);
     gpu_mask=rd(io,c->gpu+0x28);job_mask=rd(io,c->gpu+0x1008);mmu_mask=rd(io,c->gpu+0x2008);
     wr(io,c->gpu+0x28,0);wr(io,c->gpu+0x1008,0);wr(io,c->gpu+0x2008,0);
     r->stage=SWEET_CSF_BOOT_L2;
@@ -97,6 +137,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     if(rc) {r->error=rc;goto cleanup;}
     r->transcfg_lo=rd(io,c->gpu+0x2430);
     r->transtab_lo=rd(io,c->gpu+0x2400);r->transtab_hi=rd(io,c->gpu+0x2404);
+    r->memattr_lo=rd(io,c->gpu+0x2408);r->memattr_hi=rd(io,c->gpu+0x240c);r->diag_flags|=2;
     if(r->transcfg_lo!=transcfg||rd(io,c->gpu+0x2434)||
        r->transtab_lo!=(uint32_t)c->root_pa||r->transtab_hi!=(uint32_t)(c->root_pa>>32)) {
         r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
@@ -106,6 +147,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     uint64_t shared=c->arena_pa+c->shared_offset;
     io->barrier(io->context);
     r->version_before=rd(io,shared);r->sample_flags|=1;
+    startup_memory(c,io,r,0);
     /* Match the measured r32p1 internal interrupt enables before MCU AUTO.
      * CPU DAIF stays masked and GIC routing is untouched: the host still
      * polls RAW. Whether these enables fix2323 is a hardware hypothesis. */
@@ -146,6 +188,8 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     r->input_va=rd(io,shared+8);r->output_va=rd(io,shared+12);
     r->groups=rd(io,shared+16);r->group_stride=rd(io,shared+20);
     r->sample_flags|=2;
+    startup_memory(c,io,r,1);
+    init_registers(io,c->gpu,r,1);
     core_state(io,c->gpu,r,8);
     if(rc) {r->error=rc;goto cleanup;}
     r->stage=SWEET_CSF_BOOT_IFACE;

@@ -6,6 +6,9 @@
 struct sweet_csf_boot_config {
     uint64_t gpu, root_pa, arena_pa, arena_bytes;
     uint32_t shared_offset, shared_bytes, timeout_ms;
+    /* Optional pinned-blob diagnostics: arena page backing MCU0202c000.
+     * Zero disables private probes. Never supplies an arbitrary host PA. */
+    uint32_t private_probe_offset;
 };
 struct sweet_csf_boot_report {
     uint32_t stage;
@@ -31,6 +34,22 @@ struct sweet_csf_boot_report {
     uint32_t tiler_present_lo, tiler_present_hi;
     uint32_t tiler_transition_lo, tiler_transition_hi;
     uint32_t tiler_ready_lo, tiler_ready_hi;
+    /*2326 appends evidence only, 288 bytes total. diag_flags: bit0 reset
+     * register snapshot, bit1 programmed MEMATTR, bit2 memory before AUTO,
+     * bit3 memory after AUTO, bit4 post-AUTO register snapshot. Memory
+     * mutations never substitute for fresh IRQ/version readiness checks. */
+    uint32_t diag_flags, coherency_features;
+    uint32_t coherency_before, coherency_after;
+    uint32_t csf_config_before, csf_config_after;
+    uint32_t shader_config_before, shader_config_after;
+    uint32_t tiler_config_before, tiler_config_after;
+    uint32_t l2_mmu_config_before, l2_mmu_config_after;
+    uint32_t memattr_lo, memattr_hi;
+    uint32_t private_early_before, private_early_after;
+    uint32_t private_feature_before, private_feature_after;
+    uint32_t private_late_before, private_late_after;
+    uint32_t shared_alloc_before, shared_alloc_after;
+    uint32_t private_page_lo, private_page_hi;
 };
 enum sweet_csf_boot_stage {
     SWEET_CSF_BOOT_CONFIG=1, SWEET_CSF_BOOT_L2=2, SWEET_CSF_BOOT_AS=3,

@@ -740,3 +740,38 @@ kernel/image change,CI run or device action occurred. The next diagnostic
 should preserve behavior and capture reset/init register values plus early
 firmware-owned memory mutations before cleanup. Any future partition write
 requires its own concrete image approval under AGENTS.md.
+
+## CSF2326 startup evidence build (2026-10-31)
+
+The build-only successor keeps the transaction behavior unchanged and appends
+evidence fields to the report. It records pre/post values of GPU
+`COHERENCY_ENABLE` (`0x304`), `CSF_CONFIG` (`0xf00`), `SHADER_CONFIG`
+(`0xf04`), `TILER_CONFIG` (`0xf08`), `L2_MMU_CONFIG` (`0xf0c`) and the
+programmed `AS_MEMATTR` pair (`0x2408/0x240c`). It also samples four words in
+the ordinary firmware arena section and the shared word at VA `0x04000018`
+before MCU AUTO and after the startup wait. Sampling is bounded, read-only and
+does not substitute for a fresh JOB global IRQ, version publication or valid
+runtime interface.
+
+The private addresses are tied to the pinned blob: the arena page backing MCU
+VA `0x0202c000` contains the endpoint words at offsets `+0x934`, `+0x93c` and
+`+0x22c`; the disassembly writes them near PCs `0x01002bce`,
+`0x01002bea/0x01002c16` and `0x01002f14`. The shared allocation word is
+`0x04000018`, written near `0x01002fd6`. If the blob's ordinary section does
+not cover that page, the probe refuses to run.
+
+The ABI is build `0x2326`: the report is 288 bytes and the kernel records
+36 CSF qwords at marks `320..355`. The decoder treats these words as
+diagnostic evidence only. It requires all five diagnostic flag bits and the
+private page address before considering startup sampling complete, while the
+firmware-ready predicate still requires the existing fresh IRQ/version/
+interface checks. A diagnostic mutation can show that the modeled endpoint
+was reached; an unchanged word cannot prove that it was not.
+
+Validation completed without a device write: local XNU build exited 0; the
+build-only image is
+`research/matisse/20261031-gpu/shim2326-ready/matisse-shim-gpu2326.img` with
+SHA256 `2b55baf18e88a68f4e642ab35bda1cdb95987452710bc1b56a964aa99d544b87`.
+The 40-test targeted suite passed in 3.111 seconds. No CI run or push was
+performed. A 2326 hardware trial requires separate approval and must use the
+same restoration journal/full-boot hash procedure as earlier trials.

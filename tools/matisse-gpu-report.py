@@ -23,6 +23,12 @@ CSF_MASK_CORE_KEYS = ['gpu_irq_mask','mmu_irq_mask','as_present','irq_gate_passe
     'shader_present_lo','shader_present_hi','shader_transition_lo','shader_transition_hi',
     'shader_ready_lo','shader_ready_hi','tiler_present_lo','tiler_present_hi',
     'tiler_transition_lo','tiler_transition_hi','tiler_ready_lo','tiler_ready_hi']
+CSF_STARTUP_KEYS = ['diag_flags','coherency_features','coherency_before','coherency_after',
+    'csf_config_before','csf_config_after','shader_config_before','shader_config_after',
+    'tiler_config_before','tiler_config_after','l2_mmu_config_before','l2_mmu_config_after',
+    'memattr_lo','memattr_hi','private_early_before','private_early_after',
+    'private_feature_before','private_feature_after','private_late_before','private_late_after',
+    'shared_alloc_before','shared_alloc_after','private_page_lo','private_page_hi']
 CSF_STAGES = {0:'not-run',1:'config',2:'l2',3:'address-space',4:'mcu',
               5:'interface',6:'cleanup',7:'complete'}
 CSF_ERRORS = {0:'success',-40:'memory-argument',-41:'memory-capacity',
@@ -43,7 +49,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -78,21 +84,38 @@ def decode(data, expected_build=0x2321):
         fields['spm_after'] & 6 == 6 and fields['firmware_magic'] == 0x55667788 and
         fields['gpu_id'] >> 28 == 10 and fields['as_present'] not in (0,0xffffffff) and
         fields['reset_rawstat'] & 0x100 != 0)
-    if expected_build in (0x2322,0x2323,0x2324,0x2325):
-        count = 24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11)
+    if expected_build >= 0x2322:
+        count = 36 if expected_build == 0x2326 else (24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11))
         raw = report_bytes(records,320,count,expected_build,'CSF')
         csf = dict(zip(CSF_KEYS,struct.unpack('<I2i19I',raw[:88])))
         if expected_build >= 0x2323:
             csf.update(zip(CSF_DIAGNOSTIC_KEYS,struct.unpack('<7Ii2I',raw[88:128])))
-            allowed_flags = 15 if expected_build == 0x2325 else 3
+            allowed_flags = 15 if expected_build >= 0x2325 else 3
             if csf['sample_flags'] & ~allowed_flags or (expected_build == 0x2323 and csf['reserved']):
                 raise ValueError('invalid CSF diagnostic flags/reserved word')
         if expected_build >= 0x2324:
             csf['job_irq_mask'] = csf.pop('reserved')
-        if expected_build == 0x2325:
-            csf.update(zip(CSF_MASK_CORE_KEYS,struct.unpack('<16I',raw[128:])))
+        if expected_build >= 0x2325:
+            csf.update(zip(CSF_MASK_CORE_KEYS,struct.unpack('<16I',raw[128:192])))
             if csf['irq_gate_passed'] not in (0,1):
                 raise ValueError('invalid CSF IRQ gate state')
+        if expected_build == 0x2326:
+            csf.update(zip(CSF_STARTUP_KEYS,struct.unpack('<24I',raw[192:])))
+            if csf['diag_flags'] & ~31:
+                raise ValueError('invalid CSF startup diagnostic flags')
+            before,after=bool(csf['diag_flags'] & 4),bool(csf['diag_flags'] & 8)
+            page=csf['private_page_hi'] << 32 | csf['private_page_lo']
+            if page and (page < 0x40000000 or page & 4095):
+                raise ValueError('invalid private diagnostic page')
+            csf['startup_memory_sampled'] = before and after
+            csf['private_memory_sampled'] = before and after and bool(page)
+            csf['startup_memory_changed'] = {}
+            if before and after:
+                for name in ('private_early','private_feature','private_late','shared_alloc'):
+                    if name == 'shared_alloc' or page:
+                        csf['startup_memory_changed'][name] = csf[name+'_before'] != csf[name+'_after']
+            csf['startup_memory_note'] = ('Endpoint mutations are diagnostic evidence only; '
+                'unchanged words cannot exclude MCU execution. Fresh IRQ/version remain required.')
         if csf['stage'] not in CSF_STAGES:
             raise ValueError('invalid CSF report stage')
         end = 0x4094000  # shared VA + measured pinned firmware shared size
@@ -110,7 +133,7 @@ def decode(data, expected_build=0x2321):
         sampled = csf['stage'] in (5,6,7)
         if expected_build >= 0x2323:
             sampled = bool(csf['sample_flags'] & 2)
-            expected_flags = 15 if expected_build == 0x2325 else 3
+            expected_flags = 15 if expected_build >= 0x2325 else 3
             ready = (ready and csf['sample_flags'] == expected_flags and csf['gpu_raw'] & 3 == 0 and
                      csf['as_status'] & 1 == 0 and csf['transcfg_lo'] == 0x420001c6 and
                      (csf['transtab_hi'] << 32 | csf['transtab_lo']) >= 0x40000000 and
@@ -118,7 +141,7 @@ def decode(data, expected_build=0x2321):
             cleanup = cleanup and csf['disable_error'] == 0 and csf['disable_status'] == 0
             if expected_build == 0x2324:
                 ready = ready and csf['job_irq_mask'] == 0xffffffff
-            if expected_build == 0x2325:
+            if expected_build >= 0x2325:
                 required_mmu = csf['as_present'] & 0xffff
                 mask_gate = (csf['irq_gate_passed'] == 1 and
                     csf['as_present'] == fields['as_present'] and
@@ -130,6 +153,10 @@ def decode(data, expected_build=0x2321):
                 csf.update(irq_gate_verified=mask_gate,
                     core_state_sampled=bool(csf['sample_flags'] & 4),
                     core_state_after_start=bool(csf['sample_flags'] & 8))
+            if expected_build == 0x2326:
+                ready = (ready and csf['diag_flags'] == 31 and
+                    csf['memattr_lo'] == 0x4c4c9f4c and csf['memattr_hi'] == 0x4c4c4c4c and
+                    csf['private_memory_sampled'])
         csf.update(stage_name=CSF_STAGES[csf['stage']],
                    error_name=CSF_ERRORS.get(csf['error'],'firmware-format'),
                    runtime_interface_sampled=sampled,
@@ -144,7 +171,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321, 0x2322, 0x2323, 0x2324 or 0x2325)')
+                   help='expected kernel/report build (0x2321 through 0x2326)')
     a=p.parse_args()
     try:
         report=decode(a.marks.read_bytes(),a.build)

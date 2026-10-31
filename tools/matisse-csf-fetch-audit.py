@@ -154,6 +154,11 @@ def replay(arena, plan, step_limit=500000, tiler_transition_reads=0):
     last = deque(maxlen=16)
     mmio_reads, mmio_writes = Counter(), []
     shared_writes = []
+    probes = {'private_early': 0x0202C934, 'private_feature': 0x0202C93C,
+              'private_late': 0x0202C22C, 'shared_alloc': plan['shared_va'] + 0x18}
+    probe_before = {name: struct.unpack('<I', u.mem_read(address, 4))[0]
+                    for name, address in probes.items()}
+    probe_writes = []
 
     def violation(operation, address, size, message):
         state['reason'] = 'access-violation'
@@ -197,6 +202,10 @@ def replay(arena, plan, step_limit=500000, tiler_transition_reads=0):
                 mmio_writes.append({'pc': hex(pc), 'address': hex(address), 'value': hex(value), 'size': size})
             return
         if access('read' if is_read else 'write', address, size) and not is_read:
+            for name, target in probes.items():
+                if address < target + 4 and target < address + size and len(probe_writes) < 64:
+                    probe_writes.append({'name': name, 'pc': hex(pc), 'address': hex(address),
+                                         'size': size, 'value': hex(value)})
             if plan['shared_va'] <= address < plan['shared_va'] + plan['shared_bytes']:
                 state['shared_write_count'] += 1
                 if len(shared_writes) < 256:
@@ -234,6 +243,10 @@ def replay(arena, plan, step_limit=500000, tiler_transition_reads=0):
                   'mmio_reads': [{'address': hex(a), 'pc': hex(pc), 'count': n}
                                  for (a, pc), n in mmio_reads.most_common(40)],
                   'mmio_writes': mmio_writes, 'shared_writes': shared_writes,
+                  'startup_probes': {name: {'va': hex(address), 'before': hex(probe_before[name]),
+                      'after': hex(struct.unpack('<I', u.mem_read(address, 4))[0])}
+                      for name, address in probes.items()},
+                  'startup_probe_writes': probe_writes,
                   'last_pcs': [hex(x) for x in last], 'unicorn_version': uc.__version__})
     return state
 

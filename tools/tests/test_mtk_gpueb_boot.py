@@ -214,7 +214,7 @@ void con_hex(const char *a,uint64_t b){(void)a;(void)b;}
         root = adt.Node(); root.props = [('name',0,b'device-tree\0')]
         chosen = adt.Node(); chosen.props = [('name',0,b'chosen\0'),
              ('firmware-version',0,bytes(128)),('system-firmware-version',0,bytes(128)),
-             ('sweet-gpu-report',0,bytes(128)),('sweet-csf-report',0,bytes(192))]; root.children=[chosen]
+             ('sweet-gpu-report',0,bytes(128)),('sweet-csf-report',0,bytes(288))]; root.children=[chosen]
         data = adt.serialize(root)
         buf = ctypes.create_string_buffer(data)
         self.assertEqual(self.lib.shim_gpu_publish(ctypes.addressof(buf),len(data),report,shared),0)
@@ -222,9 +222,9 @@ void con_hex(const char *a,uint64_t b){(void)a;(void)b;}
         self.assertEqual(end,len(data))
         v = parsed.children[0].prop('firmware-version').split(b'\0')[0]
         self.assertIn(b'id=a0020001',v);self.assertIn(b'rst=00000100',v)
-        self.assertTrue(v.startswith(b'sweet-shim/gpu2325'))
+        self.assertTrue(v.startswith(b'sweet-shim/gpu2326'))
         csf=parsed.children[0].prop('sweet-csf-report')
-        self.assertEqual(len(csf),192)
+        self.assertEqual(len(csf),288)
         self.assertEqual(struct.unpack_from('<I',csf,88)[0],3)
         self.assertEqual(struct.unpack_from('<IiI',csf,112),(1,-53,0x01020304))
         self.assertEqual(struct.unpack_from('<4I',csf,128),(0x80503,0xff,0xff,1))

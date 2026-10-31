@@ -65,13 +65,13 @@ class PersistentReportPatchTests(unittest.TestCase):
                     cwd=directory,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,name+': '+result.stderr)
             source = (Path(directory)/'bsd/dev/sweet_ufs.c').read_text()
-        self.assertIn('#define SWEET_BUILD_ID 0x2325u',source)
+        self.assertIn('#define SWEET_BUILD_ID 0x2326u',source)
         begin = source.index('static void\nsweet_gpu_report_marks(void)\n{')
         end = source.index('\n}\n',begin)
         report = source[begin:end]
-        self.assertIn('size == 192',report)
-        self.assertIn('uint32_t csf[48];',report)
-        self.assertIn('i < 24;',report)
+        self.assertIn('size == 288',report)
+        self.assertIn('uint32_t csf[72];',report)
+        self.assertIn('i < 36;',report)
         self.assertIn('sweet_mark(320 + i, a, SWEET_BUILD_ID);',report)
         self.assertIn('for (uint32_t i = 0; i < 16; i++) {\n'
                       '\t\tsweet_mark(70 + i, i, sweet_disp_trace[i]);',source)
@@ -135,7 +135,7 @@ class ReportDecodeTests(unittest.TestCase):
         if build>=0x2323:
             if build>=0x2324:values['reserved']=changes.get('reserved',0xffffffff)
             raw+=struct.pack('<7Ii2I',*(values[k] for k in self.module.CSF_DIAGNOSTIC_KEYS))
-        if build==0x2325:
+        if build>=0x2325:
             values.update(zip(self.module.CSF_MASK_CORE_KEYS,
                 [0x80503,0xff,0xff,1,0xff,0,0,0,0xff,0,1,0,0,0,1,0]))
             values['sample_flags']=changes.get('sample_flags',15)
@@ -143,6 +143,12 @@ class ReportDecodeTests(unittest.TestCase):
             raw=struct.pack('<I2i19I',*(values[k] for k in self.module.CSF_KEYS))
             raw+=struct.pack('<7Ii2I',*(values[k] for k in self.module.CSF_DIAGNOSTIC_KEYS))
             raw+=struct.pack('<16I',*(values[k] for k in self.module.CSF_MASK_CORE_KEYS))
+        if build==0x2326:
+            values.update(zip(self.module.CSF_STARTUP_KEYS,
+                [31,3,31,31,0x44,0x44,0x55,0x55,0x66,0x66,0x77,0x77,
+                 0x4c4c9f4c,0x4c4c4c4c,0,10,0,0x200000,0,0x50c0,0,3,0x90045000,0]))
+            values.update(changes)
+            raw+=struct.pack('<24I',*(values[k] for k in self.module.CSF_STARTUP_KEYS))
         count=struct.unpack_from('<I',data,12)[0]
         for i in range(len(raw)//8):
             if i==omit:continue
@@ -230,6 +236,27 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertTrue(result['initial_power_reset_observed'])
         self.assertFalse(result['power_reset_verified'])
         self.assertFalse(self.module.decode(self.marks(reset=0))['initial_power_reset_observed'])
+
+    def test_2326_startup_mutations_are_not_readiness(self):
+        result=self.module.decode(self.csf_marks(build=0x2326),0x2326)
+        self.assertTrue(result['csf_firmware_boot_verified'])
+        self.assertTrue(result['csf']['private_memory_sampled'])
+        self.assertTrue(all(result['csf']['startup_memory_changed'].values()))
+        for args in ({'job_raw':0},{'version':0},{'diag_flags':7},{'memattr_lo':0},
+                     {'private_page_lo':0},{'cleanup_error':-53}):
+            with self.subTest(args=args):
+                self.assertFalse(self.module.decode(self.csf_marks(build=0x2326,**args),0x2326)['csf_firmware_boot_verified'])
+        stalled=self.module.decode(self.csf_marks(build=0x2326,stage=4,error=-53,
+            version=0,job_raw=0,firmware_ready=0),0x2326)
+        self.assertTrue(stalled['csf']['startup_memory_changed']['private_early'])
+        self.assertFalse(stalled['csf_firmware_boot_verified'])
+        unsampled=self.module.decode(self.csf_marks(build=0x2326,diag_flags=7,
+            stage=3,error=-52,sample_flags=5,irq_gate_passed=0),0x2326)
+        self.assertFalse(unsampled['csf']['startup_memory_sampled'])
+        self.assertEqual(unsampled['csf']['startup_memory_changed'],{})
+        for args in ({'omit':35},{'tag':0x2325},{'diag_flags':32},{'private_page_lo':1}):
+            with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2326,**args),0x2326)
+        with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2326),0x2325)
 
 if __name__ == '__main__':
     unittest.main()

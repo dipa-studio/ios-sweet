@@ -14,6 +14,7 @@ HARNESS=r'''
 struct model {
  uint64_t tick;unsigned reads,writes,enabled,resets,as_updates,locked,flushed,lock_low,lock_high;
  uint32_t gpu_mask,job_mask,mmu_mask,l2,raw,job,mcu,mmu,transcfg,table_low,table_high;
+ uint32_t memattr_lo,memattr_hi;
  int unpowered,bad_id,bad_bits,as_busy,no_l2,no_fw,fw_fault,reset_fail,bad_iface,stale,stuck_timer,live_table,request_done,disable_fail,bad_readback,bad_irq_mask,clamp_masks,missing_gpu_irq,missing_mmu_irq;
 };
 static uint32_t rd(void *p,uint64_t a) {
@@ -21,7 +22,11 @@ static uint32_t rd(void *p,uint64_t a) {
  if(a==0x1c001f3c||a==0x1c001f40)return m->unpowered?2:6;
  if(a>=0x90010000 && a<0x90010020) {
   assert(m->as_updates==2);
-  switch(a-0x90010000) {case 0:return 0x01020003;case 4:return 0x123;case 8:return m->bad_iface==1?0:0x4001000;case 12:return 0x4002000;case 16:return 8;case 20:return m->bad_iface==2?0x4000:64;default:assert(0);}
+  switch(a-0x90010000) {case 0:return 0x01020003;case 4:return 0x123;case 8:return m->bad_iface==1?0:0x4001000;case 12:return 0x4002000;case 16:return 8;case 20:return m->bad_iface==2?0x4000:64;case 24:return m->enabled&&!m->no_fw?3:0;default:assert(0);}
+ }
+ if(a==0x90005934||a==0x9000593c||a==0x9000522c) {
+  if(!m->enabled||m->no_fw)return 0;
+  return a==0x90005934?10:a==0x9000593c?0x200000:0x50c0;
  }
  assert(a>=0x13000000 && a<0x13002500);assert(!m->unpowered);
  switch(a-0x13000000) {
@@ -31,6 +36,8 @@ static uint32_t rd(void *p,uint64_t a) {
  case 0x20:return m->raw;
  case 0x28:return m->gpu_mask;
  case 0x34:return 0x100;
+ case 0x300:return 0x3;case 0x304:return 0x1f;
+ case 0xf00:return 0x44;case 0xf04:return 0x55;case 0xf08:return 0x66;case 0xf0c:return 0x77;
  case 0x100:return 0xff;case 0x104:return 0;
  case 0x110:return 1;case 0x114:return 0;
  case 0x200:return m->enabled?2:0;case 0x204:return 0;
@@ -44,6 +51,7 @@ static uint32_t rd(void *p,uint64_t a) {
  case 0x2000:return m->mmu;case 0x2008:return m->mmu_mask;
  case 0x2428:return m->as_busy?1:0;
  case 0x2400:return m->live_table?0x80000000:m->table_low;case 0x2404:return m->table_high;
+ case 0x2408:return m->memattr_lo;case 0x240c:return m->memattr_hi;
  case 0x2430:return m->bad_readback && m->as_updates==2?6:m->transcfg;case 0x2434:return 0;
  case 0x241c:return m->mmu?0xc0:0;case 0x2420:case 0x2424:return 0;
  default:assert(0);return 0;
@@ -69,7 +77,7 @@ static void wr(void*p,uint64_t a,uint32_t v) {
   if(v==5){assert(m->locked);m->flushed=1;return;}
   assert(v==1);m->as_updates++;return;
  case 0x2400:assert(v==0x90000000);m->table_low=v;return;case 0x2404:assert(v==0);m->table_high=v;return;
- case 0x2408:assert(v==0x4c4c9f4c);return;case 0x240c:assert(v==0x4c4c4c4c);return;
+ case 0x2408:assert(v==0x4c4c9f4c);m->memattr_lo=v;return;case 0x240c:assert(v==0x4c4c4c4c);m->memattr_hi=v;return;
  case 0x2430:assert(v==1||v==0x420001c6);if(v!=1)assert(m->flushed);m->transcfg=v;return;
  case 0x2434:assert(v==0);return;
  case 0x2004:m->mmu&=~v;return;
@@ -91,12 +99,23 @@ static void wr(void*p,uint64_t a,uint32_t v) {
 static uint64_t ticks(void*p){struct model*m=p;return m->stuck_timer?0:m->tick++;}
 static void barrier(void*p){(void)p;}
 static struct model model(void){return (struct model){.gpu_mask=0x55,.job_mask=0xaa,.mmu_mask=0xbb,.transcfg=1};}
-static struct sweet_csf_boot_config cfg(void){return (struct sweet_csf_boot_config){.gpu=0x13000000,.root_pa=0x90000000,.arena_pa=0x90000000,.arena_bytes=0x200000,.shared_offset=0x10000,.shared_bytes=0x20000,.timeout_ms=1};}
+static struct sweet_csf_boot_config cfg(void){return (struct sweet_csf_boot_config){.gpu=0x13000000,.root_pa=0x90000000,.arena_pa=0x90000000,.arena_bytes=0x200000,.shared_offset=0x10000,.shared_bytes=0x20000,.timeout_ms=1,.private_probe_offset=0x5000};}
 static int run(struct model*m,struct sweet_csf_boot_config*c,struct sweet_csf_boot_report*r){struct sweet_gpu_io io={m,rd,wr,ticks,barrier,1000};return sweet_csf_boot(c,&io,r);}
 static void clean(struct model*m,struct sweet_csf_boot_report*r){assert(m->gpu_mask==0x55 && m->job_mask==0xaa && m->mmu_mask==0xbb && m->resets==1);assert(r->reset_completed);}
 int main(void) {
  struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
- assert(sizeof(r)==192);assert(!run(&m,&c,&r));assert(r.stage==7 && r.firmware_ready && r.version==0x01020003);clean(&m,&r);
+ assert(sizeof(r)==288);assert(!run(&m,&c,&r));assert(r.stage==7 && r.firmware_ready && r.version==0x01020003);clean(&m,&r);
+ assert(r.diag_flags==31 && r.coherency_features==3 && r.coherency_before==31 && r.coherency_after==31);
+ assert(r.csf_config_before==0x44 && r.csf_config_after==0x44);
+ assert(r.shader_config_before==0x55 && r.shader_config_after==0x55);
+ assert(r.tiler_config_before==0x66 && r.tiler_config_after==0x66);
+ assert(r.l2_mmu_config_before==0x77 && r.l2_mmu_config_after==0x77);
+ assert(r.memattr_lo==0x4c4c9f4c && r.memattr_hi==0x4c4c4c4c);
+ assert(r.private_page_lo==0x90005000 && !r.private_page_hi);
+ assert(!r.private_early_before && r.private_early_after==10);
+ assert(!r.private_feature_before && r.private_feature_after==0x200000);
+ assert(!r.private_late_before && r.private_late_after==0x50c0);
+ assert(!r.shared_alloc_before && r.shared_alloc_after==3);
  assert(r.job_irq_mask==UINT32_MAX && r.gpu_irq_mask==0x80503 && r.mmu_irq_mask==0xffff);
  assert(r.as_present==0xff && r.irq_gate_passed==1);
  assert(r.shader_present_lo==0xff && r.shader_transition_lo==2 && r.shader_ready_lo==0xff);
@@ -111,6 +130,11 @@ int main(void) {
  assert(r.mmu_irq_mask==0xfffe && !r.irq_gate_passed);
  m=model();m.request_done=1;assert(!run(&m,&c,&r));assert(r.mmu_raw==0x10000);clean(&m,&r);
  m=model();c=cfg();c.shared_bytes=0xffffff;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
+ m=model();c=cfg();c.private_probe_offset=1;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
+ m=model();c=cfg();c.private_probe_offset=0x200000;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
+ m=model();c=cfg();c.private_probe_offset=0x10000;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
+ m=model();c=cfg();c.private_probe_offset=0;assert(!run(&m,&c,&r));clean(&m,&r);
+ assert(r.diag_flags==31 && !r.private_page_lo && !r.private_early_after && r.shared_alloc_after==3);
  m=model();c=cfg();m.unpowered=1;assert(run(&m,&c,&r)==-52 && !m.writes);
  m=model();m.bad_id=1;assert(run(&m,&c,&r)==-51 && !m.writes);
  m=model();m.bad_bits=1;assert(run(&m,&c,&r)==-51 && !m.writes);
@@ -120,9 +144,11 @@ int main(void) {
  m=model();m.no_l2=1;assert(run(&m,&c,&r)==-53 && !m.enabled);clean(&m,&r);
  m=model();m.as_busy=1;assert(run(&m,&c,&r)==-53 && !m.enabled);clean(&m,&r);
  m=model();m.stale=1;assert(run(&m,&c,&r)==-52 && !m.enabled);clean(&m,&r);
- m=model();m.no_fw=1;assert(run(&m,&c,&r)==-53 && !r.firmware_ready);clean(&m,&r);
+ m=model();c=cfg();m.no_fw=1;assert(run(&m,&c,&r)==-53 && !r.firmware_ready);clean(&m,&r);
+ assert(r.diag_flags==31 && !r.private_early_after && !r.private_late_after && !r.shared_alloc_after);
  assert(r.stage==4 && r.sample_flags==15 && r.version==0x01020003 && !r.job_raw);
  m=model();m.bad_irq_mask=1;assert(run(&m,&c,&r)==-52 && !m.enabled && r.sample_flags==5);clean(&m,&r);
+ assert(r.diag_flags==7 && !r.private_early_after && !r.coherency_after);
  m=model();m.bad_readback=1;assert(run(&m,&c,&r)==-52 && !m.enabled && !r.sample_flags);clean(&m,&r);
  m=model();m.fw_fault=1;assert(run(&m,&c,&r)==-54 && r.as_fault==0xc0);clean(&m,&r);
  m=model();m.bad_iface=1;assert(run(&m,&c,&r)==-55 && !r.firmware_ready);clean(&m,&r);
