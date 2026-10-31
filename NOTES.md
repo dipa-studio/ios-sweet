@@ -1,5 +1,75 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: CSF2329 INA-ONLY BUILT; SINGLE-TRIAL APPROVAL NEEDED <<<
+
+Offline continuation authorized after restored2328; no new image/write approved.
+Audit commit3f33f13; INA diagnostic implementation commitb6bb9e1.
+2329 changes only the opt-in AS_TRANSCFG INA field relative to2328:
+420001c6->42000006 (XOR1c0), matching executed pinned vendor protocol31
+MMIO slice45e80..45fd4. Actual C ASan/UBSan trace differs in exactly ONE
+write; all other writes/order/cleanup identical under the same synthetic
+prerequisites. Default0 preserves2328; invalid option2 rejects before IO;
+wrong readback stops before MCU. Group6 arena SHA256 unchanged
+e6cba8456388fe7fc2ba49aee64814478ebdc3491ba5480290b01f9ebe1c91dd.
+Firmware, descriptor tables/leaves, MEMATTR/cache, coherency31, IRQ masks,
+MCU AUTO/disable/reset and report304B/38 qwords320..357 are unchanged.
+csf_memory.o/csf_firmware.o/csf_blob.o and embedded blob byte-equal2328.
+No timeout diagnosis, firmware-ready or GPU acceleration claim.
+
+59 targeted tests PASS3.730s, including old ABI/new INA negatives, sanitizer
+state machine, exact-write isolation and contextual patch sequence. Actual
+2326/2327/2328 hardware captures decode byte-for-byte equivalent JSON.
+Three changed source files freestanding ARM64/no ABS64 relocation PASS.
+Local full kernel build exit0,16724248B SHA256
+9ea37e6018022e8a87eb6ed622d19cd18849fc58e33144dc74cf57acda371877.
+Build-only candidate26714112B SHA256
+83c635bbd15a08bb3333105bc949fd2c9fa21caaad05920844d751875601fe25,
+research/matisse/20261031-gpu/shim2329-ready/matisse-shim-gpu2329.img.
+Independent components/pins/frozen objects/expanded80402548B/intact stock
+Linux+32MiB/ramdisk/signature bytes/304B ABI/rootrw0/ufsrw0/PIC PASS.
+Signature bytes retained, NOT authenticated; automatic Recovery unverified.
+Contextual kernel source replay matches built tree, requiring inherited
+untracked0093 hash54f0aaa5a0390bc0678eca60e55bc192d3ebea315daab808a3c456a1ce65365b.
+No CI/push/device write/reboot in this milestone. Preserve unrelated dirt.
+
+Fresh read-only preflight PASS: matisse/_a/root Recovery,boot_a67108864B,
+full original SHA2562931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Separate shim2329-trials-run-once.py SHA256
+284b22279b00352be32bf902fc586005438ee3e00aee33bd596d449451602def;
+ONLY read-only preflight ran. restoration-plan.json prepared-unapproved,
+authorization=null,trial_count_executed=0,restore_pending=false,no journal.
+Predicted candidate full boot_a SHA256
+b9626544096d47c370d2bfc3653966e51e237483ee6913127725433041a00fe1.
+Full backup/prefix pins unchanged. Evidence ignored: firmware-static/
+{ina2329-isolation,kernel2329-source-replay,vendor-register2329-audit}.json,
+shim2329-ready/{manifest,independent-verification}.json and build/test logs.
+NEXT: ask specific approval for ONE normal2329 image83c635bb boot_a trial,
+full candidate readback, fresh2329 capture, then complete original64MiB
+restore/independent hash2931647a. Do not execute runner write branch yet.
+
+## >>> COMPLETE 2026-10-31: POST2328 OFFLINE REGISTER AND INPUT AUDIT <<<
+
+User replied 可以 to offline continuation after restored2328. No new device
+write/reboot is authorized. Audit implementation committed3f33f13;57 targeted
+tests PASS3.476s. Pinned relocation-free vendor instruction slices now execute
+AS TRANSCFG/root/MEMATTR writes, UPDATE and initial/reload MCU AUTO. Actual
+C probe MMIO writes captured under ASan/UBSan. Coherency31 yields vendor
+TRANSCFG42000006 (probe420001c6);0/1 controls yield62000006. AS7 stride/high
+root controls PASS. MCU AUTO is2 in both initial/reload paths, matching probe.
+All293 vendor leaf descriptors executed/compared against actual group6 arena.
+Remaining low cache/SH/nG/PXN/table differences persist; none is diagnosed.
+
+Old replay MMIO40000010=a8620004 and40030004=2000000a were synthetic
+assumptions, NOT measured MCU/host aliases. New explicit inputs expose this.
+Pinned01002f96..01002fd6 computes shared+18 as3+bits11:8(word10)+bit_length
+of shader mask. Synthetic word10=300,shader770017 reproduces1d; it does not
+identify real writer/PC. Low word30004 can leave private early marker0 while
+reaching synthetic WFI/version01010000. Real private-late0/version0 remains
+unexplained. Evidence ignored under firmware-static/post2328-{vendor-register-
+audit,input-sensitivity,replay-hypothetical-inputs}.json.
+The explicit opt-in INA-only2329 candidate is now built/checked above.
+No candidate device write is authorized by the offline continuation.
+
 ## >>> COMPLETE 2026-10-31: CSF2328 GROUP6 TRIAL; MCU TIMEOUT; FULL RESTORE <<<
 
 User explicitly replied 可以 to ONE normal2328 trial of imagea880c846 and

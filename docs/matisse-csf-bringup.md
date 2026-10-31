@@ -1082,3 +1082,89 @@ and complete kernel/image checks remain applicable. No new build,CI run or
 push occurred. Next is offline pinned vendor cache/AS/PTE and MCU sequence
 comparison; repeating2328 is not justified by this result. Any further
 candidate device write requires a new specific confirmation.
+
+## Post2328 executable register audit and explicit MCU inputs (2026-10-31)
+
+Audit commit3f33f13 extends the pinned vendor-helper tool with relocation-free
+instruction slices AS config0x45e80..0x45fd4,UPDATE0x4605c..0x46084,initial
+MCU start0x70008..0x7002c and reload0x6e3c8..0x6e3e8. Synthetic device/AS
+structures and a dedicated MMIO slab capture each write with its original
+text PC. Full Linux initialization, surrounding AS polling and hardware are
+not executed. The tool rejects helper relocations and out-of-range control
+flow, validates exact write order/value/width and executes all293 vendor
+leaf descriptors against the independently C-built group6 arena.
+
+For protocol31, the vendor slice writes TRANSCFG42000006/0,root40076000/0,
+MEMATTR888d8f88/0084c8d, then a separately replayed UPDATE1. Protocol0/1
+controls yield62000006; AS7 adds the expected7*64 register stride and a
+synthetic high root5a40076000 retains high word5a. Both MCU start slices
+write AUTO2, matching the current probe. An ASan/UBSan-built harness captures
+the actual independent C boot writes rather than a handwritten write list.
+Its pre-AUTO differences remain TRANSCFG and both MEMATTR words; cache,
+shareability,nG/PXN and table403-versus3 differences remain separate. These
+are observed offline differences, not a diagnosed cause of the real timeout.
+
+The earlier Cortex-M replay seeded raw firmware-visible40000010=a8620004,
+40000014=2830 and40030004=2000000a. Those were synthetic assumptions, not
+measurements of MCU-visible registers or their equivalence to host offsets.
+New explicit CLI inputs and report words make that limitation visible.
+Pinned startup01002f96..01002fd6 calculates shared04000018 as
+3+bits11:8(word40000010)+bit_length(shader mask40000100/104). Synthetic
+shader770017 gives1a with old word10 and1d with hypothetical word10=300.
+The latter matches the observed shared value but cannot identify the writer,
+firmware PC or real raw-word value. Changing hypothetical40030004 to0 leaves
+private early/feature markers0 while the modeled startup still reaches WFI;
+private-late remains50c0,unlike real0. Every sensitivity run still publishes
+version01010000. Thus neither the observed zero markers nor a single matching
+shared word supplies a hardware instruction trace.
+
+Evidence stays ignored in firmware-static/post2328-vendor-register-audit.json,
+post2328-input-sensitivity.json and post2328-replay-hypothetical-inputs.json.
+The initial offline suite passed57 tests3.476s. No GPU register writes or
+device reboot were performed.
+
+## CSF2329 INA-only candidate and verified build (2026-10-31)
+
+Implementation commitb6bb9e1 adds explicit vendor_ina0=0/1. Zero retains
+the2328 sequence; the shim selects1. Only the final AS_TRANSCFG write changes
+420001c6->42000006,XOR1c0,matching the executed vendor protocol31 slice.
+All four-level table allocation and group6 leaves are unchanged, as are
+firmware bytes,PA/permissions/cache/MEMATTR,coherency31,IRQ masks and
+MCU AUTO/disable/reset. An exact actual-C write comparison changes one write
+only; the reconstructed group6 arena remains SHA256
+e6cba8456388fe7fc2ba49aee64814478ebdc3491ba5480290b01f9ebe1c91dd.
+Built csf_memory.o,csf_firmware.o,csf_blob.o and the blob match2328 bytewise.
+
+The report remains304 bytes,38 qwords320..357. Contextual patch0127 only
+bumps the persistent build to2329. Existing transcfg_lo is the hardware
+readback; wrong value rejects before MCU start. The decoder requires
+42000006 for2329,retains old build expectations and all fresh IRQ/version/
+interface/cleanup gates. Matching INA alone never establishes readiness.
+Option2 rejects before IO; tests cover the old-valued readback,missing/stale
+records,timeout and reset failure. All59 targeted tests pass3.730s. Actual
+2326/2327/2328 captures decode to their unchanged saved JSON results.
+Freestanding ARM64 cross-compiles and no-ABS64 pointer checks pass.
+
+Full local kernel build exits0,16724248 bytes,SHA256
+9ea37e6018022e8a87eb6ed622d19cd18849fc58e33144dc74cf57acda371877.
+Candidate research/matisse/20261031-gpu/shim2329-ready/matisse-shim-gpu2329.img
+is26714112 bytes,SHA256
+83c635bbd15a08bb3333105bc949fd2c9fa21caaad05920844d751875601fe25.
+Independent verification checks expanded80402548 bytes,intact stock Linux
+at+32MiB,ramdisk/signature byte equality,source/frozen-object pins,report ABI,
+rootrw0/ufsrw0 and PIC relocations. Signature is retained,not authenticated;
+automatic Recovery remains unverified. Kernel contextual source replay
+matches the built tree with inherited untracked0093 hash
+54f0aaa5a0390bc0678eca60e55bc192d3ebea315daab808a3c456a1ce65365b,
+which remains uncommitted and preserved. No CI or push occurred.
+
+Only the separately pinned2329 runner's read-only preflight ran. It verified
+root matisse/_a/Recovery,67108864-byte boot_a and full original SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Its runner SHA256 is284b22279b00352be32bf902fc586005438ee3e00aee33bd596d449451602def.
+Restoration plan is prepared-unapproved,authorization null,trial_count_executed0,
+restore_pending=false with no journal. Predicted full candidate partition
+hash isb9626544096d47c370d2bfc3653966e51e237483ee6913127725433041a00fe1.
+No device write or reboot occurred. Next requires specific approval for one
+normal2329 trial of image83c635bb,full readback/fresh evidence collection,
+and complete64MiB original boot_a restoration with independent hash.
