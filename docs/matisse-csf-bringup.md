@@ -1427,3 +1427,68 @@ full temporary partition SHA256 is
 4dc84a77ea14e5716cb0f2a0496ac5104a2ac700eaa91e8db0be1a1bb65cc580.
 Before a write, AGENTS requires specific confirmation for this one exact
 image trial and complete64MiB original restoration plus independent hash.
+
+## CSF2333 hardware trial: documented MFG1 protections clear (2026-10-31)
+
+The user specifically confirmed ONE2333 image36be7135 boot_a trial and
+complete original restoration. Runner session19724 executed once and exited0.
+The26714112B candidate SHA256 remained
+36be7135a2ffa2995a8c3e7f518d73191c4188e9ec563c9d86670d7dc16497b5;
+complete temporary boot_a readback matched predicted SHA256
+4dc84a77ea14e5716cb0f2a0496ac5104a2ac700eaa91e8db0be1a1bb65cc580.
+Normal boot reached Fastboot at86.58s. A single raw USB session returned
+OKAY for stock-prefix download,flash:boot_a and reboot-recovery. Recovery
+then restored ALL67108864 bytes of the original boot_a. A separate check
+at2026-10-31T08:19:45Z verified root/matisse/_a/recovery,partition geometry
+and full original SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No active runner or pending restoration remains. Device is left in Recovery.
+
+Fresh marks148 contain all87 CSF qwords320..406,matching the tail block.
+The18657B console independently names gpu2333/sweettrial2333. Before marks
+and tail byte-match2332's previous after capture; stale2332 evidence rejects
+expected2333. Every common CSF field and every common GPU field is identical
+to2332,except the kernel build label. Paired path/access/platform flags are3.
+
+New path snapshots are exactly identical before AUTO and after its timeout:
+
+| Path | Enable | Status | Original MFG1 mask | Masked enable OR status |
+| --- | --- | --- | --- | --- |
+| RPC | 0x00000000 | 0xfff0fff0 | 0x000f0000 | 0 |
+| INFRA | 0x00000000 | 0xffffffe0 | 0x0000000f | 0 |
+| EMI0 | 0x00000000 | 0xff800020 | 0x000c0000 | 0 |
+| EMI1 | 0x00000000 | 0xff802020 | 0x000c0000 | 0 |
+
+Thus all measured original MFG1 protection enable/status bits were clear
+at both endpoints. The pre-AUTO protection gate passed and MCU_CONTROL2
+was written. The proposed explanation that these specific protection bits
+remain asserted is not supported by this trial. This does not establish
+that every clock/power/memory-path prerequisite is satisfied, nor prove MCU
+instruction fetch. Do not clear unrelated whole-RPC bits or copy MFG0 into
+other power controls on the basis of the prior halfword interpretation.
+
+PDC CG is018d0001;ST0/ST1/ST2/ST4/ST5/ST6 are all02000001. Every sampled
+active-power-control bit0 is set,as the original helper requests. This
+weakens a missing sampled PDC-enable hypothesis; it is not an audit of all
+shader control/reserved registers or actual rail state. SLC group6 is
+06002006,matching the original gpufreq literal; this is one control-word
+match,not proof of effective SLC routing or memory permissions.
+
+CSF still times out-53 atstage4,MCU_STATUS1,version0,JOB_RAW0,MMU_RAW0,
+AS status/fault/address0. Disable also times out-53/status1;cleanup reset
+shows raw200,reset_completed0,cleanup_error-53. Initial reset100 succeeded
+earlier. No MCU firmware-ready or GPU acceleration success is established.
+CPU executable wordd00cf8df atVA01000000/PA40080000,arena40077000,L2_READY1,
+SPM/MFG/PLL/TOPCKGEN and the other common fields remain unchanged2332.
+
+Freshness/complete-ABI/common-field comparison and independent full restore
+checks pass. Evidence remains ignored under shim2333-path-trials/gpu-normal/
+{journal.json,gpu-result.json,comparison-2332-2333.json,platform-field-analysis.json,
+independent-post-restore.json,before/after-marks.bin,before/after-tail.bin,
+after-console.txt,recovery-dmesg.txt} and gpu-normal-run.txt. The prepared
+audit2333-result.py checks the fresh captures. Plan is complete-restored-
+Recovery,approval consumed,trial_count_executed1,restore_pending=false.
+No rebuild,repeated test suite,CI run or push occurred in this trial.
+Implementation24c968b and build handoffd900294 remain applicable. Next is
+offline inspection of original MCU AUTO/debug/CSF initialization prerequisites;
+no new root cause or hardware experiment is selected or authorized.

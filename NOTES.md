@@ -1,6 +1,57 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-10-31: CSF2333 PLATFORM PATH BUILT; TRIAL UNAPPROVED <<<
+## >>> ACTIVE 2026-10-31: CSF2333 TRIAL COMPLETE; FULL RESTORE VERIFIED <<<
+
+Executed exactly ONE authorized2333 image36be7135 trial;runner session19724
+exited0. Full candidate boot_a readback4dc84a77...b65cc580 matched prediction.
+Fastboot at86.58s;single raw USB session download/flash:boot_a/reboot-recovery
+all OKAY. Recovery restored ALL67108864B original boot_a. Separate independent
+root/matisse/_a/recovery/geometry/full SHA256 PASS at2026-10-31T08:19:45Z:
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No active runner or pending restore;device left in root Recovery.
+
+Fresh2333 marks148 include87 complete CSF qwords320..406,exactly match tail.
+Console18657B names gpu2333/sweettrial2333. Before marks/tail byte-match
+previous2332 after;stale2332 rejects expected2333. Paired path flags3;
+all common GPU/CSF fields are IDENTICAL2332 except kernel build label.
+MCU remainsstage4/error-53/status1,version0,JOB_RAW0,MMU_RAW0,AS status/fault0;
+disable-53/status1,reset_raw200/reset_completed0,cleanup-53. Not firmware-ready.
+
+New observed before==after:path RPC enable0/statusfff0fff0;INFRA enable0/
+statusffffffe0;EMI0 enable0/statusff800020;EMI1 enable0/statusff802020.
+Exact original MFG1 masks RPCf0000/INFRAf/EMI0+1c0000 are ALL CLEAR in enable
+AND status before AUTO and after timeout. Gate passed and MCU AUTO ran.
+PDC CG018d0001;ST0/1/2/4/5/6 each02000001,all sampled active-control bit0 set.
+SLC group606002006 matches original source literal. These are measured
+control words,not proof of MCU fetch,all memory-path reachability or shader
+power. The specific missing-MFG1-protection hypothesis is not supported by
+this trial;do not force clear unrelated RPC bits or replay MFG0 words.
+FirmwareCPU readbackd00cf8df,VA01000000/PA40080000,arena40077000 unchanged.
+
+Evidence ignored under shim2333-path-trials/gpu-normal/{journal.json,
+gpu-result.json,comparison-2332-2333.json,platform-field-analysis.json,
+independent-post-restore.json,before/after-marks.bin,before/after-tail.bin,
+after-console.txt,recovery-dmesg.txt} and gpu-normal-run.txt. Freshness/ABI/
+comparison and independent restoration PASS. No rebuild,test suite,CI run
+or push. Implementation24c968b/build handoffd900294 remain applicable.
+Authorization consumed;no second trial. NEXT:offline inspect original MCU
+AUTO/debug/CSF initialization prerequisites against the unchanged startup
+registers. No root cause or new hardware experiment selected yet. Preserve
+unrelated dirty files and untracked0093;do not stage device/proprietary data.
+
+## >>> HISTORICAL 2026-10-31: CSF2333 SINGLE TRIAL AUTHORIZED <<<
+
+User replied 可以 to ONE exact2333 image36be7135 boot_a trial,fresh paired
+path evidence,full67108864B original restoration and independent SHA256.
+Fresh preflight root/matisse/_a/Recovery/full original hash PASS;candidate,
+backup,stock-prefix and runner dfe50627 pins match. No existing2333 journal
+or active runner. Authorization covers this single trial and restoration.
+Runner session19724 active;written full partition SHA2564dc84a77...b65cc580
+matches prediction;boot requested. Follow journal and prioritize complete
+original restoration. Do not compete for ADB/raw USB while runner active.
+No second trial or forced MFG/RPC write is authorized.
+
+## >>> HISTORICAL 2026-10-31: CSF2333 PLATFORM PATH BUILT; TRIAL UNAPPROVED <<<
 
 2332 trial and full restoration are complete below;no new device write.
 Pinned Xiaomi270b84910b941bf75490fccdb5fb2b3021dd7cbf scpsys MFG1 table
