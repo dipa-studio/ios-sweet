@@ -584,3 +584,48 @@ for bypass. This verifies2325 Recovery entry/BSS and embedded original Linux
 fallback only. Normal MCU execution, firmware readiness and acceleration
 remain unverified. The next hardware step needs separate specific approval
 for one normal2325 MCU trial using this same image, then full restoration.
+
+
+## Normal2325 hardware result (2026-10-31)
+
+The specifically approved normal2325 trial ran once; runner87765 exited0.
+Fresh marks build2325/count85 replace2324/count77;18657B console agrees with
+sweettrial2325/gpu2325. Platform INIT0/ON1/OFF0,SPM3->7,GPU_ID0xa8620004,
+initial reset completion0x100 repeated and the power reference was released.
+Prestart mask readbacks are GPU0x80503,JOB0xffffffff,MMU0xff,AS_PRESENT0xff;
+the2325 gate passed and MCU_CONTROL_AUTO was issued. This establishes that
+requesting MMU0xffff need not read back0xffff on this device.2324 did not
+record its own GPU/MMU readbacks; a specific attribution of its earlier
+rejection remains inference, not a measured2324 mask.
+
+MCU start timed out again: stage4/error-53,MCU_STATUS1,JOB_RAW0,MMU_RAW0,
+AS status/fault/address0,L2_READY1,TRANSCFG0x420001c6,rootPA0x40076000.
+sample_flags15 proves pre/post shared and core captures executed. Shared
+version before/after0 and features0; input0x04002000,output0x04003000,groups8,
+stride0xa0 remain preloaded blob metadata and are not execution evidence.
+No fresh global-interface IRQ or version publication occurred.
+
+Poststart shader PRESENT0x770017,PWRTRANS0,READY0;
+tiler PRESENT1,PWRTRANS0,READY1,all high words0. The captured endpoint is
+not an outstanding shader/tiler transition. This does not establish which
+firmware instructions executed or exclude an earlier transient wait.
+GPU_RAW0x600,disable_status1/disable_error-53,reset_raw0x600,
+reset_completed0,cleanup_error-53. Internal interrupt enables alone did not
+produce the firmware handshake. Firmware-ready and acceleration remain
+unproven, and cleanup was not verified by the MCU transaction.
+
+Fastboot enumerated99.82 seconds after normal reboot. The authorized
+single persistent fbraw session verified identity/slot/geometry, restored
+the stock20MiB prefix with OKAY and requested Recovery with OKAY. Recovery
+restored the full67108864-byte original boot_a; independent Recovery
+identity/geometry and full SHA256 matched
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Fresh Recovery dmesg874306B was saved. No user USB/key action,host SIGINT or
+blind transport retry was needed. Journal is complete-restored-Recovery,
+restore_pending=false,evidence_decoded=true; no active runner remains.
+This is host-managed restoration, not automatic Recovery from normal XNU.
+
+Evidence stays ignored under shim2325-trials/gpu-normal/ and sibling
+gpu-normal-run.txt. No second trial,new image or device write is authorized.
+Further static analysis must compare firmware boot/MMU/coherency prerequisites
+and G710 vendor initialization, without claiming the timeout root cause.

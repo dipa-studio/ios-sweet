@@ -1,5 +1,48 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> COMPLETE 2026-10-31: CSF2325 MCU TIMEOUT; MASKS OBSERVED; FULL RESTORE <<<
+
+Specifically approved normal2325 trial executed ONCE. Runner87765 exited0.
+Fresh build2325/count85 marks (before2324/count77),18657B console confirms
+sweettrial2325/gpu2325. Platform INIT0/ON1/OFF0,SPM3->7,GPU_IDa8620004,
+initial reset100,reference released. Actual prestart masks GPU80503,
+JOBffffffff,MMUff,AS_PRESENTff; irq_gate_passed1. Unlike2324, MCU AUTO was
+issued. This run establishes that literal MMUffff readback is inappropriate
+on this device;2324 did not record its own GPU/MMU masks, so attribution of
+that earlier rejection remains inference, not a measured2324 register value.
+
+CSF stage4/error-53,MCU_STATUS1,JOB_RAW0,MMU_RAW0,AS status/fault/address0,
+L2_READY1,TRANSCFG420001c6,rootPA40076000. sample_flags15: pre/post shared
+and core sampling executed. Version before/after0,features0,input04002000,
+output04003000,groups8,stridea0; input/output/group fields are preloaded
+blob metadata, NOT firmware-execution proof. No fresh global IRQ/version.
+Poststart SHADER_PRESENT770017,SHADER_TRANSITION0,SHADER_READY0;
+TILER_PRESENT1,TILER_TRANSITION0,TILER_READY1; all high words0. Thus the
+captured endpoint is not an outstanding shader/tiler transition. It does
+NOT prove which instructions ran or exclude an earlier transient/core wait.
+GPU_RAW600,disable_status1/disable_error-53,reset_raw600/reset_completed0,
+cleanup_error-53. Internal IRQ enable change alone did not achieve handshake.
+Firmware-ready/acceleration still unproven; aggregate callback failed.
+
+Fastboot enumerated99.82s after reboot. One persistent fbraw session
+verified identity/slot/geometry, stock20MiB prefix download/flash OKAY,
+reboot-recovery OKAY. Recovery restored full67108864B original boot_a;
+independent matisse/_a/recovery/root,geometry and complete SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1 PASS.
+Fresh Recovery dmesg874306B. No USB/key intervention,SIGINT or blind retry.
+Journal shim2325-trials/gpu-normal/journal.json complete-restored-Recovery,
+restore_pending=false,evidence_decoded=true. No active runner/restore duty.
+Host-managed restoration, NOT autonomous Recovery from normal XNU.
+
+Next STATIC work: exact firmware boot/MMU/coherency prerequisites and G710
+vendor initialization; do not treat masks as the proven2323 timeout cause.
+Validate final tracked patch representation against normal patch tooling.
+No second2325 trial,new image/device write authorized. Implementation3f29061,
+handoffcb2ad31,fallback98f9438. No new build/CI/push this normal trial.
+Evidence ignored gpu-normal/{after-marks.bin,after-console.txt,gpu-result.json,
+journal.json,independent-post-restore.txt,recovery-dmesg.txt},gpu-normal-run.txt.
+Preserve unrelated collector-v2/shim work. Older2325 pretrial text historical.
+
 ## >>> COMPLETE 2026-10-31: CSF2325 RECOVERY FALLBACK PASS; FULL RESTORE <<<
 
 User specifically approved image06759c12 Recovery-fallback boot_a write,
