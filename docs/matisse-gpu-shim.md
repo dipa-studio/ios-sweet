@@ -1,7 +1,7 @@
 # MT6983 shim GPU power/reset probe
 
 The opening sections describe the original power/reset probe. The latest
-CSF2331 diagnostic and its current validation boundary are recorded below.
+CSF2332 diagnostic and its current validation boundary are recorded below.
 
 2026-10-31. This independently written probe executes GPUEB INIT_SHARED_MEM,
 POWER_ON, verifies both MFG power status registers, reads GPU_ID and performs
@@ -264,3 +264,98 @@ shim2331-platform-trials/gpu-normal/`:fresh marks/tail/console,decoded report,
 comparison-2330-2331.json,platform-field-analysis.json,journal.json and
 independent-post-restore.txt. No new build,CI run or push occurred for this
 trial; implementation8ea682a and build handoff5862456 remain applicable.
+
+
+## CSF2332 corrected access snapshots, verified candidate (2026-10-31)
+
+2332 implements the paired diagnostic part of the proposed next experiment.
+It adds no power-domain,clock,PLL,RPC sleep-protection or rail writes. Existing
+GPUEB ownership and startup/cleanup operations remain in place. The MT6983
+reference enables PDCv2,conditionally omits manual MFG2..18 control,and
+contains fake SPM PWR_CON APIs. The meaning and write protocol of the sampled
+RPC0x13f91048 word are not verified. Thus 0xc0000112 and 0xfff0fff0 alone do
+not justify forcing the suggested MTCMOS sequence or clearing0xfff0.
+
+The register corrections are grounded in the pinned Linux v6.12
+panthor_regs.h/panthor_mmu.c and original vendor sources. Offsets are relative
+to GPU0x13000000:
+
+| Evidence | Correct readable offsets | Clarification |
+| --- | --- | --- |
+| AS0 fault status/address | 0x241c / 0x2420 / 0x2424 | 0x2404 is TRANSTAB_HI;0x2408/0x240c are MEMATTR |
+| AS0 status | 0x2428 | 0x2418 is COMMAND;AS_ACTIVE alone does not prove a stalled AXI fetch |
+| L2 ready | 0x160 / 0x164 | 0x140 is SHADER_READY;0x180 is SHADER_PWRON |
+| L2 transition | 0x220 / 0x224 | L2_PWRON0x1a0 is write-only and is not sampled |
+| JOB raw / masked status | 0x1000 / 0x100c | Existing platform job_stat is masked status |
+| MMU raw | 0x2000 | Panthor fault mask uses low16;upper16 mean REQ_COMPLETE |
+
+The pinned Panthor fault-mask function explicitly documents REQ_COMPLETE;
+the older shared vendor regmap header's generic MMU_BUS_ERROR macro is not
+used to reinterpret CSF upper16 bits. The2331 report already sampled the
+correct MMU raw,AS0 fault/address/status and L2-ready registers. Their zero
+fault values did not establish successful firmware execution or rule out
+all memory-path problems. MCU_STATUS1/GPU_STATUS ACTIVE also do not trace PC.
+The local-53 result is SWEET_CSF_BOOT_TIMEOUT,not Linux-EBADR.
+
+The opt-in access_snapshot requires platform_snapshot and appends120B to the
+unchanged440B report prefix,total560B,70 tagged qwords320..389. It records
+MMU/JOB raw,AS0 status/fault/address,L2 ready/transition,and code-word/version
+readback both immediately before AUTO and after the wait,before cleanup.
+Its metadata identifies the executable VA,owned arena PA and expected word.
+The parser validates flags,reserved words,mapping bounds,complete/fresh
+records,and corroborating post-wait readiness fields before any success.
+
+The executable VA is0x01000000,distinct from shared interface0x04000000.
+The expected first word is derived from the pinned firmware section,not a
+literal substituted into the probe. The native shim runs with CPU MMU/caches
+off;the barrier precedes CPU PA readback. No Linux dma_sync call is applicable
+to this native shim. A matching CPU readback proves only those CPU-visible
+bytes;it cannot prove MCU fetch,EMI reachability or a firmware PC.
+
+73 targeted tests passed in8.879s,including actual-C sanitizer boot tests,
+ABI publication,contextual kernel patches,decoder rejection cases and
+same-config snapshot-on/off MMIO write isolation. The strengthened decoder
+then passed its20 evidence tests in0.967s. The freestanding ARM64-Werror
+compile and full local CLT kernel build passed. Kernel size16724248B,SHA256
+f399367f1a0b6a336a8515b899a6d718f8d126332ef326549c70bb4030841438.
+The129-patch contextual local source replay matches SHA256
+5c5add1eccbbafb4f7e76743aff53277ee57cb0403f7e4c415e2f7ef2a243cc8,
+including the inherited untracked0093 patch whose pin remains in NOTES.md.
+No new CI run or push was dispatched. Actual2326..2331 evidence still decodes
+with unchanged measured fields and readiness results.
+
+Candidate research/matisse/20261031-gpu/shim2332-access-ready/
+matisse-shim-gpu2332.img is26714112B,SHA256
+2d57a0d05cdb9aff350d614dce1c1ad0bd0bd0efcf294ed3901fac3f2639c038.
+Independent verification passes decompression/components,stock Linux+32MiB,
+source/frozen pins,ADT560B/70qwords,read-only root cmdline and no ABS64 pointer
+relocations. Firmware,memory and GPUEB objects are byte-equal2331. Retained
+signature bytes are not authenticated;automatic Recovery remains unverified.
+
+Code growth relocates the linked arena from PA0x40076000 to0x40077000.
+This4KiB placement difference is accepted explicitly;the physical table
+bytes and AS0 table-base writes are consequently not identical to2331.
+The actual C memory builder was run for both addresses:all300 nonzero
+page/table descriptors move by4096 with identical nonaddress bits;all293
+mapped pages preserve VA,relative allocation and payload bytes. New arena
+SHA256a4c928c577a6033e2e1ade2fd2352965270bd8ff6e4f473d4f7d391c1feb9fc2.
+The executable probe is VA0x01000000,offset0x9000,PA0x40080000,expected
+word0xd00cf8df. Both extra reads and relocated PAs can affect a real trial;
+these offline checks do not establish hardware equivalence or reachability.
+
+A fresh independent read-only check confirmed root matisse/_a Recovery,
+boot_a67108864B and complete original SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+The prepared runner's read-only preflight also passes. It is pinned to this
+candidate and predicts full trial-partition SHA256
+494048191baa24a9ce2ddbb88eadf789b9b52a57d40080a1883e91dbadb8cad1.
+Its ignored restoration plan remains prepared-unapproved,authorization=null,
+trial_count_executed0,restore_pending=false,no journal. No2332 device write,
+reboot or hardware result exists. A specific one-trial approval is required
+before writing this image;the proposed operation includes fresh evidence,
+full64MiB original boot_a restoration and independent final verification.
+The completed2331 trial's approval is consumed and cannot authorize2332.
+
+Implementation commit:c2adc13. The build and verification artifacts predate
+this commit and their pinned source bytes match it. The separate handoff
+commit records the candidate and explicit pending-approval boundary.

@@ -1,6 +1,81 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-10-31: CSF2331 SNAPSHOT TRIAL; MCU TIMEOUT; FULL RESTORE <<<
+## >>> ACTIVE 2026-10-31: CSF2332 ACCESS SNAPSHOT VERIFIED; TRIAL UNAPPROVED <<<
+
+User proposes paired AS0/L2/firmware-word diagnostics plus forced MFG1/2 and
+RPC sleep-protection writes. Selected corrected READ-ONLY snapshot only.
+AS0+04 is TRANSTAB_HI,+08/+0c MEMATTR,+18 COMMAND; fault/address/status are
+241c/2420/2424/2428. L2_READY160,write-only L2_PWRON1a0;140/180 are shader.
+Pinned Panthor panthor_mmu_fault_mask explicitly treats MMU upper16 as
+REQ_COMPLETE (legacy shared KMD header has a different bus-error definition).
+2331 already measured MMU_RAW0,AS0 fault/address/status0,L2_READY1,version0.
+JOB platform field is STAT100c;job_raw is RAW1000. Executable01000000 is
+separate from shared04000000. No MCU PC or stalled-AXI proof exists.
+GPUEB/PDCv2 ownership,fake-SPM APIs and unverified RPC1048 bit semantics
+remain reasons NOT to force MFG1/2 or clearfff0. No rail/PLL/RPC writes added.
+
+2332 implementation:opt-in paired correct readable AS0/L2 fields,owned CPU
+arena executable first-word and shared version,before AUTO/after wait before
+cleanup. Native shim CPU MMU/caches off;barrier before readback. Expected
+word derives from pinned firmware;CPU readback is not MCU execution. Old
+440-byte prefix preserved,new120B,total560B/70 qwords320..389;patch0130.
+Decoder rejects incomplete/contradictory success evidence and stale builds.
+73 targeted tests PASS8.879s;after decoder strengthening20 evidence tests
+PASS0.967s. ASan/UBSan boot and ABI tests plus same-config snapshot on/off
+actual-C write traces PASS;freestanding ARM64-Werror compile PASS.
+
+Local full CLT kernel build exit0,size16724248 SHA256
+f399367f1a0b6a336a8515b899a6d718f8d126332ef326549c70bb4030841438.
+129-patch contextual source replay matches sweet_ufs SHA256
+5c5add1eccbbafb4f7e76743aff53277ee57cb0403f7e4c415e2f7ef2a243cc8;
+includes preserved inherited untracked0093 SHA25654f0aaa5a0390bc0678eca60e55bc192d3ebea315daab808a3c456a1ce65365b.
+No new GitHub Actions run or push. Fresh gh list:40262872038,40226767824,
+40226076666 all completed/action_required;these are prior runs,not2332 builds.
+
+Candidate:research/matisse/20261031-gpu/shim2332-access-ready/
+matisse-shim-gpu2332.img,26714112B,SHA256
+2d57a0d05cdb9aff350d614dce1c1ad0bd0bd0efcf294ed3901fac3f2639c038.
+Independent verify2332-access.py PASS:80402548B expanded,stock Linux+32MiB,
+intact ramdisk/signature bytes,source/frozen pins,560B/70-qword ADT,PIC and
+rootrw0/ufsrw0. Signature is retained,NOT authenticated;automatic Recovery
+is NOT verified. Firmware/memory/GPUEB objects byte-equal2331.
+Code growth moves BSS arena PA40076000->40077000 (+4096),NOT byte-identical
+physical mapping. Accepted/documented diagnostic placement difference:
+actual C rebuilt both arenas;all300 nonzero table/leaf descriptors move
+by4096 with identical nonaddress bits,all293 mapped pages preserve VA,
+relative offsets and payload bytes. New arena SHA256
+a4c928c577a6033e2e1ade2fd2352965270bd8ff6e4f473d4f7d391c1feb9fc2.
+Executable probe VA01000000,offset9000,PA40080000,expected wordd00cf8df.
+These are offline checks,not measured physical reachability;extra reads
+and different PAs mean this is not a strictly address-identical trial.
+
+Fresh separate read-only Recovery preflight2026-10-31T07:46:44Z PASS:
+root/matisse/_a/recovery,boot_a67108864B,full original SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Prepared one-shot runner shim2332-access-trials-run-once.py SHA256
+908f37f522bd267653fbcc83bcee4c1455ce3ce73b9e7846e4f6152a1b4eb270;
+its read-only preflight also PASS. Predicted full candidate boot_a SHA256
+494048191baa24a9ce2ddbb88eadf789b9b52a57d40080a1883e91dbadb8cad1.
+Plan shim2332-access-trials/restoration-plan.json is prepared-unapproved,
+authorization=null,trial_count_executed0,restore_pending=false;no journal.
+No2332 flash,reboot,MMIO hardware test or readiness result exists.2331
+approval is consumed. No active runner or pending restoration.
+
+Ignored evidence:firmware-static/access2332-{tests-final,evidence-final}.txt,
+kernel2332-access-build.txt,kernel2332-source-replay.json,
+access2332-independent-recovery-preflight.json;shim2332-access-ready/
+{manifest.json,independent-verification.json};verify2332-access.py and
+prepared runner/plan. Decoder rechecked actual2326..2331 captures unchanged.
+NEXT:ask specific approval for ONE normal2332 image2d57a0d0 boot_a trial,
+fresh paired evidence,full64MiB original restoration and independent hash.
+Do not enter runner write branch before that confirmation. Preserve all
+unrelated shim/collector/marks dirt,untracked0093 and device/proprietary data.
+Implementation committed c2adc13 (12 files,225 insertions/29 deletions).
+This handoff/docs are committed separately. The inherited unrelated dirty
+files and untracked0093 were not staged. No failed command reached any
+device write;only read-only Recovery preflights ran.
+
+## >>> HISTORICAL 2026-10-31: CSF2331 SNAPSHOT TRIAL; MCU TIMEOUT; FULL RESTORE <<<
 
 User approved ONE normal2331 imagee1920561 boot_a trial,fresh evidence and
 complete original restoration. Executed exactly once;runner session62578
