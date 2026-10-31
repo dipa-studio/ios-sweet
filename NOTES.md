@@ -1,5 +1,36 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> COMPLETE 2026-10-31: CSF2322 RECOVERY FALLBACK PASS; FULL RESTORE <<<
+
+User specifically confirmed image5ade1013 Recovery-fallback boot_a write,
+reboot Recovery, then original restoration. That exact trial is COMPLETE.
+Runner session93726 exited0. New Recovery observed26.53s after adb reboot
+recovery. Written entire partition readback15f5c01989f8023b0e84219a2dafb036fce26b580fd744e66c4ceac060b189cd
+matched candidate prefix + unchanged baseline tail. Fresh Linux dmesg and
+Recovery confirmed. Full67108864B boot_a restored/hash2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Independent post-run read verified matisse/_a/recovery/root and same full
+hash. No pending restoration or active trial runner. No Fastboot used.
+
+Authoritative ignored journal shim2322-trials/recovery-fallback/journal.json:
+status complete-restored-Recovery,restore_pending=false,new_recovery_observed
+true,return_seconds26.53. Image26710016B SHA256
+5ade1013c6cae1119d04af74db5a446c6e7401e682da6b74010bc4b4ad189e64.
+Independent-post-restore.txt and recovery-dmesg.txt saved alongside captures.
+Before/after tail and marks are byte-identical, as expected for Recovery
+bypass. This tests the2322 entry/stack/BSS and embedded original Linux path;
+NOT normal shim GPU/MCU execution, firmware readiness or acceleration.
+
+NEXT concrete action: obtain specific approval for ONE normal2322 CSF trial
+using this same image, written from Recovery to boot_a only; reboot normal,
+capture fresh2322 marks320..330, then full baseline restore/hash. Same-image
+Recovery-fallback prerequisite now PASSED. Automatic return from NORMAL
+XNU remains unverified/unreliable; prior2321 required manual Fastboot. Keep
+fbraw persistent-session stock-prefix restore available; never official
+fastboot or repeated blind USB reopen. No normal2322 write is authorized by
+the just-completed fallback confirmation. No CI/build needed this turn.
+Implementation c806996, previous handoff3110535; unrelated dirt preserved.
+Earlier "not run" notes below are superseded by this completion section.
+
 ## >>> ACTIVE 2026-10-31: CSF2322 BUILT/REVIEWED; EXACT TRIAL APPROVAL NEXT <<<
 
 No2322 partition write/reboot has occurred. Recovery online, full64MiB boot_a

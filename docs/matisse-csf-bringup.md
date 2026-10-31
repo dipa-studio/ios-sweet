@@ -133,3 +133,20 @@ USB session to flash only the known20 MiB stock prefix and request Recovery;
 then restore the full backup in Recovery. Do not use the official fastboot
 client or repeatedly reopen a hung LK transport. Never finish with pending
 restoration.
+
+## Recovery fallback hardware result (2026-10-31)
+
+The specifically authorized fallback trial of the final image5ade1013
+completed. Recovery was newly observed26.53 seconds after reboot recovery.
+Full boot_a readback after candidate write matched predicted partition hash
+15f5c01989f8023b0e84219a2dafb036fce26b580fd744e66c4ceac060b189cd.
+The original67108864-byte boot_a was restored and independently rehashed to
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Device remained matisse/slot_a/root Recovery. No Fastboot transport used.
+Journal shim2322-trials/recovery-fallback/journal.json is complete with
+restore_pending=false. Before/after persistent tail and marks are identical.
+
+This verifies this image's Recovery entry, changed stack/BSS addressing and
+embedded stock Linux bypass only. It does not execute the normal GPU/MCU
+probe and does not establish automatic Recovery from an XNU boot. The normal
+CSF trial remains pending its own specific boot_a-write confirmation.
