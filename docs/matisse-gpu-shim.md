@@ -359,3 +359,67 @@ The completed2331 trial's approval is consumed and cannot authorize2332.
 Implementation commit:c2adc13. The build and verification artifacts predate
 this commit and their pinned source bytes match it. The separate handoff
 commit records the candidate and explicit pending-approval boundary.
+
+## CSF2332 measured trial and restoration (2026-10-31)
+
+The user subsequently confirmed exactly one normal2332 image trial,fresh
+paired evidence and complete original restoration. The pinned runner ran
+once in session72667 and exited0. Full candidate boot_a readback matched
+SHA256494048191baa24a9ce2ddbb88eadf789b9b52a57d40080a1883e91dbadb8cad1.
+The device reached Fastboot in85.62s. One persistent raw USB session returned
+OKAY for stock-prefix download,flash:boot_a and reboot-recovery. Recovery
+then restored all67108864B original boot_a. A separate read-only check at
+2026-10-31T07:54:53Z verified root/matisse/_a/recovery,partition size and
+complete original SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+The device remains in root Recovery,no restoration or runner is pending,
+and this one-trial authorization is consumed.
+
+Fresh SWEETMRK identifies2332,count131,with all70 CSF qwords320..389.
+Marks match the captured4198400B userdata tail. Before marks/tail byte-match
+the previous2331 capture;the decoder rejects that stale capture as2332.
+The18569B console independently names gpu2332/sweettrial2332. Both platform
+and access sample flags are3,showing both requested sampling points.
+
+| Readable evidence | Before AUTO | After wait,before cleanup |
+| --- | --- | --- |
+| Executable word at CPU PA0x40080000 | 0xd00cf8df | 0xd00cf8df |
+| Expected executable word | 0xd00cf8df | 0xd00cf8df |
+| Shared interface version | 0 | 0 |
+| MMU_INT_RAWSTAT / JOB_INT_RAWSTAT | 0 / 0 | 0 / 0 |
+| AS0 status / fault / fault address | 0 / 0 / 0 | 0 / 0 / 0 |
+| L2_READY lo/hi | 1 / 0 | 1 / 0 |
+| L2_PWRTRANS lo/hi | 0 / 0 | 0 / 0 |
+| GPU_STATUS / MCU_CONTROL | 0x100 / 0 | 0x101 / 2 |
+
+Probe VA0x01000000,PA0x40080000 and expected instruction word match the
+independent image/arena verification. CPU-visible first-word correctness
+and L2-ready are now directly corroborated before and after the wait. This
+rules out an absent or mismatching first code word at that sampled CPU PA;
+it does not validate the entire image as seen by the MCU,its instruction
+fetch,PC or EMI permissions. AS_ACTIVE is0 in both samples,so the proposed
+AS_ACTIVE1 stalled-request signature was not observed. No MMU/AS0 fault
+was recorded,and no version/IRQ handshake appeared. These values do not
+establish that MFG1/2 or RPC sleep protection is the root cause.
+
+The CSF report remains stage4,error-53,MCU_STATUS1,firmware_ready0.
+MCU disable times out-53 with status1;cleanup reset remains incomplete
+(raw0x200,reset_completed0,cleanup_error-53). GPUEB INIT0/ON1/OFF0 and
+initial GPU reset raw0x100 remain observed. The complete2331->2332 common
+field comparison changes only kernel_build and the two expected4KiB
+address relocations:TRANSTAB0x40076000->0x40077000 and private-page
+PA0x400bb000->0x400bc000. All other common GPU/CSF fields,including the
+platform power/PLL/TOPCKGEN/RPC snapshots,are identical.85.62s versus82.54s
+is one-run timing only,not evidence of a causal change. Firmware readiness
+and GPU acceleration remain unverified.
+
+Ignored fresh evidence:research/matisse/20261031-gpu/
+shim2332-access-trials/gpu-normal/{journal.json,gpu-result.json,
+comparison-2331-2332.json,independent-post-restore.json,before/after-marks.bin,
+before/after-tail.bin,after-console.txt,recovery-dmesg.txt};the dmesg is
+816100B. The standalone audit2332-result.py verifies freshness,ABI
+completeness,paired fields and the exact common-field comparison.
+Implementationc2adc13/build handoff81f9fc3 remain applicable. No rebuild,
+new CI run,push or repeated test suite was needed for this trial. Next work
+is an offline comparison of original PDC CG/ST and EMI/memory-path
+initialization before selecting another distinct hardware experiment.

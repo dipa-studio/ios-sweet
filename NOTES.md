@@ -1,6 +1,52 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-10-31: CSF2332 ACCESS SNAPSHOT VERIFIED; TRIAL UNAPPROVED <<<
+## >>> ACTIVE 2026-10-31: CSF2332 TRIAL COMPLETE; FULL RESTORE VERIFIED <<<
+
+Executed exactly one authorized2332 trial;runner session72667 exited0.
+Full trial boot_a readback49404819...adb8cad1 matched prediction. Reached
+Fastboot85.62s;raw download/flash:boot_a/reboot-recovery all OKAY. Then
+Recovery restored ALL67108864B original boot_a. Independent post-restore
+root/matisse/_a/recovery/geometry/full SHA256 PASS at07:54:53Z:
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No active runner or pending restore. Device left in root Recovery.
+Fresh2332 marks131 include70 complete qwords320..389 and match tail;
+console18569B names gpu2332/sweettrial2332. Before marks/tail byte-match
+previous2331;stale2331 fails expected2332. Paired access flags3. Both
+snapshots:code wordd00cf8df atCPU PA40080000 matches expected;version0,
+MMU_RAW0,JOB_RAW0,AS status/fault/address0,L2_READY1/0,transition0/0.
+MCU remains stage4/error-53/status1;disable-53/status1,reset_raw200,
+reset_completed0,cleanup-53;no firmware-ready or acceleration success.
+Full comparison against2331 changes only build tag and expected4KiB
+relocations TRANSTAB/private PA. All other common GPU/CSF fields,including
+platform power/clock/RPC words,are identical. CPU code-byte visibility and
+L2-ready are now measured together;these do not prove MCU fetch,PC,EMI
+reachability or that forced MFG/RPC writes are needed. AS_ACTIVE is0,not1.
+Detailed fresh evidence and independent restore JSON stay ignored under
+shim2332-access-trials/gpu-normal/. Authorization consumed;no second trial.
+Freshness/ABI/common-field audit PASS;documents updated for measured result.
+NEXT:offline audit original PDC CG/ST and EMI/memory-path initialization
+before selecting a distinct next experiment. No blind MFG/RPC writes or repeated2332. Implementation
+c2adc13/build handoff81f9fc3;no rebuild,CI run,push or repeated tests.
+
+## >>> HISTORICAL 2026-10-31: CSF2332 SINGLE TRIAL AUTHORIZED <<<
+
+User specifically replied 可以 to ONE normal2332 image2d57a0d0 boot_a trial,
+fresh paired evidence,complete64MiB original restoration and independent
+SHA256 verification. Fresh root/matisse/_a/Recovery preflight PASS;full
+boot_a SHA2562931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Candidate2d57a0d05cdb9aff350d614dce1c1ad0bd0bd0efcf294ed3901fac3f2639c038,
+runner908f37f522bd267653fbcc83bcee4c1455ce3ce73b9e7846e4f6152a1b4eb270,
+backup and stock-prefix pins match. No existing2332 journal/active runner.
+Authorization covers exactly this one trial and its complete restoration.
+Runner session72667 active. Candidate boot_a full readback verified SHA256
+494048191baa24a9ce2ddbb88eadf789b9b52a57d40080a1883e91dbadb8cad1;
+normal reboot requested,journal waiting-fresh-Recovery,restore_pending=true.
+Do not compete with active runner for ADB/raw USB. Restore first.
+Once started,follow shim2332-access-trials/gpu-normal/journal.json and
+prioritize full original restore plus independent hash before interpreting
+GPU evidence. Do not launch a second trial. No force-MFG/RPC writes added.
+
+## >>> HISTORICAL 2026-10-31: CSF2332 ACCESS SNAPSHOT VERIFIED; TRIAL UNAPPROVED <<<
 
 User proposes paired AS0/L2/firmware-word diagnostics plus forced MFG1/2 and
 RPC sleep-protection writes. Selected corrected READ-ONLY snapshot only.
