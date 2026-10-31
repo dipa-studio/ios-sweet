@@ -14,7 +14,7 @@ HARNESS=r'''
 struct model {
  uint64_t tick;unsigned reads,writes,enabled,resets,as_updates,locked,flushed,lock_low,lock_high;
  uint32_t gpu_mask,job_mask,mmu_mask,l2,raw,job,mcu,mmu,transcfg,table_low,table_high;
- int unpowered,bad_id,bad_bits,as_busy,no_l2,no_fw,fw_fault,reset_fail,bad_iface,stale,stuck_timer,live_table,request_done,disable_fail,bad_readback,bad_irq_mask;
+ int unpowered,bad_id,bad_bits,as_busy,no_l2,no_fw,fw_fault,reset_fail,bad_iface,stale,stuck_timer,live_table,request_done,disable_fail,bad_readback,bad_irq_mask,clamp_masks,missing_gpu_irq,missing_mmu_irq;
 };
 static uint32_t rd(void *p,uint64_t a) {
  struct model*m=p;m->reads++;
@@ -31,6 +31,12 @@ static uint32_t rd(void *p,uint64_t a) {
  case 0x20:return m->raw;
  case 0x28:return m->gpu_mask;
  case 0x34:return 0x100;
+ case 0x100:return 0xff;case 0x104:return 0;
+ case 0x110:return 1;case 0x114:return 0;
+ case 0x200:return m->enabled?2:0;case 0x204:return 0;
+ case 0x210:return m->enabled?1:0;case 0x214:return 0;
+ case 0x140:return m->enabled?0xff:0;case 0x144:return 0;
+ case 0x150:return m->enabled?1:0;case 0x154:return 0;
  case 0x120:return 1;case 0x124:return 0;case 0x160:return m->l2;case 0x220:return 0;
  case 0x704:return m->mcu;
  case 0x1000:return m->stale?0x80000000:m->job;
@@ -46,9 +52,15 @@ static uint32_t rd(void *p,uint64_t a) {
 static void wr(void*p,uint64_t a,uint32_t v) {
  struct model*m=p;m->writes++;assert(!m->unpowered);
  switch(a-0x13000000) {
- case 0x28:m->gpu_mask=v;return;
+ case 0x28:
+  m->gpu_mask=v;
+  if(v==0x80503){if(m->clamp_masks)m->gpu_mask=0x103;if(m->missing_gpu_irq)m->gpu_mask&=~1u;}
+  return;
  case 0x1008:m->job_mask=v;return;
- case 0x2008:m->mmu_mask=v;return;
+ case 0x2008:
+  m->mmu_mask=v;
+  if(v==0xffff){if(m->clamp_masks)m->mmu_mask=0xff;if(m->missing_mmu_irq)m->mmu_mask&=~1u;}
+  return;
  case 0x1a0:assert(v==1);if(!m->no_l2)m->l2=1;return;
  case 0x2410:assert(v==47);m->lock_low=1;return;
  case 0x2414:assert(v==0);m->lock_high=1;return;
@@ -65,7 +77,7 @@ static void wr(void*p,uint64_t a,uint32_t v) {
  case 0x700:
   if(v==0){if(!m->disable_fail)m->mcu=0;return;}
   assert(v==2 && m->l2 && m->as_updates==2 && m->transcfg==0x420001c6);
-  assert(m->gpu_mask==0x80503 && m->job_mask==UINT32_MAX && m->mmu_mask==0xffff);
+  assert((m->gpu_mask&0x103)==0x103 && m->job_mask==UINT32_MAX && (m->mmu_mask&0xff)==0xff);
   m->enabled++;m->mcu=1;
   if(m->request_done)m->mmu=0x10000;
   if(m->fw_fault)m->mmu=1;
@@ -84,10 +96,19 @@ static int run(struct model*m,struct sweet_csf_boot_config*c,struct sweet_csf_bo
 static void clean(struct model*m,struct sweet_csf_boot_report*r){assert(m->gpu_mask==0x55 && m->job_mask==0xaa && m->mmu_mask==0xbb && m->resets==1);assert(r->reset_completed);}
 int main(void) {
  struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
- assert(sizeof(r)==128);assert(!run(&m,&c,&r));assert(r.stage==7 && r.firmware_ready && r.version==0x01020003);clean(&m,&r);
- assert(r.job_irq_mask==UINT32_MAX);
- assert(r.sample_flags==3 && r.version_before==r.version && !r.disable_error && !r.disable_status);
+ assert(sizeof(r)==192);assert(!run(&m,&c,&r));assert(r.stage==7 && r.firmware_ready && r.version==0x01020003);clean(&m,&r);
+ assert(r.job_irq_mask==UINT32_MAX && r.gpu_irq_mask==0x80503 && r.mmu_irq_mask==0xffff);
+ assert(r.as_present==0xff && r.irq_gate_passed==1);
+ assert(r.shader_present_lo==0xff && r.shader_transition_lo==2 && r.shader_ready_lo==0xff);
+ assert(r.tiler_present_lo==1 && r.tiler_transition_lo==1 && r.tiler_ready_lo==1);
+ assert(r.sample_flags==15 && r.version_before==r.version && !r.disable_error && !r.disable_status);
  assert(r.transcfg_lo==0x420001c6 && r.transtab_lo==0x90000000 && !r.transtab_hi);
+ m=model();m.clamp_masks=1;assert(!run(&m,&c,&r));clean(&m,&r);
+ assert(r.gpu_irq_mask==0x103 && r.mmu_irq_mask==0xff && r.irq_gate_passed==1);
+ m=model();m.missing_gpu_irq=1;assert(run(&m,&c,&r)==-52 && !m.enabled && r.sample_flags==5);clean(&m,&r);
+ assert(r.gpu_irq_mask==0x80502 && !r.irq_gate_passed && !r.shader_transition_lo);
+ m=model();m.missing_mmu_irq=1;assert(run(&m,&c,&r)==-52 && !m.enabled && r.sample_flags==5);clean(&m,&r);
+ assert(r.mmu_irq_mask==0xfffe && !r.irq_gate_passed);
  m=model();m.request_done=1;assert(!run(&m,&c,&r));assert(r.mmu_raw==0x10000);clean(&m,&r);
  m=model();c=cfg();c.shared_bytes=0xffffff;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
  m=model();c=cfg();m.unpowered=1;assert(run(&m,&c,&r)==-52 && !m.writes);
@@ -100,8 +121,8 @@ int main(void) {
  m=model();m.as_busy=1;assert(run(&m,&c,&r)==-53 && !m.enabled);clean(&m,&r);
  m=model();m.stale=1;assert(run(&m,&c,&r)==-52 && !m.enabled);clean(&m,&r);
  m=model();m.no_fw=1;assert(run(&m,&c,&r)==-53 && !r.firmware_ready);clean(&m,&r);
- assert(r.stage==4 && r.sample_flags==3 && r.version==0x01020003 && !r.job_raw);
- m=model();m.bad_irq_mask=1;assert(run(&m,&c,&r)==-52 && !m.enabled && r.sample_flags==1);clean(&m,&r);
+ assert(r.stage==4 && r.sample_flags==15 && r.version==0x01020003 && !r.job_raw);
+ m=model();m.bad_irq_mask=1;assert(run(&m,&c,&r)==-52 && !m.enabled && r.sample_flags==5);clean(&m,&r);
  m=model();m.bad_readback=1;assert(run(&m,&c,&r)==-52 && !m.enabled && !r.sample_flags);clean(&m,&r);
  m=model();m.fw_fault=1;assert(run(&m,&c,&r)==-54 && r.as_fault==0xc0);clean(&m,&r);
  m=model();m.bad_iface=1;assert(run(&m,&c,&r)==-55 && !r.firmware_ready);clean(&m,&r);

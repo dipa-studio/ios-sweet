@@ -1,5 +1,47 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+
+## >>> ACTIVE 2026-10-31: CSF2325 BUILT; NEW MASK/CORE EVIDENCE; NO TRIAL <<<
+
+Normal2324 trial completed and full boot_a restore independently verified;
+see result below. Firmware did NOT start: 2324 rejected before MCU_CONTROL_AUTO.
+Its JOB mask readback was ffffffff; GPU/MMU readbacks were not recorded, so
+the rejected register is unknown. Do not claim 2324 tested the IRQ hypothesis.
+
+2325 retains requested mask writes GPU80503/JOBffffffff/MMUffff and records
+all exact GPU/JOB/MMU readbacks plus AS_PRESENT. Gate now requires JOB global
+bit31, GPU fault/protected/reset bits103, and MMU page-fault mask for each
+present AS0..15 bit. Reserved/unimplemented bits may read zero. It records
+shader+tiler PRESENT/PWRTRANS/READY before MCU start and after startup wait;
+the latter snapshot identifies a persistent firmware core-state wait without
+guessing from preloaded metadata. Firmware disassembly at01002ee4 waits for
+TILER_PRESENT (GPU+110/114) & TILER_PWRTRANS (GPU+210/214) to clear, then
+powers shader cores. 2324 did not capture either core state.
+
+2325 source, report decoder and strict models implemented.30 targeted tests
+PASS (2.478s); actual pinned firmware ASan/UBSan replay PASS:7 ordinary,
+3 protected skipped,8 table pages,1232896B arena,606208B shared. Full local
+kernel build exit0, no CI/push;16724248B SHA256
+da73b367cb071992f592485431bc7ac963c3ce200709eee61236774a70459f39.
+Image26714112B SHA256
+06759c12f2bfb0bd7a7631909e03adb6e7411668dd4f346338797cd31d7e611f.
+Predicted candidate full boot_a SHA256
+5193d19a93bfe4065a5833d0f46e72250810335b452075d9bc3d51730739ba3e.
+Independent source/frozen-object/image/fallback checks PASS; rootrw=0,
+ufsrw=0; retained signature not authenticated. Readonly Recovery preflight
+PASS; current full boot_a still baseline2931647a, no write/reboot/new runner
+or restore duty.
+
+Ignored runner shim2325-trials/run-once.py pins the image/hash, baseline,
+partition prediction and recovery strategy. Next requires specific approval
+for ONE2325 Recovery-fallback write/reboot and full64MiB restore/hash. Only
+after fallback passes request separate normal MCU trial. No2325 device write
+is authorized. Implementation pending commit in this handoff; no CI run.
+Evidence csf2325-tests.txt,csf2325-real-fw-test.txt,
+kernel-csf2325-build.txt,shim2325-build-arguments.json,
+shim2325-ready/independent-verification.json,
+shim2325-trials/preflight.txt. Preserve unrelated collector-v2/shim dirt.
+
 ## >>> COMPLETE 2026-10-31: CSF2324 PRE-MCU MASK GATE REJECTED; FULL RESTORE <<<
 
 Specifically approved normal2324 trial executed ONCE. Runner21671 exited0.

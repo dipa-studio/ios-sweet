@@ -21,6 +21,16 @@ struct sweet_csf_boot_report {
     int32_t disable_error;
     /*2323 reserved this word as zero;2324 records JOB_INT_MASK readback. */
     uint32_t version_before, job_irq_mask;
+    /*2325 appends exact mask readbacks and core state, 192 bytes total.
+     * Flags bit2: pre-start core state; bit3: post-start core state.
+     * Post-start capture replaces the core words when bit3 is set. */
+    uint32_t gpu_irq_mask, mmu_irq_mask, as_present, irq_gate_passed;
+    uint32_t shader_present_lo, shader_present_hi;
+    uint32_t shader_transition_lo, shader_transition_hi;
+    uint32_t shader_ready_lo, shader_ready_hi;
+    uint32_t tiler_present_lo, tiler_present_hi;
+    uint32_t tiler_transition_lo, tiler_transition_hi;
+    uint32_t tiler_ready_lo, tiler_ready_hi;
 };
 enum sweet_csf_boot_stage {
     SWEET_CSF_BOOT_CONFIG=1, SWEET_CSF_BOOT_L2=2, SWEET_CSF_BOOT_AS=3,

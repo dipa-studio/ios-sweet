@@ -18,6 +18,17 @@ static int as_command(const struct sweet_gpu_io *io,uint64_t gpu,uint32_t comman
     if(!rc) {wr(io,gpu+0x2418,command);rc=poll(io,gpu+0x2428,1,0,budget);}
     return rc;
 }
+static void core_state(const struct sweet_gpu_io *io,uint64_t gpu,
+                       struct sweet_csf_boot_report *r,uint32_t flag)
+{
+    r->shader_present_lo=rd(io,gpu+0x100);r->shader_present_hi=rd(io,gpu+0x104);
+    r->shader_transition_lo=rd(io,gpu+0x200);r->shader_transition_hi=rd(io,gpu+0x204);
+    r->shader_ready_lo=rd(io,gpu+0x140);r->shader_ready_hi=rd(io,gpu+0x144);
+    r->tiler_present_lo=rd(io,gpu+0x110);r->tiler_present_hi=rd(io,gpu+0x114);
+    r->tiler_transition_lo=rd(io,gpu+0x210);r->tiler_transition_hi=rd(io,gpu+0x214);
+    r->tiler_ready_lo=rd(io,gpu+0x150);r->tiler_ready_hi=rd(io,gpu+0x154);
+    r->sample_flags|=flag;
+}
 int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_io *io,
                    struct sweet_csf_boot_report *r)
 {
@@ -40,7 +51,8 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     if((rd(io,0x1c001f3c)&rd(io,0x1c001f40)&6)!=6) {
         r->error=SWEET_CSF_BOOT_STATE;return r->error;
     }
-    if(rd(io,c->gpu)!=0xa8620004 || !(rd(io,c->gpu+0x18)&1)) {
+    r->as_present=rd(io,c->gpu+0x18);
+    if(rd(io,c->gpu)!=0xa8620004 || r->as_present==UINT32_MAX || !(r->as_present&1)) {
         r->error=SWEET_CSF_BOOT_MODEL;return r->error;
     }
     r->mmu_features=rd(io,c->gpu+0x14);
@@ -102,10 +114,17 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     wr(io,c->gpu+0x1008,UINT32_MAX);
     wr(io,c->gpu+0x2008,0xffff);
     r->job_irq_mask=rd(io,c->gpu+0x1008);
-    if(r->job_irq_mask!=UINT32_MAX || rd(io,c->gpu+0x28)!=0x80503 ||
-       rd(io,c->gpu+0x2008)!=0xffff) {
+    r->gpu_irq_mask=rd(io,c->gpu+0x28);r->mmu_irq_mask=rd(io,c->gpu+0x2008);
+    core_state(io,c->gpu,r,4);
+    /* Reserved/unimplemented bits may read zero. Require the fault/reset
+     * sources, global JOB IRQ and page-fault bits for present AS slots.
+     * The full requested/read masks remain evidence, never synthesized. */
+    uint32_t required_mmu=r->as_present&0xffff;
+    if(!(r->job_irq_mask&0x80000000) || (r->gpu_irq_mask&0x103)!=0x103 ||
+       (r->mmu_irq_mask&required_mmu)!=required_mmu) {
         r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
     }
+    r->irq_gate_passed=1;
     r->stage=SWEET_CSF_BOOT_MCU;
     wr(io,c->gpu+0x700,2); /* AUTO is2; ENABLE is1. */
     uint64_t begin=io->ticks(io->context);
@@ -127,6 +146,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     r->input_va=rd(io,shared+8);r->output_va=rd(io,shared+12);
     r->groups=rd(io,shared+16);r->group_stride=rd(io,shared+20);
     r->sample_flags|=2;
+    core_state(io,c->gpu,r,8);
     if(rc) {r->error=rc;goto cleanup;}
     r->stage=SWEET_CSF_BOOT_IFACE;
     /* An input/output page and every CSG control block must fit shared. */

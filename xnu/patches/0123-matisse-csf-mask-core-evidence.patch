@@ -1,0 +1,13 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -826 +826 @@
+-#define SWEET_BUILD_ID 0x2324u
++#define SWEET_BUILD_ID 0x2325u
+@@ -906,2 +906,2 @@
+-	    (void const **)&report, &size) == kSuccess && size == 128) {
+-		uint32_t csf[32];
++	    (void const **)&report, &size) == kSuccess && size == 192) {
++		uint32_t csf[48];
+@@ -909 +909 @@
+-		for (uint32_t i = 0; i < 16; i++) {
++		for (uint32_t i = 0; i < 24; i++) {

@@ -106,8 +106,16 @@ class ReportDecodeTests(unittest.TestCase):
             values.update(changes)
         raw=struct.pack('<I2i19I',*(values[k] for k in self.module.CSF_KEYS))
         if build>=0x2323:
-            if build==0x2324:values['reserved']=changes.get('reserved',0xffffffff)
+            if build>=0x2324:values['reserved']=changes.get('reserved',0xffffffff)
             raw+=struct.pack('<7Ii2I',*(values[k] for k in self.module.CSF_DIAGNOSTIC_KEYS))
+        if build==0x2325:
+            values.update(zip(self.module.CSF_MASK_CORE_KEYS,
+                [0x80503,0xff,0xff,1,0xff,0,0,0,0xff,0,1,0,0,0,1,0]))
+            values['sample_flags']=changes.get('sample_flags',15)
+            values.update(changes)
+            raw=struct.pack('<I2i19I',*(values[k] for k in self.module.CSF_KEYS))
+            raw+=struct.pack('<7Ii2I',*(values[k] for k in self.module.CSF_DIAGNOSTIC_KEYS))
+            raw+=struct.pack('<16I',*(values[k] for k in self.module.CSF_MASK_CORE_KEYS))
         count=struct.unpack_from('<I',data,12)[0]
         for i in range(len(raw)//8):
             if i==omit:continue
@@ -167,6 +175,28 @@ class ReportDecodeTests(unittest.TestCase):
         for args in ({'omit':15},{'tag':0x2323},{'sample_flags':4}):
             with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2324,**args),0x2324)
         with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2324),0x2323)
+
+    def test_2325_supported_masks_and_core_state_evidence(self):
+        result=self.module.decode(self.csf_marks(build=0x2325),0x2325)
+        self.assertTrue(result['csf_firmware_boot_verified'])
+        self.assertEqual(result['csf']['mmu_irq_mask'],0xff)
+        self.assertTrue(result['csf']['core_state_after_start'])
+        clamped=self.module.decode(self.csf_marks(build=0x2325,
+            gpu_irq_mask=0x103,reserved=0x80000000),0x2325)
+        self.assertTrue(clamped['csf_firmware_boot_verified'])
+        for args in ({'gpu_irq_mask':0x80502},{'mmu_irq_mask':0xfe},
+                     {'as_present':0xffff},{'irq_gate_passed':0},{'reserved':0x7fffffff},
+                     {'sample_flags':7},{'sample_flags':5},{'job_raw':0},{'version':0},
+                     {'cleanup_error':-53}):
+            with self.subTest(args=args):
+                self.assertFalse(self.module.decode(self.csf_marks(build=0x2325,**args),0x2325)['csf_firmware_boot_verified'])
+        rejected=self.module.decode(self.csf_marks(build=0x2325,stage=3,error=-52,
+            irq_gate_passed=0,sample_flags=5,mmu_irq_mask=0xfe),0x2325)
+        self.assertFalse(rejected['csf']['core_state_after_start'])
+        self.assertTrue(rejected['csf']['core_state_sampled'])
+        for args in ({'omit':23},{'tag':0x2324},{'sample_flags':16},{'irq_gate_passed':2}):
+            with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2325,**args),0x2325)
+        with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2325),0x2324)
 
     def test_initial_reset_observation_survives_later_callback_failure(self):
         result=self.module.decode(self.marks(error=-53))

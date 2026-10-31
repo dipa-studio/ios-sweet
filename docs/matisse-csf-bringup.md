@@ -3,10 +3,10 @@
 2026-10-31. GPU2321 established actual GPUEB power ownership and Mali soft
 reset on matisse. These diagnostics install MCU firmware mappings, power
 the first L2 group, enable AS0 and start the MCU. Both2322 and2323 hardware
-trials timed out at MCU start and were fully restored.2324 is built and
-locally validated; its Recovery-fallback trial passed with full restoration.
-Its normal trial rejected the internal-mask readback gate before MCU start.
-Firmware readiness remains unproven. The original2322 design follows, then the measured results
+2322 and2323 trials timed out at MCU start;2324 was rejected by a pre-MCU
+mask gate. All trials were fully restored.2324 Recovery fallback passed.
+2325 records the exact mask/core state and is built locally, but has NOT run
+on hardware. Firmware readiness remains unproven. The original2322 design follows, then the measured results
 and successive2323/2324 changes. There is no shader job, command queue,
 Vulkan or Metal path yet.
 
@@ -341,9 +341,11 @@ Observed instruction locations in the blob:
 
 - Reset startup0x010018ec, MPU configuration0x01003126 and main startup
   0x01002aec.
-- Loop0x01002ee4..0x01002ef2 reads MCU-view shader power-transition words
-  0x40000214/0x40000210 and present words0x40000114/0x40000110, waiting until
-  their intersection is zero.
+- Loop0x01002ee4..0x01002ef2 reads TILER_PWRTRANS at MCU-view
+  0x40000214/0x40000210 and TILER_PRESENT at0x40000114/0x40000110, waiting
+  until their intersection is zero. It then writes SHADER_PWRON at
+  0x40000180/0x40000184. These are GPU registers viewed through the MCU
+  aperture; do not interpret the loop as waiting on shader transition bits.
 - At0x01003012 startup publishes version0x01010000 to shared VA0x04000000.
 - At0x0100301c it writes0x80000000 to internal MCU-view0x40001000, issuing
   the initial global-interface interrupt; startup WFI is0x01003032.
@@ -493,3 +495,71 @@ gpu-normal-run.txt. Next static work must audit implemented interrupt-mask
 bits and preserve exact GPU/MMU readbacks in a successor before interpreting
 another MCU trial. No second trial,new image or device write is authorized.
 No new build,CI run,push or source-code modification was needed for this trial.
+
+
+## Normal2324 result and successor2325 (2026-10-31)
+
+The normal2324 hardware trial reached the CSF address-space stage but
+rejected the pre-MCU mask gate with state error-52. Fresh marks establish
+sample_flags1, L2_READY1, TRANSCFG0x420001c6, rootPA0x40076000,
+AS_PRESENT0xff and JOB_INT_MASK readback0xffffffff. MCU_CONTROL_AUTO was
+not issued. 2324 report ABI did not preserve GPU/MMU mask readbacks, so the
+exact rejected comparison is unknown; neither one may be guessed. Core
+state was not sampled by2324. Cleanup disable and soft reset passed, the
+power reference was released, and no firmware-ready claim applies.
+
+Fastboot enumerated83.56 seconds after normal reboot. The preapproved
+single-session fbraw restoration flashed the stock20MiB prefix, requested
+Recovery and allowed a full67108864B original boot_a restore. Independent
+Recovery identity/geometry and full SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1
+passed. Journal is complete-restored-Recovery with restore_pending=false.
+Evidence stays ignored under shim2324-trials/gpu-normal/. This was host-
+managed restoration, not automatic Recovery from normal XNU.
+
+2325 retains the full requested pre-start writes GPU_MASK0x80503,
+JOB_MASK0xffffffff and MMU_MASK0xffff. It records exact GPU/JOB/MMU mask
+readbacks, AS_PRESENT and whether the gate passed. It requires JOB global
+interface bit31, GPU fault/protected/reset bits0x103, and every page-fault
+mask bit corresponding to a present AS0..15 slot. It does not require
+reserved/unimplemented mask bits to read back as ones; the exact values are
+still reported. This accommodates a GPU readback such as0x103 when optional
+source bits are not implemented, while refusing absent fault/reset sources.
+MMU mask requirement follows the measured AS_PRESENT bitmap; simulator tests
+cover zero-extended/clamped and missing-required-bit readbacks.
+
+Before MCU start,2325 captures GPU AS_PRESENT and shader/tiler PRESENT,
+PWRTRANS and READY registers. After the firmware wait, it captures the same
+core state again, along with the existing CSF RAW/shared evidence. The exact
+pinned firmware loop at0x01002ee4 reads TILER_PRESENT and TILER_PWRTRANS,
+waiting for their intersection to clear before it powers shader cores.
+2324 did not capture these registers, so no actual cause of its gate rejection
+or the earlier2323 firmware timeout is inferred. Post-start transition
+values will test whether the firmware's initial wait can complete.
+
+Report grows128->192B; kernel records24 CSF qwords at marks320..343. Decoder
+retains2321..2324 layouts and verifies mask evidence only for2325. Targeted
+30-test suite PASS, including ASan/UBSan loader/state-machine models,
+2325 evidence cases and prior ABI regressions. Actual pinned firmware
+ASan/UBSan replay PASS:7 ordinary sections,3 protected skipped,8 tables,
+1232896 arena bytes,606208 shared bytes.
+
+Local incremental kernel build exited0 without CI/push. Kernel16724248B
+SHA256 da73b367cb071992f592485431bc7ac963c3ce200709eee61236774a70459f39.
+Image26714112B:
+research/matisse/20261031-gpu/shim2325-ready/matisse-shim-gpu2325.img
+SHA256 06759c12f2bfb0bd7a7631909e03adb6e7411668dd4f346338797cd31d7e611f.
+Predicted full boot_a hash, candidate prefix plus unchanged baseline tail:
+5193d19a93bfe4065a5833d0f46e72250810335b452075d9bc3d51730739ba3e.
+Independent source-manifest/frozen-object/image/fallback validation passed.
+Expanded image80402548B, fallback Linux +32MiB unchanged,rootrw=0,ufsrw=0.
+Signature bytes are retained but not authenticated. Proprietary inputs remain
+ignored. Recovery-only readonly preflight reverified current boot_a baseline
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+
+No2325 hardware trial has occurred. Next action is specific approval for
+ONE2325 Recovery-fallback boot_a trial, Recovery reboot and full baseline
+restore/hash. A separate approval is required for normal MCU execution after
+same-image fallback passes. Normal XNU Recovery remains unreliable; retain
+the verified persistent fbraw stock-prefix path. No second2324 trial or
+2325 write is authorized by the2324 approval.
