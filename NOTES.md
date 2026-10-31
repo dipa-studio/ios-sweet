@@ -1,5 +1,39 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> COMPLETE 2026-10-31: CSF2324 PRE-MCU MASK GATE REJECTED; FULL RESTORE <<<
+
+Specifically approved normal2324 trial executed ONCE. Runner21671 exited0.
+Fresh build2324/count77 marks and18657B console gpu2324/sweettrial2324.
+Platform INIT0/ON1/OFF0,SPM3->7,GPU_IDa8620004,initial reset100 repeated;
+reference released. CSF stage3/error-52, sample_flags1,version_before0,
+L2_READY1,TRANSCFG420001c6,rootPA40076000,JOB_MASKffffffff. The exact
+internal-mask readback gate rejected BEFORE MCU_CONTROL_AUTO, so MCU was
+NOT started. JOB mask readback passed; either GPU or MMU mask differed
+from the literal requirement (or both). Neither value is recorded in2324;
+do NOT assert which failed. Runtime interface was NOT sampled; zero report
+fields are unobserved. This trial cannot test the IRQ-enable hypothesis
+against2323's firmware timeout. Disable status/error0,reset_raw100,
+reset_completed1,cleanup_error0: cleanup verified. Firmware-ready false.
+
+Fastboot enumerated83.56s after normal boot. Runner's one persistent fbraw
+session verified matisse/slot/geometry, stock20MiB prefix download/flash
+OKAY and reboot-recovery OKAY. Recovery restored full67108864B boot_a;
+independent full read/hash2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1,
+identity matisse/_a/recovery/root and geometry PASS. No user USB/key action,
+SIGINT or blind transport retry. Recovery dmesg891397B. Journal
+shim2324-trials/gpu-normal/journal.json complete-restored-Recovery,
+restore_pending=false,evidence_decoded=true. No active runner/restore duty.
+This is host-managed restoration, not autonomous Recovery from XNU.
+
+Next STATIC audit implemented GPU/MMU mask bits and the overly literal
+readback gate; preserve actual masks in a successor report before another
+MCU attempt. GPU AS_PRESENTff is measured, but the rejected mask register
+is NOT identified yet. No second2324 trial,new image/write approved.
+Implementation6d59d9c,patch e6a84ae,fallback3a286d1. No new build/CI/push.
+Evidence ignored gpu-normal/{after-marks.bin,after-console.txt,gpu-result.json,
+journal.json,independent-post-restore.txt,recovery-dmesg.txt} and sibling
+gpu-normal-run.txt. Unrelated collector-v2/shim work preserved.
+
 ## >>> COMPLETE 2026-10-31: CSF2324 RECOVERY FALLBACK PASS; FULL RESTORE <<<
 
 User specifically approved imageb8214a7e Recovery-fallback boot_a write,

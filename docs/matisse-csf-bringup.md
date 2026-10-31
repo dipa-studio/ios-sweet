@@ -5,7 +5,8 @@ reset on matisse. These diagnostics install MCU firmware mappings, power
 the first L2 group, enable AS0 and start the MCU. Both2322 and2323 hardware
 trials timed out at MCU start and were fully restored.2324 is built and
 locally validated; its Recovery-fallback trial passed with full restoration.
-Its normal MCU trial has NOT run. Firmware readiness remains unproven. The original2322 design follows, then the measured results
+Its normal trial rejected the internal-mask readback gate before MCU start.
+Firmware readiness remains unproven. The original2322 design follows, then the measured results
 and successive2323/2324 changes. There is no shader job, command queue,
 Vulkan or Metal path yet.
 
@@ -454,3 +455,41 @@ Recovery boot_a write -> normal reboot -> fresh2324 marks320..335/console
 -> full64MiB baseline restoration/hash. Keep the tested one-session fbraw
 stock-prefix restore available if Fastboot appears. No new build,CI run,
 push or source-code modification was needed for this fallback.
+
+
+## Normal2324 hardware result (2026-10-31)
+
+The specifically approved normal2324 trial ran once; runner21671 exited0.
+Fresh build2324/count77 marks replaced2323/count77, and18657-byte console
+agrees with gpu2324/sweettrial2324. Platform INIT0/ON1/OFF0,SPM3->7,
+GPU_ID0xa8620004 and initial reset completion0x100 repeated successfully;
+the acquired power reference was released.
+
+CSF stopped at stage3/address-space,error-52/state, before MCU_CONTROL_AUTO.
+The source path and sample_flags1 prove the internal-mask gate was reached
+and rejected; JOB mask readback was0xffffffff, so the remaining GPU0x80503
+or MMU0xffff comparison failed (or both). Neither GPU/MMU mask readback is
+recorded by2324; this result cannot identify which mask was responsible.
+L2_READY1,TRANSCFG0x420001c6,rootPA0x40076000 and prestart shared version0
+were observed. MCU was NOT started and runtime interface was NOT sampled;
+zero runtime fields are unobserved. Thus this trial does not evaluate the
+IRQ-enable hypothesis against the earlier2323 MCU timeout. Cleanup verified:
+disable status/error0,reset RAW0x100,reset_completed1,cleanup_error0.
+Firmware-ready remains false. AS_PRESENT was0xff, not proof of which
+interrupt-mask bits the hardware implements.
+
+Normal boot enumerated Fastboot83.56s after reboot. One persistent fbraw
+session verified matisse/slot_a/geometry, flashed the known stock20MiB
+prefix (OKAY), and requested Recovery (OKAY). Recovery restored the full
+67108864-byte original boot_a; independent identity/geometry and full hash
+matched2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No user keys/unplug,host SIGINT or blind USB retry was needed. Fresh Recovery
+dmesg891397B was saved. Journal is complete-restored-Recovery,
+restore_pending=false; no active trial/restore runner remains. This is
+host-managed restoration, not automatic Recovery from XNU.
+
+Ignored evidence is under shim2324-trials/gpu-normal/ with sibling
+gpu-normal-run.txt. Next static work must audit implemented interrupt-mask
+bits and preserve exact GPU/MMU readbacks in a successor before interpreting
+another MCU trial. No second trial,new image or device write is authorized.
+No new build,CI run,push or source-code modification was needed for this trial.
