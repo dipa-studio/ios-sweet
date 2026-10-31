@@ -38,6 +38,8 @@ Authorization consumed;no second trial. NEXT:offline inspect original MCU
 AUTO/debug/CSF initialization prerequisites against the unchanged startup
 registers. No root cause or new hardware experiment selected yet. Preserve
 unrelated dirty files and untracked0093;do not stage device/proprietary data.
+Measured result/docs committed6f8822d. Trial authorization fully consumed;
+no2334 image,new runner,build or device-write permission exists.
 
 ## >>> HISTORICAL 2026-10-31: CSF2333 SINGLE TRIAL AUTHORIZED <<<
 
