@@ -1,5 +1,36 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> COMPLETE 2026-10-31: CSF2323 NORMAL TIMEOUT; FULL RESTORE <<<
+
+Authorized normal2323 trial ran ONCE. Runner32766 exited0; journal
+shim2323-trials/gpu-normal/journal.json complete-restored-Recovery,
+restore_pending=false. Fastboot enumerated86.57s; host detected it without
+opening/retrying commands, then existing one persistent fbraw session
+verified identity/slot/geometry, downloaded/flashed stock20MiB prefix OKAY,
+reboot-recovery OKAY. Recovery full64MiB boot_a restored/hash independently
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No user USB/key intervention, no SIGINT, no pending restore or active runner.
+
+Fresh marks build2323,count77 (before2322,count72), console18657B confirms
+sweettrial2323/gpu2323. Platform INIT0/ON1/OFF0,SPM3->7,GPU_IDa8620004,
+initial reset100,ownership released. initial_power_reset_observed=true;
+aggregate failed on callback. CSF stage4/error-53, MCU_STATUS1,JOB_RAW0,
+MMU_RAW0,AS fault/status/address0,L2 ready1. Config readback420001c6,
+rootPA40076000. sample_flags3: shared interface actually sampled this time.
+version_before0/version_after0,features0,input04002000,output04003000,
+groups8,stridea0. These metadata match blob; no fresh readiness IRQ or
+version publication. This does NOT prove that firmware executed.
+GPU_RAW600,disable_status1/disable_error-53; reset_raw600/reset_completed0,
+cleanup_error-53. Firmware-ready/acceleration not achieved.
+
+No2323 second trial or new image approved. Continue STATIC audit from these
+measurements: table/cache change alone did not produce handshake; examine
+MCU boot prerequisites, IRQ delivery/internal GPU event ownership and vendor
+G710 initialization. Do not call the VA/cache discrepancy a proven cause.
+Evidence ignored gpu-normal/{gpu-result.json,after-marks.bin,after-console.txt,
+recovery-dmesg.txt,independent-post-restore.txt}; sibling gpu-normal-run.txt.
+Implementation41c0b94, prior fallback12aa100; no new CI/build/source change.
+
 ## >>> COMPLETE 2026-10-31: CSF2323 RECOVERY FALLBACK PASS; FULL RESTORE <<<
 
 User specifically confirmed image23b2c8dc Recovery-fallback boot_a write,

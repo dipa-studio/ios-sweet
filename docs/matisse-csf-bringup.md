@@ -288,3 +288,39 @@ image: write boot_a from Recovery, boot normal, capture fresh2323 CSF marks
 320..335 and console, then restore the full baseline/hash. Automatic Recovery
 from normal XNU remains unreliable. No firmware-ready or acceleration claim.
 No build, CI run or source-code modification was needed for this fallback.
+
+
+## Normal2323 hardware result (2026-10-31)
+
+The specifically authorized normal2323 trial executed once. Runner32766
+exited0; fresh marks build2323/count77 replaced2322/count72, and18657-byte
+console agrees with gpu2323/sweettrial2323. Platform INIT0/ON1/OFF0, SPM3->7,
+GPU_ID0xa8620004 and initial reset completion0x100 repeated successfully;
+the single power reference was released. Aggregate failure is the CSF
+callback, not the initial reset.
+
+MCU again timed out at stage4/error-53, status1, JOB_RAW0, MMU_RAW0,
+L2_READY1, AS status/fault/address0. Configuration readback0x420001c6 and
+rootPA0x40076000 matched. sample_flags3 now proves shared sampling occurred:
+version before/after0, features0, input0x04002000, output0x04003000,
+groups8 and stride0xa0. The same metadata exist in the firmware blob; they
+do not prove MCU execution. No fresh global readiness IRQ or version was
+published. GPU_RAW0x600, disable_status1/disable_error-53, cleanup_error-53,
+reset_raw0x600/reset_completed0. Firmware-ready remains false.
+
+Fastboot enumerated86.57s after normal reboot. The host detected enumeration
+without opening the transport and entered the existing restoration path.
+One persistent fbraw session verified identity/slot/geometry, restored the
+stock20MiB prefix with OKAY and requested Recovery with OKAY. Recovery
+restored the full67108864-byte original boot_a; independent identity and
+full SHA256 matched
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No user keys/unplug or host SIGINT was needed. Journal status is
+complete-restored-Recovery, restore_pending=false; no active runner remains.
+This is host-managed restoration, not autonomous Recovery from XNU.
+
+Evidence stays ignored under shim2323-trials/gpu-normal/ and sibling
+gpu-normal-run.txt. No second trial, new image, CI run or source change.
+The48-bit/cache change alone did not establish readiness. Further static
+work must examine MCU startup prerequisites/internal event delivery and
+G710 vendor initialization without claiming a diagnosed root cause.
