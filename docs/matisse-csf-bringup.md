@@ -4,8 +4,8 @@
 reset on matisse. These diagnostics install MCU firmware mappings, power
 the first L2 group, enable AS0 and start the MCU. Both2322 and2323 hardware
 trials timed out at MCU start and were fully restored.2324 is built and
-locally validated, but has NOT been written or booted. Firmware readiness
-remains unproven. The original2322 design follows, then the measured results
+locally validated; its Recovery-fallback trial passed with full restoration.
+Its normal MCU trial has NOT run. Firmware readiness remains unproven. The original2322 design follows, then the measured results
 and successive2323/2324 changes. There is no shader job, command queue,
 Vulkan or Metal path yet.
 
@@ -425,3 +425,32 @@ hashes matched, and the live full64MiB boot_a was rehashed to baseline
 2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
 Final29-test rerun PASS (2.563s); git diff --check PASS. Preflight does not
 write a partition or reboot. No2324 trial journal or pending restoration.
+
+
+## Recovery fallback2324 hardware result (2026-10-31)
+
+The specifically approved fallback trial of imageb8214a7e ran once.
+Runner83683 exited0. A fresh Recovery boot was observed26.56 seconds after
+adb reboot recovery. Full candidate boot_a readback matched prediction
+8d7de4d7f5cac9a6b73f50df7f3e8da23a9bc163e9a0db34bd25bf5bbbf0b8f1.
+No Fastboot, user USB/key action or host SIGINT was needed. Fresh Recovery
+dmesg842253B was captured. Full67108864-byte original boot_a was restored;
+an independent read again verified
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Independent identity/geometry confirmed matisse/slot_a/root Recovery.
+
+Ignored shim2324-trials/recovery-fallback/journal.json is
+complete-restored-Recovery, restore_pending=false. No active trial/restore
+runner remains. Independent-post-restore.txt and recovery-dmesg.txt are
+alongside the captures; recovery-fallback-run.txt is in the parent directory.
+Before/after4198400B tails and4096B marks are byte-identical as expected for
+bypass. Historical2323 console/marks are not fresh2324 execution evidence.
+
+This verifies2324 Recovery entry/BSS and embedded original Linux fallback
+only. Normal MCU execution, firmware readiness, acceleration and automatic
+Recovery from normal XNU remain unverified. The next step needs separate
+specific approval for ONE normal2324 MCU trial using this same image,
+Recovery boot_a write -> normal reboot -> fresh2324 marks320..335/console
+-> full64MiB baseline restoration/hash. Keep the tested one-session fbraw
+stock-prefix restore available if Fastboot appears. No new build,CI run,
+push or source-code modification was needed for this fallback.

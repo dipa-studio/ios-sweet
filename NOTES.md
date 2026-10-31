@@ -1,5 +1,38 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> COMPLETE 2026-10-31: CSF2324 RECOVERY FALLBACK PASS; FULL RESTORE <<<
+
+User specifically approved imageb8214a7e Recovery-fallback boot_a write,
+reboot Recovery, then complete original restoration. Executed ONCE; runner
+session83683 exited0. New Recovery observed26.56s after adb reboot recovery.
+Candidate full-partition readback matched prediction
+8d7de4d7f5cac9a6b73f50df7f3e8da23a9bc163e9a0db34bd25bf5bbbf0b8f1.
+No Fastboot, user USB/key intervention or SIGINT. Fresh Recovery dmesg842253B.
+Full67108864B original boot_a restored, then independently rehashed
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Independent matisse/_a/recovery/root and geometry verified. Journal
+shim2324-trials/recovery-fallback/journal.json complete-restored-Recovery,
+restore_pending=false; no active test/restore runner or restoration pending.
+
+Before/after4198400B diagnostic tails and4096B marks are byte-identical,
+as expected for Recovery bypass. Historical2323 console/marks are NOT fresh
+2324 GPU evidence. This verifies2324 Recovery entry/BSS and embedded stock
+Linux fallback only; it does not execute normal MCU startup or establish
+firmware readiness, acceleration or autonomous Recovery from normal XNU.
+
+NEXT: obtain specific approval for ONE normal2324 MCU trial with SAME image
+b8214a7e5166f396db9b6e7ac42331c6c592662473347288b32e6ab5679506f1:
+Recovery boot_a write -> normal reboot -> capture fresh2324 marks320..335
+and console -> full64MiB baseline restore/hash. Same-image fallback PASSED.
+Normal XNU automatic Recovery remains UNRELIABLE; persistent fbraw stock-
+prefix restoration stays available if Fastboot appears. Fallback approval
+is consumed; no normal2324 trial/write authorized yet. Implementation
+6d59d9c, final patch/handoffe6a84ae. No new build,CI run/push or source edit.
+Evidence ignored recovery-fallback/{journal.json,independent-post-restore.txt,
+recovery-dmesg.txt,before/after-tail.bin,before/after-marks.bin} and sibling
+recovery-fallback-run.txt. Unrelated collector-v2/shim dirt preserved.
+The older pre-trial2324 section below is historical and superseded here.
+
 ## >>> ACTIVE 2026-10-31: CSF2324 BUILT; STATIC STARTUP AUDIT; NO DEVICE TRIAL <<<
 
 Latest hardware evidence remains the restored2323 timeout below.2324 has
