@@ -1,5 +1,50 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: GPU ROUTE AUDITED; 0x2317 hardware baseline unchanged <<<
+
+User supplied the UniXNU/Mali layering constraint. Documentation commit
+51e7537 adds docs/matisse-gpu-plan.md and links it from the Chinese roadmap.
+Decision: reuse architectural boundaries only; investigate MT6983 CSF /
+Panthor / PanVK with a Darwin KMD interface. No Adreno740/Turnip/GMU port
+is implied. AIR/Metal reuse on this iOS16 ABI remains unverified.
+
+Observed source facts: research/matisse/mt6983.dts declares Mali MMIO
+0x13000000+0x480000 and GPUEB support. MiCode/MTK_kernel_modules local
+rubens-s-oss commit c66b3c9ce7b5c0bc3d72a829f6542200deaa8a9c, r32p1
+MT6983 OOT Makefile explicitly enables CONFIG_MALI_CSF_SUPPORT=y; its CSF
+loader defaults to mali_csffw.bin. This is reference-source evidence, NOT
+the running device's driver version, firmware hash, GPU_ID or powered state.
+Mali-G710 is the expected model, not newly hardware-read in this task.
+
+Important correction to supplied licensing claim: Linux v6.12 Panthor
+drv/fw/mmu/gpu/heap/sched/device/gem .c files are GPL-2.0 OR MIT; Panthor
+UAPI is MIT. Panfrost drv is GPL-2.0. Audit dependencies individually; do
+not treat all Linux DRM or MTK kbase as MIT. Mesa official support table
+snapshot lists G310/G610 but not G710, so G610 support/conformance does
+not prove G710 works. Linux ioctl compatibility alone is insufficient;
+matrix covers BO/VM/CSF groups/tiler heaps/syncobj/sharing and the risk of
+mapping a 4KiB-isolated MMIO register page into 16KiB XNU user pages.
+
+Validation: git diff --check PASS; 10 downloaded v6.12 reference hashes
+and all8 stated Panthor license headers verified, Mesa snapshot hash and
+local Markdown target/fences checked. References/manifests are ignored in
+research/matisse/20261031-gpu/, no third-party source/blobs committed.
+UniXNU GPU port webpage returned HTTP403; its detailed guide was not
+independently verified. AdrenoMetal README confirms sheng/A740 composition.
+No kernel/source driver edits, build, CI dispatch, boot or device writes
+in this task; no new build/boot/CI result or GPU acceleration claim.
+Prior2317 restoration evidence below remains the latest hardware result,
+not a live Recovery connectivity check performed in this task.
+
+Next concrete action: phase0 read-only live-DT/driver/firmware inventory
+and pin a Mesa revision for phase1 capability + Darwin interface audit,
+before designing an opt-in hardware probe. Do not read unpowered GPU
+MMIO, run old trial scripts, or write boot_a/userdata without the required
+fresh confirmation. Preserve unrelated dirty shim/build.sh,shim/shim.c,
+tools/sweet-marks.py and untracked0093/.DS_Store/.workbuddy.
+
+The following ACTIVE heading is the preserved last hardware handoff.
+
 ## >>> ACTIVE 2026-10-31: 0x2317 native1440x3200 + TOUCH + ALL3 KEYS VERIFIED; stock boot_a RESTORED; Recovery online <<<
 
 
