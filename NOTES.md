@@ -1,5 +1,50 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-10-31: OFFLINE CSF FETCH AUDIT PASS; HARDWARE STILL BLOCKED <<<
+
+Read this section before the historical2325 trial entries below. Device was
+last independently verified root Recovery with complete original64MiB boot_a
+hash2931647a; restore_pending=false. No device command, image change, new
+kernel build, CI run or push in this offline milestone. Previous2325 flash
+approvals are consumed; continuing static work does not authorize another
+partition write. GPU power/reset passed in2325; MCU handshake did NOT.
+
+New tools/matisse-csf-fetch-audit.py compiles the ACTUAL portable C parser/
+memory builder under ASan/UBSan, walks its four-level48-bit/4KiB page tables
+at measured rootPA40076000, and loads Unicorn from those translated arena
+bytes. Every startup instruction/data access is checked for AF, AP, RO and
+PXN/UXN. CLI pins proprietary blobde22d2fc; unsupported firmware is rejected
+because startup PC/MMIO assumptions are blob-specific. No blobs committed.
+
+Synthetic controls: zero-transition reaches01003032 WFI in986 instructions,
+shared version01010000, no access violations; transition clearing on fourth
+read reaches WFI in1004. Stuck transition hits10000-step cap in TILER loop
+01002ee4..01002ef2,version0. Artificial shared-page RO stops instruction640
+at PC01002fd6 writing04000018. These show loader bytes/permissions support
+THIS synthetic path and that the audit catches a real startup write. They
+do NOT emulate GPU MMU/cache/DRAM/clocks, locate the physical MCU PC, prove
+hardware fetch or diagnose2325. Real version remains0.
+
+39 targeted tests PASS (3.177s);8 new permission/bounds tests need no blob or
+Unicorn. C memory source SHA256b30ea8dc07278f9bc1cfa4d9d37a20bf6659e2cb2385a51ea616227dca5100fc;
+parser17520e27cb0a48bf00db23cd26ae7c719c0ef564e82c28fc778ce62eb434991a.
+Ignored firmware-static/fetch-audit-{zero,transition-completes,transition-stuck,
+readonly-negative}.json and csf-fetch-audit-tests.txt preserve outputs.
+
+Focused vendor comparison: cached sections use vendor index0/attr88/no SH
+versus probe index1/attr9f/SH_IS; shared firmware cache-mode3 falls to mode0
+under vendor coherency31, using index5/attr4c/no SH versus probe index0/4c/
+SH_OS. Vendor entry_set_pte47250 adds403 plus software count bits55..58 to
+table entries; probe emits PA|3. These are observations, not demonstrated
+defects. Do not copy vendor attributes without testing their effective meaning.
+
+NEXT: design evidence-only sampling of reset/init register values and early
+firmware memory writes, retaining current startup behavior. Need hardware
+evidence to distinguish no-fetch from early-start stall; endpoint core state
+and synthetic replay alone cannot do that. Do not rerun an old trial script.
+Prior completed commits: normal2325 result32dbb13, patch regression5bbd6b6,
+vendor audit/handoff a665688. Preserve unrelated shim/collector-v2 changes.
+
 ## >>> COMPLETE 2026-10-31: CSF2325 MCU TIMEOUT; MASKS OBSERVED; FULL RESTORE <<<
 
 Specifically approved normal2325 trial executed ONCE. Runner87765 exited0.
