@@ -2,6 +2,10 @@
 
 ## >>> ACTIVE 2026-10-31: CSF2323 BUILT; NO DEVICE WRITE <<<
 
+Implementation/tests/docs committed41c0b94 on codex/matisse-xnu-screen-log.
+Next-specific approval question covers Recovery fallback only, not normal
+MCU execution. No2323 trial has started at this handoff.
+
 2322 normal result committed703f99b; full boot_a restoration remains complete.
 Static audit: vendor AUTO2 already correct. Vendor MMU setup6 + WB/RA42000000,
 no INA observed; Panthor v6.12 hardwareVA48/WB and cached firmware sections
