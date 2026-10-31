@@ -64,11 +64,12 @@ int sweet_csf_memory_plan(const uint8_t *fw, size_t bytes, struct sweet_csf_memo
     *out = m;
     return 0;
 }
-int sweet_csf_memory_build(const uint8_t *fw, size_t bytes, const struct sweet_csf_memory *m,
-    void *buffer, size_t capacity, uint64_t pa, unsigned pa_bits, uint64_t *root_pa)
+int sweet_csf_memory_build_group(const uint8_t *fw, size_t bytes, const struct sweet_csf_memory *m,
+    void *buffer, size_t capacity, uint64_t pa, unsigned pa_bits, unsigned memory_group,
+    uint64_t *root_pa)
 {
     struct sweet_csf_memory verified;
-    if (!fw || !m || !buffer || !root_pa || ((uintptr_t)buffer & 7) ||
+    if (!fw || !m || !buffer || !root_pa || memory_group > 15 || ((uintptr_t)buffer & 7) ||
         bytes > UINTPTR_MAX - (uintptr_t)fw || capacity > UINTPTR_MAX - (uintptr_t)buffer)
         return SWEET_CSF_MEMORY_ARGUMENT;
     int rc = sweet_csf_memory_plan(fw, bytes, &verified);
@@ -120,9 +121,15 @@ int sweet_csf_memory_build(const uint8_t *fw, size_t bytes, const struct sweet_c
             desc |= cached ? 0x304 : 0x200;
             if (!(p->flags & 2)) desc |= 0x80;
             if (!(p->flags & 4)) desc |= UINT64_C(3) << 53;
+            desc |= (uint64_t)memory_group << 59;
             put64(table + ((va >> 12) & 511) * 8, desc);
         }
     }
     *root_pa = pa;
     return 0;
+}
+int sweet_csf_memory_build(const uint8_t *fw, size_t bytes, const struct sweet_csf_memory *m,
+    void *buffer, size_t capacity, uint64_t pa, unsigned pa_bits, uint64_t *root_pa)
+{
+    return sweet_csf_memory_build_group(fw, bytes, m, buffer, capacity, pa, pa_bits, 0, root_pa);
 }

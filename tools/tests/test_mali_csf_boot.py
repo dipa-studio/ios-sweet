@@ -109,7 +109,7 @@ static int run(struct model*m,struct sweet_csf_boot_config*c,struct sweet_csf_bo
 static void clean(struct model*m,struct sweet_csf_boot_report*r){assert(m->gpu_mask==0x55 && m->job_mask==0xaa && m->mmu_mask==0xbb && m->resets==1);assert(r->reset_completed);}
 int main(void) {
  struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
- assert(sizeof(r)==296);assert(!run(&m,&c,&r));assert(r.stage==7 && r.firmware_ready && r.version==0x01020003);clean(&m,&r);
+ assert(sizeof(r)==304);assert(!run(&m,&c,&r));assert(r.stage==7 && r.firmware_ready && r.version==0x01020003);clean(&m,&r);
  assert(r.diag_flags==31 && r.coherency_features==1 && r.coherency_before==31 && r.coherency_after==31);
  assert(!m.coherency_writes && !r.coherency_requested && !r.coherency_readback);
  assert(r.csf_config_before==0x44 && r.csf_config_after==0x44);
@@ -139,6 +139,11 @@ int main(void) {
  assert(m.coherency_writes==1 && !m.enabled && !m.as_updates && !m.l2);
  assert(r.diag_flags==33 && r.coherency_requested==31 && !r.coherency_readback);
  m=model();c.noncoherent=2;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
+ c=cfg();c.pte_group_requested=6;c.pte_pages_built=293;
+ m=model();assert(!run(&m,&c,&r));clean(&m,&r);
+ assert(r.pte_group_requested==6 && r.pte_pages_built==293);
+ m=model();c.pte_group_requested=16;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
+ m=model();c=cfg();c.pte_pages_built=513;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
  c=cfg();
  m=model();m.clamp_masks=1;assert(!run(&m,&c,&r));clean(&m,&r);
  assert(r.gpu_irq_mask==0x103 && r.mmu_irq_mask==0xff && r.irq_gate_passed==1);

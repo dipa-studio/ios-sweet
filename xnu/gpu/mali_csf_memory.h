@@ -30,4 +30,10 @@ int sweet_csf_memory_plan(const uint8_t *, size_t, struct sweet_csf_memory *);
 int sweet_csf_memory_build(const uint8_t *, size_t, const struct sweet_csf_memory *,
     void *arena, size_t arena_bytes, uint64_t arena_pa, unsigned pa_bits,
     uint64_t *root_pa);
+/* Isolated platform diagnostic: leaf bits59..62 carry a 4-bit memory-group
+ * tag. Tables, PA, permissions and cache attributes are unchanged. Group0
+ * is byte-identical to sweet_csf_memory_build. No routing/readiness claim. */
+int sweet_csf_memory_build_group(const uint8_t *, size_t, const struct sweet_csf_memory *,
+    void *arena, size_t arena_bytes, uint64_t arena_pa, unsigned pa_bits,
+    unsigned memory_group, uint64_t *root_pa);
 #endif

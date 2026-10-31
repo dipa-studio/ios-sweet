@@ -29,6 +29,18 @@ class FetchAccessTests(unittest.TestCase):
         for op in ('read', 'write', 'fetch'):
             audit.check_access(self.arena, self.root, audit.PAGE - 2, 4, op)
 
+    def test_leaf_group_does_not_alias_physical_address_or_permissions(self):
+        self.put_leaf(0, 0x443 | (6 << 59))
+        self.assertEqual(audit.translate(self.arena, self.root, 17)[0], 4 * audit.PAGE + 17)
+        for op in ('read', 'write', 'fetch'):
+            audit.check_access(self.arena, self.root, 0, 4, op, True)
+        self.put_leaf(0, 0x4c3 | (6 << 59))
+        with self.assertRaisesRegex(audit.MappingError, 'read-only'):
+            audit.check_access(self.arena, self.root, 0, 4, 'write')
+        self.put_leaf(0, 0x443 | (1 << 54) | (6 << 59))
+        with self.assertRaisesRegex(audit.MappingError, 'execute-never'):
+            audit.check_access(self.arena, self.root, 0, 2, 'fetch', True)
+
     def test_missing_next_page_cannot_hide_at_boundary(self):
         struct.pack_into('<Q', self.arena, 3 * audit.PAGE + 8, 0)
         with self.assertRaisesRegex(audit.MappingError, 'missing'):

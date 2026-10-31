@@ -27,7 +27,7 @@ HOST_BUILDER = r'''
 #include <stdlib.h>
 #include "mali_csf_memory.h"
 int main(int argc, char **argv) {
-    if (argc != 4) return 2;
+    if (argc != 5) return 2;
     FILE *f = fopen(argv[1], "rb");
     if (!f || fseek(f, 0, SEEK_END)) return 3;
     long n = ftell(f);
@@ -39,8 +39,8 @@ int main(int argc, char **argv) {
     if (sweet_csf_memory_plan(fw, (size_t)n, &m)) return 6;
     uint8_t *arena = aligned_alloc(4096, m.required_bytes);
     uint64_t root = 0, pa = strtoull(argv[3], NULL, 0);
-    if (!arena || sweet_csf_memory_build(fw, (size_t)n, &m, arena,
-        m.required_bytes, pa, 40, &root)) return 7;
+    if (!arena || sweet_csf_memory_build_group(fw, (size_t)n, &m, arena,
+        m.required_bytes, pa, 40, (unsigned)strtoul(argv[4], NULL, 0), &root)) return 7;
     f = fopen(argv[2], "wb");
     if (!f || fwrite(arena, 1, m.required_bytes, f) != m.required_bytes) return 8;
     fclose(f);
@@ -111,7 +111,9 @@ def check_access(arena, root_pa, va, size, operation, unprivileged=False):
         va = end
 
 
-def build_arena(firmware, arena_pa, compiler='cc'):
+def build_arena(firmware, arena_pa, compiler='cc', memory_group=0):
+    if not isinstance(memory_group, int) or not 0 <= memory_group <= 15:
+        raise ValueError('memory group must fit four bits')
     with tempfile.TemporaryDirectory(prefix='csf-fetch-') as tmp:
         tmp = Path(tmp)
         source, binary, arena_path = tmp / 'loader.c', tmp / 'loader', tmp / 'arena.bin'
@@ -121,7 +123,7 @@ def build_arena(firmware, arena_pa, compiler='cc'):
                         str(source), str(ROOT / 'xnu/gpu/mali_csf_firmware.c'),
                         str(ROOT / 'xnu/gpu/mali_csf_memory.c'), '-o', str(binary)],
                        check=True, capture_output=True, text=True)
-        result = subprocess.run([str(binary), str(firmware), str(arena_path), hex(arena_pa)],
+        result = subprocess.run([str(binary), str(firmware), str(arena_path), hex(arena_pa), str(memory_group)],
                                 check=True, capture_output=True, text=True)
         return arena_path.read_bytes(), json.loads(result.stdout)
 
@@ -256,6 +258,8 @@ def main():
     parser.add_argument('--firmware', required=True, type=Path)
     parser.add_argument('--python-deps', type=Path, help='directory containing local Unicorn installation')
     parser.add_argument('--arena-pa', type=lambda value: int(value, 0), default=0x40076000)
+    parser.add_argument('--memory-group', type=int, choices=range(16), default=0,
+                        help='leaf bits59..62; hardware routing is not modeled')
     parser.add_argument('--step-limit', type=int, default=500000)
     parser.add_argument('--tiler-transition-reads', type=int, default=0,
                         help='synthetic transition: 0 absent, -1 stuck, N clears after N reads')
@@ -267,10 +271,10 @@ def main():
     firmware_hash = hashlib.sha256(args.firmware.read_bytes()).hexdigest()
     if firmware_hash != FIRMWARE_SHA256:
         parser.error('unsupported firmware hash; startup PC and MMIO model require the pinned matisse blob')
-    arena, plan = build_arena(args.firmware.resolve(), args.arena_pa)
+    arena, plan = build_arena(args.firmware.resolve(), args.arena_pa, memory_group=args.memory_group)
     result = {'scope': 'Offline synthetic startup; not hardware execution or timeout root-cause proof.',
               'firmware_sha256': firmware_hash,
-              'synthetic_parameters': {'step_limit': args.step_limit,
+              'synthetic_parameters': {'step_limit': args.step_limit, 'memory_group': args.memory_group,
                                        'tiler_transition_reads': args.tiler_transition_reads},
               'arena_sha256': hashlib.sha256(arena).hexdigest(),
               'source_sha256': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()

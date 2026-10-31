@@ -31,6 +31,29 @@ static uint64_t walk(const uint8_t *a,uint64_t pa,uint32_t va) {
  for(unsigned l=0;l<3;l++) {unsigned shift=39-9*l;uint64_t d=u64(t+(((uint64_t)va>>shift)&511)*8);if((d&3)!=3)return 0;assert((d&0x0000fffffffff000ULL)>=pa);t=a+((d&0x0000fffffffff000ULL)-pa);}
  return u64(t+((va>>12)&511)*8);
 }
+static void group_checks(const uint8_t *fw,size_t size,const struct sweet_csf_memory *m) {
+ uint8_t *baseline=aligned_alloc(4096,m->required_bytes);
+ uint8_t *grouped=aligned_alloc(4096,m->required_bytes);
+ uint8_t *expected=malloc(m->required_bytes);assert(baseline&&grouped&&expected);
+ uint64_t root=0;assert(!sweet_csf_memory_build(fw,size,m,baseline,m->required_bytes,0x90000000,40,&root));
+ for(unsigned group=0;group<16;group+=group?9:6) {
+  memcpy(expected,baseline,m->required_bytes);
+  assert(!sweet_csf_memory_build_group(fw,size,m,grouped,m->required_bytes,root,40,group,&root));
+  for(unsigned i=0;i<m->mapping_count;i++)for(unsigned off=0;off<m->map[i].bytes;off+=4096) {
+   uint32_t va=m->map[i].va+off;uint8_t *t=expected;
+   for(unsigned l=0;l<3;l++) {unsigned shift=39-9*l;uint64_t d=u64(t+(((uint64_t)va>>shift)&511)*8);assert((d&3)==3);t=expected+((d&0x0000fffffffff000ULL)-root);}
+   uint8_t *leaf=t+((va>>12)&511)*8;uint64_t value=u64(leaf)|((uint64_t)group<<59);
+   for(unsigned k=0;k<8;k++)leaf[k]=(uint8_t)(value>>(8*k));
+   assert(walk(grouped,root,va)==(walk(baseline,root,va)|((uint64_t)group<<59)));
+  }
+  /* Compare every byte: no table/data/cache/permission changes can hide. */
+  assert(!memcmp(grouped,expected,m->required_bytes));
+ }
+ memset(grouped,0xa5,m->required_bytes);root=0xabcdef;
+ assert(sweet_csf_memory_build_group(fw,size,m,grouped,m->required_bytes,0x90000000,40,16,&root)==-40);
+ for(unsigned i=0;i<m->required_bytes;i++)assert(grouped[i]==0xa5);
+ assert(root==0xabcdef);free(expected);free(grouped);free(baseline);
+}
 static void checks(const uint8_t *fw,size_t size) {
  struct sweet_csf_memory m;assert(!sweet_csf_memory_plan(fw,size,&m));
  assert(m.mapping_count>0 && m.shared_va==0x4000000 && m.shared_bytes);
@@ -50,6 +73,7 @@ static void checks(const uint8_t *fw,size_t size) {
   }
  }
  assert(!walk(a,root,0x3000000));
+ group_checks(fw,size,&m);
  memset(a,0xa5,m.required_bytes);root=0xabcdef;
  assert(sweet_csf_memory_build(fw,size,&m,a,m.required_bytes-1,0x90000000,40,&root)==-41);
  assert(a[0]==0xa5 && root==0xabcdef);

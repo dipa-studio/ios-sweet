@@ -74,7 +74,8 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     *r=(struct sweet_csf_boot_report){.stage=SWEET_CSF_BOOT_CONFIG};
     if(!c||!io||!io->read32||!io->write32||!io->ticks||!io->barrier||
        !io->frequency||io->frequency>1000000000||c->gpu!=0x13000000||
-       !c->timeout_ms||c->timeout_ms>1000||c->noncoherent>1||c->root_pa!=c->arena_pa||
+       !c->timeout_ms||c->timeout_ms>1000||c->noncoherent>1||c->pte_group_requested>15||
+       c->pte_pages_built>c->arena_bytes/4096||c->root_pa!=c->arena_pa||
        c->arena_pa<0x40000000||(c->arena_pa&4095)||!c->arena_bytes||
        c->arena_bytes>0x1000000||c->arena_pa>UINT64_MAX-c->arena_bytes||
        c->shared_bytes<4096||(c->shared_offset&4095)||
@@ -86,6 +87,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
         r->error=SWEET_CSF_BOOT_ARGUMENT;return r->error;
     }
     budget=(io->frequency*c->timeout_ms+999)/1000;
+    r->pte_group_requested=c->pte_group_requested;r->pte_pages_built=c->pte_pages_built;
     /* Caller must already own power; do not probe a powered-off GPU. */
     if((rd(io,0x1c001f3c)&rd(io,0x1c001f40)&6)!=6) {
         r->error=SWEET_CSF_BOOT_STATE;return r->error;

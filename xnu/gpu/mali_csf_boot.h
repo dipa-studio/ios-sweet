@@ -12,6 +12,8 @@ struct sweet_csf_boot_config {
     /*2327 isolated diagnostic: select vendor's protocol NONE (31).
      * Zero preserves the previous boot sequence; only 0/1 are accepted. */
     uint32_t noncoherent;
+    /*2328 software build metadata, not hardware translation readback. */
+    uint32_t pte_group_requested, pte_pages_built;
 };
 struct sweet_csf_boot_report {
     uint32_t stage;
@@ -56,6 +58,9 @@ struct sweet_csf_boot_report {
     /*2327 appends 8 bytes (296 total). diag_flags bit5: protocol write
      * attempted; bit6: immediate readback matched. No readiness inference. */
     uint32_t coherency_requested, coherency_readback;
+    /*2328 appends8 bytes (304 total). Canonical loader inputs/count only;
+     * these do not prove memory routing or firmware execution. */
+    uint32_t pte_group_requested, pte_pages_built;
 };
 enum sweet_csf_boot_stage {
     SWEET_CSF_BOOT_CONFIG=1, SWEET_CSF_BOOT_L2=2, SWEET_CSF_BOOT_AS=3,
