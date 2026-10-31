@@ -37,6 +37,9 @@ def decode(data, expected_build=0x2321):
     if fields['stage'] not in STAGES:
         raise ValueError('invalid GPU report stage')
     success = (fields['stage'] == 10 and fields['error'] == 0 and
+               fields['init_result'] >= 0 and
+               fields['spm_before'] & fields['spm_second'] & 2 != 0 and
+               fields['spm_after'] & 6 == 6 and
                fields['firmware_magic'] == 0x55667788 and
                fields['gpu_id'] >> 28 == 10 and fields['as_present'] not in (0,0xffffffff) and
                fields['on_result'] == 1 and fields['off_result'] == 0 and

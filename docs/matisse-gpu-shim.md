@@ -89,3 +89,47 @@ identifies this kernel. GPU2321 retains the already tested Linux fallback
 and the unchanged GPU state machine; only report tags and kernel evidence
 collection changed. Root remains read-only. Firmware/ID/reset hardware
 success still requires a fresh decoded result.
+
+## Confirmed hardware result: GPU2321
+
+2026-10-31, local commit264c9cf kernel and image32a9768f. Fresh console
+sweettrial=2321 and independent SWEETMRK kernel build2321/report300..308
+agree exactly. This is measured on the device, not the host model:
+
+| Measurement | Result |
+| --- | --- |
+| GPUEB firmware ready magic | 0x55667788 |
+| Shared2MiB reservation PA | 0x7fa30000 |
+| Additional20MiB firmware PA | 0x79a00000 |
+| INIT_SHARED_MEM reply | 0 |
+| POWER_ON reference count | 1 |
+| SPM status before / after | 0x3 / 0x7 (second before0x3) |
+| GPU_ID | 0xa8620004 |
+| GPU_STATUS / AS_PRESENT | 0x100 / 0xff |
+| CSF soft-reset completion RAWSTAT | 0x100 |
+| POWER_OFF reference count | 0 |
+| Final stage / error | 10 / 0 |
+
+The diagnostic releases its single power reference after reset, leaving no
+owned reference. This proves platform power-on, accessible Mali registers,
+and completed soft reset. It does NOT prove MCU/CSF firmware boot, GPU MMU,
+shader execution, Vulkan or Metal acceleration. The two firmware memory
+reservations are below XNU RAM0x100000000..0x22e000000 in this measured boot.
+
+GPU2321 did not automatically return to Recovery. User entered Fastboot;
+initial macOS platform-tools transport stalled. After the device re-entered
+Fastboot, existing tools/fbraw.py successfully downloaded/flashed the known
+20,873,216-byte stock prefix (fe6e8fbf) and reboot-recovery returned OKAY.
+Recovery then captured fresh evidence, restored the full67,108,864-byte
+baseline, and independently verified SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Device is back in root Recovery; restore_pending=false; no active runners.
+No further boot test is requested by this record. Do not rely on watchdog
+scratch to guarantee Recovery; the tested Recovery bypass alone is valid.
+
+Ignored evidence: research/matisse/20261031-gpu/shim2321-trials/gpu-normal/
+{after-console.txt,after-marks.bin,gpu-result.json,journal.json} and
+shim2321-trials/restore-fbraw-log.txt. Local build PASS;51 host tests PASS;
+no GitHub Actions run was required. The next GPU milestone is CSF MCU
+firmware memory/page-table preparation and a bounded firmware-ready check,
+using the already parsed device firmware; it has not yet been implemented.

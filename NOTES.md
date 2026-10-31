@@ -1,5 +1,40 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> COMPLETE 2026-10-31: REAL GPU POWER + SOFT RESET VERIFIED; FULL RESTORE <<<
+
+Latest instruction fulfilled: flash original image, enter Recovery and read
+logs. No further GPU trial. Device independently checked matisse/_a/root
+Recovery. Full boot_a67108864B SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Authoritative shim2321-trials/gpu-normal/journal.json restore_pending=false.
+All test/restore runner sessions completed; no pending restoration.
+
+HARDWARE SUCCESS from fresh2321 console AND independent marks300..308,
+kernel mark2321: stage10,error0,INIT0,POWER_ON1,POWER_OFF0,
+GPUEB magic55667788,GPU_IDa8620004,GPU_STATUS100,AS_PRESENTff,
+reset_rawstat100,SPM before3(second3)/after7. Shared2MiB PA7fa30000,
+extra20MiB firmware PA79a00000; both below XNU RAM100000000..22e000000.
+Single power reference released. This proves platform power and completed
+Mali soft reset; NOT CSF firmware boot/MMU/shader/Vulkan/Metal readiness.
+Fresh console confirms sweettrial2321 and readonly root. Log fix0119 works:
+new18713B console seq1 replaces historical2317 instead of silently refusing.
+
+AUTORECOVERY FAILED: user could only enter Fastboot. Do not claim automatic
+watchdog Recovery success. Existing fbraw completed stock20MiB prefix
+fe6e8fbf flash + reboot-recovery; full64MiB backup restored via Recovery,
+then independently hashed. Platform-tools and ad-hoc USB retries failed
+before writes. Never use64MiB platform-tools flash as the preferred restore.
+Raw evidence shim2321-trials/gpu-normal/{after-console.txt,after-marks.bin,
+gpu-result.json,journal.json}; transport restore-fbraw-log.txt. All ignored.
+
+Commits3056f54(power/reset),87ad680(fallback record),264c9cf(log fix0119),
+d555ebc(independent decoder). Local kernel/image2321 SHA e733b11f/32a9768f;
+51 host tests PASS including sanitizer bounds/driver/decoder; local kernel
+build PASS; no CI runs or pushes. Collector-v2 and unrelated dirty files
+retained. NEXT CSF MCU firmware page tables/memory/boot-ready handshake;
+not implemented. Any future boot test must not assume automatic Recovery.
+Earlier RESTORE_PENDING/RUNNING notes below are superseded by this section.
+
 ## >>> RESTORE PENDING 2026-10-31: GPU2321; USER REQUESTED ORIGINAL FASTBOOT RESTORE <<<
 
 User reports keys only reach Fastboot and automatic Recovery did not work.

@@ -49,8 +49,6 @@ int main(void) {
         self.assertIn('ufs_write_blocks_checked(base, 1, true)', patch)
         self.assertIn('ufs_write_blocks_checked(lba, count, false)', patch)
 
-if __name__ == '__main__':
-    unittest.main()
 
 class ReportDecodeTests(unittest.TestCase):
     @classmethod
@@ -60,9 +58,9 @@ class ReportDecodeTests(unittest.TestCase):
         cls.module=importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.module)
 
-    def marks(self, error=0, omit=None, build=0x2321, reset=0x100):
+    def marks(self, error=0, omit=None, build=0x2321, reset=0x100, init=0, spm=6):
         import struct
-        raw=struct.pack('<I4i8I4xQ2I',10,error,0,1,0,2,6,2,0x55667788,
+        raw=struct.pack('<I4i8I4xQ2I',10,error,init,1,0,2,spm,2,0x55667788,
                         0xa0020001,0,reset,0xff,0x250000000,0,1)
         records=[(99,0,build,0)]
         records += [(300+i,0,struct.unpack_from('<Q',raw,i*8)[0],build)
@@ -82,6 +80,8 @@ class ReportDecodeTests(unittest.TestCase):
     def test_failure_is_not_success(self):
         self.assertFalse(self.module.decode(self.marks(error=-23))['power_reset_verified'])
         self.assertFalse(self.module.decode(self.marks(reset=0))['power_reset_verified'])
+        self.assertFalse(self.module.decode(self.marks(init=-1))['power_reset_verified'])
+        self.assertFalse(self.module.decode(self.marks(spm=2))['power_reset_verified'])
 
     def test_stale_partial_wrong_build_and_duplicate_rejected(self):
         import struct
@@ -92,3 +92,6 @@ class ReportDecodeTests(unittest.TestCase):
         struct.pack_into('<I',data,12,count+1)
         struct.pack_into('<IIQQ',data,16+24*count,300,0,0,0x2321)
         with self.assertRaises(ValueError):self.module.decode(data)
+
+if __name__ == '__main__':
+    unittest.main()
