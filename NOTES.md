@@ -1,5 +1,35 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> COMPLETE 2026-10-31: CSF2322 MCU START TIMEOUT; FULL RESTORE <<<
+
+Authorized normal2322 trial executed ONCE, runner63108 exited0. Fresh
+SWEETMRK build2322,count72 (before2321,count61), report320..330 decoded.
+Fresh console sweettrial2322/gpu2322 agrees. L2_PRESENT1,L2_READY1,
+MMU_FEATURES2830,MCU_STATUS1(enabled),JOB_RAW0,MMU_RAW0,AS fault/status addr0.
+CSF stage4/error-53 timeout; no fresh global readiness IRQ. Firmware fields
+were NOT sampled on timeout (zeros are unobserved,not actual shared data).
+Cleanup_error-53,reset_raw600,reset_completed0. Do NOT call firmware ready.
+Platform INIT0,ON1,SPM3->7,GPU_IDa8620004,initial reset100;OFF0 and acquired0.
+Aggregate platform stage8/error-53 reflects callback failure, not failed
+initial reset. Per-phase initial power/reset still observed; full combined
+transaction failed. Shared7fa30000,extra79a00000. No Vulkan/Metal claim.
+
+Normal boot ended at Fastboot (~126s enumerated18d1:d00d), not automatic
+Recovery. Host SIGINT to waiting runner only entered its finally restoration;
+KeyboardInterrupt in journal is HOST control, not a device panic. Persistent
+fbraw verified product/slot/geometry; stock20MiB prefixfe6e8fbf flash OKAY,
+reboot-recovery OKAY03:08:13Z. No user USB/keys action needed. Recovery full
+64MiB backup restored/hash2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Independent identity/hash verified. Journal complete-restored-Recovery,
+restore_pending=false; no active test/restore runner. No second image test.
+
+Evidence ignored shim2322-trials/gpu-normal/{after-console.txt,after-marks.bin,
+gpu-result.json,journal.json,independent-post-restore.txt},gpu-normal-run.txt.
+Next STATIC audit actual vendor MCU page-table width, firmware mapping/cache
+policy, IRQ enables, model quirks and cleanup. No new flash authorized.
+Hypotheses must not be stated as measured causes. Record source/test fixes
+and build concrete successor before any next-specific-trial confirmation.
+
 ## >>> COMPLETE 2026-10-31: CSF2322 RECOVERY FALLBACK PASS; FULL RESTORE <<<
 
 User specifically confirmed image5ade1013 Recovery-fallback boot_a write,

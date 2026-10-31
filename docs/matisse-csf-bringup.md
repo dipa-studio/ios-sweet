@@ -150,3 +150,40 @@ This verifies this image's Recovery entry, changed stack/BSS addressing and
 embedded stock Linux bypass only. It does not execute the normal GPU/MCU
 probe and does not establish automatic Recovery from an XNU boot. The normal
 CSF trial remains pending its own specific boot_a-write confirmation.
+
+
+## Normal CSF2322 hardware result (2026-10-31)
+
+The specifically authorized normal trial ran once. Fresh build0x2322 marks
+contain72 records (previous capture build0x2321,count61); the console agrees
+with sweettrial2322/gpu2322. Platform INIT0 and POWER_ON1 succeeded; SPM
+changed3->7, GPU_ID was0xa8620004 and initial reset completion was0x100.
+POWER_OFF returned0 and the single acquired reference was released.
+
+CSF stopped at stage4/MCU with timeout-53. MMU_FEATURES was0x2830 (VA48/PA40),
+L2_PRESENT/L2_READY were1, MCU_STATUS was1, JOB_RAW was0, MMU_RAW was0 and
+AS fault status/address were0. No fresh global-interface interrupt was seen.
+The timeout path did not sample shared runtime-interface fields, so their
+zero report words are unobserved, not measured zero contents. Cleanup also
+timed out (-53), reset raw was0x600 and reset_completed was0. Firmware-ready
+and acceleration remain unproven. Aggregate platform stage8/error-53 reflects
+the callback failure, not a failure of the earlier platform reset.
+
+Normal boot enumerated Fastboot after approximately126 seconds. Host SIGINT
+only entered the waiting runner's existing finally restoration; its journal
+KeyboardInterrupt is not a device panic. One persistent fbraw session verified
+matisse/slot_a/geometry, flashed the known20MiB stock prefix (OKAY) and issued
+reboot-recovery (OKAY at03:08:13Z). Recovery restored the full67108864-byte
+original boot_a; an independent read verified SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No user USB/key action was required. Runner63108 exited0, journal status is
+complete-restored-Recovery and restore_pending=false. Device is root Recovery;
+there is no pending runner/restoration. No second trial has run.
+
+Evidence stays ignored under shim2322-trials/gpu-normal/: after-console.txt,
+after-marks.bin, gpu-result.json, journal.json, recovery-dmesg.txt and
+independent-post-restore.txt; gpu-normal-run.txt is alongside that directory.
+Next work is static comparison of MCU translation, firmware permissions/cache,
+IRQ behavior and cleanup with the actual vendor KMD. Discrepancies are
+hypotheses until tested. Any successor hardware write needs its own specific
+confirmation after a concrete image is built.
