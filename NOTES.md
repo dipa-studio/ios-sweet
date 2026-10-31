@@ -1,5 +1,32 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> COMPLETE 2026-10-31: CSF2325 RECOVERY FALLBACK PASS; FULL RESTORE <<<
+
+User specifically approved image06759c12 Recovery-fallback boot_a write,
+reboot Recovery, then full original restoration. Executed ONCE; runner43725
+exited0. New Recovery observed26.53s after adb reboot recovery. Candidate
+full-partition readback matched predicted SHA256
+5193d19a93bfe4065a5833d0f46e72250810335b452075d9bc3d51730739ba3e.
+No Fastboot,user USB/key intervention or SIGINT. Fresh Recovery dmesg863855B.
+Full67108864B original boot_a restored and independently rehashed
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Independent matisse/_a/recovery/root and geometry verified. Journal
+shim2325-trials/recovery-fallback/journal.json complete-restored-Recovery,
+restore_pending=false; no active runner or pending restore.
+
+Before/after4198400B tails and4096B marks are byte-identical, as expected
+for Recovery bypass. This verifies2325 Recovery entry/BSS and embedded stock
+Linux fallback only; it does not execute normal MCU startup or establish
+firmware readiness, acceleration or normal-XNU automatic Recovery.
+
+NEXT: obtain separate specific approval for ONE normal2325 MCU trial with
+same image06759c12: Recovery boot_a write -> normal reboot -> fresh2325
+marks320..343 and console -> full64MiB baseline restore/hash2931647a.
+Fallback approval is consumed; no normal2325 write authorized yet.
+Implementation3f29061, handoffcb2ad31. No new build/CI/push or source edit.
+Evidence ignored recovery-fallback/{journal.json,independent-post-restore.txt,
+recovery-dmesg.txt,before/after-tail.bin,before/after-marks.bin} and sibling
+recovery-fallback-run.txt. Unrelated collector-v2/shim dirt preserved.
 
 ## >>> ACTIVE 2026-10-31: CSF2325 BUILT; NEW MASK/CORE EVIDENCE; NO TRIAL <<<
 

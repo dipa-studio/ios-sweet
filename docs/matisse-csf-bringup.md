@@ -563,3 +563,24 @@ boot_a trial, Recovery reboot and full baseline restore/hash. A separate approva
 same-image fallback passes. Normal XNU Recovery remains unreliable; retain
 the verified persistent fbraw stock-prefix path. No second2324 trial or
 2325 write is authorized by the2324 approval.
+
+
+## Recovery fallback2325 hardware result (2026-10-31)
+
+The specifically approved fallback trial of image06759c12 ran once; runner
+43725 exited0. Fresh Recovery was observed26.53 seconds after adb reboot
+recovery. Full candidate boot_a readback matched predicted partition hash
+5193d19a93bfe4065a5833d0f46e72250810335b452075d9bc3d51730739ba3e.
+No Fastboot, user USB/key action or host SIGINT was needed. Fresh Recovery
+dmesg863855B was captured. Full67108864-byte original boot_a was restored
+and independently rehashed2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Independent identity/geometry confirmed matisse/slot_a/root Recovery.
+
+Ignored shim2325-trials/recovery-fallback/journal.json is
+complete-restored-Recovery,restore_pending=false. Independent-post-restore.txt
+records the same identity/hash; no active runner or restoration remains.
+Before/after4198400B tails and4096B marks are byte-identical, as expected
+for bypass. This verifies2325 Recovery entry/BSS and embedded original Linux
+fallback only. Normal MCU execution, firmware readiness and acceleration
+remain unverified. The next hardware step needs separate specific approval
+for one normal2325 MCU trial using this same image, then full restoration.
