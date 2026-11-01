@@ -1,3 +1,52 @@
+### 2026-11-01 — r11 candidate: instrument the gap after IOKitBSDInit ret 0
+
+**New device observation on verified r10nro:** temporary boot was accepted at
+`2026-11-01T19:37:52.0652703Z`. Image SHA256:
+`a23a4951b7d1c0853b47b0160a5521d99018979047f8bcab8dbbeb2e8d79eb24`.
+The user reported the final line `SWEETM 31 IOKitBSDInit ret 0`, no later text,
+then a manual return to TWRP after an unspecified long interval. No full photo/log
+or exact elapsed time was captured. This establishes an observed successful
+IOKitBSDInit return, not a proven hang, automatic reboot, root mount or userland.
+
+**Diagnostic candidate:** `0087-sweet-post-autoconf-marks.patch` adds 17 pairs of
+fixed `printf` strings (`SWEETP 00` through `16`) around the original caller-side
+calls from `bsd_autoconf()` through `inittodr(0)`. Existing feature guards and
+call order remain intact; every added print is SWEET-only. `00 ...-done` follows
+the return from `bsd_autoconf`; `01` surrounds DTrace, `02` loopattach, `15`
+net_init_run and `16` inittodr. Disabled features produce expected number gaps.
+An `...-done` line means that call returned, not that its subsystem is usable.
+The existing `SWEETM 40 setconf` remains after this interval. Output may change
+timing; this patch is instrumentation, not a diagnosed kernel fix.
+
+**Completed local validation:** add-only delta (102 C source lines, no deletions)
+applies with `git apply --check` and `git apply` to the exact frozen r10
+`bsd/kern/bsd_init.c` pinned by successful CI `40173696413` / source
+`4cd53c45a8c046730d15c421d379e973672209be`. Git-applied bytes match independently
+generated candidate bytes. Before SHA256:
+`61bcdd43e7bce98d6bc683e2faca69570b59e1100179645df60dc3b22f96bb4d`;
+after SHA256 `98cc79f84094c95b392af481d07528935ceed1ae0eb0c428ff8b270bc32b20ca`.
+Patch SHA256 `c76166f53ac120f2cf521a966e4d29f4c5c689f30b35845690e833c95defcfb8`.
+Read-only independent review found no confirmed defect. These are source/apply
+checks, not a new full patch-chain replay, compile or CI build.
+
+**Isolation:** implementation is on `codex/r11-post-autoconf-20261101`, separate
+worktree `C:\ports\ios-cas-r11-diag`, based on `988d6fb` (only documentation
+differs from pinned `4cd53c4`). The original `C:\ports\ios-cas` working files,
+HEAD and dirty index must remain intact. Private state snapshots stay outside git.
+Current local source report: `C:\ports\r11-diag\source-apply-report.json`.
+Current cross-harness handoff: `C:\ports\handoff.md`.
+
+**Next gate:** build this exact candidate on CI; verify successful Build, exact
+post-patch source, ARM64 Mach-O/SHA256/UUID, linked inert beacon and checkpoint
+strings before packaging a new image. No r11 CI run, kernel, image or device boot
+is claimed here. Keep r10nro's donor/DTB/ADT, memory and read-only arguments.
+Do not repurpose r10's hard-pinned validators as proof of a different source/run.
+
+---
+
+Earlier entries are retained milestone history; their r10 queued/no-boot state
+is superseded by the evidence above and the current C:\ports\handoff.md.
+
 ### 2026-10-25 — r10: 0086 committed; exact-source/frozen checks PASS, CI 40173696413 queued
 
 **Implemented:** new tail patch `0086-sweet-disable-fb-beacon.patch` replaces only
