@@ -1,0 +1,178 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -815,10 +815,22 @@
+ 	printf("SWEETI 26 sysctl_mib_init-done\n");
+ 
+ 	bsd_init_kprintf("calling bsd_autoconf\n");
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 00 bsd_autoconf-in\n");
++#endif
+ 	bsd_autoconf();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 00 bsd_autoconf-done\n");
++#endif
+ 
+ #if CONFIG_DTRACE
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 01 dtrace_postinit-in\n");
++#endif
+ 	dtrace_postinit();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 01 dtrace_postinit-done\n");
++#endif
+ #endif
+ 
+ 	/*
+@@ -829,49 +841,127 @@
+ #include <loop.h>
+ #if NLOOP > 0
+ 	bsd_init_kprintf("calling loopattach\n");
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 02 loopattach-in\n");
++#endif
+ 	loopattach();                   /* XXX */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 02 loopattach-done\n");
++#endif
+ #endif
+ #if NGIF
+ 	/* Initialize gif interface (after lo0) */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 03 gif_init-in\n");
++#endif
+ 	gif_init();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 03 gif_init-done\n");
++#endif
+ #endif
+ 
+ #if PFLOG
+ 	/* Initialize packet filter log interface */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 04 pfloginit-in\n");
++#endif
+ 	pfloginit();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 04 pfloginit-done\n");
++#endif
+ #endif /* PFLOG */
+ 
+ #if NETHER > 0
+ 	/* Register the built-in dlil ethernet interface family */
+ 	bsd_init_kprintf("calling ether_family_init\n");
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 05 ether_family_init-in\n");
++#endif
+ 	ether_family_init();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 05 ether_family_init-done\n");
++#endif
+ #endif /* ETHER */
+ 
+ #if NETWORKING
+ #if CONTENT_FILTER
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 06 cfil_init-in\n");
++#endif
+ 	cfil_init();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 06 cfil_init-done\n");
++#endif
+ #endif
+ 
+ #if PACKET_MANGLER
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 07 pkt_mnglr_init-in\n");
++#endif
+ 	pkt_mnglr_init();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 07 pkt_mnglr_init-done\n");
++#endif
+ #endif
+ 
+ 	/*
+ 	 * Register subsystems with kernel control handlers
+ 	 */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 08 utun_register_control-in\n");
++#endif
+ 	utun_register_control();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 08 utun_register_control-done\n");
++#endif
+ #if IPSEC
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 09 ipsec_register_control-in\n");
++#endif
+ 	ipsec_register_control();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 09 ipsec_register_control-done\n");
++#endif
+ #endif /* IPSEC */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 10 netsrc_init-in\n");
++#endif
+ 	netsrc_init();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 10 netsrc_init-done\n");
++#endif
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 11 nstat_init-in\n");
++#endif
+ 	nstat_init();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 11 nstat_init-done\n");
++#endif
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 12 tcp_cc_init-in\n");
++#endif
+ 	tcp_cc_init();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 12 tcp_cc_init-done\n");
++#endif
+ #if MPTCP
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 13 mptcp_control_register-in\n");
++#endif
+ 	mptcp_control_register();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 13 mptcp_control_register-done\n");
++#endif
+ #endif /* MPTCP */
+ 
+ #if REMOTE_VIF
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 14 rvi_init-in\n");
++#endif
+ 	rvi_init();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 14 rvi_init-done\n");
++#endif
+ #endif /* REMOTE_VIF */
+ 
+ 	/*
+@@ -879,11 +969,23 @@
+ 	 * the clients that are waiting for the networking stack to be usable.
+ 	 */
+ 	bsd_init_kprintf("calling net_init_run\n");
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 15 net_init_run-in\n");
++#endif
+ 	net_init_run();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 15 net_init_run-done\n");
++#endif
+ #endif /* NETWORKING */
+ 
+ 	bsd_init_kprintf("calling inittodr\n");
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 16 inittodr-in\n");
++#endif
+ 	inittodr(0);
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETP 16 inittodr-done\n");
++#endif
+ 
+ 	/* Mount the root file system. */
+ 	while (TRUE) {
