@@ -1615,3 +1615,66 @@ restore followed by complete67108864B original restoration in Recovery.
 Its preflight passes and predicted full trial partition SHA256 is
 af10635174cb7bfaf50a1c56453222bb426fbfce8845326ab0964b158718fbd8.
 At this build milestone no2334 device write or hardware result exists yet.
+
+## CSF2334 hardware result: reset-store executes (2026-11-02)
+
+Exactly one authorized trial ran with imageaef92ca5...0dd1ed0. The full
+temporary boot_a readback matchedaf106351...718fbd8. Runner session23392
+reached Fastboot after85.49s,restored the stock prefix through one raw USB
+session,rebooted Recovery,and restored all67108864 bytes of original boot_a.
+An independent check at2026-11-02T10:28:54Z verified root/matisse/_a/Recovery,
+partition geometry and complete original SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Runner exits0;device remains in Recovery,no pending restoration or second trial.
+
+| Observation | Original CSF2333 | Reset-store2334 |
+| --- | --- | --- |
+| Header version before AUTO | `0` | `0` |
+| Header version after wait | `0` | `0x53545542` |
+| MCU status before cleanup | ENABLED1 | ENABLED1 |
+| Global JOB IRQ | `0` | `0` (stub emits none) |
+| Disable error/status | `-53` / `1` | `0` / `0` |
+| Cleanup reset RAWSTAT | `0x200` | `0x100` |
+| Reset completed | `0` | `1` |
+| Cleanup error | `-53` | `0` |
+| Firmware ready | false | false |
+
+The paired access snapshot independently repeats the0->53545542 header
+mutation. Both trials use root PA0x40077000,the same mappings,PTE group6,
+NONE31 coherency and AS configuration. All common platform/path snapshots,
+including the original MFG1 protection masks,PDC and SLC,are identical.
+No MMU/AS/GPU fault is recorded. The diagnostic's stage4/-53 is expected:
+the boot transaction still waits for an IRQ that this stub never issues.
+The successful marker does not relax runtime-interface readiness.
+
+The fresh148-record SWEETMRK block contains all87 CSF qwords320..406 and
+matches the captured tail. Kernel mark99 and all report tags identify2334;
+before captures exactly match2333's after and reject expected2334. The new
+18657B console contains sweettrial2334. Its iBoot display name remains
+gpu2333 because the deliberately unchanged shim publisher hard-codes that
+string when it overwrites the ADT properties. A result-audit assertion
+expecting gpu2334 in that display initially failed;inspection explained
+the retained label. Do not claim that label itself proves freshness.
+No repeat trial or hardware adjustment was made to fix a display string.
+
+This real marker supports execution of the vector-selected reset handler
+and a completed shared write through these low-address mappings. It
+contradicts the proposed stall at the very first reset-vector/code fetch or
+initial page walk along this path. It does not establish that the rest of
+the original firmware's code/private/stack pages or MCU MMIO transactions
+complete. The original firmware could block later;its PC and the root cause
+remain unknown. Moving all memory high or changing already-working page
+tables is not justified solely by the prior first-fetch hypothesis.
+
+Next offline work should inspect the original reset path from0x010018ec
+through private-memory initialization and MCU-view register accesses,and
+prepare a checkpoint that distinguishes those later dependencies. Keep the
+existing success condition for original CSF: fresh global IRQ and a valid
+nonzero runtime interface. Another device trial needs its own authorization.
+
+Measured evidence stays ignored under shim2334-reset-trials/gpu-normal/:
+journal.json,gpu-result.json,comparison-2333-2334.json,
+independent-post-restore.json,before/after marks and tails,console and
+Recovery dmesg. The sibling audit2334-result.py verifies freshness,comparison
+and full restoration. Implementation81dd6b0,patch-context9cbd7ec;no new CI
+dispatch,push,DEVAPC/EMI clear or additional hardware experiment occurred.

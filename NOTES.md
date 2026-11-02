@@ -1,6 +1,61 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-02:2334 TRIAL RUNNING; ORIGINAL RESTORE PENDING <<<
+## >>> ACTIVE 2026-11-02:2334 REAL MCU STUB STORE PASS; FULL RESTORE VERIFIED <<<
+
+Executed exactly ONE authorized2334 reset-store trial;runner session23392
+exited0. Full temporary boot_a readbackaf106351...718fbd8 matched prediction.
+Fastboot at85.49s;one raw USB session restored stock prefix and rebooted
+Recovery with OKAY. Recovery then restored ALL67108864B original boot_a.
+Separate independent root/matisse/_a/Recovery/geometry/full SHA256 PASS at
+2026-11-02T10:28:54Z:2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Device left in root Recovery;no active runner or pending restoration.
+
+KEY REAL RESULT:version header before0->after53545542,also matched by
+paired access snapshots. The minimal Thumb reset-store code executed on
+the MCU and wrote its shared header through the unchanged low-PA arena.
+disable_error0/status0;cleanup reset_raw100/reset_completed1/cleanup_error0.
+Contrast2333 original CSF:version0,disable-53/status1,reset_raw200/no complete.
+All87 qwords320..406 in fresh148 marks are complete and match tail;kernel
+mark99 and report tags2334. Old2333/before captures reject expected2334;
+before marks/tail exactly match2333's after. Console18657B has fresh
+sweettrial2334. Caveat:IBoot display still saysgpu2333 because frozen
+shim/gpu.c hard-codes that publisher label. Do NOT claim freshgpu2334
+IBoot label;freshness is established by kernel/tags/cmdline and changed
+raw evidence. This was detected during result audit;no repeat trial needed.
+
+MCU still sampled ENABLED1,stage4/error-53,JOB_RAW0,firmware_ready0,as
+expected:the diagnostic deliberately emits no CSF IRQ/interface. MMU/GPU
+faults remain0. Every common platform/path snapshot,including PDC/SLC and
+protection masks,is identical2333. Common differences are only version,
+successful disable/reset/cleanup and their derived fields. Root PA40077000,
+COHERENCY_NONE31,AS_TRANSCFG42000006 and mappings are unchanged.
+
+Inference supported:MCU reset-entry execution,that code page and shared
+write work at low physical addresses with these tables. The proposed
+failure at the very first vector/fetch/page-walk on this same path is
+contradicted. NOT proven:all original firmware pages/private stack/MMIO/
+peripheral initialization work. Original CSF may stall on a later access;
+no original-firmware PC or bus/DEVAPC/EMI fault is identified. Keep firmware
+readiness strict;this marker is NOT a valid interface/version/IRQ success.
+
+Evidence ignored under shim2334-reset-trials/gpu-normal/{journal.json,
+gpu-result.json,comparison-2333-2334.json,independent-post-restore.json,
+pretrial-freshness.json,before/after-marks.bin,before/after-tail.bin,
+after-console.txt,recovery-dmesg.txt} and gpu-normal-run.txt. Repeatable
+audit2334-result.py PASS;plan complete-restored-Recovery,one consumed trial,
+restore_pendingfalse. Build/verifier/runner pins in historical handoff below.
+Implementation81dd6b0,patch-format9cbd7ec,in-flight handoffd497787. No push,
+new CI run,second trial,DEVAPC/EMI clear,high-RAM move or further MMIO change.
+Unrelated dirt/untracked0093 preserved;no device/proprietary data staged.
+
+NEXT:offline inspect original reset010018ec through first private startup
+stores and MCU-view MMIO,then design one discriminating checkpoint candidate.
+Use existing source/disassembly/fetch audit;do not blindly rerun unchanged
+CSF or infer that all DRAM/security paths are proven. A future image should
+also make publisher labels explicit without confusing this frozen-control
+trial. No further hardware experiment is currently authorized.
+
+## >>> HISTORICAL 2026-11-02:2334 TRIAL RUNNING; ORIGINAL RESTORE PENDING <<<
 
 Runner session23392 is ACTIVE. It wrote the ONE authorized candidate;
 full boot_a readbackaf10635174cb7bfaf50a1c56453222bb426fbfce8845326ab0964b158718fbd8
