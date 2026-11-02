@@ -1,6 +1,21 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-02: ONE2334 RESET-STORE TRIAL AUTHORIZED; CANDIDATE VERIFIED <<<
+## >>> ACTIVE 2026-11-02:2334 TRIAL RUNNING; ORIGINAL RESTORE PENDING <<<
+
+Runner session23392 is ACTIVE. It wrote the ONE authorized candidate;
+full boot_a readbackaf10635174cb7bfaf50a1c56453222bb426fbfce8845326ab0964b158718fbd8
+matches prediction. Boot requested2026-11-02T10:26:16Z. Local journal
+shim2334-reset-trials/gpu-normal/journal.json statuswaiting-fresh-Recovery,
+restore_pending=true. DO NOT compete for USB/ADB or launch a second trial.
+Follow the runner and prioritize FULL67108864B original restoration,then
+independent root/matisse/_a/Recovery/full SHA256 before interpreting evidence.
+Authorization is now consumed by this one trial;no second experiment.
+
+Implementation/source/build handoff committed81dd6b0;patch formatting fix
+9cbd7ec preserves identical generated source and passes contextual replay
+test0.748s. User trial authorization remains active. Dispatch the one-shot
+runner below once;after it starts follow only its local journal and prioritize
+restoration. Do not launch a second runner or compete for USB/ADB.
 
 2334 candidate BUILD+INDEPENDENT VERIFICATION PASS. CLT session19978 exit0;
 kernel16724248B SHAa68627e3f6b0716081b61cd4f6d83d6c8454e50f702dc0dbbc8d90caa3ebb7c2.
