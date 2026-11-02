@@ -21,6 +21,11 @@ ROOT = Path(__file__).resolve().parents[1]
 PAGE = 4096
 PA_MASK = 0x0000FFFFFFFFF000
 FIRMWARE_SHA256 = 'de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f7229a'
+# Assembled from matisse-csf-reset-store.S; the cross-compile test compares
+# the object section with this template. These are Thumb/M-class instructions.
+RESET_STORE_CODE = bytes.fromhex('024803490160bff34f8ffee7')
+RESET_STORE_MARKER = 0x53545542
+RESET_ENTRY = 0x010018ED
 HOST_BUILDER = r'''
 #include <stdint.h>
 #include <stdio.h>
@@ -147,8 +152,64 @@ def shared_allocation_word(fw_word10, shader_present):
     return (((fw_word10 >> 8) & 15) + shader_present.bit_length() + 3) & 0xFFFF
 
 
+def patch_reset_store_stub(arena, plan):
+    """Replace only reset-entry bytes in an offline arena; keep all PTEs.
+
+    The vector at VA0 selects the entry, not the first code-section word.
+    The pinned shared control header, rather than its input page, holds
+    version. This marker deliberately cannot satisfy CSF firmware readiness.
+    """
+    root, shared = plan['root_pa'], plan['shared_va']
+    if shared != 0x04000000 or len(arena) != plan['required_bytes']:
+        raise MappingError('unsupported reset-store arena or shared header')
+    check_access(arena, root, 0, 8, 'read')
+    vector_offset, _ = translate(arena, root, 0)
+    stack, entry = struct.unpack_from('<II', arena, vector_offset)
+    if entry != RESET_ENTRY or stack != 0x02040000:
+        raise MappingError('reset-store requires the pinned reset vectors')
+    check_access(arena, root, stack - 4, 4, 'write')
+    check_access(arena, root, shared, 4, 'write')
+    shared_offset, _ = translate(arena, root, shared)
+    if struct.unpack_from('<I', arena, shared_offset)[0]:
+        raise MappingError('reset-store requires a zero initial version')
+    code = RESET_STORE_CODE + struct.pack('<II', shared, RESET_STORE_MARKER)
+    start = entry & ~1
+    check_access(arena, root, start, len(code), 'fetch')
+    offset, _ = translate(arena, root, start)
+    last, _ = translate(arena, root, start + len(code) - 1)
+    if last != offset + len(code) - 1 or offset < plan['table_pages'] * PAGE:
+        raise MappingError('reset-store entry overlaps tables or is not contiguous')
+    patched = bytearray(arena)
+    patched[offset:offset + len(code)] = code
+    return bytes(patched), {
+        'entry_va': hex(start), 'entry_pa': hex(root + offset),
+        'patch_bytes': len(code), 'patch_hex': code.hex(),
+        'self_loop_va': hex(start + 10), 'marker': hex(RESET_STORE_MARKER),
+        'version_va': hex(shared), 'version_pa': hex(root + shared_offset),
+        'original_patch_sha256': hashlib.sha256(arena[offset:offset + len(code)]).hexdigest(),
+        'page_tables_unchanged': patched[:plan['table_pages'] * PAGE] == arena[:plan['table_pages'] * PAGE],
+        'outside_patch_unchanged': patched[:offset] == arena[:offset] and
+                                   patched[offset + len(code):] == arena[offset + len(code):],
+        'firmware_ready': False,
+        'interpretation': 'A real marker would prove reset-entry execution and a shared write. '
+                          'No IRQ or valid CSF interface is provided; a missing marker does not localize the stall.',
+    }
+
+
+def reset_store_pass(result, patch):
+    return (result['reason'] == 'diagnostic-self-loop' and not result['violations'] and
+            result['version'] == patch['marker'] and result['shared_write_count'] == 1 and
+            len(result['shared_writes']) == 1 and
+            result['shared_writes'][0]['address'] == patch['version_va'] and
+            result['shared_writes'][0]['size'] == 4 and
+            result['shared_writes'][0]['value'] == patch['marker'] and
+            not result['mmio_writes'] and not result['startup_probe_writes'] and
+            patch['page_tables_unchanged'] and patch['outside_patch_unchanged'])
+
+
 def replay(arena, plan, step_limit=500000, tiler_transition_reads=0,
-           fw_word10=0xA8620004, shader_present=0, fw_word30004=0x2000000A):
+           fw_word10=0xA8620004, shader_present=0, fw_word30004=0x2000000A,
+           self_loop_pc=None):
     words = synthetic_mmio_words(fw_word10, shader_present, fw_word30004)
     uc = importlib.import_module('unicorn')
     arm = importlib.import_module('unicorn.arm_const')
@@ -181,6 +242,7 @@ def replay(arena, plan, step_limit=500000, tiler_transition_reads=0,
     probe_before = {name: struct.unpack('<I', u.mem_read(address, 4))[0]
                     for name, address in probes.items()}
     probe_writes = []
+    self_loop_hits = 0
 
     def violation(operation, address, size, message):
         state['reason'] = 'access-violation'
@@ -201,6 +263,7 @@ def replay(arena, plan, step_limit=500000, tiler_transition_reads=0,
         return True
 
     def code_hook(_u, address, size, _context):
+        nonlocal self_loop_hits
         state['steps'] += 1
         last.append(address)
         if not access('fetch', address, size):
@@ -208,6 +271,11 @@ def replay(arena, plan, step_limit=500000, tiler_transition_reads=0,
         if address == 0x01003032:
             state['reason'] = 'startup-wfi'
             u.emu_stop()
+        if address == self_loop_pc:
+            self_loop_hits += 1
+            if self_loop_hits == 2:
+                state['reason'] = 'diagnostic-self-loop'
+                u.emu_stop()
 
     def memory_hook(_u, operation, address, size, value, _context):
         pc = u.reg_read(arm.UC_ARM_REG_PC)
@@ -284,6 +352,8 @@ def main():
     parser.add_argument('--arena-pa', type=lambda value: int(value, 0), default=0x40076000)
     parser.add_argument('--memory-group', type=int, choices=range(16), default=0,
                         help='leaf bits59..62; hardware routing is not modeled')
+    parser.add_argument('--reset-store-stub', action='store_true',
+                        help='offline only: patch Thumb reset entry to store STUB at the version header and loop')
     parser.add_argument('--step-limit', type=int, default=500000)
     parser.add_argument('--tiler-transition-reads', type=int, default=0,
                         help='synthetic transition: 0 absent, -1 stuck, N clears after N reads')
@@ -306,6 +376,10 @@ def main():
     if firmware_hash != FIRMWARE_SHA256:
         parser.error('unsupported firmware hash; startup PC and MMIO model require the pinned matisse blob')
     arena, plan = build_arena(args.firmware.resolve(), args.arena_pa, memory_group=args.memory_group)
+    patch = None
+    original_arena_hash = hashlib.sha256(arena).hexdigest()
+    if args.reset_store_stub:
+        arena, patch = patch_reset_store_stub(arena, plan)
     result = {'scope': 'Offline synthetic startup; not hardware execution or timeout root-cause proof.',
               'firmware_sha256': firmware_hash,
               'synthetic_parameters': {'step_limit': args.step_limit, 'memory_group': args.memory_group,
@@ -317,8 +391,19 @@ def main():
               'source_sha256': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
                                 for name in ('xnu/gpu/mali_csf_memory.c', 'xnu/gpu/mali_csf_firmware.c')},
               'plan': plan, 'replay': replay(arena, plan, args.step_limit, args.tiler_transition_reads,
-                                           args.fw_word10, args.shader_present, args.fw_word30004)}
+                                           args.fw_word10, args.shader_present, args.fw_word30004,
+                                           int(patch['self_loop_va'], 0) if patch else None)}
+    if patch:
+        result['scope'] = 'Offline synthetic reset-store diagnostic; not hardware execution or firmware readiness.'
+        for name in ('tools/matisse-csf-reset-store.S', 'tools/matisse-csf-fetch-audit.py'):
+            result['source_sha256'][name] = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+        result['original_arena_sha256'] = original_arena_hash
+        result['reset_store_stub'] = patch
+        result['diagnostic_pass'] = reset_store_pass(result['replay'], patch)
+        result['firmware_ready'] = False
     print(json.dumps(result, indent=2))
+    if patch:
+        return 0 if result['diagnostic_pass'] else 1
     return 0 if result['replay']['reason'] == 'startup-wfi' and not result['replay']['violations'] else 1
 
 

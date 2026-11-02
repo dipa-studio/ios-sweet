@@ -1,7 +1,10 @@
 """Negative checks for offline CSF fetch/access auditing, without firmware blobs."""
 import importlib.util
 from pathlib import Path
+import shutil
 import struct
+import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -115,6 +118,125 @@ class SyntheticMmioTests(unittest.TestCase):
                      (0, 1 << 64, 0), (0, 0, -1), (0, 0, 1 << 32)):
             with self.subTest(args=args), self.assertRaisesRegex(ValueError, 'width'):
                 audit.synthetic_mmio_words(*args)
+
+
+@unittest.skipUnless(shutil.which('cc'), 'requires C compiler')
+class ResetStoreStubTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Public synthetic container: same reset vector/VA contract, no vendor
+        # bytes. Use the actual C loader so tests also exercise section layout.
+        data = bytearray(136 + 0x2000 + 0x2000)
+        struct.pack_into('<I', data, 0, 0xC3F13A6E)
+        struct.pack_into('<I', data, 16, 116)
+        sections = [(9, 0, 0x1000, 128, 136),
+                    (13, 0x01000000, 0x01002000, 136, 136 + 0x2000),
+                    (11, 0x02000000, 0x02040000, 0, 0),
+                    (0x4000001B, 0x04000000, 0x04004000,
+                     136 + 0x2000, len(data))]
+        for i, fields in enumerate(sections):
+            struct.pack_into('<6I', data, 20 + i * 24, 24 << 8, *fields)
+        struct.pack_into('<II', data, 128, 0x02040000, audit.RESET_ENTRY)
+        data[136 + 0x18EC:136 + 0x18EE] = bytes.fromhex('fee7')
+        with tempfile.TemporaryDirectory() as directory:
+            firmware = Path(directory) / 'synthetic.bin'
+            firmware.write_bytes(data)
+            cls.arena, cls.plan = audit.build_arena(firmware, 0x40077000, memory_group=6)
+
+    def leaf_offset(self, arena, va):
+        table = 0
+        for shift in (39, 30, 21):
+            desc, = struct.unpack_from('<Q', arena, table + ((va >> shift) & 511) * 8)
+            table = (desc & audit.PA_MASK) - self.plan['root_pa']
+        return table + ((va >> 12) & 511) * 8
+
+    def set_leaf_bits(self, arena, va, bits):
+        pos = self.leaf_offset(arena, va)
+        desc, = struct.unpack_from('<Q', arena, pos)
+        struct.pack_into('<Q', arena, pos, desc | bits)
+
+    def test_changes_only_reset_entry_and_leaves_version_zero(self):
+        patched, patch = audit.patch_reset_store_stub(self.arena, self.plan)
+        offset, _ = audit.translate(self.arena, self.plan['root_pa'], audit.RESET_ENTRY & ~1)
+        self.assertEqual(patch['patch_bytes'], 20)
+        self.assertEqual(patched[:offset], self.arena[:offset])
+        self.assertEqual(patched[offset + 20:], self.arena[offset + 20:])
+        self.assertTrue(patch['page_tables_unchanged'])
+        self.assertTrue(patch['outside_patch_unchanged'])
+        self.assertFalse(patch['firmware_ready'])
+        version_offset, _ = audit.translate(patched, self.plan['root_pa'], 0x04000000)
+        self.assertEqual(patched[version_offset:version_offset + 4], bytes(4))
+        self.assertEqual(struct.unpack_from('<II', patched, offset + 12),
+                         (0x04000000, audit.RESET_STORE_MARKER))
+
+    def test_rejects_input_page_as_version_and_changed_vectors(self):
+        with self.assertRaisesRegex(audit.MappingError, 'shared header'):
+            audit.patch_reset_store_stub(self.arena, dict(self.plan, shared_va=0x04002000))
+        arena = bytearray(self.arena)
+        offset, _ = audit.translate(arena, self.plan['root_pa'], 0)
+        struct.pack_into('<I', arena, offset + 4, 0x01000001)
+        with self.assertRaisesRegex(audit.MappingError, 'reset vectors'):
+            audit.patch_reset_store_stub(arena, self.plan)
+
+    def test_rejects_existing_version(self):
+        arena = bytearray(self.arena)
+        offset, _ = audit.translate(arena, self.plan['root_pa'], 0x04000000)
+        struct.pack_into('<I', arena, offset, audit.RESET_STORE_MARKER)
+        with self.assertRaisesRegex(audit.MappingError, 'zero initial version'):
+            audit.patch_reset_store_stub(arena, self.plan)
+
+    def test_rejects_readonly_shared_or_stack_and_nonexecutable_entry(self):
+        for va, bit, message in ((0x04000000, 1 << 7, 'read-only'),
+                                  (0x0203FFFC, 1 << 7, 'read-only'),
+                                  (audit.RESET_ENTRY & ~1, 1 << 53, 'execute-never')):
+            arena = bytearray(self.arena)
+            self.set_leaf_bits(arena, va, bit)
+            with self.subTest(va=hex(va)), self.assertRaisesRegex(audit.MappingError, message):
+                audit.patch_reset_store_stub(arena, self.plan)
+
+    @unittest.skipUnless(shutil.which('clang'), 'requires ARM-capable clang')
+    def test_thumb_assembly_matches_template_without_relocations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'stub.o'
+            subprocess.run(['clang', '-target', 'armv7m-none-eabi', '-mcpu=cortex-m7', '-mthumb',
+                            '-c', str(ROOT / 'tools/matisse-csf-reset-store.S'), '-o', str(target)],
+                           check=True, capture_output=True)
+            obj = target.read_bytes()
+        self.assertEqual(obj[:6], b'\x7fELF\x01\x01')
+        shoff, = struct.unpack_from('<I', obj, 32)
+        entsize, count, names_index = struct.unpack_from('<HHH', obj, 46)
+        sections = [struct.unpack_from('<10I', obj, shoff + i * entsize) for i in range(count)]
+        names = obj[sections[names_index][4]:sections[names_index][4] + sections[names_index][5]]
+        index, section = next((i, s) for i, s in enumerate(sections)
+                              if names[s[0]:].split(b'\0', 1)[0] == b'.text.csf_reset_store')
+        self.assertEqual(obj[section[4]:section[4] + section[5]],
+                         audit.RESET_STORE_CODE + struct.pack('<II', 0x04000000, audit.RESET_STORE_MARKER))
+        self.assertFalse(any(s[1] in (4, 9) and s[7] == index and s[5] for s in sections))
+
+    @unittest.skipUnless(importlib.util.find_spec('unicorn'), 'requires Unicorn')
+    def test_emulated_store_and_permission_negative_control(self):
+        arena, patch = audit.patch_reset_store_stub(self.arena, self.plan)
+        result = audit.replay(arena, self.plan, step_limit=32,
+                              self_loop_pc=int(patch['self_loop_va'], 0))
+        self.assertTrue(audit.reset_store_pass(result, patch), result)
+        readonly = bytearray(arena)
+        self.set_leaf_bits(readonly, 0x04000000, 1 << 7)
+        negative = audit.replay(readonly, self.plan, step_limit=32,
+                                self_loop_pc=int(patch['self_loop_va'], 0))
+        self.assertEqual(negative['reason'], 'access-violation')
+        self.assertFalse(audit.reset_store_pass(negative, patch))
+
+    @unittest.skipUnless(importlib.util.find_spec('unicorn'), 'requires Unicorn')
+    def test_prefilled_marker_without_execution_is_not_a_pass(self):
+        _, patch = audit.patch_reset_store_stub(self.arena, self.plan)
+        arena = bytearray(self.arena)  # Original synthetic reset just loops.
+        offset, _ = audit.translate(arena, self.plan['root_pa'], 0x04000000)
+        struct.pack_into('<I', arena, offset, audit.RESET_STORE_MARKER)
+        result = audit.replay(arena, self.plan, step_limit=32,
+                              self_loop_pc=int(patch['self_loop_va'], 0))
+        self.assertEqual(result['version'], patch['marker'])
+        self.assertEqual(result['shared_write_count'], 0)
+        self.assertFalse(audit.reset_store_pass(result, patch))
 
 
 if __name__ == '__main__':
