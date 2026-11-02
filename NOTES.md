@@ -1,6 +1,35 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-02:2335 TRIAL RUNNING; FULL RESTORATION PENDING <<<
+## >>> ACTIVE 2026-11-02:2335 REMOTE CHECKPOINT ABSENT; FULL RESTORE VERIFIED <<<
+
+ONE2335 trial completed;runner33712 exits0. Fastboot129.26s;single raw session
+restored stock prefix and rebooted Recovery. Full67108864B original boot_a
+restored;independent check2026-11-02T10:59:35Z root/matisse/_a/recovery,
+geometry and SHA2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1
+PASS. No active runner or pending restore. Implementation1acf745,in-flight
+handoff3dde8f0. No new CI/push. Device left root Recovery.
+
+Fresh2335 kernel/all87 report qwords/148 marks/tail/cmdline/iBoot publisher
+verified;before matches2334 after and stale2333/2334 rejected. KEY RESULT:
+marker04000ffc remains0 before/after;true version04000000 also0. MCU1,
+JOB/MMU/AS/GPU faults0;disable-53/status1;cleanup reset_raw200/completed0/
+error-53. ALL common CSF fields exactly match2333,including platform/path.
+The remote trampoline marker did NOT execute visibly. This cannot support
+"entry marker then original body hangs" or body-PC bisection. Extra code-page
+fetch0100f000 and distinct marker cache line are new diagnostic dependencies;
+the2334 in-place store result remains valid. Do not revive universal first-
+fetch failure or infer coherent-transaction cause from this negative result.
+
+Audit2335-result.py PASS;ignored comparison-2333-2335.json,independent-post-
+restore.json and fresh evidence under shim2335-entry-trials/gpu-normal/.
+NEXT:remove the probe's pre-marker remote-fetch dependency by placing the
+first marker inline in the proven reset page,then a second checkpoint in
+the remote trampoline before reproducing the original prefix. Preserve
+mappings/protocol/platform and distinguish these checkpoints from version.
+This continues the user's requested entry-marker experiment;no speculative
+shareability change or original-body bisection is justified yet.
+
+## >>> HISTORICAL 2026-11-02:2335 TRIAL RUNNING; FULL RESTORATION PENDING <<<
 
 Runner session33712 ACTIVE;do not compete for USB/ADB or launch another trial.
 ONE candidate imagea47c3852...5f86677 has been written;FULL boot_a readback

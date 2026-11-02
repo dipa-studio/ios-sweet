@@ -1721,3 +1721,37 @@ and autonomous Recovery remain unverified. One bounded trial and complete
 original64MiB boot_a restoration are prepared;at this milestone no2335
 hardware write or result exists. Latest user instructions authorize this
 entry-probe experiment;the previous2334 authorization is not reused.
+
+
+## CSF2335 hardware result: remote entry checkpoint absent (2026-11-02)
+
+One entry-probe trial ran with imagea47c3852...5f86677. Full temporary boot_a
+readback matchedd240402b...2b0b18a. Runner33712 exited0;Fastboot appeared
+at129.26s. One raw USB session restored the stock prefix and rebooted Recovery,
+which restored the complete original67108864B. Independent verification at
+2026-11-02T10:59:35Z confirmed root/matisse/_a/Recovery,geometry and original
+SHA2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No restoration remains pending.
+
+The separate marker at0x04000ffc remained0 before and after AUTO. True
+version0x04000000 also remained0;MCU status1,JOB/MMU/AS/GPU faults0,disable
+-53/status1 and cleanup reset_raw0x200/no completion/error-53. Every common
+CSF field matches2333 exactly,including paired platform/path snapshots.
+Fresh148 marks contain all87 correctly tagged2335 CSF qwords,match the tail
+and reject stale2333/2334. Before captures match2334 after. Cmdline and iBoot
+publisher now both identify2335. Marker sampling occurs before cleanup;the
+C model verifies it is not overwritten by later path sampling.
+
+This is a negative instrumentation result. It does not establish that the
+original body ran before hanging. Unlike2334's in-place store,the2335 branch
+fetches the remote trampoline page0x0100f000 before its first marker. The
+marker also uses a different word/cache line from2334. The valid2334 result
+still rules out a universal first-reset-fetch failure along its proven path.
+No evidence yet selects a coherent transaction,private-memory access or
+original CSF instruction as the cause. The next discriminating instrument
+must put its first store inline in the reset page,then distinguish remote
+trampoline arrival before attempting an original-body checkpoint.
+
+Ignored audit2335-result.py and comparison-2333-2335.json verify the measured
+result and full restoration. No second trial or protocol/platform change
+was performed at this milestone.
