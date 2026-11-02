@@ -1,6 +1,61 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-10-31: CSF2333 TRIAL COMPLETE; FULL RESTORE VERIFIED <<<
+## >>> ACTIVE 2026-11-02: RESET-STORE STUB VERIFIED OFFLINE; NO NEW PHONE TRIAL <<<
+
+Reviewed the user's bus-path diagnosis against actual2333 code/evidence.
+Initial soft reset completed; MCU AUTO/disable timeout with no version/IRQ
+is compatible with a blocked memory transaction, NOT proof of first-fetch
+or page-walk hang. No real MCU PC/bus response/DEVAPC/EMI violation evidence
+has been collected. Existing MFG1 protection exclusions remain narrow.
+
+Corrections grounded in existing sources:55667788 is GPUEB handoff magic
+read at13c1fd24,not a CSF container header. GPUEB INIT0/POWER_ON1 already
+acknowledged before MCU start. Actual mali_csffw starts c3f13a6e;the C loader
+validates it and uses header section VAs. Version is at MCU VA04000000,
+not input04002000/output04003000. Reset vector VA0 contains MSP02040000
+and Thumb entry010018ed. With unchanged2333 arena40077000,reset code is
+PA400818ec,version PA40110000;code section starts PA40080000. Full used
+arena ends401a4000,not400bc000(private probe page only). Original MT6983
+source identifies PLL CON1 bit31 as SDM_PCW_CHG,not lock or POSDIV.
+
+Added public20B Thumb/M-class reset-store assembly and opt-in offline
+--reset-store-stub to tools/matisse-csf-fetch-audit.py. It replaces ONLY
+20 bytes at the vector-selected reset entry,stores53545542 to the correct
+version header,DSB,self-loop. Original vectors/PTEs/other arena bytes stay
+identical. It never supplies an IRQ/valid interface;firmware_ready remains
+false and the hardware readiness gate is unchanged. No shim or kernel
+behavior changed. Implementation committed6cbf445 (3 files);this handoff
+and the detailed diagnosis are committed separately.
+
+21 targeted tests PASS0.560s,including actual C loader ASan/UBSan,ARM
+Thumb cross-assembly/zero relocation check,emulated store,RO rejection,
+and prefilled-marker-without-execution rejection. Exact proprietary blob
+offline replay at measured2333 PA/group6 reaches diagnostic-self-loop
+in6 instruction hooks,one4B shared write53545542,no MMIO/probe writes or
+access violations. Original arena SHAa4c928c5...1feb9fc2 matches2333;
+stub arena d3cc2c1637107d16e281d6302e989c4afc7325e9c1b4417eb38c7a3076a8259e.
+Normal firmware replay byte-for-JSON equals HEAD:986 instructions,
+version01010000,startup-wfi. These are synthetic results,not phone fetch.
+Ignored reports:firmware-static/reset-store-2333-offline.json and
+reset-store-normal-regression.json under research/matisse/20261031-gpu/.
+
+No new image,kernel build,CI dispatch,push,device write/reboot/MMIO access
+or restoration was performed. gh lists prior40262872038/40226767824/
+40226076666 completed/action_required;no new run ID. Last measured device
+state remains2333's fully restored root Recovery;not refreshed this turn.
+Unrelated dirty files/untracked0093 preserved;no proprietary data staged.
+
+NEXT:integrate the validated reset patch as an explicit shim diagnostic
+candidate with frozen2333 controls,verify actual placement and fresh build
+identity,and prepare its one-shot full64MiB restoration plan. No candidate
+or runner exists yet. Audit exact MT6983 DEVAPC/EMI status ownership and
+clear semantics before adding access;no guessed clear writes. A missing
+stub marker still cannot distinguish reset/vector/fetch/write failure.
+Keep real firmware readiness dependent on fresh global IRQ and valid
+nonzero interface. No concrete new boot_a write has been confirmed;
+AGENTS requires confirmation before a destructive device step.
+
+## >>> HISTORICAL 2026-10-31: CSF2333 TRIAL COMPLETE; FULL RESTORE VERIFIED <<<
 
 Executed exactly ONE authorized2333 image36be7135 trial;runner session19724
 exited0. Full candidate boot_a readback4dc84a77...b65cc580 matched prediction.

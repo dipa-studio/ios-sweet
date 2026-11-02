@@ -1492,3 +1492,94 @@ No rebuild,repeated test suite,CI run or push occurred in this trial.
 Implementation24c968b and build handoffd900294 remain applicable. Next is
 offline inspection of original MCU AUTO/debug/CSF initialization prerequisites;
 no new root cause or hardware experiment is selected or authorized.
+
+## Reset-store diagnostic prepared offline (2026-11-02)
+
+The2333 timeout is compatible with an uncompleted MCU memory transaction,
+but its ENABLED status,zero fault registers and failed disable do not prove
+the location or cause of a stall. No MCU PC,AXI response or DEVAPC/EMI
+violation record has been measured. Missing markers do not establish that
+the MCU never executed. The clear original MFG1 protection masks exclude
+those specific bits,not all platform memory or power prerequisites.
+
+Several distinctions matter when constructing the proposed minimal stub:
+
+- `firmware_magic=0x55667788` belongs to the GPUEB handoff register at
+  `0x13c1fd24`. It is not a CSF container word. Existing GPUEB mailbox
+  INIT returns0 and POWER_ON returns1 before the CSF callback runs.
+- The pinned CSF container actually starts `0xc3f13a6e`. The C parser
+  validates this magic and the memory builder uses the header section VAs.
+  Code word `0xd00cf8df` at MCU VA`0x01000000` is already section payload.
+- The shared control header/version is at VA`0x04000000`;`0x04002000` and
+  `0x04003000` are input/output pages. A store to input does not publish
+  the version that the host polls.
+- The reset vector at VA0 names MSP`0x02040000` and Thumb entry
+  `0x010018ed`. Changing the first code-section word alone does not replace
+  the reset handler selected by that vector.
+- Original gpufreq_mt6983.c identifies PLL CON1 bit31 as
+  `MFGPLL_SDM_PCW_CHG`;POSDIV is bits24..26. It is not a lock indication.
+
+Walking the actual C-built arena at the measured2333 base gives:
+
+| Object | MCU VA | Physical address |
+| --- | --- | --- |
+| Reset vector | `0x00000000` | `0x4007f000` |
+| Code-section start | `0x01000000` | `0x40080000` |
+| Reset handler | `0x010018ec` | `0x400818ec` |
+| Private probe page | `0x0202c000` | `0x400bc000` |
+| Version header | `0x04000000` | `0x40110000` |
+| Input page | `0x04002000` | `0x40112000` |
+| Output page | `0x04003000` | `0x40113000` |
+
+The full used arena is`0x12d000` bytes,ending at PA`0x401a4000` exclusive;
+`0x400bc000` is not its end. This is an offline table walk,not a physical
+GPU reachability measurement or proof that low RAM aliases high RAM.
+
+The public assembly in`tools/matisse-csf-reset-store.S` is20 bytes:
+load shared/header address and marker,store`0x53545542`,DSB,and self-loop.
+It uses Thumb/M-class instructions and no stack or MMIO access. New
+`--reset-store-stub` mode in the existing fetch-audit tool patches only the
+vector-selected reset handler in an offline arena. It leaves all original
+vectors,page tables,other code/data,and initial version bytes unchanged.
+It validates the expected vectors,executable entry,writable stack/shared
+page,and initially-zero version before patching. Existing device startup
+code and firmware-readiness validation are unchanged.
+
+From the repository root,with the local proprietary input kept ignored:
+
+```sh
+python3 tools/matisse-csf-fetch-audit.py \
+  --firmware research/matisse/20261031-gpu/extracted/vendor_a-mali_csffw.bin \
+  --python-deps research/matisse/20261031-gpu/firmware-static/python-deps \
+  --arena-pa 0x40077000 --memory-group 6 --reset-store-stub
+```
+
+Exact-blob Unicorn2.1.4 replay reaches the terminal self-loop in6 instruction
+hooks with one4-byte shared write,no MMIO/private-probe writes and no modeled
+access violation. The original arena SHA256 remains the measured2333 value
+`a4c928c577a6033e2e1ade2fd2352965270bd8ff6e4f473d4f7d391c1feb9fc2`.
+The patched arena SHA256 is
+`d3cc2c1637107d16e281d6302e989c4afc7325e9c1b4417eb38c7a3076a8259e`.
+Every byte outside the20-byte patch,including all tables,is identical.
+Normal firmware replay compares exactly with the pre-change tool:986
+instructions,version`0x01010000`,startup WFI.21 targeted tests pass in0.560s,
+including C ASan/UBSan,assembly/template equivalence with no relocations,
+shared RO rejection,and a prefilled marker without execution failing the
+diagnostic. Reports stay ignored under firmware-static/
+`reset-store-2333-offline.json` and`reset-store-normal-regression.json`.
+
+The stub deliberately provides neither a global-interface IRQ nor a valid
+CSF interface. `diagnostic_pass` is separate from `firmware_ready=false`.
+On hardware,a fresh marker would demonstrate execution through the reset
+entry and a shared write. An absent marker still leaves vector read,fetch,
+translation and data-store failures unresolved. Synthetic success proves
+none of these physical paths. Real firmware readiness still requires the
+fresh global IRQ and valid nonzero runtime interface.
+
+No new phone image,shim integration,kernel/CI build or device access occurred.
+Next work is a concrete diagnostic candidate preserving2333 controls and
+an audited one-shot restoration plan. Exact MT6983 DEVAPC/EMI access and
+clear semantics must be established before adding status-register writes;
+no speculative clear sequence was added. Last measured restoration remains
+the2333 result above. A new destructive device step still needs the explicit
+confirmation required by AGENTS.md.
