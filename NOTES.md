@@ -1,6 +1,18 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-02:2335 ENTRY CANDIDATE VERIFIED; ONE TRIAL PREPARED <<<
+## >>> ACTIVE 2026-11-02:2335 TRIAL RUNNING; FULL RESTORATION PENDING <<<
+
+Runner session33712 ACTIVE;do not compete for USB/ADB or launch another trial.
+ONE candidate imagea47c3852...5f86677 has been written;FULL boot_a readback
+matches predictedd240402b81af0a603291a4c42546250614fee5dd7d44ceebb9dac77472b0b18a.
+Boot requested2026-11-02T10:55:54Z. Journal shim2335-entry-trials/gpu-normal/
+journal.json statuswaiting-fresh-Recovery,restore_pendingtrue. Follow runner
+and prioritize full67108864B original boot_a restoration,then independent
+Recovery identity/geometry/SHA256 before interpreting evidence. Implementation
+committed1acf745. No2335 MCU result yet;user's directed entry experiment is
+in progress. No change to shareability or platform controls.
+
+## >>> HISTORICAL 2026-11-02:2335 ENTRY CANDIDATE VERIFIED; ONE TRIAL PREPARED <<<
 
 Latest user directs real firmware with entry marker, unchanged AS/root/memattr/
 entry, section inventory and fresh pre-cleanup samples. This authorizes the
