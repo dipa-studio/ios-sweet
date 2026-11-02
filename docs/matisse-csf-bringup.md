@@ -1786,3 +1786,42 @@ Signature authentication and autonomous Recovery are unverified. Fresh
 read-only Recovery/root/matisse/_a/boot_a SHA preflight passes. One bounded
 trial and complete original64MiB boot_a restoration are prepared;no2336
 hardware result exists at this milestone.
+
+
+## CSF2336 hardware result: inline marker still absent (2026-11-02)
+
+One authorized2336 trial ran with imagef90c1abe...75490d3. Complete
+candidate boot_a readback matcheddb9a2a7f...56dc9fb. Fastboot appeared
+at85.51s. One raw USB session restored the stock boot prefix and rebooted
+Recovery,which restored all67108864B of the original partition. Independent
+verification at2026-11-02T11:37:27Z checked root/matisse/_a/Recovery,
+geometry and full original SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No restoration remains pending.
+
+The progress word0x04000ffc is0 before and after MCU AUTO:neither inline
+STUB nor tail TRAM was observed. The true version0x04000000 is also0,
+MCU_STATUS1,JOB/MMU/AS/GPU faults0;disable-53/status1 and cleanup reset
+RAWSTAT0x200/no completion/error-53. Every common CSF field matches the
+original2333 failure,including paired platform/path snapshots. Fresh148
+marks contain all87 tagged2336 CSF qwords and match the tail;stale2333/2335
+are rejected. The pretrial capture matches2335's final capture. Console
+sweettrial and iBoot publisher both identify2336. The repeatable ignored
+audit2336-result.py checks evidence,comparison and full restoration.
+
+Putting the first store in the reset page removes2335's dependency on a
+remote trampoline fetch before a marker could appear. Its continued absence
+therefore rules out that dependency as the sole explanation. It does not
+show that original CSF code reached any later PC:the marker write itself
+could have stalled,or execution could have stalled earlier. The2334 stub
+successfully wrote shared0x04000000;2336 targets shared0x04000ffc. Both
+words have the same initial0,physical page and PTE0x3060000040110e43,
+but are different words/cache lines. There is no MCU PC or AXI response
+trace. Fault registers remaining0 do not identify the blocked operation.
+
+The clean next control is the proven2334 in-place20B self-loop stub with
+only its store literal changed from0x04000000 to0x04000ffc,plus readback
+of that separate word. If that control fails,the target address becomes a
+candidate; if it passes,the longer inline overlay or its branch/fetch
+becomes a candidate. No second trial or protocol/platform changes were
+performed under the2336 authorization.

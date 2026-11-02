@@ -1,6 +1,47 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-02:2336 TRIAL RUNNING; FULL RESTORE PENDING <<<
+## >>> ACTIVE 2026-11-02:2336 INLINE MARKER ABSENT; FULL RESTORE VERIFIED <<<
+
+ONE authorized2336 trial completed;runner session47583 exit0. Temporary full
+boot_a readbackdb9a2a7f...56dc9fb matched prediction. Fastboot85.51s;
+single raw session restored stock prefix and rebooted Recovery,then restored
+ALL67108864B original boot_a. Separate independent check at
+2026-11-02T11:37:27Z verified root/matisse/_a/recovery,boot_a67108864B,
+userdata114319917056B and complete original SHA
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Device left root Recovery;no active runner or pending restoration.
+
+KEY OBSERVATION:fresh2336 progress04000ffc before0/after0,so neither inline
+STUB nor tail TRAM observed. True version04000000 stays0;MCU1,JOB/MMU/AS/
+GPU faults0;disable-53/status1,cleanup reset_raw200/completed0/error-53.
+All common CSF fields match2333 exactly,including paired platform/path.
+Fresh148 marks contain all87 correctly tagged2336 CSF qwords,match tail;
+before matches2335 after,stale2333/2335 reject expected2336. Console
+sweettrial2336 and iBoot publishergpu2336. Audit2336-result.py PASS.
+
+INFERENCE LIMIT:placing first store inline removes2335's remote-tail-fetch
+prerequisite,so absence cannot be attributed ONLY to that jump. It still
+does NOT show original firmware reached any body PC. First marker targets
+04000ffc;2334 success targeted04000000. They share SAME PA page and PTE
+3060000040110e43,initially0,but different word/cache line. No MCU PC/AXI
+response is observed. Do not claim coherent flag or MMIO cause,or undo2334
+proof of its particular first fetch/write. No shareability change or second
+trial performed. ONE2336 authorization consumed.
+
+Implementation9a94b98,prepared handoff62ccc8f,running handoff26ff5fb.
+No new CI/push;prior gh runs40262872038/40226767824/40226076666 remain
+completed/action_required. All device/proprietary evidence ignored under
+shim2336-inline-trials/gpu-normal;full restoration and comparison verified.
+Unrelated dirt/untracked0093 preserved.
+
+NEXT:offline design a clean one-variable control:copy2334's proven20B
+in-place self-loop stub,changing ONLY its store target from04000000 to
+04000ffc,then separately sample that word before cleanup. If it fails,
+address/line-specific access is implicated; if it succeeds,the longer2336
+inline code or its fetch/branch is implicated. Do not reuse the consumed
+2336 hardware authorization. Keep existing mappings/NONE/memattr/platform.
+
+## >>> HISTORICAL 2026-11-02:2336 TRIAL RUNNING; FULL RESTORE PENDING <<<
 
 Runner session47583 ACTIVE;do not compete for USB/ADB or launch another trial.
 ONE candidate imagef90c1abe...75490d3 written;full boot_a readback matches
