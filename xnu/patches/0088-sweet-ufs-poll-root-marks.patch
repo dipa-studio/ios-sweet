@@ -1,0 +1,155 @@
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -169,7 +169,12 @@
+ 	struct utrd *utrd = (struct utrd *)(su.dma + DMA_UTRL);
+ 	struct ucd *ucd = (struct ucd *)(su.dma + DMA_UCD);
+ 	uint64_t ucd_pa = su.dma_pa + DMA_UCD, bounce_pa = su.dma_pa + DMA_BOUNCE;
+-
++	bool boot_diag = !su.ready;
++	unsigned int diag_polls = 0;
++
++	if (boot_diag) {
++		printf("SWEETU 00 scsi-in op 0x%02x len %u\n", cdb[0], len);
++	}
+ 	assert(len <= BOUNCE_SIZE);
+ 	bzero(utrd, sizeof(*utrd));
+ 	bzero(ucd, sizeof(*ucd));
+@@ -201,6 +206,10 @@
+ 		utrd->prdt = (1024u / 4) << 16 | n;
+ 	}
+ 
++	if (boot_diag) {
++		printf("SWEETU 01 cache-in irq %d preempt %d\n",
++		    ml_get_interrupts_enabled(), get_preemption_level());
++	}
+ 	if (su.cache) {
+ 		dma_clean(DMA_UTRL, sizeof(*utrd));
+ 		dma_clean(DMA_UCD, 16 + cdb_len);
+@@ -220,12 +229,23 @@
+ 			dma_sync(DMA_BOUNCE, len);
+ 		}
+ 	}
++	if (boot_diag) {
++		printf("SWEETU 02 cache-done\n");
++	}
+ 	__builtin_arm_dsb(0xf);
+ 
+ 	ufs_wr(REG_UTRLDBR, 1);
++	if (boot_diag) {
++		printf("SWEETU 03 submit-done clock-in\n");
++	}
+ 	uint64_t deadline;
+ 	nanoseconds_to_absolutetime(CMD_TIMEOUT_NS, &deadline);
+-	deadline += mach_absolute_time();
++	uint64_t started = mach_absolute_time();
++	deadline += started;
++	if (boot_diag) {
++		printf("SWEETU 04 clock-done start %llu ticks %llu\n",
++		    (unsigned long long)started, (unsigned long long)(deadline - started));
++	}
+ 	bool sleepable = su.wait && su.ready && ml_get_interrupts_enabled() &&
+ 	    !ml_at_interrupt_context() && get_preemption_level() == 0;
+ 	uint64_t spin_until = 0, sleep_interval = 0;
+@@ -234,8 +254,16 @@
+ 		spin_until += mach_absolute_time();
+ 		nanoseconds_to_absolutetime(CMD_SLEEP_NS, &sleep_interval);
+ 	}
++	if (boot_diag) {
++		printf("SWEETU 05 poll-in db 0x%x\n", ufs_rd(REG_UTRLDBR));
++	}
+ 	while (ufs_rd(REG_UTRLDBR) & 1) {
+ 		uint64_t now = mach_absolute_time();
++		/* One iteration-based sample also runs when the counter is stalled. */
++		if (boot_diag && diag_polls < 4096 && ++diag_polls == 4096) {
++			printf("SWEETU 06 poll-heartbeat dt %llu db 0x%x\n",
++			    (unsigned long long)(now - started), ufs_rd(REG_UTRLDBR));
++		}
+ 		if (now > deadline) {
+ 			ufs_wr(REG_UTRLCLR, ~1u);
+ 			printf("SWEET UFS: command 0x%02x timed out\n", cdb[0]);
+@@ -249,11 +277,16 @@
+ 				thread_block(THREAD_CONTINUE_NULL);
+ 			}
+ 		} else {
+-			delay(1);
++			/* Keep polling: XNU delay() may enter thread_block or WFE.
++			 * YIELD is an event-independent CPU hint; the timer bounds the poll. */
++			__builtin_arm_yield();
+ 		}
+ 	}
+ 	__builtin_arm_dsb(0xf);
+ 	ufs_wr(REG_IS, ufs_rd(REG_IS));         /* acknowledge completion status */
++	if (boot_diag) {
++		printf("SWEETU 07 complete invalidate-in\n");
++	}
+ 
+ 	dma_sync(DMA_UTRL, sizeof(*utrd));
+ 	if (su.cache) {
+@@ -265,11 +298,17 @@
+ 		dma_sync(DMA_BOUNCE, len);
+ 	}
+ 
++	if (boot_diag) {
++		printf("SWEETU 08 invalidate-done\n");
++	}
+ 	uint32_t ocs = utrd->dw2 & 0xff;
+ 	if (ocs || ucd->resp[0] != 0x21 || ucd->resp[6] || ucd->resp[7]) {
+ 		printf("SWEET UFS: command 0x%02x failed: ocs 0x%x upiu 0x%x response 0x%x status 0x%x\n",
+ 		    cdb[0], ocs, ucd->resp[0], ucd->resp[6], ucd->resp[7]);
+ 		return EIO;
++	}
++	if (boot_diag) {
++		printf("SWEETU 09 scsi-done op 0x%02x\n", cdb[0]);
+ 	}
+ 	return 0;
+ }
+@@ -321,7 +360,9 @@
+ ufs_find_partition(const char *want)
+ {
+ 	const uint8_t *b = (const uint8_t *)(su.dma + DMA_BOUNCE);
++	printf("SWEETU 30 gpt-header-in\n");
+ 	int error = ufs_read_blocks(1, 1);
++	printf("SWEETU 31 gpt-header-done ret %d\n", error);
+ 	if (error) {
+ 		return error;
+ 	}
+@@ -338,7 +379,9 @@
+ 		printf("SWEET UFS: unsupported GPT entries %u x %u\n", nent, esz);
+ 		return ENXIO;
+ 	}
++	printf("SWEETU 32 gpt-table-in\n");
+ 	error = ufs_read_blocks(entry_lba, (nent * esz + UFS_BLOCK - 1) / UFS_BLOCK);
++	printf("SWEETU 33 gpt-table-done ret %d\n", error);
+ 	if (error) {
+ 		return error;
+ 	}
+@@ -651,11 +694,19 @@
+ 	if (!error) {
+ 		static const uint8_t tur[6] = { 0x00 };
+ 		/* The first command after the bootloader may report a unit attention. */
+-		for (int i = 0; i < 3 && (error = ufs_scsi(tur, sizeof(tur), 0, false)); i++) {
++		for (int i = 0; i < 3; i++) {
++			printf("SWEETU 20 tur-in try %d\n", i + 1);
++			error = ufs_scsi(tur, sizeof(tur), 0, false);
++			printf("SWEETU 21 tur-done try %d ret %d\n", i + 1, error);
++			if (!error) {
++				break;
++			}
+ 		}
+ 	}
+ 	if (!error) {
++		printf("SWEETU 22 gpt-find-in\n");
+ 		error = ufs_find_partition(want);
++		printf("SWEETU 23 gpt-find-done ret %d\n", error);
+ 	}
+ 	if (!error) {
+ 		/* 4: yellow - GPT parsed, the named partition is known. */
+@@ -664,6 +715,7 @@
+ 	}
+ 	lck_mtx_unlock(&sweet_ufs_lock);
+ 	if (error) {
++		printf("SWEETU 24 root-init-error ret %d\n", error);
+ 		return error;
+ 	}
+ 

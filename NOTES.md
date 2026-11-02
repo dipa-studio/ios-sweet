@@ -1,3 +1,55 @@
+### 2026-11-02 — r12: instrument UFS root lookup and keep early polling runnable
+
+**New r11 console observation:** the user supplied `SWEETM 31 IOKitBSDInit ret 0`,
+post-autoconfiguration SWEETP output through `16 inittodr-done`, then
+`SWEETM 40 setconf`, `50 IOFindBSDRoot`, `64 sweet_ufs_rootdev`, `60 sweet_ufs_init`
+and `61 ufs_take_over_host ret 0`. They reported no further visible progress and
+manually rebooted the phone. The pasted tail repeats older output after these
+lines; its order is not a second initialization trace. Console visibility and
+elapsed time are unknown. UFS host takeover returned success; successful SCSI,
+GPT lookup, root mount and userland are not established.
+
+**Candidate:** `0088-sweet-ufs-poll-root-marks.patch` applies to the exact accepted
+r11 `bsd/dev/sweet_ufs.c`. It adds 19 SWEETU printf formats around the first SCSI
+command, cache handling, doorbell polling, TEST UNIT READY and GPT reads. The
+poll heartbeat is limited to one sample, including when the clock counter stalls.
+The non-sleeping polling branch uses ARM YIELD instead of `delay(1)` because the
+XNU delay path may block or enter WFE. This is a targeted diagnostic candidate;
+the new runtime stop point and the effectiveness of this change still need proof.
+The existing sleepable guard, timeout, barriers, MMIO write order, UFS data-write
+gate and inert framebuffer beacon are preserved.
+
+**Completed checks:** exact-source patch check/application and independent replay
+match the generated candidate byte-for-byte. All 18 protected functions and
+existing printf formats are unchanged. Independent read-only review PASS after
+the heartbeat counter was made saturating. Final saved report:
+`C:\ports\r12-rootdiag\source-check-r12.json` (2026-11-02 20:23:04 UTC).
+
+```text
+base source: 016c3d9140c2967512e8aca23ce1ccad7b4f7fd357d8b2ff6a6620a8f78cfe9a
+new source:  4297f2034d080ba7219d3d25fcbb101b3f8288d7be04fb8848cf162a06707169
+tail patch:  0e61ae83f3ec9c050d4be91da5f8dd784165519db1fa8f6eac43bd167ff11314
+```
+
+The earlier `source-replay-r12.json` pins a superseded candidate; use the final
+`source-check-r12.json`. These are source checks, not native compilation, a full
+CI patch-chain replay or a verified new kernel.
+
+**Isolation and next gate:** `C:\ports\ios-cas-r12-ufs-poll`, branch
+`codex/r12-ufs-poll-20261102`, based on accepted r11 source
+`45e0536244c628afe323843933b55271a740d784`. Only this entry and patch 0088 change.
+Build the pinned r12 commit on the existing macos-15-intel workflow in
+`proshivka/ios-cas`; do not submit a PR or use the original ios-sweet repository.
+No r12 CI run, compiled kernel, package or device boot is claimed at this milestone.
+After CI success verify exact source, full artifact digests, ARM64 kernel and old
+plus new linked checkpoints before packaging. Keep the donor shim/DTB/ADT,
+memory `0xb0000000 / 0x4cf00000` and `ufsrw=0 sweetlog=0 nortc=1`.
+Before any temporary boot verify the known cas phone separately from rooted Alice.
+The original dirty repository and all previous artifacts/intents stay intact.
+Current source commit, CI receipts and cross-harness state: `C:\ports\handoff.md`.
+
+---
+
 ### 2026-11-02 — r11 CI runner migration after confirmed macOS 14 retirement
 
 **Confirmed platform failure:** exact r11 run `41350752723` at source
