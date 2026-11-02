@@ -1,6 +1,18 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-02:2336 INLINE CANDIDATE VERIFIED; ONE TRIAL PREPARED <<<
+## >>> ACTIVE 2026-11-02:2336 TRIAL RUNNING; FULL RESTORE PENDING <<<
+
+Runner session47583 ACTIVE;do not compete for USB/ADB or launch another trial.
+ONE candidate imagef90c1abe...75490d3 written;full boot_a readback matches
+predicteddb9a2a7fac2a62eaf40104c15c8396cf0575f044bd5f7c9ed6fa51d7556dc9fb.
+Boot requested2026-11-02T11:34:13Z. Journal shim2336-inline-trials/gpu-normal/
+journal.json statuswaiting-fresh-Recovery,restore_pendingtrue. Follow runner;
+prioritize full67108864B original boot_a restoration,then independent
+Recovery identity/geometry/SHA256 before interpreting evidence. Commits
+9a94b98 implementation,62ccc8f candidate handoff. No2336 MCU result yet.
+No shareability/platform/mapping changes;ONE authorized trial in progress.
+
+## >>> HISTORICAL 2026-11-02:2336 INLINE CANDIDATE VERIFIED; ONE TRIAL PREPARED <<<
 
 User replied 可以 to one corrected inline-first entry checkpoint trial and full
 original boot_a restoration. Implementation committed9a94b98. No2336 device
