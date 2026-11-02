@@ -1,11 +1,8 @@
 --- a/bsd/dev/sweet_ufs.c
 +++ b/bsd/dev/sweet_ufs.c
-@@ -823,7 +823,7 @@
- #define SWEET_MARK_MAX  160
- 
+@@ -825,4 +825,4 @@
  /* Bumped for every locally built kernel that is flashed to the phone. */
 -#define SWEET_BUILD_ID 0x2333u
 +#define SWEET_BUILD_ID 0x2334u
- 
+
  struct sweet_mark_rec {
- 	uint32_t code;
