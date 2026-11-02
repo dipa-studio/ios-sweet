@@ -33,18 +33,22 @@ def pinned(path, expected):
         raise ValueError('SHA256 mismatch: ' + str(path))
     return data
 
-def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=False, inline_entry=False):
+def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=False,
+                        inline_entry=False, entry_pte_guard=False):
     firmware = pinned(path, expected)
     if expected != 'de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f7229a':
         raise ValueError('CSF probe requires the measured device firmware')
-    if inline_entry and (not entry_probe or build_id != 0x2336):
-        raise ValueError('inline entry requires build2336 and entry probe')
+    if inline_entry and (not entry_probe or build_id not in (0x2336,0x2337)):
+        raise ValueError('inline entry requires build2336/2337 and entry probe')
+    if entry_pte_guard != (build_id == 0x2337):
+        raise ValueError('build2337 requires the entry PTE guard; other builds forbid it')
     if entry_probe:
-        if build_id != (0x2336 if inline_entry else 0x2335) or reset_store_stub:
-            raise ValueError('entry probe requires build2335 and original firmware')
+        if (build_id not in ((0x2336,0x2337) if inline_entry else (0x2335,)) or
+                reset_store_stub):
+            raise ValueError('entry probe requires build2335/2336/2337 and original firmware')
         return firmware, None
-    if build_id in (0x2335,0x2336):
-        raise ValueError('build2335 requires the entry probe')
+    if build_id in (0x2335,0x2336,0x2337):
+        raise ValueError('build2335/2336/2337 requires the entry probe')
     if (build_id == 0x2334) != reset_store_stub:
         raise ValueError('build2334 requires the reset-store stub; other builds must retain stock firmware')
     if not reset_store_stub:
@@ -93,7 +97,8 @@ def build(a):
         raise ValueError('refuse existing output directory')
     kernel = pinned(a.kernel, a.kernel_sha256)
     firmware, reset_patch = diagnostic_firmware(a.firmware, a.firmware_sha256,
-                                               a.build_id, a.reset_store_stub, a.entry_probe, a.inline_entry)
+                                               a.build_id, a.reset_store_stub, a.entry_probe,
+                                               a.inline_entry, a.entry_pte_guard)
     template = pinned(a.template, a.template_sha256)
     original_adt = pinned(a.adt, a.adt_sha256)
     stock = pinned(a.stock, a.stock_sha256)
@@ -122,6 +127,8 @@ def build(a):
         definitions.append('-DSHIM_CSF_ENTRY_PROBE')
     if a.inline_entry:
         definitions.append('-DSHIM_CSF_INLINE_ENTRY_PROBE')
+    if a.entry_pte_guard:
+        definitions.append('-DSHIM_CSF_ENTRY_PTE_GUARD')
     source = {'start': ROOT / 'shim/start.S', 'loader': ROOT / 'shim/loader.c',
               'gpu': ROOT / 'shim/gpu.c', 'gpueb_boot': ROOT / 'xnu/gpu/mtk_gpueb_boot.c',
               'gpueb_protocol': ROOT / 'xnu/gpu/mtk_gpueb_protocol.c',
@@ -225,19 +232,25 @@ def build(a):
         info['entry_probe']['source_sha256'] = {name: digest((ROOT / name).read_bytes()) for name in
             ('tools/matisse-csf-entry-probe.S', 'tools/matisse-csf-fetch-audit.py',
              'xnu/gpu/mali_csf_entry_probe.h', 'xnu/gpu/mali_csf_boot.h', 'tools/matisse-shim-gpu-image.py')}
+        if a.entry_pte_guard:
+            info['entry_pte_guard'] = dict(pre_auto=True, reset_entry_va='0x10018ec',
+                expected_entry_word='0x4803b672',
+                source_sha256=digest((ROOT / 'xnu/gpu/mali_csf_entry_guard.h').read_bytes()))
         info['firmware_sections'] = fetch.firmware_sections(firmware)
     (out / 'manifest.json').write_text(json.dumps(info, indent=2) + '\n')
     print(json.dumps(info, indent=2))
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
                    help='build2335 only: mark a separate word and continue the original reset path')
     p.add_argument('--inline-entry', action='store_true',
-                   help='build2336 only: inline STUB before remote fetch, then TRAM in tail')
+                   help='build2336/2337: inline STUB before remote fetch, then TRAM in tail')
+    p.add_argument('--entry-pte-guard', action='store_true',
+                   help='build2337 only: reject PTE/backing mismatch before MCU_CONTROL')
     for key in ('firmware','firmware-sha256','kernel','kernel-sha256','template','template-sha256','adt','adt-sha256',
                 'stock','stock-sha256','frozen','cmdline','ndk','out'):
         p.add_argument('--' + key, required=True)

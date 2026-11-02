@@ -4,6 +4,12 @@
 #include "console.h"
 #ifdef SHIM_CSF_ENTRY_PROBE
 #include "../xnu/gpu/mali_csf_entry_probe.h"
+#ifdef SHIM_CSF_ENTRY_PTE_GUARD
+#include "../xnu/gpu/mali_csf_entry_guard.h"
+#endif
+#endif
+#if defined(SHIM_CSF_ENTRY_PTE_GUARD) && (!defined(SHIM_CSF_ENTRY_PROBE) || !defined(SHIM_CSF_INLINE_ENTRY_PROBE))
+#error "entry PTE guard requires the inline reset-entry overlay"
 #endif
 
 static uint8_t arena[2u<<20] __attribute__((aligned(4096)));
@@ -55,6 +61,19 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
     if(rc) {shim_csf_report.error=rc;return rc;}
 #endif
     io->barrier(io->context); /* Native shim has MMU and CPU caches off. */
+#ifdef SHIM_CSF_ENTRY_PTE_GUARD
+    struct sweet_csf_entry_guard_result evidence={0};
+    rc=sweet_csf_entry_guard(&memory,pa,root,io->read32,io->context,
+        sweet_csf_inline_jump,sizeof(sweet_csf_inline_jump),&evidence);
+    con_hex2("CSF entry guard","rc=",(uint32_t)rc,"VA=",SWEET_CSF_RESET_ENTRY_VA);
+    con_hex2("CSF entry PTE","lo=",(uint32_t)evidence.leaf_pte,
+             "hi=",(uint32_t)(evidence.leaf_pte>>32));
+    con_hex2("CSF entry","PA=",(uint32_t)evidence.entry_pa,
+             "word=",evidence.entry_word);
+    con_hex2("CSF entry words","section=",evidence.code_start_word,
+             "expected=",sweet_csf_entry_u32(sweet_csf_inline_jump));
+    if(rc) {shim_csf_report.error=SWEET_CSF_BOOT_STATE;return shim_csf_report.error;}
+#endif
     struct sweet_csf_boot_config c={.gpu=gpu,.root_pa=root,.arena_pa=pa,
         .arena_bytes=memory.required_bytes,.shared_offset=memory.shared_offset,
         .shared_bytes=memory.shared_bytes,.timeout_ms=1000,.noncoherent=1,

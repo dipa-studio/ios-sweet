@@ -5,8 +5,10 @@
 #include <stdint.h>
 
 /* Portable static parser; no MMIO, allocation, firmware execution or kernel hooks.
- * Binary format reference: Linux v6.12 panthor_fw.c (GPL-2.0 OR MIT).
- * Firmware format version/hash are NOT the running CSF interface ABI version.
+ * Device reference: MT6983 Linux 5.10 mali-r32p1/mali_kbase_csf_firmware.c
+ * and its GPUEB/gpufreq modules. Mainline panthor is a historical ABI
+ * cross-check, not the driver that boots this phone's firmware.
+ * Firmware header version/hash are NOT the runtime GLB_VERSION interface ABI.
  */
 enum sweet_csf_result {
     SWEET_CSF_OK = 0,

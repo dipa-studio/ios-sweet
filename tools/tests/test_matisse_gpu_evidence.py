@@ -57,7 +57,7 @@ class PersistentReportPatchTests(unittest.TestCase):
         # locally edited build tree must not conceal a broken source patch.
         names = subprocess.check_output(['git','ls-files','--','xnu/patches/*.patch'],
                                         cwd=ROOT,text=True).splitlines()
-        latest='xnu/patches/0134-matisse-csf-inline-entry-identity.patch'
+        latest='xnu/patches/0135-matisse-csf-entry-guard-identity.patch'
         if latest not in names:names=sorted(names+[latest])
         self.assertTrue(names)
         with tempfile.TemporaryDirectory(prefix='csf-evidence-patches-') as directory:
@@ -67,7 +67,7 @@ class PersistentReportPatchTests(unittest.TestCase):
                     cwd=directory,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,name+': '+result.stderr)
             source = (Path(directory)/'bsd/dev/sweet_ufs.c').read_text()
-        self.assertIn('#define SWEET_BUILD_ID 0x2336u',source)
+        self.assertIn('#define SWEET_BUILD_ID 0x2337u',source)
         begin = source.index('static void\nsweet_gpu_report_marks(void)\n{')
         end = source.index('\n}\n',begin)
         report = source[begin:end]
@@ -502,6 +502,16 @@ class ReportDecodeTests(unittest.TestCase):
             self.assertFalse(self.module.decode(self.csf_marks(**args),0x2336)['csf']['entry_marker_observed'])
         for data in (self.csf_marks(build=0x2335),self.csf_marks(build=0x2336,omit=56)):
             with self.assertRaises(ValueError):self.module.decode(data,0x2336)
+
+    def test_2337_guard_build_preserves_report_abi_and_rejects_stale_tags(self):
+        data=self.csf_marks(build=0x2337,version=0,version_before=0,
+                            access_reserved=0,path_reserved=0)
+        result=self.module.decode(data,0x2337)
+        self.assertEqual(result['csf']['entry_progress'],'unobserved')
+        self.assertIn('pre-AUTO',result['csf']['entry_guard_note'])
+        self.assertFalse(result['csf_firmware_boot_verified'])
+        with self.assertRaises(ValueError):
+            self.module.decode(self.csf_marks(build=0x2336),0x2337)
 
     def test_2330_cached_byte_requires_fresh_firmware_and_cleanup(self):
         result=self.module.decode(self.csf_marks(build=0x2330),0x2330)

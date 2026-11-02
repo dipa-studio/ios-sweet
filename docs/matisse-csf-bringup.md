@@ -1,4 +1,4 @@
-# MT6983 CSF MCU boot probes (2322 / 2323 / 2324 / 2325)
+# MT6983 CSF MCU boot probes
 
 2026-10-31. GPU2321 established actual GPUEB power ownership and Mali soft
 reset on matisse. These diagnostics install MCU firmware mappings, power
@@ -12,14 +12,20 @@ job, command queue, Vulkan or Metal path yet.
 
 ## Reference facts and firmware
 
-The independently written portable code uses register/ABI facts from Linux
-tag v6.12: drivers/gpu/drm/panthor/panthor_regs.h, panthor_fw.h, panthor_fw.c,
-panthor_mmu.c and panthor_gpu.c; drivers/iommu/io-pgtable-arm.c was consulted
-for AArch64 stage1 descriptor fields. These are source references, not code
-copied into XNU. Panthor files declare GPL-2.0 OR MIT. The vendor register
-headers were cross-checked against xiaomi-rubens commit
-270b84910b941bf75490fccdb5fb2b3021dd7cbf and extracted device firmware.
-Local reference copies stay under ignored research/.
+The device's working reference is the MT6983 Linux 5.10 vendor stack:
+MiCode/MTK_kernel_modules pearl-s-oss, mali-r32p1/mali_kbase_csf_firmware.c
+plus the same tree's GPUEB, gpufreq and mfg power code. The local kbase copy
+under ignored research/matisse/20261031-gpu/platform-source/ is pinned
+by SHA256 de03ba8d462e647ff746711253f0be3f605f294d6df11ee08577afecd5e9eb37.
+The 5.10 loader parses interface entries before enabling the MCU and reads
+shared_info[GLB_VERSION/4] after boot. It checks the firmware header
+**major** against FIRMWARE_HEADER_VERSION; minor is read and reported,
+but not independently rejected. Panthor v6.12 remains a historical register
+and ABI cross-check, not the driver running on this device. The portable code
+is independent; source references are not copied into XNU. The vendor register
+headers were also cross-checked against xiaomi-rubens commit
+270b84910b941bf75490fccdb5fb2b3021dd7cbf. Local reference copies and
+the proprietary firmware stay under ignored research/.
 
 Only the measured vendor_a mali_csffw.bin is accepted by the image builder:
 258048 bytes, SHA256
@@ -1825,3 +1831,57 @@ of that separate word. If that control fails,the target address becomes a
 candidate; if it passes,the longer inline overlay or its branch/fetch
 becomes a candidate. No second trial or protocol/platform changes were
 performed under the2336 authorization.
+
+## CSF2337 pre-AUTO entry PTE guard (offline, 2026-11-02)
+
+The active device source reference is Linux 5.10 mali_kbase plus MT6983 GPUEB,
+not Linux 6.12 panthor. The kbase global interface's first word is
+GLB_VERSION, read as shared_info[GLB_VERSION/4]. The following fields are
+GLB_FEATURES, GLB_INPUT_VA, GLB_OUTPUT_VA, GLB_GROUP_NUM and GLB_GROUP_STRIDE.
+The 2336 input VA/group count cannot establish that the MCU wrote this area;
+only a fresh nonzero version together with the global-interface IRQ is a
+firmware-ready signal. The vendor loader rejects an incompatible header
+major, but records the minor without separately requiring a match.
+
+The 2336 CPU probe word 0xD00CF8DF belongs to the code section start at
+VA 0x01000000, PA 0x40080000. The reset vector instead selects Thumb VA
+0x010018ed, whose instruction address is VA 0x010018ec. It lies at offset
+0x8ec in VA page 0x01001000. The unchanged 2336 leaf is
+0x3000000040081fc7, giving instruction PA 0x400818ec. In the inline-first
+overlay the first 32-bit word there must be 0x4803B672; all 24 overlay bytes
+are checked. The branch toward the tail is later in those 24 bytes. Checking
+the section start or the beginning of the 0x01001000 page would miss the
+actual reset instruction.
+
+Build 2337 adds a CPU readback gate after loading the original pinned vendor
+container and installing the same inline overlay, but before sweet_csf_boot
+can write MCU_CONTROL. The gate walks the AS0 root and three descendants
+inside the owned arena, records the leaf and instruction PA/word, checks the
+exact leaf attributes and all 24 bytes, and returns a state error on any
+unexpected table, backing or instruction. It never reads an out-of-arena PA.
+The code-section word is logged separately to avoid mistaking its legitimate
+0xD00CF8DF for the reset instruction. The AS/root, group-6 PTEs, memattr,
+COHERENCY_NONE, GPUEB sequence and MCU overlay remain unchanged.
+
+Synthetic ASan/UBSan tests exercise a correct walk, changed leaf, out-of-arena
+backing, broken table pointer and reset word overwritten with 0xD00CF8DF.
+The identical guard also passes with the SHA-pinned vendor firmware loaded by
+the real C builder. These are CPU/offline checks, not evidence of an MCU fetch.
+No 2337 device trial has run; 2336's single authorization has been consumed.
+
+The local CLT 2337 kernel build exits 0 (SHA256
+ddc8b3c09e5007e41baa1a156e45213c31ab9297659ad8fb98578ab3476291cc).
+The 26,714,112-byte build-only image has SHA256
+70f16522004fdd6267f339d0be861cc7c1848979d08ba979b0855453487947c0.
+Independent inspection confirms the pinned firmware container, all 293
+mappings, root 0x40077000, entry leaf 0x3000000040081fc7 and PA 0x400818ec,
+byte-identical firmware/page-table arena to 2336, and unchanged stock fallback,
+ramdisk and signature bytes. The 2337 kernel source differs from 2336 only in
+SWEET_BUILD_ID. No new CI run was dispatched; no partition was written.
+The adapted one-shot runner predicts temporary full boot_a SHA256
+0d37dc4a6598153732033d0f9a2f22b3630d0fdeb26b4f1ed15f836385efd82b,
+requires an exact image-hash argument, and restores the complete 64 MiB
+backup. Its read-only Recovery preflight passes current device identity,
+partition geometry and original SHA256; the device remains in Recovery.
+Across firmware, memory, boot, entry and report tests, 52 run with three
+optional-dependency skips and no failures.
