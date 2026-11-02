@@ -89,7 +89,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -187,8 +187,10 @@ def decode(data, expected_build=0x2321):
                 'do not measure clock rate or lock, MCU enabled does not trace execution.')
         if expected_build >= 0x2332:
             flags, reserved, va, pa_lo, pa_hi, word = struct.unpack_from('<6I', raw, 440)
-            if flags & ~3 or flags == 2 or reserved:
+            if flags & ~3 or flags == 2 or (reserved and expected_build != 0x2335):
                 raise ValueError('invalid CSF access snapshot flags/reserved word')
+            if expected_build == 0x2335:
+                csf['entry_marker_before'] = reserved
             pa = pa_hi << 32 | pa_lo
             root = csf['transtab_hi'] << 32 | csf['transtab_lo']
             if flags and (va != 0x01000000 or pa & 4095 or
@@ -207,8 +209,10 @@ def decode(data, expected_build=0x2321):
                 'Native shim CPU MMU/caches are off; barriers precede readback.')
         if expected_build >= 0x2333:
             flags, reserved = struct.unpack_from('<2I', raw, 560)
-            if flags & ~3 or flags == 2 or reserved:
+            if flags & ~3 or flags == 2 or (reserved and expected_build != 0x2335):
                 raise ValueError('invalid CSF platform path flags/reserved word')
+            if expected_build == 0x2335:
+                csf['entry_marker_after'] = reserved
             if flags and csf['access_sample_flags'] & 1 == 0:
                 raise ValueError('platform path snapshot without preceding access snapshot')
             if flags == 3 and csf['access_sample_flags'] != 3:
@@ -307,6 +311,15 @@ def decode(data, expected_build=0x2321):
                 'is separate from CSF firmware readiness; an absent marker does not localize the stall.')
             ready = False
             csf['firmware_ready_observed'] = False
+        if expected_build == 0x2335:
+            csf['entry_marker_va'] = 0x04000ffc
+            csf['entry_marker_sampled'] = csf['access_snapshot_complete']
+            csf['entry_marker_observed'] = (csf['entry_marker_sampled'] and
+                csf['entry_marker_before'] == 0 and csf['entry_marker_after'] == 0x53545542)
+            csf['entry_marker_note'] = ('Separate shared+0xffc checkpoint sampled before AUTO and '
+                'after wait,before cleanup. Global control/version remains at shared+0.')
+            ready = ready and csf['version'] != 0x53545542
+            csf['firmware_ready_observed'] = ready
         result['csf_firmware_boot_verified'] = (success and ready and cleanup and
                                                csf['stage'] == 7 and csf['error'] == 0)
     result.update(error_details(result, result.get('csf')))
@@ -317,7 +330,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2334)')
+                   help='expected kernel/report build (0x2321 through 0x2335)')
     a=p.parse_args()
     try:
         report=decode(a.marks.read_bytes(),a.build)

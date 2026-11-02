@@ -26,13 +26,16 @@ FIRMWARE_SHA256 = 'de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f72
 RESET_STORE_CODE = bytes.fromhex('024803490160bff34f8ffee7')
 RESET_STORE_MARKER = 0x53545542
 RESET_ENTRY = 0x010018ED
+ENTRY_PROBE_VA = 0x0100F900
+ENTRY_MARKER_VA = 0x04000FFC
 HOST_BUILDER = r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "mali_csf_memory.h"
+#include "mali_csf_entry_probe.h"
 int main(int argc, char **argv) {
-    if (argc != 5) return 2;
+    if (argc != 5 && argc != 6) return 2;
     FILE *f = fopen(argv[1], "rb");
     if (!f || fseek(f, 0, SEEK_END)) return 3;
     long n = ftell(f);
@@ -46,6 +49,7 @@ int main(int argc, char **argv) {
     uint64_t root = 0, pa = strtoull(argv[3], NULL, 0);
     if (!arena || sweet_csf_memory_build_group(fw, (size_t)n, &m, arena,
         m.required_bytes, pa, 40, (unsigned)strtoul(argv[4], NULL, 0), &root)) return 7;
+    if (argc == 6 && sweet_csf_entry_probe_install(arena, m.required_bytes, &m)) return 9;
     f = fopen(argv[2], "wb");
     if (!f || fwrite(arena, 1, m.required_bytes, f) != m.required_bytes) return 8;
     fclose(f);
@@ -116,7 +120,7 @@ def check_access(arena, root_pa, va, size, operation, unprivileged=False):
         va = end
 
 
-def build_arena(firmware, arena_pa, compiler='cc', memory_group=0):
+def build_arena(firmware, arena_pa, compiler='cc', memory_group=0, entry_probe=False):
     if not isinstance(memory_group, int) or not 0 <= memory_group <= 15:
         raise ValueError('memory group must fit four bits')
     with tempfile.TemporaryDirectory(prefix='csf-fetch-') as tmp:
@@ -128,9 +132,56 @@ def build_arena(firmware, arena_pa, compiler='cc', memory_group=0):
                         str(source), str(ROOT / 'xnu/gpu/mali_csf_firmware.c'),
                         str(ROOT / 'xnu/gpu/mali_csf_memory.c'), '-o', str(binary)],
                        check=True, capture_output=True, text=True)
-        result = subprocess.run([str(binary), str(firmware), str(arena_path), hex(arena_pa), str(memory_group)],
+        command = [str(binary), str(firmware), str(arena_path), hex(arena_pa), str(memory_group)]
+        if entry_probe:
+            command.append('entry-probe')
+        result = subprocess.run(command,
                                 check=True, capture_output=True, text=True)
         return arena_path.read_bytes(), json.loads(result.stdout)
+
+
+def firmware_sections(data):
+    """Inventory of the pinned container after the actual C parser validates it."""
+    end, = struct.unpack_from('<I', data, 16)
+    sections, offset = [], 20
+    while offset < end:
+        header, = struct.unpack_from('<I', data, offset)
+        size = (header >> 8) & 255
+        if size < 4 or offset + size > end:
+            raise MappingError('invalid section inventory header')
+        if header & 255 == 0:
+            flags, start, stop, first, last = struct.unpack_from('<5I', data, offset + 4)
+            sections.append(dict(flags=flags, va_start=start, va_end=stop,
+                data_start=first, data_end=last,
+                cache_mode=('none','cached','uncached-coherent','cached-coherent')[(flags >> 3) & 3],
+                shared=bool(flags & (1 << 30)), zero_tail=bool(flags & (1 << 31))))
+        offset += size
+    return sections
+
+
+def entry_probe_metadata(original, patched, plan):
+    root = plan['root_pa']
+    ranges = []
+    for va, size in ((RESET_ENTRY & ~1, 8), (ENTRY_PROBE_VA, 36)):
+        offset, _ = translate(original, root, va)
+        ranges.append((offset, size))
+    expected = bytearray(original)
+    for offset, size in ranges:
+        expected[offset:offset + size] = patched[offset:offset + size]
+    if bytes(expected) != patched or original[:plan['table_pages'] * PAGE] != patched[:plan['table_pages'] * PAGE]:
+        raise MappingError('entry probe changed bytes outside its two code overlays')
+    marker_offset, _ = translate(patched, root, ENTRY_MARKER_VA)
+    version_offset, _ = translate(patched, root, plan['shared_va'])
+    if patched[marker_offset:marker_offset+4] != bytes(4) or patched[version_offset:version_offset+4] != bytes(4):
+        raise MappingError('entry probe prefilled marker or version')
+    return dict(reset_entry_va=hex(RESET_ENTRY & ~1), reset_entry_pa=hex(root + ranges[0][0]),
+                trampoline_va=hex(ENTRY_PROBE_VA), trampoline_pa=hex(root + ranges[1][0]),
+                resume_va='0x10018f4', marker_va=hex(ENTRY_MARKER_VA),
+                marker_pa=hex(root + marker_offset), marker=hex(RESET_STORE_MARKER),
+                version_va=hex(plan['shared_va']), version_pa=hex(root + version_offset),
+                patches=[dict(arena_offset=off, bytes=size, hex=patched[off:off+size].hex()) for off,size in ranges],
+                page_tables_unchanged=True, outside_code_overlays_unchanged=True,
+                version_and_marker_initially_zero=True)
 
 
 def synthetic_mmio_words(fw_word10=0xA8620004, shader_present=0, fw_word30004=0x2000000A):
@@ -209,7 +260,7 @@ def reset_store_pass(result, patch):
 
 def replay(arena, plan, step_limit=500000, tiler_transition_reads=0,
            fw_word10=0xA8620004, shader_present=0, fw_word30004=0x2000000A,
-           self_loop_pc=None):
+           self_loop_pc=None, entry_checkpoint=False):
     words = synthetic_mmio_words(fw_word10, shader_present, fw_word30004)
     uc = importlib.import_module('unicorn')
     arm = importlib.import_module('unicorn.arm_const')
@@ -239,6 +290,8 @@ def replay(arena, plan, step_limit=500000, tiler_transition_reads=0,
     shared_writes = []
     probes = {'private_early': 0x0202C934, 'private_feature': 0x0202C93C,
               'private_late': 0x0202C22C, 'shared_alloc': plan['shared_va'] + 0x18}
+    if entry_checkpoint:
+        probes['entry_checkpoint'] = ENTRY_MARKER_VA
     probe_before = {name: struct.unpack('<I', u.mem_read(address, 4))[0]
                     for name, address in probes.items()}
     probe_writes = []
@@ -268,6 +321,10 @@ def replay(arena, plan, step_limit=500000, tiler_transition_reads=0,
         last.append(address)
         if not access('fetch', address, size):
             return
+        if entry_checkpoint and address == 0x010018F4:
+            state['entry_resume_registers'] = {
+                name: hex(u.reg_read(getattr(arm, 'UC_ARM_REG_' + name)))
+                for name in ('R0', 'R1', 'MSP', 'PSP', 'PRIMASK', 'CONTROL', 'XPSR')}
         if address == 0x01003032:
             state['reason'] = 'startup-wfi'
             u.emu_stop()
@@ -354,6 +411,8 @@ def main():
                         help='leaf bits59..62; hardware routing is not modeled')
     parser.add_argument('--reset-store-stub', action='store_true',
                         help='offline only: patch Thumb reset entry to store STUB at the version header and loop')
+    parser.add_argument('--entry-probe', action='store_true',
+                        help='mark a distinct shared word, restore original reset prefix and continue real firmware')
     parser.add_argument('--step-limit', type=int, default=500000)
     parser.add_argument('--tiler-transition-reads', type=int, default=0,
                         help='synthetic transition: 0 absent, -1 stuck, N clears after N reads')
@@ -364,6 +423,8 @@ def main():
     parser.add_argument('--fw-word30004', type=lambda value: int(value, 0), default=0x2000000A,
                         help='synthetic raw firmware MMIO40030004; not measured on the MCU')
     args = parser.parse_args()
+    if args.entry_probe and args.reset_store_stub:
+        parser.error('select only one firmware diagnostic')
     if args.step_limit < 1 or args.step_limit > 1000000 or args.tiler_transition_reads < -1:
         parser.error('invalid bounded replay parameters')
     try:
@@ -380,6 +441,14 @@ def main():
     original_arena_hash = hashlib.sha256(arena).hexdigest()
     if args.reset_store_stub:
         arena, patch = patch_reset_store_stub(arena, plan)
+    entry_patch = None
+    if args.entry_probe:
+        original = arena
+        arena, probe_plan = build_arena(args.firmware.resolve(), args.arena_pa,
+                                       memory_group=args.memory_group, entry_probe=True)
+        if probe_plan != plan:
+            parser.error('entry probe changed the canonical mapping plan')
+        entry_patch = entry_probe_metadata(original, arena, plan)
     result = {'scope': 'Offline synthetic startup; not hardware execution or timeout root-cause proof.',
               'firmware_sha256': firmware_hash,
               'synthetic_parameters': {'step_limit': args.step_limit, 'memory_group': args.memory_group,
@@ -392,7 +461,12 @@ def main():
                                 for name in ('xnu/gpu/mali_csf_memory.c', 'xnu/gpu/mali_csf_firmware.c')},
               'plan': plan, 'replay': replay(arena, plan, args.step_limit, args.tiler_transition_reads,
                                            args.fw_word10, args.shader_present, args.fw_word30004,
-                                           int(patch['self_loop_va'], 0) if patch else None)}
+                                           int(patch['self_loop_va'], 0) if patch else None,
+                                           entry_checkpoint=args.entry_probe)}
+    if entry_patch:
+        result['entry_probe'] = entry_patch
+        result['sections'] = firmware_sections(args.firmware.read_bytes())
+        result['original_arena_sha256'] = original_arena_hash
     if patch:
         result['scope'] = 'Offline synthetic reset-store diagnostic; not hardware execution or firmware readiness.'
         for name in ('tools/matisse-csf-reset-store.S', 'tools/matisse-csf-fetch-audit.py'):

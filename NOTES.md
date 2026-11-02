@@ -1,6 +1,51 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-02:2334 REAL MCU STUB STORE PASS; FULL RESTORE VERIFIED <<<
+## >>> ACTIVE 2026-11-02:2335 ENTRY CANDIDATE VERIFIED; ONE TRIAL PREPARED <<<
+
+Latest user directs real firmware with entry marker, unchanged AS/root/memattr/
+entry, section inventory and fresh pre-cleanup samples. This authorizes the
+next2335 entry-probe trial and full restoration;2334 permission is not reused.
+No2335 device write or active runner yet. Fresh read-only Recovery preflight
+passes root/matisse/_a,boot_a67108864B,user_data114319917056B and original
+SHA2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+
+47 targeted C/ASan/UBSan/Thumb assembly/Unicorn/evidence tests PASS3.443s.
+Saved2334 kernel/source controls. Applied0133 identity only,132 contextual
+patches including preserved untracked0093 exactly match local kernel source.
+CLT build session74850 exits0;kernel SHA4c7b5e6aa12cddf51c3b1f5ff6c534c64aa228b1fe46d654f1801d72b2d6cf05.
+gh prior40262872038/40226767824/40226076666 remain completed/action_required;
+no new CI dispatch/push. Build logfirmware-static/kernel2335-entry-build.txt.
+
+Candidate shim2335-entry-ready/matisse-shim-gpu2335.img26714112B SHA
+a47c38520d4f78babfde27fcff8c0029876c6b3e893b9e6d04ec9f32e5f86677.
+Independent verify2335-entry.py PASS:original containerde22d2fc...,all293
+mappings/PTEs,arena/root40077000,initialized data,stock fallback/ramdisk/
+signature bytes preserved. Signature authentication and autonomous Recovery
+remain unverified. Actual C loader applies ONLY8B overlay010018ec+36B at
+0100f900 in executable zero tail. Distinct marker04000ffc/PA40110ffc;true
+version04000000/PA40110000. Trampoline restores r040022000/r1b/MSP02040000/
+PRIMASK1 before resume010018f4. Original and instrumented offline firmware
+have same MMIO sequence/private probes/final version01010000/startup-wfi;
+993 vs986 instruction hooks. Added fetch page0100f000 means absent marker
+alone does not localize failure. No stack use in trampoline. Report696B;
+2335 reuses reserved words for marker before/after sampled BEFORE cleanup.
+
+Source corrections:panthor ZERO copies initialized bytes then zeros tail;
+DO NOT erase434 nonzero initialized shared bytes. Code start01000000 differs
+from vector-selected Thumb entry010018ed. Shared c000001b coherent ABI flag
+alone proves no hang:panthor maps coherent modes uncached and2334 accessed
+the same shared mapping. Keep NONE31/transcfg42000006/memattr unchanged.
+
+One-shot shim2335-entry-trials-run-once.py prepared,plan under matching trials
+folder;predicted full temporary boot_a SHA
+d240402b81af0a603291a4c42546250614fee5dd7d44ceebb9dac77472b0b18a.
+No trial executed yet. NEXT:commit completed implementation,run this one
+bounded candidate,capture fresh2335 evidence,restore ALL67108864B original,
+then independently verify Recovery/hash before diagnosis. Do not compete
+for USB/ADB once runner is active. Preserve unrelated dirty files0093;
+all device/proprietary artifacts ignored. No speculative shareability change.
+
+## >>> HISTORICAL 2026-11-02:2334 REAL MCU STUB STORE PASS; FULL RESTORE VERIFIED <<<
 
 Executed exactly ONE authorized2334 reset-store trial;runner session23392
 exited0. Full temporary boot_a readbackaf106351...718fbd8 matched prediction.

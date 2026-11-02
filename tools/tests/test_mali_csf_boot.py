@@ -13,7 +13,7 @@ HARNESS=r'''
 #include "mali_csf_boot.h"
 struct model {
  uint64_t tick;unsigned reads,writes,enabled,resets,as_updates,locked,flushed,lock_low,lock_high;
- uint32_t path[16],path_after_bits;unsigned path_on,path_reads;
+ uint32_t path[16],path_after_bits;unsigned path_on,path_reads,marker_reads;
  uint32_t gpu_mask,job_mask,mmu_mask,l2,raw,job,mcu,mmu,transcfg,table_low,table_high;
  uint32_t memattr_lo,memattr_hi,coherency,coherency_writes,control,platform_reads;
  int bad_coherency_readback,vendor_ina0,vendor_cached_memattr,bad_memattr;
@@ -36,6 +36,7 @@ static uint32_t rd(void *p,uint64_t a) {
   m->platform_reads++;return (uint32_t)a+(m->enabled?1:0);
  }
  if(a==0x1c001f3c||a==0x1c001f40)return m->unpowered?2:6;
+ if(a==0x90010ffc){assert(!m->resets && m->as_updates==2 && m->control==(m->enabled?2:0));m->marker_reads++;return m->enabled?0x53545542:0;}
  if(a==0x90006000){assert(!m->resets && m->as_updates==2);return 0x12345678;}
  if(a>=0x90010000 && a<0x90010020) {
   assert(m->as_updates==2);
@@ -220,6 +221,16 @@ int main(void) {
   else if(i==5)bad.firmware_probe_offset=c.shared_offset;else bad.firmware_probe_va=0x04000000;
   m=model();assert(run(&m,&bad,&r)==-50 && !m.reads && !m.writes);
  }
+ c.entry_checkpoint=1;m=model();m.no_fw=1;m.disable_fail=1;
+ assert(run(&m,&c,&r)==-53);clean(&m,&r);
+ assert(m.marker_reads==2 && r.access_reserved==0 && r.path_reserved==0x53545542);
+ assert(r.access_sample_flags==3 && r.disable_error==-53);
+ for(unsigned i=0;i<2;i++) {
+  struct sweet_csf_boot_config bad=c;
+  if(i==0)bad.entry_checkpoint=2;else bad.access_snapshot=0;
+  m=model();assert(run(&m,&bad,&r)==-50 && !m.reads && !m.writes);
+ }
+ c.entry_checkpoint=0;
  c.platform_path=1;m=model();m.path_on=1;
  m.path[0]=m.path[1]=0xfff0fff0;assert(!run(&m,&c,&r));clean(&m,&r);
  assert(r.path_sample_flags==3 && !r.path_reserved && m.path_reads==34);

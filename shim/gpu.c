@@ -236,13 +236,22 @@ int shim_gpu_publish(uintptr_t adt, uint32_t bytes,
 #endif
     for (unsigned i = 0; i < 128; i++) raw[i] = 0, a[i] = 0, b[i] = 0;
     for (unsigned i = 0; i < sizeof(*r); i++) raw[i] = ((const uint8_t *)r)[i];
+#ifdef SHIM_CSF_ENTRY_PROBE
+    char *p = text(a, "sweet-shim/gpu2335 s=");
+#else
     char *p = text(a, "sweet-shim/gpu2333 s=");
+#endif
     p = hex(p, r->stage, 2); p = text(p, " e="); p = hex(p, (uint32_t)r->error, 8);
     p = text(p, " id="); p = hex(p, r->gpu_id, 8);
     p = text(p, " rst="); p = hex(p, r->reset_rawstat, 8);
     p = text(p, " on="); p = hex(p, (uint32_t)r->on_result, 8);
     p = text(p, " off="); p = hex(p, (uint32_t)r->off_result, 8); *p = 0;
-    p = text(b, "sweet-shim/gpu2333 shared="); p = hex(p, shared, 16);
+#ifdef SHIM_CSF_ENTRY_PROBE
+    p = text(b, "sweet-shim/gpu2335 shared=");
+#else
+    p = text(b, "sweet-shim/gpu2333 shared=");
+#endif
+    p = hex(p, shared, 16);
     p = text(p, " fw="); p = hex(p, r->firmware_memory, 16);
     p = text(p, " magic="); p = hex(p, r->firmware_magic, 8);
     p = text(p, " spm="); p = hex(p, r->spm_before, 8);

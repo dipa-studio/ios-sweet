@@ -99,6 +99,11 @@ static void access_state(const struct sweet_csf_boot_config *c,const struct swee
     io->barrier(io->context);
     s->firmware_word0=rd(io,c->arena_pa+c->firmware_probe_offset);
     s->version=rd(io,c->arena_pa+c->shared_offset);
+    if(c->entry_checkpoint) {
+        uint32_t marker=rd(io,c->arena_pa+c->shared_offset+0xffc);
+        if(after)r->path_reserved=marker;
+        else r->access_reserved=marker;
+    }
     r->access_sample_flags|=after?2:1;
 }
 static int platform_path(const struct sweet_csf_boot_config *c,const struct sweet_gpu_io *io,
@@ -136,6 +141,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
        !io->frequency||io->frequency>1000000000||c->gpu!=0x13000000||
        !c->timeout_ms||c->timeout_ms>1000||c->noncoherent>1||c->vendor_ina0>1||
        c->vendor_cached_memattr>1||c->platform_snapshot>1||c->access_snapshot>1||c->platform_path>1||
+       c->entry_checkpoint>1||(c->entry_checkpoint&&!c->access_snapshot)||
        c->pte_group_requested>15||
        c->pte_pages_built>c->arena_bytes/4096||c->root_pa!=c->arena_pa||
        c->arena_pa<0x40000000||(c->arena_pa&4095)||!c->arena_bytes||

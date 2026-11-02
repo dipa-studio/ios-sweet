@@ -1678,3 +1678,46 @@ independent-post-restore.json,before/after marks and tails,console and
 Recovery dmesg. The sibling audit2334-result.py verifies freshness,comparison
 and full restoration. Implementation81dd6b0,patch-context9cbd7ec;no new CI
 dispatch,push,DEVAPC/EMI clear or additional hardware experiment occurred.
+
+
+## CSF2335 real-firmware entry checkpoint prepared (2026-11-02)
+
+The user directs continuing with the original CSF firmware and an entry
+checkpoint. The original container,vector-selected entry,mapping plan,all293
+PTEs,AS0/root0x40077000,NONE31,memattr and shader behavior are preserved.
+Build0133 changes only kernel identity2334 to2335;the report remains696B.
+
+The loader applies an8-byte branch overlay at0x010018ec and a36-byte Thumb
+trampoline in the code section's existing zero-filled tail at0x0100f900.
+The trampoline disables interrupts,writes STUB to a separate word at
+0x04000ffc,DSBs,reproduces the original reset prefix and resumes0x010018f4
+before the first peripheral store. It uses no stack and restores original
+r0/r1/PRIMASK state. The true global-control version at0x04000000 is untouched.
+Marker-before/after repurpose the2335 report's reserved words and are sampled
+before AUTO and after wait,before disable/reset cleanup. Every section's
+flags,VA bounds and data bounds is printed before enabling MCU.
+
+The code section begins0x01000000;its reset vector points inside it at
+0x010018ed. Shared flags0xc000001b include SHARED and ZERO. Panthor's ZERO
+means copy initialized bytes then zero the remaining tail;erasing the whole
+section would incorrectly remove434 nonzero initialized bytes,including the
+input/output directory. Coherent ABI cache flags alone do not identify a
+bus stall:panthor maps them uncached and the prior stub already accessed
+the same shared page. No shareability experiment is selected here.
+
+47 targeted tests pass,including atomic overlay rejection on changed vectors,
+reset prefix,literal,tail,version or marker;linked Thumb bytes;bounded MCU
+snapshot order;fresh/stale/partial decoder evidence;and the original loader
+and page-table tests. Proprietary firmware remains ignored. Offline original
+and instrumented replay agree on resume registers,MMIO events,private probe
+writes and final true version0x01010000 at startup-WFI. The probe adds seven
+instruction hooks and a fetch of page0x0100f000. An absent hardware marker
+would therefore not establish an original-entry failure.
+
+CLT kernel build exits0 with SHA4c7b5e6a...b2d6cf05. Candidate26714112B image
+SHAa47c3852...5f86677 passes independent source/container/PTE/initialized-data/
+stock fallback/ramdisk/signature-byte verification. Signature authentication
+and autonomous Recovery remain unverified. One bounded trial and complete
+original64MiB boot_a restoration are prepared;at this milestone no2335
+hardware write or result exists. Latest user instructions authorize this
+entry-probe experiment;the previous2334 authorization is not reused.

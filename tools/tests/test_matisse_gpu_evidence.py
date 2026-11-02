@@ -57,7 +57,7 @@ class PersistentReportPatchTests(unittest.TestCase):
         # locally edited build tree must not conceal a broken source patch.
         names = subprocess.check_output(['git','ls-files','--','xnu/patches/*.patch'],
                                         cwd=ROOT,text=True).splitlines()
-        latest='xnu/patches/0132-matisse-csf-reset-store-identity.patch'
+        latest='xnu/patches/0133-matisse-csf-entry-probe-identity.patch'
         if latest not in names:names=sorted(names+[latest])
         self.assertTrue(names)
         with tempfile.TemporaryDirectory(prefix='csf-evidence-patches-') as directory:
@@ -67,7 +67,7 @@ class PersistentReportPatchTests(unittest.TestCase):
                     cwd=directory,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,name+': '+result.stderr)
             source = (Path(directory)/'bsd/dev/sweet_ufs.c').read_text()
-        self.assertIn('#define SWEET_BUILD_ID 0x2334u',source)
+        self.assertIn('#define SWEET_BUILD_ID 0x2335u',source)
         begin = source.index('static void\nsweet_gpu_report_marks(void)\n{')
         end = source.index('\n}\n',begin)
         report = source[begin:end]
@@ -469,6 +469,25 @@ class ReportDecodeTests(unittest.TestCase):
             self.module.decode(self.csf_marks(build=0x2333),0x2334)
         pretend_ready=self.module.decode(self.csf_marks(build=0x2334),0x2334)
         self.assertFalse(pretend_ready['csf_firmware_boot_verified'])
+
+    def test_2335_separate_checkpoint_never_replaces_true_version(self):
+        kwargs=dict(build=0x2335,version_before=0,access_reserved=0,path_reserved=0x53545542)
+        r=self.module.decode(self.csf_marks(**kwargs),0x2335)
+        self.assertTrue(r['csf']['entry_marker_observed'])
+        self.assertTrue(r['csf_firmware_boot_verified'])
+        for change in ({'version':0}, {'version':0x53545542},
+                       {'job_raw':0}, {'disable_error':-53}):
+            args=dict(kwargs);args.update(change)
+            r=self.module.decode(self.csf_marks(**args),0x2335)
+            self.assertFalse(r['csf_firmware_boot_verified'],change)
+        for change in ({'access_reserved':0x53545542}, {'path_reserved':0},
+                       {'path_reserved':1}):
+            args=dict(kwargs);args.update(change)
+            self.assertFalse(self.module.decode(self.csf_marks(**args),0x2335)['csf']['entry_marker_observed'])
+        for data in (self.csf_marks(build=0x2334),self.csf_marks(omit=56,**kwargs),
+                     self.csf_marks(tag=0x2334,**kwargs),
+                     self.csf_marks(access_sample_flags=1,path_sample_flags=1,**kwargs)):
+            with self.assertRaises(ValueError):self.module.decode(data,0x2335)
 
     def test_2330_cached_byte_requires_fresh_firmware_and_cleanup(self):
         result=self.module.decode(self.csf_marks(build=0x2330),0x2330)

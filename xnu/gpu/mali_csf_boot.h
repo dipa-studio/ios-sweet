@@ -28,6 +28,9 @@ struct sweet_csf_boot_config {
     uint32_t firmware_probe_expected;
     /*2333: check original MFG1 bus-protection masks before MCU AUTO. */
     uint32_t platform_path;
+    /*2335:0/1 read a distinct checkpoint word at shared+0xffc before AUTO
+     * and after the wait,before cleanup. Never changes interface version. */
+    uint32_t entry_checkpoint;
 };
 struct sweet_csf_platform_snapshot {
     uint32_t gpu_status, mcu_control, gpu_fault_status, gpu_fault_lo, gpu_fault_hi;
@@ -98,6 +101,8 @@ struct sweet_csf_boot_report {
     struct sweet_csf_platform_snapshot platform_before, platform_after;
     /*2332 appends120 bytes (560 total), preserving the440-byte prefix.
      * Flags bit0 before AUTO,bit1 after wait; readback is not execution. */
+    /*2335 reuses access_reserved for checkpoint-before and path_reserved
+     * for checkpoint-after;older builds retain reserved-zero semantics. */
     uint32_t access_sample_flags, access_reserved, firmware_probe_va;
     uint32_t firmware_probe_pa_lo, firmware_probe_pa_hi, firmware_probe_expected;
     struct sweet_csf_access_snapshot access_before, access_after;
