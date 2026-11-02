@@ -1,6 +1,25 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-02:2335 REMOTE CHECKPOINT ABSENT; FULL RESTORE VERIFIED <<<
+## >>> ACTIVE 2026-11-02:2336 INLINE CHECKPOINT AUTHORIZED; PREPARING <<<
+
+User replied "可以" to placing the first marker inline in the proven reset
+page. Authorization covers one corrected entry-probe hardware trial and full
+original boot_a restoration. No2336 device write/active runner/build yet.
+Last independently verified state:root Recovery,full original64MiB boot_a
+SHA2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+
+Plan:store STUB at04000ffc directly in reset page01001000,DSB,then branch to
+tail0100f900. Tail overwrites the SAME progress word with TRAM5452414d before
+reproducing original reset prefix and resuming01001904. True version04000000
+stays separate. No stack use,AS/root40077000/PTEs/initialized data/NONE31/
+memattr/platform/shader behavior unchanged. Two checkpoints distinguish
+observable inline store from observable tail arrival;absence still does not
+identify an original firmware PC. Preserve unrelated dirt and untracked0093.
+NEXT:assemble/validate/tests/build/independent image audit;fresh read-only
+Recovery preflight;one trial,capture before cleanup,full original restore and
+independent Recovery/hash verification. No speculation-driven mapping change.
+
+## >>> HISTORICAL 2026-11-02:2335 REMOTE CHECKPOINT ABSENT; FULL RESTORE VERIFIED <<<
 
 ONE2335 trial completed;runner33712 exits0. Fastboot129.26s;single raw session
 restored stock prefix and rebooted Recovery. Full67108864B original boot_a

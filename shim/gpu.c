@@ -236,7 +236,9 @@ int shim_gpu_publish(uintptr_t adt, uint32_t bytes,
 #endif
     for (unsigned i = 0; i < 128; i++) raw[i] = 0, a[i] = 0, b[i] = 0;
     for (unsigned i = 0; i < sizeof(*r); i++) raw[i] = ((const uint8_t *)r)[i];
-#ifdef SHIM_CSF_ENTRY_PROBE
+#ifdef SHIM_CSF_INLINE_ENTRY_PROBE
+    char *p = text(a, "sweet-shim/gpu2336 s=");
+#elif defined(SHIM_CSF_ENTRY_PROBE)
     char *p = text(a, "sweet-shim/gpu2335 s=");
 #else
     char *p = text(a, "sweet-shim/gpu2333 s=");
@@ -246,7 +248,9 @@ int shim_gpu_publish(uintptr_t adt, uint32_t bytes,
     p = text(p, " rst="); p = hex(p, r->reset_rawstat, 8);
     p = text(p, " on="); p = hex(p, (uint32_t)r->on_result, 8);
     p = text(p, " off="); p = hex(p, (uint32_t)r->off_result, 8); *p = 0;
-#ifdef SHIM_CSF_ENTRY_PROBE
+#ifdef SHIM_CSF_INLINE_ENTRY_PROBE
+    p = text(b, "sweet-shim/gpu2336 shared=");
+#elif defined(SHIM_CSF_ENTRY_PROBE)
     p = text(b, "sweet-shim/gpu2335 shared=");
 #else
     p = text(b, "sweet-shim/gpu2333 shared=");

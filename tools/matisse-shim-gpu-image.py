@@ -33,15 +33,17 @@ def pinned(path, expected):
         raise ValueError('SHA256 mismatch: ' + str(path))
     return data
 
-def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=False):
+def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=False, inline_entry=False):
     firmware = pinned(path, expected)
     if expected != 'de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f7229a':
         raise ValueError('CSF probe requires the measured device firmware')
+    if inline_entry and (not entry_probe or build_id != 0x2336):
+        raise ValueError('inline entry requires build2336 and entry probe')
     if entry_probe:
-        if build_id != 0x2335 or reset_store_stub:
+        if build_id != (0x2336 if inline_entry else 0x2335) or reset_store_stub:
             raise ValueError('entry probe requires build2335 and original firmware')
         return firmware, None
-    if build_id == 0x2335:
+    if build_id in (0x2335,0x2336):
         raise ValueError('build2335 requires the entry probe')
     if (build_id == 0x2334) != reset_store_stub:
         raise ValueError('build2334 requires the reset-store stub; other builds must retain stock firmware')
@@ -91,7 +93,7 @@ def build(a):
         raise ValueError('refuse existing output directory')
     kernel = pinned(a.kernel, a.kernel_sha256)
     firmware, reset_patch = diagnostic_firmware(a.firmware, a.firmware_sha256,
-                                               a.build_id, a.reset_store_stub, a.entry_probe)
+                                               a.build_id, a.reset_store_stub, a.entry_probe, a.inline_entry)
     template = pinned(a.template, a.template_sha256)
     original_adt = pinned(a.adt, a.adt_sha256)
     stock = pinned(a.stock, a.stock_sha256)
@@ -118,6 +120,8 @@ def build(a):
                    '-DEMBEDDED_XNU_BYTES=' + str(len(payload))]
     if a.entry_probe:
         definitions.append('-DSHIM_CSF_ENTRY_PROBE')
+    if a.inline_entry:
+        definitions.append('-DSHIM_CSF_INLINE_ENTRY_PROBE')
     source = {'start': ROOT / 'shim/start.S', 'loader': ROOT / 'shim/loader.c',
               'gpu': ROOT / 'shim/gpu.c', 'gpueb_boot': ROOT / 'xnu/gpu/mtk_gpueb_boot.c',
               'gpueb_protocol': ROOT / 'xnu/gpu/mtk_gpueb_protocol.c',
@@ -212,10 +216,10 @@ def build(a):
         fetch = importlib.util.module_from_spec(spec); spec.loader.exec_module(fetch)
         original, plan = fetch.build_arena(Path(a.firmware), 0x40000000 + arena, memory_group=6)
         patched, probe_plan = fetch.build_arena(Path(a.firmware), 0x40000000 + arena,
-                                               memory_group=6, entry_probe=True)
+                                               memory_group=6, entry_probe=True, inline_entry=a.inline_entry)
         if plan != probe_plan:
             raise ValueError('entry probe changed firmware mappings')
-        info['entry_probe'] = fetch.entry_probe_metadata(original, patched, plan)
+        info['entry_probe'] = fetch.entry_probe_metadata(original, patched, plan, inline_entry=a.inline_entry)
         info['entry_probe']['arena_sha256'] = digest(patched)
         info['entry_probe']['original_arena_sha256'] = digest(original)
         info['entry_probe']['source_sha256'] = {name: digest((ROOT / name).read_bytes()) for name in
@@ -227,11 +231,13 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
                    help='build2335 only: mark a separate word and continue the original reset path')
+    p.add_argument('--inline-entry', action='store_true',
+                   help='build2336 only: inline STUB before remote fetch, then TRAM in tail')
     for key in ('firmware','firmware-sha256','kernel','kernel-sha256','template','template-sha256','adt','adt-sha256',
                 'stock','stock-sha256','frozen','cmdline','ndk','out'):
         p.add_argument('--' + key, required=True)

@@ -47,7 +47,11 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
 #ifdef SHIM_CSF_ENTRY_PROBE
     struct sweet_csf_layout layout;
     rc=sweet_csf_parse(sweet_csf_blob_start,fw_bytes,&layout,dump_section,0);
+#ifdef SHIM_CSF_INLINE_ENTRY_PROBE
+    if(!rc)rc=sweet_csf_inline_probe_install(arena,sizeof(arena),&memory);
+#else
     if(!rc)rc=sweet_csf_entry_probe_install(arena,sizeof(arena),&memory);
+#endif
     if(rc) {shim_csf_report.error=rc;return rc;}
 #endif
     io->barrier(io->context); /* Native shim has MMU and CPU caches off. */
