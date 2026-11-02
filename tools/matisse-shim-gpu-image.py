@@ -6,10 +6,12 @@ Never flashes or imports historical trial runners. Requires pinned inputs.
 import argparse
 import gzip
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import struct
 import subprocess
+import tempfile
 
 import adt
 import embed_payload
@@ -30,6 +32,35 @@ def pinned(path, expected):
     if digest(data) != expected:
         raise ValueError('SHA256 mismatch: ' + str(path))
     return data
+
+def diagnostic_firmware(path, expected, build_id, reset_store_stub):
+    firmware = pinned(path, expected)
+    if expected != 'de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f7229a':
+        raise ValueError('CSF probe requires the measured device firmware')
+    if (build_id == 0x2334) != reset_store_stub:
+        raise ValueError('build2334 requires the reset-store stub; other builds must retain stock firmware')
+    if not reset_store_stub:
+        return firmware, None
+    spec = importlib.util.spec_from_file_location('csf_fetch', ROOT / 'tools/matisse-csf-fetch-audit.py')
+    fetch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fetch)
+    arena, plan = fetch.build_arena(Path(path), 0x40077000, memory_group=6)
+    patched_arena, patch = fetch.patch_reset_store_stub(arena, plan)
+    entry = int(patch['entry_va'], 0)
+    code = bytes.fromhex(patch['patch_hex'])
+    section = next(s for s in plan['sections'] if s['flags'] & 4 and
+                   s['va'] <= entry and entry + len(code) <= s['va'] + s['data_bytes'])
+    offset = section['data_start'] + entry - section['va']
+    embedded = firmware[:offset] + code + firmware[offset + len(code):]
+    with tempfile.TemporaryDirectory(prefix='csf-reset-store-') as directory:
+        candidate = Path(directory) / 'diagnostic.bin'
+        candidate.write_bytes(embedded)
+        rebuilt, rebuilt_plan = fetch.build_arena(candidate, 0x40077000, memory_group=6)
+    if rebuilt != patched_arena or rebuilt_plan != plan or len(embedded) != len(firmware):
+        raise ValueError('container patch differs from the verified reset-store arena')
+    patch.update(container_patch_offset=offset, original_container_sha256=digest(firmware),
+                 embedded_container_sha256=digest(embedded), diagnostic_only=True)
+    return embedded, patch
 
 def diagnostic_adt(data, build_id=0x2333):
     root, end = adt.parse(data)
@@ -53,9 +84,8 @@ def build(a):
     if out.exists():
         raise ValueError('refuse existing output directory')
     kernel = pinned(a.kernel, a.kernel_sha256)
-    firmware = pinned(a.firmware, a.firmware_sha256)
-    if a.firmware_sha256 != 'de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f7229a':
-        raise ValueError('CSF probe requires the measured device firmware')
+    firmware, reset_patch = diagnostic_firmware(a.firmware, a.firmware_sha256,
+                                               a.build_id, a.reset_store_stub)
     template = pinned(a.template, a.template_sha256)
     original_adt = pinned(a.adt, a.adt_sha256)
     stock = pinned(a.stock, a.stock_sha256)
@@ -159,12 +189,22 @@ def build(a):
     info['csf_arena'] = dict(shim_offset=arena, bytes=2 << 20,
                              bss_end=symbol['_bss_end'], shim_end=end,
                              payload_offset=end + 16, cpu_cache_policy='MMU/cache off')
+    if reset_patch:
+        if arena != 0x77000:
+            raise ValueError('reset-store trial must preserve the measured2333 arena placement')
+        info['reset_store_stub'] = reset_patch
+        info['reset_store_stub']['source_sha256'] = {
+            name: digest((ROOT / name).read_bytes()) for name in
+            ('tools/matisse-csf-reset-store.S', 'tools/matisse-csf-fetch-audit.py',
+             'tools/matisse-shim-gpu-image.py')}
     (out / 'manifest.json').write_text(json.dumps(info, indent=2) + '\n')
     print(json.dumps(info, indent=2))
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334), default=0x2333)
+    p.add_argument('--reset-store-stub', action='store_true',
+                   help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     for key in ('firmware','firmware-sha256','kernel','kernel-sha256','template','template-sha256','adt','adt-sha256',
                 'stock','stock-sha256','frozen','cmdline','ndk','out'):
         p.add_argument('--' + key, required=True)

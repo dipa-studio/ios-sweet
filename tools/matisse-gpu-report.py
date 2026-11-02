@@ -89,7 +89,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -297,6 +297,16 @@ def decode(data, expected_build=0x2321):
         if expected_build >= 0x2333:
             ready = ready and csf['platform_path_released']
             csf['firmware_ready_observed'] = ready
+        if expected_build == 0x2334:
+            csf['reset_store_diagnostic_only'] = True
+            csf['reset_store_marker_observed'] = (
+                csf['sample_flags'] & 3 == 3 and csf['access_snapshot_complete'] and
+                csf['version_before'] == csf['access_before']['version'] == 0 and
+                csf['version'] == csf['access_after']['version'] == 0x53545542)
+            csf['reset_store_note'] = ('Pinned20-byte Thumb reset-store diagnostic. A fresh marker '
+                'is separate from CSF firmware readiness; an absent marker does not localize the stall.')
+            ready = False
+            csf['firmware_ready_observed'] = False
         result['csf_firmware_boot_verified'] = (success and ready and cleanup and
                                                csf['stage'] == 7 and csf['error'] == 0)
     result.update(error_details(result, result.get('csf')))
@@ -307,7 +317,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2333)')
+                   help='expected kernel/report build (0x2321 through 0x2334)')
     a=p.parse_args()
     try:
         report=decode(a.marks.read_bytes(),a.build)

@@ -1583,3 +1583,35 @@ clear semantics must be established before adding status-register writes;
 no speculative clear sequence was added. Last measured restoration remains
 the2333 result above. A new destructive device step still needs the explicit
 confirmation required by AGENTS.md.
+
+## CSF2334 reset-store candidate and authorization (2026-11-02)
+
+The user then explicitly authorized the described phone trial with
+“可以上机现在在rec”. Read-only Recovery preflight verified root/matisse/_a,
+64MiB boot_a and its complete original SHA256 against the local backup.
+The authorization covers one reset-store trial and full original restoration.
+
+Build2334 patches only file offsets0x2780..0x2793 of the pinned CSF input.
+The builder re-loads the patched container with the actual C loader and
+requires an exact match to the previously validated patched arena. Kernel
+patch0132 changes only the persistent build identity to2334;the696B report
+ABI is unchanged. The decoder labels2334 as diagnostic-only and distinguishes
+a fresh0->53545542 version mutation from firmware readiness,which stays false.
+44 targeted tests pass in3.131s. Full local CLT build exits0,kernel16724248B,
+SHA256a68627e3f6b0716081b61cd4f6d83d6c8454e50f702dc0dbbc8d90caa3ebb7c2.
+131 contextual patches reproduce the built sweet_ufs source exactly.
+
+The26714112B image is saved under ignored shim2334-reset-ready/ as
+matisse-shim-gpu2334.img,SHA256
+aef92ca586ffc75960ed54c720fc72b671c133a7b543747c6f3dd6ebb0dd1ed0.
+Independent verification compares all rebuilt shim objects and the linked
+shim with2333:only the20 firmware bytes change before the payload. Arena,
+vectors,all293 mapped pages' PTEs,GPUEB and MCU control code remain identical.
+Original Linux fallback,ramdisk and signature bytes match their pinned inputs.
+Signature authentication and autonomous Recovery remain unverified.
+
+The prepared one-shot runner retains the known raw fastboot stock-prefix
+restore followed by complete67108864B original restoration in Recovery.
+Its preflight passes and predicted full trial partition SHA256 is
+af10635174cb7bfaf50a1c56453222bb426fbfce8845326ab0964b158718fbd8.
+At this build milestone no2334 device write or hardware result exists yet.

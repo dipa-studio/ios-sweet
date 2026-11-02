@@ -1,6 +1,61 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-02: RESET-STORE STUB VERIFIED OFFLINE; NO NEW PHONE TRIAL <<<
+## >>> ACTIVE 2026-11-02: ONE2334 RESET-STORE TRIAL AUTHORIZED; CANDIDATE VERIFIED <<<
+
+2334 candidate BUILD+INDEPENDENT VERIFICATION PASS. CLT session19978 exit0;
+kernel16724248B SHAa68627e3f6b0716081b61cd4f6d83d6c8454e50f702dc0dbbc8d90caa3ebb7c2.
+131-patch contextual replay exactly matches current sweet_ufs source;
+relative2333 ONLY SWEET_BUILD_ID changed. No new CI dispatch;gh prior
+40262872038/40226767824/40226076666 remain completed/action_required.
+Candidate shim2334-reset-ready/matisse-shim-gpu2334.img26714112B SHA256
+aef92ca586ffc75960ed54c720fc72b671c133a7b543747c6f3dd6ebb0dd1ed0.
+Independent verifier proves every rebuilt shim object except csf_blob.o
+byte-identical2333;the linked shim before payload differs ONLY by20B at
+the firmware reset handler. Same arena40077000,all293 mappings/PTEs/vectors
+identical;reset PA400818ec/version40110000. Embedded firmware3a8e0a1c...
+80d47a0f is original with ONLY file2780..2793 patched. Actual C arena equals
+offline validated d3cc2c16...76a8259e. Firmware diagnostic-only;no IRQ/valid
+interface. Stock Linux+32MiB,ramdisk,signature bytes intact;signature NOT
+authenticated and automatic Recovery NOT verified. Existing raw-prefix
+plus full64MiB restoration path retained. Exact-blob offline stub replay PASS.
+
+Prepared authorized one-shot runner shim2334-reset-trials-run-once.py SHA
+bf986f0556d1dc97fb35d9608271dfa66183f02c2572cef99f6cb277d86fd962;
+read-only preflight PASS. Plan shim2334-reset-trials/restoration-plan.json
+status authorized-prepared,trial_count_executed0,restore_pendingfalse.
+Predicted full temporary boot_a SHA256
+af10635174cb7bfaf50a1c56453222bb426fbfce8845326ab0964b158718fbd8.
+No phone write yet. NEXT:commit completed implementation,execute this ONE
+already authorized trial,follow journal and restore ALL67108864B original;
+independently verify Recovery identity/geometry/full hash before diagnosis.
+No concurrent ADB/raw USB actions once runner starts. Do not repeat trial.
+
+User explicitly said "可以上机现在在rec" after the20B Thumb stub explanation.
+This authorizes ONE reset-store diagnostic phone trial and its complete
+original boot_a restoration;no repeat trial or other hardware experiment.
+No renewed permission question is needed for this already authorized step.
+Read-only preflight2026-11-02T10:17:32Z PASS:root/matisse/_a/recovery,
+boot_a67108864B and userdata114319917056B;full original boot_a SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1
+matches the independent full local backup. No runner/restore was active.
+
+Builder now supports explicit2334 reset-store mode:patch only the original
+container's20 reset-entry bytes,and use the unchanged loader/shim objects
+and original2333 arena placement. It re-runs the actual C loader and rejects
+any difference from the verified offline patched arena. No added device
+register writes. Patch0132 changes ONLY kernel build identity2333->2334;
+696B report layout preserved. Decoder separates fresh stub marker from
+firmware-ready,which is always false for this diagnostic build.
+44 targeted tests PASS3.131s. Saved prior kernel/source pins under ignored
+firmware-static/kernel2333-control and sweet_ufs2333-control.c. Applied0132
+to the verified local build source and launched CLT kernel build session19978,
+logfirmware-static/kernel2334-reset-build.txt. No2334 image or write yet.
+NEXT:finish build,independently verify exact candidate/unchanged mappings,
+prepare the bounded one-shot restoration runner,execute ONE authorized trial,
+capture fresh2334 evidence,and restore ALL64MiB with independent SHA256.
+Preserve unrelated dirt/untracked0093;keep all device/proprietary data ignored.
+
+## >>> HISTORICAL 2026-11-02: RESET-STORE STUB VERIFIED OFFLINE; NO NEW PHONE TRIAL <<<
 
 Reviewed the user's bus-path diagnosis against actual2333 code/evidence.
 Initial soft reset completed; MCU AUTO/disable timeout with no version/IRQ

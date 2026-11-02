@@ -57,7 +57,7 @@ class PersistentReportPatchTests(unittest.TestCase):
         # locally edited build tree must not conceal a broken source patch.
         names = subprocess.check_output(['git','ls-files','--','xnu/patches/*.patch'],
                                         cwd=ROOT,text=True).splitlines()
-        latest='xnu/patches/0131-matisse-csf-platform-path.patch'
+        latest='xnu/patches/0132-matisse-csf-reset-store-identity.patch'
         if latest not in names:names=sorted(names+[latest])
         self.assertTrue(names)
         with tempfile.TemporaryDirectory(prefix='csf-evidence-patches-') as directory:
@@ -67,7 +67,7 @@ class PersistentReportPatchTests(unittest.TestCase):
                     cwd=directory,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,name+': '+result.stderr)
             source = (Path(directory)/'bsd/dev/sweet_ufs.c').read_text()
-        self.assertIn('#define SWEET_BUILD_ID 0x2333u',source)
+        self.assertIn('#define SWEET_BUILD_ID 0x2334u',source)
         begin = source.index('static void\nsweet_gpu_report_marks(void)\n{')
         end = source.index('\n}\n',begin)
         report = source[begin:end]
@@ -452,6 +452,23 @@ class ReportDecodeTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2329,**args),0x2329)
         with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2328),0x2329)
         with self.assertRaises(ValueError):self.module.decode(self.csf_marks(build=0x2329),0x2328)
+
+    def test_2334_marker_is_separate_from_firmware_readiness(self):
+        changes=dict(build=0x2334, stage=4, error=-53, firmware_ready=0,
+                     version_before=0, version=0x53545542, job_raw=0)
+        result=self.module.decode(self.csf_marks(**changes),0x2334)
+        self.assertTrue(result['csf']['reset_store_marker_observed'])
+        self.assertFalse(result['csf_firmware_boot_verified'])
+        self.assertFalse(result['csf']['firmware_ready_observed'])
+        for mutation in ({'version':0},{'version_before':0x53545542},
+                         {'access_after_version':0},{'access_before_version':1}):
+            with self.subTest(mutation=mutation):
+                r=self.module.decode(self.csf_marks(**dict(changes,**mutation)),0x2334)
+                self.assertFalse(r['csf']['reset_store_marker_observed'])
+        with self.assertRaises(ValueError):
+            self.module.decode(self.csf_marks(build=0x2333),0x2334)
+        pretend_ready=self.module.decode(self.csf_marks(build=0x2334),0x2334)
+        self.assertFalse(pretend_ready['csf_firmware_boot_verified'])
 
     def test_2330_cached_byte_requires_fresh_firmware_and_cleanup(self):
         result=self.module.decode(self.csf_marks(build=0x2330),0x2330)
