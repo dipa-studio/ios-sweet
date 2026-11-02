@@ -1,3 +1,37 @@
+### 2026-11-02 — r11 CI runner migration after confirmed macOS 14 retirement
+
+**Confirmed platform failure:** exact r11 run `41350752723` at source
+`502cd7f52944fb4446548ddf4b820cf8f6f43705` has a saved attempt-1 check annotation:
+"This job failed because of a scheduled macOS 14 runner image brownout. macOS 14
+runner images will be retired on November 2, 2026."
+The user's same-run retry was accepted on 2026-11-02 at 17:22 UTC; the saved latest
+state was queued with attempt still 1, not a successful Build. Its dispatch/rerun
+intents remain in `C:\ports\r11-diag` and must stay intact.
+
+**Migration candidate:** use `macos-15-intel` to keep the previous Intel host and
+record host/Xcode/iig/SDK selection. Keep pinned DXB, workflow inputs and kernel
+patches unchanged. Newer Xcode's iig may need compatibility work for xnu-8796;
+this runner change does not establish a successful compile or linked kernel.
+No fake iig replacement or generated-header stubs are used in this workflow.
+
+**Isolation and next gate:** changes are only this NOTES entry and xnu workflow
+in `C:\ports\ios-cas-r11-ci-migrate`, branch `codex/r11-macos15-20261102`, based
+on exact `502cd7f`. The original dirty `C:\ports\ios-cas` and frozen
+`C:\ports\ios-cas-r11-diag` stay intact. Build this new exact commit separately;
+inspect actual toolchain/Build errors before addressing iig ABI. After success,
+verify the same r11 caller/source hashes, linked inert beacon/checkpoints and
+new kernel identity before new packaging/device boot.
+
+**Device baseline changed:** the user reports installing MIUI 14 xiaomi.eu.
+Android userspace is not a dependency of temporary XNU boot or CI. Firmware/DTBO
+and userdata may have changed during installation; fresh device identity and
+bootloader checks are required before another verified temporary boot. No new
+device operation, root mount or userland result is claimed here.
+
+Current cross-harness state and exact commit/run receipts: `C:\ports\handoff.md`.
+
+---
+
 ### 2026-11-01 — r11 candidate: instrument the gap after IOKitBSDInit ret 0
 
 **New device observation on verified r10nro:** temporary boot was accepted at
