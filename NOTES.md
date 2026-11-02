@@ -1,6 +1,51 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-02:2336 INLINE MARKER ABSENT; FULL RESTORE VERIFIED <<<
+## >>> ACTIVE 2026-11-02:2337 ENTRY PTE GATE BUILT OFFLINE; NO DEVICE TRIAL <<<
+
+User corrected active reference to MT6983 Linux5.10 mali_kbase+GPUEB, not
+v6.12 panthor. Local pinned mali-r32p1/mali_kbase_csf_firmware.c checks
+header major (minor is recorded), reads shared_info[GLB_VERSION/4] and
+requires nonzero GLB_VERSION after boot. Original vendor_a mali_csffw.bin
+remains pinned SHA de22d2fc...4f7229a. No protocol/platform/memory-map
+changes. 2336 CPU word D00CF8DF was code-section start VA01000000/PA40080000,
+NOT reset entry. Vector selects Thumb010018ed; instruction VA010018ec,
+page VA01001000+0x8ec, leaf3000000040081fc7 -> PA400818ec.
+
+NEW: pre-AUTO guard walks actual AS0 PTEs and reads PA400818ec after the
+existing 24B inline overlay. Requires first word4803b672 and exact24B;
+logs leaf/entry PA/word separately from legitimate section-start D00CF8DF.
+Any mismatch returns STATE before sweet_csf_boot/MCU_CONTROL. Wrong table,
+wrong leaf, out-of-arena backing and wrong instruction fail closed. Synthetic
+ASan/UBSan and pinned vendor C-loader tests PASS; 52 related tests run,
+three skipped (existing optional dependencies), zero failures. Built distinct
+2337 locally via
+CLT; kernel16724248B SHA ddc8b3c09e5007e41baa1a156e45213c31ab9297659ad8fb98578ab3476291cc.
+Image26714112B SHA70f16522004fdd6267f339d0be861cc7c1848979d08ba979b0855453487947c0.
+Independent verify2337-entry-guard.py PASS: original container, all293 maps,
+root40077000, PTE3000000040081fc7, entry word4803b672, same arena as2336,
+stock fallback/ramdisk/signature bytes. Implementation commit628f9cb;no new
+CI run. Build and audit in ignored
+research/matisse/20261031-gpu/shim2337-entry-guard-{ready,prep}/.
+Predicted full temporary boot_a SHA0d37dc4a6598153732033d0f9a2f22b3630d0fdeb26b4f1ed15f836385efd82b.
+Adapted one-shot runner shim2337-entry-guard-trials-run-once.py in ignored
+research,with full64MiB restore and exact image-hash gate. Read-only Recovery
+preflight PASS: root/matisse/_a/recovery,boot_a67108864B and full original
+SHA. No active journal or trial.
+
+OBSERVATION: all 2337 evidence is CPU/offline; no MCU execution or firmware
+readiness is proven. NO 2337 device boot or partition write; only read-only
+Recovery preflight was run.
+Last independently verified device state remains root Recovery with full
+original boot_a SHA2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+The one 2336 hardware authorization is consumed. Any further destructive
+device step needs its own confirmation under AGENTS.md. Preserve unrelated
+dirty files and untracked0093. NEXT: if a new trial is authorized, run only
+the bounded2337 candidate, capture pre-AUTO gate console plus fresh MCU
+evidence if the gate passes, then restore all64MiB original boot_a and
+independently verify Recovery/identity/geometry/SHA. Do not infer MCU fetch
+from CPU PTE readback alone. Implementation committed628f9cb;handoff updated.
+
+## >>> HISTORICAL 2026-11-02:2336 INLINE MARKER ABSENT; FULL RESTORE VERIFIED <<<
 
 ONE authorized2336 trial completed;runner session47583 exit0. Temporary full
 boot_a readbackdb9a2a7f...56dc9fb matched prediction. Fastboot85.51s;
