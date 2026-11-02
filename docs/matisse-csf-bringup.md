@@ -1755,3 +1755,34 @@ trampoline arrival before attempting an original-body checkpoint.
 Ignored audit2335-result.py and comparison-2333-2335.json verify the measured
 result and full restoration. No second trial or protocol/platform change
 was performed at this milestone.
+
+
+## CSF2336 inline-first entry checkpoint prepared (2026-11-02)
+
+After2335's remote trampoline marker stayed zero,the user authorized one
+corrected trial. The reset-page overlay at0x010018ec now stores STUB to
+0x04000ffc and DSBs before any branch to the tail. At0x0100f900 the tail
+advances the same progress word to TRAM,then recreates the three displaced
+MCU/peripheral stores and resumes original code at0x01001904. The true
+control/version word at0x04000000 remains distinct and initially zero.
+
+This preserves the original CSF container,vector and all293 PTEs,root
+0x40077000,AS/NONE31/memattr/platform/shader configuration and initialized
+shared bytes. Only24 reset-page bytes and64 zero-tail bytes are overlaid.
+The report still has696 bytes and captures progress before AUTO and after
+wait,before cleanup. Its decoder distinguishes no marker,STUB-only,and
+TRAM,without treating either marker as firmware readiness.
+
+50 targeted tests pass,including linked Thumb opcode checks,atomic failure
+on changed input,offline reset-page store before tail fetch,and permission
+failure at the tail preserving STUB. Full original/instrumented firmware
+replay agrees on resume registers,MMIO operation order,private probes and
+true version0x01010000 at WFI. Offline simulation is not hardware execution.
+
+Kernel build2336 SHA897139db...0321fe3;candidate26714112B image
+SHAf90c1abe...75490d3. Independent audit verifies pinned original container,
+PTEs,initialized data,stock Linux fallback,ramdisk and signature bytes.
+Signature authentication and autonomous Recovery are unverified. Fresh
+read-only Recovery/root/matisse/_a/boot_a SHA preflight passes. One bounded
+trial and complete original64MiB boot_a restoration are prepared;no2336
+hardware result exists at this milestone.

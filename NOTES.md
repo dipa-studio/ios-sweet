@@ -1,6 +1,32 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-02:2336 INLINE CHECKPOINT AUTHORIZED; PREPARING <<<
+## >>> ACTIVE 2026-11-02:2336 INLINE CANDIDATE VERIFIED; ONE TRIAL PREPARED <<<
+
+User replied 可以 to one corrected inline-first entry checkpoint trial and full
+original boot_a restoration. Implementation committed9a94b98. No2336 device
+write or active runner yet. 50 targeted tests PASS4.216s. Actual C loader
+ASan/UBSan and Unicorn:STUB store at reset-page PC010018f2 before remote
+fetch,TRAM at tail0100f904;forbidden tail fetch leaves STUB observable.
+Full offline firmware resumes with identical registers,MMIO operations,
+private probes and true version01010000/startup-WFI.
+
+CLT kernel build exits0 SHA897139dbf6ab28c38e2cf256413a3b7443114cc5548987ab28aa126a90321fe3;
+133-patch contextual replay matches local source. No new CI/push.
+Candidate shim2336-inline-ready/matisse-shim-gpu2336.img26714112B SHA
+f90c1abe48ecece4feaa7f6ad73b730871c02228caf6f7cc7e3b7054675490d3.
+Independent verify2336-inline.py PASS:original containerde22d2fc...,all293
+mapping/PTEs,root40077000,shared initialized data,stock fallback/ramdisk/
+signature bytes,report696B. Only24B inline reset+64B tail overlays. Signature
+authentication/autonomous Recovery unverified. Fresh read-only Recovery
+preflight passes root/matisse/_a,boot_a67108864B,userdata114319917056B,
+original SHA2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+One-shot runner shim2336-inline-trials-run-once.py prepared;predicted full
+temporary partition SHAdb9a2a7fac2a62eaf40104c15c8396cf0575f044bd5f7c9ed6fa51d7556dc9fb.
+NEXT:run ONE trial,capture fresh evidence,restore ALL67108864B original,and
+independently verify Recovery/hash before diagnosis. Preserve unrelated dirt,
+untracked0093 and all device/proprietary artifacts outside git.
+
+## >>> HISTORICAL 2026-11-02:2336 INLINE CHECKPOINT AUTHORIZED; PREPARING <<<
 
 User replied "可以" to placing the first marker inline in the proven reset
 page. Authorization covers one corrected entry-probe hardware trial and full
