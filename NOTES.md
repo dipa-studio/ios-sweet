@@ -133,7 +133,7 @@ Do not repurpose r10's hard-pinned validators as proof of a different source/run
 Earlier entries are retained milestone history; their r10 queued/no-boot state
 is superseded by the evidence above and the current C:\ports\handoff.md.
 
-### 2026-11-03 — r13 rootfs: guestmount use_ino rejected; compatibility fix ready
+### 2026-11-03 — r13 rootfs: guestmount reaches file probe; metadata mismatch under diagnosis
 
 Current hardware milestone is **BSD root selected, HFS mount rejected**. The
 verified r12 kernel from Actions run `41523222878`, exact source
@@ -155,8 +155,9 @@ the user has now installed guestmount/libguestfs `1.58.1-3ubuntu3`, supermin,
 QEMU and `linux-image-7.0.0-42-generic` with its modules. Apt completed without
 a reported fatal error. This generic kernel is for the guestfs appliance;
 it is not a module source for the active WSL kernel. `libguestfs-hfsplus` was
-recommended but not explicitly installed; actual appliance support remains
-to be tested. Agent WSL launch is denied by CreateInstance/E_ACCESSDENIED,
+recommended but not explicitly installed. The latest invocation now reaches
+probe file creation and metadata operations; full HFSX acceptance is still
+pending. Agent WSL launch is denied by CreateInstance/E_ACCESSDENIED,
 so Linux commands run in the user's existing WSL prompt. User requested direct
 commands and no new wrapper scripts.
 
@@ -191,10 +192,21 @@ uses a fresh private test directory and refuses an existing rootfs output.
 Current Bash syntax and diff whitespace checks PASS. Existing-output and invalid
 backend refusal checks passed before these compatibility fixes. Earlier static
 reviews passed but missed the FUSE option defects exposed by Linux execution.
-Independent review of removing use_ino and checking hardlinks through shared
-writes PASS; no static blocker found. Actual Linux probe success remains pending.
+The next user invocation (`0acb9e2`) got past guestmount and file creation,
+chown/chmod/link operations, but rejected the expected metadata tuple
+`501:20:640:2`. No actual uid/gid/mode/nlink values were printed in that version;
+the underlying cause is not yet established. No cleanup error was reported,
+and the real root image remains absent.
+
+The builder now prints observed/expected metadata and, on refusal, attributes
+of both aliases. Guestmount gets four exact-value reads with at most three
+one-second waits for possible FUSE attribute caching; native still checks once.
+Persistent mismatch still fails before output creation. Synthetic control-flow
+checks PASS for correct, transient, persistent and native-owner failure cases;
+these do not exercise a Linux mount. Syntax/diff checks and independent review
+PASS. FUSE caching is a hypothesis, not a confirmed cause or completed fix.
 Current builder SHA256:
-`c8e3df21b7508b84a351546386b28f62df4d4995cd65933d431ece6ddb0bc7fc`.
+`3c67a054eb1180f721c3164d091d894f5b287257c89a556f2ef0615dc79f43e0`.
 A successful Linux backend probe, OS copy, filesystem acceptance and iOS boot
 are still pending; package installation is not a rootfs build.
 

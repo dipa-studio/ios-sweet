@@ -144,8 +144,24 @@ sudo chown 501:20 "$work/probe/file"
 sudo chmod 0640 "$work/probe/file"
 sudo ln "$work/probe/file" "$work/probe/hardlink"
 sudo ln -s file "$work/probe/symlink"
-[[ $(sudo stat -c '%u:%g:%a:%h' "$work/probe/file") == 501:20:640:2 ]] ||
-	{ echo "HFSX probe ownership, mode or hardlink count failed" >&2; exit 1; }
+expected_probe_metadata=501:20:640:2
+# FUSE may briefly cache attributes from before chown/chmod/link. Re-read for
+# at most three seconds; every accepted result must still match exactly.
+for ((probe_attempt=0; probe_attempt<4; probe_attempt++)); do
+	probe_metadata=$(sudo stat -c '%u:%g:%a:%h' "$work/probe/file")
+	if [[ $probe_metadata == "$expected_probe_metadata" ||
+	      $backend != guestmount || $probe_attempt == 3 ]]; then
+		break
+	fi
+	sleep 1
+done
+printf 'HFSX probe metadata: %s (expected %s)\n' "$probe_metadata" "$expected_probe_metadata"
+if [[ $probe_metadata != "$expected_probe_metadata" ]]; then
+	sudo stat -c '%n: uid=%u gid=%g mode=%a links=%h type=%F' \
+		"$work/probe/file" "$work/probe/hardlink" >&2
+	echo "HFSX probe ownership, mode or hardlink count failed" >&2
+	exit 1
+fi
 # FUSE can present inode numbers independently from the backing filesystem.
 # Require actual shared writes through the hardlink, not inode presentation.
 printf 'hardlink update\n' | sudo tee "$work/probe/hardlink" >/dev/null
