@@ -3,6 +3,9 @@
 # root filesystem plus its cryptexes, for the userdata partition (rd=ufsroot0).
 #
 #   mkiosroot.sh OS.dmg SYSTEMOS.dmg APPOS.dmg OUT.img [SIZE]     (SIZE default 16G)
+#   SWEET_HFS_BACKEND=auto|native|guestmount (default auto)
+#   The guestmount backend requires root, guestmount/guestunmount and a guest
+#   Linux kernel with HFS+ support; it also works when the host kernel lacks HFS+.
 #
 # The IPSW images are raw APFS with LZBITMAP-compressed files: they are read
 # through apfs-fuse (decompressing), so the HFS+ copy is uncompressed. On a
@@ -19,12 +22,32 @@
 set -euo pipefail
 
 [[ $# -ge 4 ]] || { sed -n '2,12p' "$0"; exit 2; }
-os=$(realpath "$1") sysos=$(realpath "$2") appos=$(realpath "$3") out=$4 size=${5:-16G}
+os=$(realpath "$1") sysos=$(realpath "$2") appos=$(realpath "$3")
+out=$(realpath -m "$4") size=${5:-16G}
 [[ ! -e $out ]] || { echo "refusing to overwrite $out" >&2; exit 1; }
+
+backend=${SWEET_HFS_BACKEND:-auto}
+case $backend in
+	auto)
+		if grep -qw hfsplus /proc/filesystems ||
+		    { command -v modinfo >/dev/null && modinfo hfsplus >/dev/null 2>&1; }; then
+			backend=native
+		else
+			backend=guestmount
+		fi ;;
+	native|guestmount) ;;
+	*) echo "unknown HFS backend: $backend" >&2; exit 1 ;;
+esac
+if [[ $backend == guestmount && $EUID != 0 ]]; then
+	echo "run the guestmount backend as root (sudo env SWEET_HFS_BACKEND=guestmount bash ...)" >&2
+	exit 1
+fi
 
 # Pre-flight tool check
 missing_tools=()
-for tool in apfs-fuse mkfs.hfsplus rsync; do
+required_tools=(apfs-fuse mkfs.hfsplus fsck.hfsplus rsync python3)
+[[ $backend != guestmount ]] || required_tools+=(guestmount guestunmount)
+for tool in "${required_tools[@]}"; do
 	command -v "$tool" >/dev/null 2>&1 || missing_tools+=("$tool")
 done
 
@@ -39,23 +62,98 @@ fi
 
 work=$(mktemp -d)
 mounts=()
-cleanup() {
-	local busy=0
-	for m in "${mounts[@]}"; do
-		if mountpoint -q "$m"; then
-			sudo umount "$m" 2>/dev/null || true
+guest_mount=''
+guest_pidfile="$work/guestmount.pid"
+
+wait_guest_exit() {
+	local pid
+	[[ -f $guest_pidfile ]] || { echo "missing guestmount PID file; cannot confirm image is closed" >&2; return 1; }
+	pid=$(cat "$guest_pidfile")
+	[[ $pid =~ ^[1-9][0-9]+$ ]] || { echo "invalid guestmount PID file" >&2; return 1; }
+	for ((attempt=0; attempt<300; attempt++)); do
+		if ! kill -0 "$pid" 2>/dev/null; then
+			rm -f "$guest_pidfile"
+			guest_mount=''
+			return 0
 		fi
+		sleep 0.1
+	done
+	echo "guestmount is still running; image must not be checked or reused yet" >&2
+	return 1
+}
+
+unmount_one() {
+	local point=$1
+	if [[ $point == "$guest_mount" ]]; then
+		if mountpoint -q "$point"; then
+			sudo guestunmount "$point" || return 1
+		fi
+		wait_guest_exit || return 1
+	elif mountpoint -q "$point"; then
+		sudo umount "$point" || return 1
+	fi
+	return 0
+}
+
+cleanup() {
+	local original_status=$? busy=0 m
+	for ((i=${#mounts[@]}-1; i>=0; i--)); do
+		m=${mounts[i]}
+		unmount_one "$m" || busy=1
 		mountpoint -q "$m" && busy=1
 	done
 	# Never recurse into a directory that is still mounted (the root is writable).
 	if [[ $busy == 0 ]]; then
-		rm -f "$work"/*.dmg
+		rm -f "$work"/*.dmg "$work/probe.img" "$guest_pidfile"
 		rmdir "$work"/* "$work" 2>/dev/null || true
 	else
 		echo "still mounted under $work: left in place" >&2
+		# A successful build must also release its source mounts. Preserve an
+		# earlier failure code, but report cleanup failure after success.
+		[[ $original_status != 0 ]] || exit 1
 	fi
 }
 trap cleanup EXIT
+
+hfs_mount() {
+	local image=$1 point=$2
+	# Track even a partly failed mount so the EXIT trap can release it.
+	mounts+=("$point")
+	if [[ $backend == guestmount ]]; then
+		guest_mount=$point
+		sudo env LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg \
+			guestmount --rw --format=raw -a "$image" \
+			-m /dev/sda:/:rw,force:hfsplus --pid-file "$guest_pidfile" \
+			-o allow_other,use_ino "$point"
+	else
+		sudo mount -t hfsplus -o loop,force "$image" "$point"
+	fi
+}
+
+# Exercise the actual mount backend before allocating the output image or
+# opening the Apple volumes. HFSX case handling and Unix metadata are required.
+echo "checking HFSX backend: $backend"
+mkdir "$work/probe"
+truncate -s 64M "$work/probe.img"
+mkfs.hfsplus -s -J -v HFSXProbe "$work/probe.img" >/dev/null
+hfs_mount "$work/probe.img" "$work/probe"
+printf 'HFSX probe\n' | sudo tee "$work/probe/file" >/dev/null
+sudo chown 501:20 "$work/probe/file"
+sudo chmod 0640 "$work/probe/file"
+sudo ln "$work/probe/file" "$work/probe/hardlink"
+sudo ln -s file "$work/probe/symlink"
+[[ $(sudo stat -c '%u:%g:%a:%h' "$work/probe/file") == 501:20:640:2 ]]
+[[ $(sudo stat -c '%i' "$work/probe/file") == $(sudo stat -c '%i' "$work/probe/hardlink") ]]
+[[ $(sudo readlink "$work/probe/symlink") == file ]]
+printf 'upper\n' | sudo tee "$work/probe/Case" >/dev/null
+printf 'lower\n' | sudo tee "$work/probe/case" >/dev/null
+[[ $(sudo cat "$work/probe/Case") == upper && $(sudo cat "$work/probe/case") == lower ]]
+unmount_one "$work/probe"
+fsck.hfsplus -f -n "$work/probe.img"
+rm -f "$work/probe.img"
+rmdir "$work/probe"
+mounts=()
+echo "HFSX backend probe passed"
 
 # apfs-fuse splits its options on ',' (e.g. in iPhone10,3 paths): use links.
 # Keep the .dmg name: apfs-fuse only parses UDIF images (the OS one is UDIF,
@@ -71,11 +169,13 @@ apfs_mount "$os" os
 apfs_mount "$sysos" sysos
 apfs_mount "$appos" appos
 
+# Atomically claim a new regular output. A concurrent build must fail rather
+# than truncate or format the image another build has already started writing.
+python3 -c 'import os,sys; os.close(os.open(sys.argv[1], os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))' "$out"
 truncate -s "$size" "$out"
 mkfs.hfsplus -s -J -v iOSRoot "$out"
 mkdir "$work/root"
-sudo mount -t hfsplus -o loop,force "$out" "$work/root"
-mounts=("$work/root" "${mounts[@]}")
+hfs_mount "$out" "$work/root"
 
 copy() {
 	echo "copying $1 -> ${2#"$work/root"}"
@@ -127,8 +227,13 @@ printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
 	'<plist version="1.0"><dict><key>KeyBagKeys</key><data>U1dFRVQ=</data></dict></plist>' |
 	sudo install -m 0600 -o 0 -g 0 /dev/stdin "$work/root/private/var/keybags/systembag.kb"
 
+sudo test -s "$work/root/sbin/launchd"
+sudo test -s "$work/root/usr/lib/dyld"
+cache="$work/root/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64"
+sudo test -s "$cache" || { echo "missing primary arm64 dyld shared cache" >&2; exit 1; }
+sudo python3 -c 'import sys; magic=open(sys.argv[1],"rb").read(16); fields=magic.rstrip(b"\0").split(); sys.exit(0 if len(magic)==16 and fields==[b"dyld_v1",b"arm64"] else "invalid primary arm64 dyld cache magic")' "$cache"
 df -h "$work/root"
-sudo umount "$work/root"
+unmount_one "$work/root"
 # Linux hfsplus decomposes some non-ASCII names (localized Shortcuts examples)
 # differently from Apple's tables; let fsck_hfs rewrite them, then verify.
 fsck.hfsplus -f -y "$out" | grep -v 'Illegal name' || true

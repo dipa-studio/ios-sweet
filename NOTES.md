@@ -133,6 +133,64 @@ Do not repurpose r10's hard-pinned validators as proof of a different source/run
 Earlier entries are retained milestone history; their r10 queued/no-boot state
 is superseded by the evidence above and the current C:\ports\handoff.md.
 
+### 2026-11-03 — r13 rootfs: guestmount backend prepared; Linux execution pending
+
+Current hardware milestone is **BSD root selected, HFS mount rejected**. The
+verified r12 kernel from Actions run `41523222878`, exact source
+`4d8e6ab7a4614bf1c0636332fc81a2f5fb4395b5`, was temporarily booted with
+`sweetkeys=0 sweettouch=0 sweetusb=0 sweetsample=-`, UFS writes/logging disabled.
+User console confirms GPT reads, userdata on LUN0 and `SWEETM 41 IOFindBSDRoot
+ret 0`; HFS then rejects signature `2db5`. TWRP independently showed F2FS on
+`/data` via dm-6. This is not a successful root mount or iOS userland boot.
+Full console and image proof remain outside Git in `C:\ports\r12-rootdiag`.
+
+The old `C:\ports\iosroot\ios16-root.img` is empty HFSX (only journal files).
+All three extracted 20H392 source DMGs now match their saved IPSW entry sizes
+and CRC32, and their SHA384 matches BuildManifest Digest. Receipt:
+`C:\ports\r13-rootfs\source-inputs-verified.json`; Apple binaries stay out of Git.
+
+The user's WSL kernel `6.18.54.1-microsoft-standard-WSL2` has no available
+`hfsplus` module. apfs-fuse, mkfs.hfsplus, fsck.hfsplus and rsync are installed;
+the user has now installed guestmount/libguestfs `1.58.1-3ubuntu3`, supermin,
+QEMU and `linux-image-7.0.0-42-generic` with its modules. Apt completed without
+a reported fatal error. This generic kernel is for the guestfs appliance;
+it is not a module source for the active WSL kernel. `libguestfs-hfsplus` was
+recommended but not explicitly installed; actual appliance support remains
+to be tested. Agent WSL launch is denied by CreateInstance/E_ACCESSDENIED,
+so Linux commands run in the user's existing WSL prompt. User requested direct
+commands and no new wrapper scripts.
+
+This isolated branch `codex/r13-rootfs-guestmount-20261103`, based on the accepted
+r12 source, updates existing `tools/mkiosroot.sh` with native/guestmount backend
+selection. The guest backend requires root and an appliance kernel; it uses
+direct QEMU with TCG. It checks real HFSX case handling, ownership, modes,
+symlinks and hardlinks on a temporary 64MiB image before creating the output.
+Guest unmount waits for the daemon PID to exit before fsck or image reuse.
+The output is atomically reserved with O_EXCL to prevent concurrent overwrite.
+Critical launchd/dyld paths and the nonempty primary arm64 dyld shared cache
+with matching magic must exist before final offline filesystem checks.
+Cleanup failure also fails the build. `.gitattributes` keeps this Bash file LF
+on Windows checkouts.
+
+Completed local checks: Bash syntax PASS; refusal of an existing output PASS;
+invalid backend rejected before output creation PASS; diff whitespace PASS.
+Final independent read-only static review PASS, including the cache magic,
+atomic output reservation and unmount/cleanup sequence. Builder SHA256:
+`086db4c8d55d930e520a068117ae96e7e670d1c13066e2766eefa5e71545d380`.
+Linux backend mount/probe, full OS copy, filesystem acceptance and iOS boot are
+still pending; successful package installation is not a rootfs build.
+
+Next: run the existing builder in the user's WSL prompt with
+`SWEET_HFS_BACKEND=guestmount` against the three verified DMGs into a **new**
+`C:\ports\r13-rootfs\ios16-root-20H392-r13.img`. Validate the result and apply
+the existing root tweaks before proposing installation. Userdata installation
+would replace current Android data and needs specific approval. No device
+write/flash/erase/format/GPT action has been issued during rootfs preparation.
+Original dirty `C:\ports\ios-cas` and frozen accepted worktrees are preserved;
+current cross-harness checkpoint is `C:\ports\handoff.md`.
+
+---
+
 ### 2026-10-25 — r10: 0086 committed; exact-source/frozen checks PASS, CI 40173696413 queued
 
 **Implemented:** new tail patch `0086-sweet-disable-fb-beacon.patch` replaces only
