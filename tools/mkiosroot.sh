@@ -121,12 +121,12 @@ hfs_mount() {
 	mounts+=("$point")
 	if [[ $backend == guestmount ]]; then
 		guest_mount=$point
-		# guestmount escapes commas inside each -o value; pass FUSE options
-		# separately so allow_other and use_ino are two recognized options.
+		# guestmount escapes commas inside each -o value. Keep just the
+		# required FUSE access option; current guestmount rejects use_ino.
 		sudo env LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg \
 			guestmount --rw --format=raw -a "$image" \
 			-m /dev/sda:/:rw,force:hfsplus --pid-file "$guest_pidfile" \
-			-o allow_other -o use_ino "$point"
+			-o allow_other "$point"
 	else
 		sudo mount -t hfsplus -o loop,force "$image" "$point"
 	fi
@@ -144,8 +144,13 @@ sudo chown 501:20 "$work/probe/file"
 sudo chmod 0640 "$work/probe/file"
 sudo ln "$work/probe/file" "$work/probe/hardlink"
 sudo ln -s file "$work/probe/symlink"
-[[ $(sudo stat -c '%u:%g:%a:%h' "$work/probe/file") == 501:20:640:2 ]]
-[[ $(sudo stat -c '%i' "$work/probe/file") == $(sudo stat -c '%i' "$work/probe/hardlink") ]]
+[[ $(sudo stat -c '%u:%g:%a:%h' "$work/probe/file") == 501:20:640:2 ]] ||
+	{ echo "HFSX probe ownership, mode or hardlink count failed" >&2; exit 1; }
+# FUSE can present inode numbers independently from the backing filesystem.
+# Require actual shared writes through the hardlink, not inode presentation.
+printf 'hardlink update\n' | sudo tee "$work/probe/hardlink" >/dev/null
+[[ $(sudo cat "$work/probe/file") == 'hardlink update' ]] ||
+	{ echo "HFSX probe hardlink does not share file contents" >&2; exit 1; }
 [[ $(sudo readlink "$work/probe/symlink") == file ]]
 printf 'upper\n' | sudo tee "$work/probe/Case" >/dev/null
 printf 'lower\n' | sudo tee "$work/probe/case" >/dev/null
