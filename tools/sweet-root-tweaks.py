@@ -33,6 +33,35 @@ BUILD, VERSION = '20H392', '16.7.16'
 MOBILE = 501
 
 
+def image_path(root, path):
+    """Resolve a device path, including absolute symlinks, within MOUNTED_ROOT."""
+    from collections import deque
+    root = os.path.realpath(root)
+    pending = deque(path.split('/'))
+    resolved = []
+    links = 0
+    while pending:
+        part = pending.popleft()
+        if part in ('', '.'):
+            continue
+        if part == '..':
+            if resolved:
+                resolved.pop()
+            continue
+        candidate = os.path.join(root, *resolved, part)
+        if os.path.islink(candidate):
+            links += 1
+            if links > 40:
+                raise ValueError('too many image symlinks: ' + path)
+            target = os.readlink(candidate)
+            if target.startswith('/'):
+                resolved = []
+            pending.extendleft(reversed(target.split('/')))
+        else:
+            resolved.append(part)
+    return os.path.join(root, *resolved)
+
+
 def load(path):
     with open(path, 'rb') as f:
         return plistlib.load(f)
@@ -47,7 +76,7 @@ def save(path, data, uid, gid, mode, fmt=plistlib.FMT_BINARY):
 
 def merge_pref(root, name, values):
     """Merge keys into /var/mobile/Library/Preferences/NAME.plist (mobile, 0600)."""
-    path = os.path.join(root, 'private/var/mobile/Library/Preferences', name + '.plist')
+    path = image_path(root, 'private/var/mobile/Library/Preferences/' + name + '.plist')
     data = load(path) if os.path.exists(path) else {}
     data.update(values)
     save(path, data, MOBILE, MOBILE, 0o600)
@@ -55,7 +84,7 @@ def merge_pref(root, name, values):
 
 
 def launchd(root):
-    path = os.path.join(root, 'System/Library/xpc/launchd.plist')
+    path = image_path(root, 'System/Library/xpc/launchd.plist')
     st = os.stat(path)
     plist = load(path)
     jobs = plist['LaunchDaemons']
@@ -72,9 +101,10 @@ def launchd(root):
 
 
 def containers(root):
-    base = os.path.join(root, 'private/var/containers')
+    root = os.path.realpath(root)
+    base = image_path(root, 'private/var/containers')
     for sub, uid in (('Bundle', 33), ('Data/System', 0), ('Shared/SystemGroup', 0), ('Temp', 0)):
-        d = os.path.join(base, sub)
+        d = image_path(root, os.path.relpath(os.path.join(base, sub), root))
         if not os.path.isdir(d):
             os.makedirs(d)
             os.chown(d, uid, uid)
@@ -83,23 +113,26 @@ def containers(root):
 
 
 def find_container(root, kind, identifier):
-    for meta in glob.glob(os.path.join(root, 'private/var/containers', kind, '*',
-                                       '.com.apple.mobile_container_manager.metadata.plist')):
+    root = os.path.realpath(root)
+    base = image_path(root, 'private/var/containers/' + kind)
+    for meta in glob.glob(os.path.join(base, '*', '.com.apple.mobile_container_manager.metadata.plist')):
+        meta = image_path(root, os.path.relpath(meta, root))
         if load(meta).get('MCMMetadataIdentifier') == identifier:
             return os.path.dirname(meta)
     return None
 
 
 def activation(root):
+    root = os.path.realpath(root)
     c = find_container(root, 'Data/System', 'com.apple.mobileactivationd')
     if c is None:
         print('warning: no mobileactivationd system container in the image; skipped data ark')
         return
-    d = os.path.join(c, 'Library/internal')
+    d = image_path(root, os.path.relpath(os.path.join(c, 'Library/internal'), root))
     os.makedirs(d, exist_ok=True)
     os.chown(d, MOBILE, MOBILE)
     os.chmod(d, 0o755)
-    save(os.path.join(d, 'data_ark.plist'), {
+    save(image_path(root, os.path.relpath(os.path.join(d, 'data_ark.plist'), root)), {
         '-ActivationState': 'Activated', '-BrickState': False,
         '-BuildVersion': BUILD, '-ProductVersion': VERSION,
         '-DataMigrationCompleted': True, '-PreSydroDataMigrationCompleted': True,
@@ -108,13 +141,16 @@ def activation(root):
 
 
 def audio(root):
-    src = os.path.join(root, 'Library/Audio/Plug-Ins/HAL/VirtualAudio.plugin')
-    dst_dir = os.path.join(root, 'Library/Audio/Plug-Ins/HAL.disabled')
+    root = os.path.realpath(root)
+    src = image_path(root, 'Library/Audio/Plug-Ins/HAL/VirtualAudio.plugin')
+    dst_dir = image_path(root, 'Library/Audio/Plug-Ins/HAL.disabled')
     if os.path.exists(src):
         os.makedirs(dst_dir, exist_ok=True)
         shutil.move(src, dst_dir)
         print('VirtualAudio.plugin disabled')
-    for conf in glob.glob(os.path.join(root, 'System/Library/Frameworks/MediaToolbox.framework/*/SubServerConfiguration.plist')):
+    framework = image_path(root, 'System/Library/Frameworks/MediaToolbox.framework')
+    for conf in glob.glob(os.path.join(framework, '*/SubServerConfiguration.plist')):
+        conf = image_path(root, os.path.relpath(conf, root))
         st = os.stat(conf)
         data = load(conf)
         data['StartRecorderServer'] = False
@@ -123,9 +159,9 @@ def audio(root):
 
 
 def main():
-    if len(sys.argv) != 2 or not os.path.isdir(os.path.join(sys.argv[1], 'System/Library/xpc')):
+    if len(sys.argv) != 2 or not os.path.isdir(image_path(sys.argv[1], 'System/Library/xpc')):
         sys.exit(__doc__)
-    root = sys.argv[1]
+    root = os.path.realpath(sys.argv[1])
     launchd(root)
     containers(root)
     activation(root)

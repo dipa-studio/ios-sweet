@@ -4,6 +4,7 @@
 #
 #   mkiosroot.sh OS.dmg SYSTEMOS.dmg APPOS.dmg OUT.img [SIZE]     (SIZE default 16G)
 #   SWEET_HFS_BACKEND=auto|native|guestmount (default auto)
+#   SWEET_ROOT_TWEAKS=1 also applies the existing 20H392 bring-up tweaks.
 #   The guestmount backend requires root, guestmount/guestunmount and a guest
 #   Linux kernel with HFS+ support; it also works when the host kernel lacks HFS+.
 #
@@ -25,6 +26,12 @@ set -euo pipefail
 os=$(realpath "$1") sysos=$(realpath "$2") appos=$(realpath "$3")
 out=$(realpath -m "$4") size=${5:-16G}
 [[ ! -e $out ]] || { echo "refusing to overwrite $out" >&2; exit 1; }
+root_tweaks=${SWEET_ROOT_TWEAKS:-0}
+[[ $root_tweaks == 0 || $root_tweaks == 1 ]] ||
+	{ echo "SWEET_ROOT_TWEAKS must be 0 or 1" >&2; exit 1; }
+tweaks_tool="$(dirname "$0")/sweet-root-tweaks.py"
+[[ -f $tweaks_tool ]] ||
+	{ echo "missing existing root tweaks tool: $tweaks_tool" >&2; exit 1; }
 
 backend=${SWEET_HFS_BACKEND:-auto}
 case $backend in
@@ -64,6 +71,7 @@ work=$(mktemp -d)
 mounts=()
 guest_mount=''
 guest_pidfile="$work/guestmount.pid"
+probe_image=''
 
 wait_guest_exit() {
 	local pid
@@ -92,6 +100,10 @@ unmount_one() {
 	elif mountpoint -q "$point"; then
 		sudo umount "$point" || return 1
 	fi
+	if mountpoint -q "$point"; then
+		echo "mount is still present: $point" >&2
+		return 1
+	fi
 	return 0
 }
 
@@ -104,10 +116,14 @@ cleanup() {
 	done
 	# Never recurse into a directory that is still mounted (the root is writable).
 	if [[ $busy == 0 ]]; then
-		rm -f "$work"/*.dmg "$work/probe.img" "$guest_pidfile"
+		if [[ -n $probe_image && -f $probe_image ]]; then
+			echo "closed failed probe retained for inspection: $probe_image" >&2
+		fi
+		rm -f "$work"/*.dmg "$work"/*.files "$guest_pidfile"
 		rmdir "$work"/* "$work" 2>/dev/null || true
 	else
 		echo "could not confirm all mounts are released under $work: left in place" >&2
+		[[ -z $probe_image ]] || echo "probe image closure unconfirmed: $probe_image" >&2
 		# A successful build must also release its source mounts. Preserve an
 		# earlier failure code, but report cleanup failure after success.
 		[[ $original_status != 0 ]] || exit 1
@@ -116,7 +132,12 @@ cleanup() {
 trap cleanup EXIT
 
 hfs_mount() {
-	local image=$1 point=$2
+	local image=$1 point=$2 access=${3:-rw} guest_access mount_options native_options
+	case $access in
+		rw) guest_access=--rw; mount_options=rw,force; native_options=loop,force ;;
+		ro) guest_access=--ro; mount_options=ro; native_options=loop,ro ;;
+		*) echo "unknown HFS access mode: $access" >&2; return 1 ;;
+	esac
 	# Track even a partly failed mount so the EXIT trap can release it.
 	mounts+=("$point")
 	if [[ $backend == guestmount ]]; then
@@ -124,56 +145,100 @@ hfs_mount() {
 		# guestmount escapes commas inside each -o value. Keep just the
 		# required FUSE access option; current guestmount rejects use_ino.
 		sudo env LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg \
-			guestmount --rw --format=raw -a "$image" \
-			-m /dev/sda:/:rw,force:hfsplus --pid-file "$guest_pidfile" \
-			-o allow_other "$point"
+			guestmount "$guest_access" --format=raw -a "$image" \
+			-m "/dev/sda:/:$mount_options:hfsplus" --pid-file "$guest_pidfile" \
+			-o allow_other "$point" || return
 	else
-		sudo mount -t hfsplus -o loop,force "$image" "$point"
+		sudo mount -t hfsplus -o "$native_options" "$image" "$point" || return
 	fi
+	mountpoint -q "$point" || { echo "HFS mount did not appear: $point" >&2; return 1; }
+}
+
+hfs_check() {
+	local image=$1 repair_status=0
+	[[ -z $guest_mount ]] || { echo "refusing fsck while guest writer is unconfirmed" >&2; return 1; }
+	# Only newly created probe/output images reach this helper. Fresh journaled
+	# HFSX and Linux's name tables may need repair; the strict second pass decides.
+	fsck.hfsplus -f -y "$image" || repair_status=$?
+	if [[ $repair_status != 0 ]]; then
+		echo "HFS repair returned $repair_status; requiring clean read-only check" >&2
+	fi
+	fsck.hfsplus -f -n "$image"
+}
+
+image_resolve() {
+	local result_var=$1 relative_path=$2 image_root=${3:-$work/root} resolved_image_path
+	# A trailing NUL preserves names containing newlines. A failed resolver
+	# produces no terminator, so read fails before any mkdir/cp/ln can run.
+	if ! IFS= read -r -d '' resolved_image_path < <(
+		python3 -c 'import os,runpy,sys; resolve=runpy.run_path(sys.argv[1])["image_path"]; os.write(1,os.fsencode(resolve(sys.argv[2],sys.argv[3]))+b"\0")' \
+			"$tweaks_tool" "$image_root" "$relative_path"
+	); then
+		echo "cannot resolve path within root image: $relative_path" >&2
+		return 1
+	fi
+	printf -v "$result_var" '%s' "$resolved_image_path"
 }
 
 # Exercise the actual mount backend before allocating the output image or
 # opening the Apple volumes. HFSX case handling and Unix metadata are required.
 echo "checking HFSX backend: $backend"
 mkdir "$work/probe"
-truncate -s 64M "$work/probe.img"
-mkfs.hfsplus -s -J -v HFSXProbe "$work/probe.img" >/dev/null
-hfs_mount "$work/probe.img" "$work/probe"
+probe_image=$(mktemp "${out}.probe.XXXXXX")
+truncate -s 64M "$probe_image"
+mkfs.hfsplus -s -J -v HFSXProbe "$probe_image" >/dev/null
+hfs_mount "$probe_image" "$work/probe"
 printf 'HFSX probe\n' | sudo tee "$work/probe/file" >/dev/null
 sudo chown 501:20 "$work/probe/file"
 sudo chmod 0640 "$work/probe/file"
 sudo ln "$work/probe/file" "$work/probe/hardlink"
 sudo ln -s file "$work/probe/symlink"
-expected_probe_metadata=501:20:640:2
-# FUSE may briefly cache attributes from before chown/chmod/link. Re-read for
-# at most three seconds; every accepted result must still match exactly.
-for ((probe_attempt=0; probe_attempt<4; probe_attempt++)); do
-	probe_metadata=$(sudo stat -c '%u:%g:%a:%h' "$work/probe/file")
-	if [[ $probe_metadata == "$expected_probe_metadata" ||
-	      $backend != guestmount || $probe_attempt == 3 ]]; then
-		break
-	fi
-	sleep 1
-done
-printf 'HFSX probe metadata: %s (expected %s)\n' "$probe_metadata" "$expected_probe_metadata"
-if [[ $probe_metadata != "$expected_probe_metadata" ]]; then
-	sudo stat -c '%n: uid=%u gid=%g mode=%a links=%h type=%F' \
-		"$work/probe/file" "$work/probe/hardlink" >&2
-	echo "HFSX probe ownership, mode or hardlink count failed" >&2
-	exit 1
-fi
-# FUSE can present inode numbers independently from the backing filesystem.
-# Require actual shared writes through the hardlink, not inode presentation.
+# Finish every mutation before checking through a fresh read-only mount.
+# FUSE can cache separate size/data attributes for two hardlink paths.
 printf 'hardlink update\n' | sudo tee "$work/probe/hardlink" >/dev/null
-[[ $(sudo cat "$work/probe/file") == 'hardlink update' ]] ||
-	{ echo "HFSX probe hardlink does not share file contents" >&2; exit 1; }
-[[ $(sudo readlink "$work/probe/symlink") == file ]]
 printf 'upper\n' | sudo tee "$work/probe/Case" >/dev/null
 printf 'lower\n' | sudo tee "$work/probe/case" >/dev/null
-[[ $(sudo cat "$work/probe/Case") == upper && $(sudo cat "$work/probe/case") == lower ]]
 unmount_one "$work/probe"
-fsck.hfsplus -f -n "$work/probe.img"
-rm -f "$work/probe.img"
+hfs_check "$probe_image"
+hfs_mount "$probe_image" "$work/probe" ro
+sudo python3 - "$work/probe" <<'PY_PROBE'
+import os, stat, sys
+root = sys.argv[1]
+expected = (501, 20, 0o640, 2)
+payload = b"hardlink update\n"
+errors = []
+for name in ("file", "hardlink"):
+    path = os.path.join(root, name)
+    info = os.lstat(path)
+    actual = (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode), info.st_nlink)
+    print(f"HFSX probe metadata {name}: {actual[0]}:{actual[1]}:{actual[2]:o}:{actual[3]}")
+    if not stat.S_ISREG(info.st_mode) or actual != expected:
+        errors.append(f"{name}: expected regular file with 501:20:640:2, got {actual!r}")
+    with open(path, "rb") as source:
+        data = source.read()
+    if data != payload:
+        errors.append(f"{name}: expected {payload!r}, got {data!r}")
+link = os.path.join(root, "symlink")
+if not os.path.islink(link) or os.readlink(link) != "file":
+    errors.append("symlink target is not file")
+else:
+    with open(link, "rb") as source:
+        if source.read() != payload:
+            errors.append("symlink does not resolve to updated file contents")
+for name, wanted in (("Case", b"upper\n"), ("case", b"lower\n")):
+    with open(os.path.join(root, name), "rb") as source:
+        actual = source.read()
+    if actual != wanted:
+        errors.append(f"{name}: expected {wanted!r}, got {actual!r}")
+if errors:
+    for error in errors:
+        print("HFSX persisted probe failed: " + error, file=sys.stderr)
+    sys.exit(1)
+print("HFSX persisted metadata, hardlink, symlink and case checks passed")
+PY_PROBE
+unmount_one "$work/probe"
+rm -f "$probe_image"
+probe_image=''
 rmdir "$work/probe"
 mounts=()
 echo "HFSX backend probe passed"
@@ -185,12 +250,37 @@ apfs_mount() {
 	ln -s "$1" "$work/$2.dmg"
 	mkdir "$work/$2"
 	# As root: a user's FUSE mount is unreadable to the root rsync below.
-	sudo "$(command -v apfs-fuse)" "$work/$2.dmg" "$work/$2"
 	mounts+=("$work/$2")
+	sudo "$(command -v apfs-fuse)" "$work/$2.dmg" "$work/$2"
+	mountpoint -q "$work/$2" || { echo "APFS mount did not appear: $2" >&2; return 1; }
 }
 apfs_mount "$os" os
 apfs_mount "$sysos" sysos
 apfs_mount "$appos" appos
+
+cache_rel=System/Library/Caches/com.apple.dyld
+for source in os sysos appos; do
+	sudo test -d "$work/$source/root" ||
+		{ echo "missing APFS root directory: $source" >&2; exit 1; }
+done
+sudo test -s "$work/os/root/sbin/launchd" || { echo "missing source launchd" >&2; exit 1; }
+sudo test -s "$work/sysos/root/$cache_rel/dyld_shared_cache_arm64" ||
+	{ echo "missing source primary arm64 dyld cache" >&2; exit 1; }
+if [[ $root_tweaks == 1 ]]; then
+	python3 - "$work/os/root/System/Library/CoreServices/SystemVersion.plist" <<'PY_TWEAK_VERSION'
+import plistlib, sys
+with open(sys.argv[1], "rb") as source:
+    version = plistlib.load(source)
+if (version.get("ProductVersion"), version.get("ProductBuildVersion")) != ("16.7.16", "20H392"):
+    sys.exit("existing root tweaks require iOS 16.7.16 / 20H392")
+PY_TWEAK_VERSION
+fi
+# Enumerate immutable sources, not the just-populated destination FUSE cache.
+# Save NUL-delimited lists first so find failures propagate before allocation.
+for c in OS App; do
+	if [[ $c == OS ]]; then source="$work/sysos/root"; else source="$work/appos/root"; fi
+	(cd "$source" && sudo find . ! -type d ! -path './System/Library/Caches/com.apple.dyld/*' -print0) > "$work/$c.files"
+done
 
 # Atomically claim a new regular output. A concurrent build must fail rather
 # than truncate or format the image another build has already started writing.
@@ -201,63 +291,169 @@ mkdir "$work/root"
 hfs_mount "$out" "$work/root"
 
 copy() {
-	echo "copying $1 -> ${2#"$work/root"}"
-	sudo mkdir -p "$2"
-	sudo rsync -aH --numeric-ids "$1/" "$2/"
+	local destination
+	image_resolve destination "$2"
+	echo "copying $1 -> /$2"
+	sudo mkdir -p "$destination"
+	sudo rsync -aH --numeric-ids --info=progress2 "$1/" "$destination/"
 }
-copy "$work/os/root" "$work/root"
-copy "$work/sysos/root" "$work/root/private/preboot/Cryptexes/OS"
-copy "$work/appos/root" "$work/root/private/preboot/Cryptexes/App"
+copy "$work/os/root" .
+copy "$work/sysos/root" private/preboot/Cryptexes/OS
+copy "$work/appos/root" private/preboot/Cryptexes/App
+
+# Bind the cryptexes to this single-volume layout. Relative links also resolve
+# within the image when host tools inspect them before installation.
+image_resolve cryptex_links System/Cryptexes
+sudo mkdir -p "$cryptex_links"
+for c in OS App; do
+	# Compute an equivalent relative link from the physical parent directory.
+	image_resolve cryptex_target "private/preboot/Cryptexes/$c"
+	cryptex_link=$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$cryptex_target" "$cryptex_links")
+	sudo ln -sfn -T "$cryptex_link" "$cryptex_links/$c"
+done
 
 # Shared cache where dyld looks at ignition level 1: hard links, no extra space.
-dsc=private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld
-sudo mkdir -p "$work/root/System/Library/Caches/com.apple.dyld"
-for f in "$work/root/$dsc"/*; do
-	sudo ln "$f" "$work/root/System/Library/Caches/com.apple.dyld/${f##*/}"
+dsc=private/preboot/Cryptexes/OS/$cache_rel
+image_resolve cache_parent System/Library/Caches
+cache_directory="$cache_parent/com.apple.dyld"
+if sudo test -L "$cache_directory"; then sudo rm "$cache_directory"; fi
+sudo mkdir -p "$cache_directory"
+image_resolve cryptex_cache_directory "$dsc"
+for f in "$work/sysos/root/$cache_rel"/*; do
+	sudo test -f "$f" || { echo "unsupported dyld cache entry: $f" >&2; exit 1; }
+	name=${f##*/}
+	[[ $cryptex_cache_directory/$name != "$cache_directory/$name" ]] || continue
+	if sudo test -L "$f"; then
+		sudo cp -pP -T "$f" "$cache_directory/$name"
+	else
+		sudo ln -f -T "$cryptex_cache_directory/$name" "$cache_directory/$name"
+	fi
 done
 
 # dyld does not search the cryptexes at ignition level 1: hard-link every
 # cryptex file that has no counterpart in the OS root (libobjc-trampolines,
 # libffi-trampolines, libstdc++, ...) to its root path.
+declare -A linked_cryptex_files=()
 for c in OS App; do
-	(cd "$work/root/private/preboot/Cryptexes/$c" && sudo find . ! -type d ! -path './System/Library/Caches/com.apple.dyld/*') |
-	while IFS= read -r f; do
+	if [[ $c == OS ]]; then source="$work/sysos/root"; else source="$work/appos/root"; fi
+	while IFS= read -r -d '' f; do
 		f=${f#./}
-		if ! sudo test -e "$work/root/$f" && ! sudo test -L "$work/root/$f"; then
-			sudo mkdir -p "$work/root/$(dirname "$f")"
-			src="$work/root/private/preboot/Cryptexes/$c/$f"
+		if [[ $f == */* ]]; then parent=${f%/*}; else parent=.; fi
+		image_resolve original_parent "$parent" "$work/os/root"
+		original_target="$original_parent/${f##*/}"
+		if ! sudo test -e "$original_target" && ! sudo test -L "$original_target" &&
+		    [[ ! ${linked_cryptex_files["$f"]+present} ]]; then
+			image_resolve target_parent "$parent"
+			target="$target_parent/${f##*/}"
+			# OS directory symlinks can already expose the copied cryptex file.
+			if sudo test -e "$target" || sudo test -L "$target"; then continue; fi
+			image_resolve src "private/preboot/Cryptexes/$c/$f"
+			[[ $src != "$target" ]] || continue
+			sudo mkdir -p "$target_parent"
 			# Linux hfsplus cannot hard-link symlinks: copy those.
-			if sudo test -L "$src"; then sudo cp -P "$src" "$work/root/$f"; else sudo ln "$src" "$work/root/$f"; fi
+			if sudo test -L "$source/$f"; then sudo cp -pP -T "$source/$f" "$target"; else sudo ln -T "$src" "$target"; fi
+			linked_cryptex_files["$f"]=1
 			echo "linked $c:/$f"
 		fi
-	done
+	done < "$work/$c.files"
 done
 
 # logd's log stores, normally made at restore: it checks owner _logd (272)
 # and mode, plus a .migrated marker, else asks a helper and crashes
 # ("BUG IN LIBTRACE: Failed to migrate directory").
-db="$work/root/private/var/db"
-sudo install -d -o 272 -g 272 -m 0751 "$db/diagnostics"
-sudo install -d -o 272 -g 272 -m 0755 "$db/uuidtext" "$db/diagnostics/timesync"
 for d in diagnostics uuidtext diagnostics/timesync; do
-	sudo install -o 272 -g 272 -m 0644 /dev/null "$db/$d/.migrated"
+	image_resolve log_directory "private/var/db/$d"
+	if [[ $d == diagnostics ]]; then log_mode=0751; else log_mode=0755; fi
+	sudo install -d -o 272 -g 272 -m "$log_mode" "$log_directory"
+	image_resolve log_marker "private/var/db/$d/.migrated"
+	sudo install -o 272 -g 272 -m 0644 /dev/null "$log_marker"
 done
 
 # System keybag for the built-in AppleKeyStore (no passcode).
-sudo install -d -m 0700 -o 0 -g 0 "$work/root/private/var/keybags"
+image_resolve keybags private/var/keybags
+sudo install -d -m 0700 -o 0 -g 0 "$keybags"
+image_resolve keybag_file private/var/keybags/systembag.kb
 printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
 	'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
 	'<plist version="1.0"><dict><key>KeyBagKeys</key><data>U1dFRVQ=</data></dict></plist>' |
-	sudo install -m 0600 -o 0 -g 0 /dev/stdin "$work/root/private/var/keybags/systembag.kb"
+	sudo install -m 0600 -o 0 -g 0 /dev/stdin "$keybag_file"
 
-sudo test -s "$work/root/sbin/launchd"
-sudo test -s "$work/root/usr/lib/dyld"
-cache="$work/root/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64"
-sudo test -s "$cache" || { echo "missing primary arm64 dyld shared cache" >&2; exit 1; }
-sudo python3 -c 'import sys; magic=open(sys.argv[1],"rb").read(16); fields=magic.rstrip(b"\0").split(); sys.exit(0 if len(magic)==16 and fields==[b"dyld_v1",b"arm64"] else "invalid primary arm64 dyld cache magic")' "$cache"
+if [[ $root_tweaks == 1 ]]; then
+	for directory in private/var/mobile private/var/mobile/Library private/var/mobile/Library/Preferences; do
+		image_resolve mobile_directory "$directory"
+		sudo install -d -o 501 -g 501 -m 0755 "$mobile_directory"
+	done
+	sudo python3 "$tweaks_tool" "$work/root"
+fi
 df -h "$work/root"
 unmount_one "$work/root"
-# Linux hfsplus decomposes some non-ASCII names (localized Shortcuts examples)
-# differently from Apple's tables; let fsck_hfs rewrite them, then verify.
-fsck.hfsplus -f -y "$out" | grep -v 'Illegal name' || true
-fsck.hfsplus -f -n "$out"
+hfs_check "$out"
+hfs_mount "$out" "$work/root" ro
+sudo python3 - "$work/root" "$work/os/root" "$root_tweaks" "$tweaks_tool" <<'PY_ROOT'
+import os, plistlib, runpy, stat, struct, sys
+root, original, tweaks, tool = sys.argv[1:]
+resolve_image = runpy.run_path(tool)["image_path"]
+
+def in_image(path):
+    return resolve_image(root, path)
+
+def metadata(path, wanted):
+    info = os.stat(in_image(path))
+    actual = (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode))
+    if actual != wanted:
+        raise ValueError(f"{path}: metadata {actual!r}, expected {wanted!r}")
+    return info
+
+try:
+    for path, filetype in (("sbin/launchd", 2), ("usr/lib/dyld", 7)):
+        info = os.stat(in_image(path))
+        if not stat.S_ISREG(info.st_mode) or info.st_size == 0 or info.st_uid != 0 or not info.st_mode & 0o111:
+            raise ValueError("missing root-owned executable: " + path)
+        with open(in_image(path), "rb") as source:
+            header = source.read(32)
+        if len(header) != 32 or struct.unpack_from("<I", header)[0] != 0xfeedfacf or struct.unpack_from("<I", header, 4)[0] != 0x100000c or struct.unpack_from("<I", header, 12)[0] != filetype:
+            raise ValueError("invalid ARM64 Mach-O executable header: " + path)
+    for name in ("OS", "App"):
+        path = "System/Cryptexes/" + name
+        target = in_image("private/preboot/Cryptexes/" + name)
+        if in_image(path) != target or not os.path.isdir(target):
+            raise ValueError("missing cryptex contents: " + path)
+    caches = ("System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64",
+              "private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64")
+    cache_paths = tuple(in_image(path) for path in caches)
+    minimum_links = 1 if cache_paths[0] == cache_paths[1] else 2
+    sizes = []
+    for path in caches:
+        info = os.stat(in_image(path))
+        with open(in_image(path), "rb") as source:
+            magic = source.read(16)
+        if info.st_size == 0 or info.st_nlink < minimum_links or len(magic) != 16 or magic.rstrip(b"\0").split() != [b"dyld_v1", b"arm64"]:
+            raise ValueError("invalid or unlinked primary arm64 cache: " + path)
+        sizes.append(info.st_size)
+    if sizes[0] != sizes[1]:
+        raise ValueError("cache aliases have different sizes")
+    with open(os.path.join(original, "System/Library/CoreServices/SystemVersion.plist"), "rb") as source:
+        expected_version = plistlib.load(source)
+    with open(in_image("System/Library/CoreServices/SystemVersion.plist"), "rb") as source:
+        version = plistlib.load(source)
+    for key in ("ProductVersion", "ProductBuildVersion"):
+        if not version.get(key) or version[key] != expected_version.get(key):
+            raise ValueError("root version differs from source: " + key)
+    metadata("private/var/keybags/systembag.kb", (0, 0, 0o600))
+    metadata("private/var/keybags", (0, 0, 0o700))
+    metadata("private/var/db/diagnostics", (272, 272, 0o751))
+    for name in ("uuidtext", "diagnostics/timesync"):
+        metadata("private/var/db/" + name, (272, 272, 0o755))
+    for name in ("diagnostics", "uuidtext", "diagnostics/timesync"):
+        metadata("private/var/db/" + name + "/.migrated", (272, 272, 0o644))
+    if tweaks == "1":
+        metadata("private/var/mobile/Library/Preferences/com.apple.migration.plist", (501, 501, 0o600))
+        with open(in_image("private/var/mobile/Library/Preferences/com.apple.migration.plist"), "rb") as source:
+            if plistlib.load(source).get("LastSystemVersion") != version["ProductBuildVersion"]:
+                raise ValueError("root migration tweak is missing")
+    print("iOS persisted root checks passed: " + version["ProductVersion"] + " / " + version["ProductBuildVersion"])
+except (OSError, ValueError, plistlib.InvalidFileException) as error:
+    sys.exit("iOS persisted root check failed: " + str(error))
+PY_ROOT
+unmount_one "$work/root"
+echo "iOS root image verified and closed: $out"

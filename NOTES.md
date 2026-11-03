@@ -133,7 +133,7 @@ Do not repurpose r10's hard-pinned validators as proof of a different source/run
 Earlier entries are retained milestone history; their r10 queued/no-boot state
 is superseded by the evidence above and the current C:\ports\handoff.md.
 
-### 2026-11-03 — r13 rootfs: guestmount reaches file probe; metadata mismatch under diagnosis
+### 2026-11-03 — r13 rootfs: full cold-check pipeline prepared; real Linux build pending
 
 Current hardware milestone is **BSD root selected, HFS mount rejected**. The
 verified r12 kernel from Actions run `41523222878`, exact source
@@ -205,15 +205,52 @@ Persistent mismatch still fails before output creation. Synthetic control-flow
 checks PASS for correct, transient, persistent and native-owner failure cases;
 these do not exercise a Linux mount. Syntax/diff checks and independent review
 PASS. FUSE caching is a hypothesis, not a confirmed cause or completed fix.
-Current builder SHA256:
-`3c67a054eb1180f721c3164d091d894f5b287257c89a556f2ef0615dc79f43e0`.
+
+The latest real user invocation (`f49d335`) reached exact `501:20:640:2` but
+failed the immediate shared-write content read. Its actual bytes were not
+printed. This still does not distinguish FUSE's size/page cache from a backing
+hardlink failure. The user requested a complete pipeline fix instead of further
+successive single-check retries.
+
+Current implementation finishes ALL probe mutations first, unmounts and waits
+for the writer PID, repairs only the newly created HFSX probe and requires clean
+read-only fsck, then mounts a fresh read-only view. It verifies both aliases'
+metadata and full bytes, symlink target/content and distinct Case/case contents.
+No inode-number equality or live-mount delay is needed. The unique probe lives
+beside OUT, so a failed closed probe remains available for host inspection;
+uncertain writer closure is reported separately and still blocks fsck/reuse.
+
+The complete output follows the same close/repair/strict-fsck/RO-check/close
+sequence. APFS inputs remain read-only. Cache/cryptex lists come from immutable
+sources with NUL delimiters and find errors checked before OUT reservation.
+Existing aliases are tracked and paths resolve iOS absolute symlinks from the
+image root. The shared resolver is in the EXISTING `sweet-root-tweaks.py`, which
+also uses it for writes, including final data-ark symlinks and canonical root
+arguments. No new wrapper script was added.
+
+`SWEET_ROOT_TWEAKS=1` applies that existing tool during the same writable output
+mount; its 16.7.16/20H392 requirement is checked before output allocation. The
+final cold check verifies ARM64 launchd MH_EXECUTE and dyld MH_DYLINKER headers,
+cache magic/alias sizes, cryptex contents, source system version, keybag/log
+metadata and the enabled migration preference. A cache exposed through the
+same resolved path needs no redundant hardlink; distinct paths require nlink>=2.
+
+Final syntax/diff/early-refusal checks PASS. Simulated semantic fixtures cover
+bad data, metadata, absolute parent/final symlinks, root aliases, ARM64 headers,
+cache/version/marker failures; five lifecycle cases cover normal completion,
+header repair, bad data, bad fsck and a live writer. All PASS, plus independent
+static review. These checks do NOT execute Linux guestmount or copy Apple files.
+Current tool hashes:
+`mkiosroot.sh`: `68e300ddd07b31fc6ed697607786f2c71e06d429983a0019ad9d66914f36ceec`;
+`sweet-root-tweaks.py`: `9d2b0c61e7031d021301966000e3330f891bf0b414a7748c3e43c0bf3f372e8c`.
 A successful Linux backend probe, OS copy, filesystem acceptance and iOS boot
 are still pending; package installation is not a rootfs build.
 
 Next: run the existing builder in the user's WSL prompt with
-`SWEET_HFS_BACKEND=guestmount` against the three verified DMGs into a **new**
-`C:\ports\r13-rootfs\ios16-root-20H392-r13.img`. Validate the result and apply
-the existing root tweaks before proposing installation. Userdata installation
+`SWEET_HFS_BACKEND=guestmount SWEET_ROOT_TWEAKS=1` against the verified DMGs into a **new**
+`C:\ports\r13-rootfs\ios16-root-20H392-r13.img`. Validate the result and confirm
+the tweak stage completed successfully. Capture the full output
+with tee to `C:\ports\r13-rootfs\build-r13.log` for host inspection. Userdata installation
 would replace current Android data and needs specific approval. No device
 write/flash/erase/format/GPT action has been issued during rootfs preparation.
 Original dirty `C:\ports\ios-cas` and frozen accepted worktrees are preserved;
