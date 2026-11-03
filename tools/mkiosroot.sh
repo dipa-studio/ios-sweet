@@ -107,7 +107,7 @@ cleanup() {
 		rm -f "$work"/*.dmg "$work/probe.img" "$guest_pidfile"
 		rmdir "$work"/* "$work" 2>/dev/null || true
 	else
-		echo "still mounted under $work: left in place" >&2
+		echo "could not confirm all mounts are released under $work: left in place" >&2
 		# A successful build must also release its source mounts. Preserve an
 		# earlier failure code, but report cleanup failure after success.
 		[[ $original_status != 0 ]] || exit 1
@@ -121,10 +121,12 @@ hfs_mount() {
 	mounts+=("$point")
 	if [[ $backend == guestmount ]]; then
 		guest_mount=$point
+		# guestmount escapes commas inside each -o value; pass FUSE options
+		# separately so allow_other and use_ino are two recognized options.
 		sudo env LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg \
 			guestmount --rw --format=raw -a "$image" \
 			-m /dev/sda:/:rw,force:hfsplus --pid-file "$guest_pidfile" \
-			-o allow_other,use_ino "$point"
+			-o allow_other -o use_ino "$point"
 	else
 		sudo mount -t hfsplus -o loop,force "$image" "$point"
 	fi

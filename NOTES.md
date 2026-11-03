@@ -133,7 +133,7 @@ Do not repurpose r10's hard-pinned validators as proof of a different source/run
 Earlier entries are retained milestone history; their r10 queued/no-boot state
 is superseded by the evidence above and the current C:\ports\handoff.md.
 
-### 2026-11-03 — r13 rootfs: guestmount backend prepared; Linux execution pending
+### 2026-11-03 — r13 rootfs: first guestmount probe failed; FUSE option fix ready
 
 Current hardware milestone is **BSD root selected, HFS mount rejected**. The
 verified r12 kernel from Actions run `41523222878`, exact source
@@ -172,13 +172,24 @@ with matching magic must exist before final offline filesystem checks.
 Cleanup failure also fails the build. `.gitattributes` keeps this Bash file LF
 on Windows checkouts.
 
-Completed local checks: Bash syntax PASS; refusal of an existing output PASS;
-invalid backend rejected before output creation PASS; diff whitespace PASS.
-Final independent read-only static review PASS, including the cache magic,
-atomic output reservation and unmount/cleanup sequence. Builder SHA256:
-`086db4c8d55d930e520a068117ae96e7e670d1c13066e2766eefa5e71545d380`.
-Linux backend mount/probe, full OS copy, filesystem acceptance and iOS boot are
-still pending; successful package installation is not a rootfs build.
+The first user Linux invocation of commit `511456f` failed on the 64MiB probe:
+FUSE rejected `allow_other\,use_ino`, then libguestfs reported fuse_new Invalid
+argument. guestmount escapes the comma inside a single `-o` value. The builder
+now passes `-o allow_other -o use_ino` separately. No PID file was created;
+cleanup intentionally retained `/tmp/tmp.dPo7RKPxuJ` because it could not confirm
+closure. Its diagnostic now states that uncertainty rather than claiming a
+live mount. The real output image is still absent; repeating the same command
+uses a fresh private test directory and does not overwrite an existing rootfs.
+
+Current Bash syntax and diff whitespace checks PASS. Existing-output and invalid
+backend refusal checks passed before this argument-only fix. Original static
+review passed but missed the FUSE option defect exposed by Linux execution.
+Independent review of the separate options and conservative cleanup diagnostic
+PASS; daemon wait and missing-PID refusal remain intact.
+Current builder SHA256:
+`18582a8006dc708eee86503b59ed46e5e6a7fb77547e9d215751093dd1dc5c98`.
+A successful Linux backend probe, OS copy, filesystem acceptance and iOS boot
+are still pending; package installation is not a rootfs build.
 
 Next: run the existing builder in the user's WSL prompt with
 `SWEET_HFS_BACKEND=guestmount` against the three verified DMGs into a **new**
