@@ -119,7 +119,7 @@ cleanup() {
 		if [[ -n $probe_image && -f $probe_image ]]; then
 			echo "closed failed probe retained for inspection: $probe_image" >&2
 		fi
-		rm -f "$work"/*.dmg "$work"/*.files "$guest_pidfile"
+		rm -f "$work"/*.dmg "$work"/*.files "$work"/*.fsck.log "$guest_pidfile"
 		rmdir "$work"/* "$work" 2>/dev/null || true
 	else
 		echo "could not confirm all mounts are released under $work: left in place" >&2
@@ -155,7 +155,7 @@ hfs_mount() {
 }
 
 hfs_check() {
-	local image=$1 repair_status=0
+	local image=$1 repair_status=0 readonly_log="$work/readonly.fsck.log" live_log="$work/live.fsck.log"
 	[[ -z $guest_mount ]] || { echo "refusing fsck while guest writer is unconfirmed" >&2; return 1; }
 	# Only newly created probe/output images reach this helper. Fresh journaled
 	# HFSX and Linux's name tables may need repair; the strict second pass decides.
@@ -163,7 +163,76 @@ hfs_check() {
 	if [[ $repair_status != 0 ]]; then
 		echo "HFS repair returned $repair_status; requiring clean read-only check" >&2
 	fi
-	fsck.hfsplus -f -n "$image"
+	if fsck.hfsplus -d -f -n "$image" > "$readonly_log" 2>&1; then
+		cat "$readonly_log"
+		return 0
+	fi
+	cat "$readonly_log"
+	# fsck 540.1-Linux can retain its primary-header cache buffer during
+	# IsJournalEmpty, then report EDEADLK (35) as a damaged volume header.
+	# On an unmounted regular file, -l still checks every tree, bitmap and
+	# volume header without writing, but skips that journal reader. Only use
+	# it for this exact failure after independently checking the new journal.
+	python3 - "$image" "$readonly_log" <<'PY_HFS_JOURNAL' || return 1
+import os, re, stat, struct, sys
+image, log_path = sys.argv[1:]
+with open(log_path, encoding="utf-8", errors="replace") as source:
+    log = source.read()
+if "version 540.1-Linux" not in log or not re.search(r"invalid primary VHB at 2 result 35\b", log):
+    sys.exit("HFS read-only check failed; journal-cache workaround does not apply")
+if not re.search(r"VIStat = 0x8000, ABTStat = 0x0000 EBTStat = 0x0000\s+CBTStat = 0x0000 CatStat = 0x00000000", log):
+    sys.exit("HFS check reported additional damage; refusing journal-cache workaround")
+with open(image, "rb") as source:
+    info = os.fstat(source.fileno())
+    if not stat.S_ISREG(info.st_mode):
+        sys.exit("journal-cache workaround requires a closed regular image")
+    headers = []
+    for offset in (1024, info.st_size - 1024):
+        source.seek(offset)
+        header = source.read(512)
+        if len(header) != 512:
+            sys.exit("short HFS volume header")
+        signature, version, attributes, _, jib = struct.unpack_from(">HHIII", header)
+        block_size, blocks = struct.unpack_from(">II", header, 40)
+        if (signature, version) != (0x4858, 5) or block_size < 512 or block_size & (block_size - 1) or block_size * blocks != info.st_size:
+            sys.exit("invalid HFSX header geometry")
+        if attributes & 0x2100 != 0x2100 or attributes & 0x800:
+            sys.exit("HFSX image must be cleanly unmounted and journaled")
+        headers.append((block_size, blocks, jib))
+    if headers[0] != headers[1]:
+        sys.exit("HFSX headers disagree about journal or geometry")
+    block_size, _, jib = headers[0]
+    if jib < 1 or (jib + 1) * block_size > info.st_size:
+        sys.exit("invalid HFS journal info block")
+    source.seek(jib * block_size)
+    journal_info = source.read(52)
+    flags = struct.unpack_from(">I", journal_info)[0]
+    offset, size = struct.unpack_from(">QQ", journal_info, 36)
+    if flags != 5 or offset < block_size or offset % block_size or size < 512 or size % block_size or offset + size > info.st_size or offset < (jib + 1) * block_size and jib * block_size < offset + size:
+        sys.exit("workaround requires an internal journal marked needsInit with valid bounds")
+    source.seek(offset)
+    remaining = size
+    while remaining:
+        chunk = source.read(min(remaining, 1024 * 1024))
+        if not chunk or any(chunk):
+            sys.exit("journal contains data; refusing journal-cache workaround")
+        remaining -= len(chunk)
+print("HFS new journal independently verified empty; using fsck cache workaround")
+PY_HFS_JOURNAL
+	fsck.hfsplus -d -l -f -n "$image" > "$live_log" 2>&1 || { cat "$live_log"; return 1; }
+	cat "$live_log"
+	python3 - "$live_log" <<'PY_HFS_COMPLETE'
+import sys
+with open(sys.argv[1], encoding="utf-8", errors="replace") as source:
+    log = source.read()
+stages = ("extents overflow file", "catalog file", "multi-linked files",
+          "catalog hierarchy", "extended attributes file", "volume bitmap",
+          "volume information")
+if "(NO WRITE)" not in log or "appears to be OK." not in log or any(
+        "Checking " + stage + "." not in log for stage in stages):
+    sys.exit("HFS workaround did not complete every read-only filesystem check")
+print("HFS complete read-only filesystem check passed")
+PY_HFS_COMPLETE
 }
 
 image_resolve() {

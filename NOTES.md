@@ -133,7 +133,23 @@ Do not repurpose r10's hard-pinned validators as proof of a different source/run
 Earlier entries are retained milestone history; their r10 queued/no-boot state
 is superseded by the evidence above and the current C:\ports\handoff.md.
 
-### 2026-11-03 — r13 rootfs: full cold-check pipeline prepared; real Linux build pending
+### 2026-11-03 — r13 rootfs: fsck cache workaround verified; full Linux build pending
+
+Publication branch `codex/cas-bringup-pr-20261103` contains the same nine real
+changes as `origin/main..4a572fd`, attributed to the repository owner's supplied
+GitHub email. Their original author dates are retained; accepted source/artifact
+references below still refer to the original frozen commits, not rewritten CI
+run IDs. Implementation files are byte-identical to the original working branch.
+Original dirty main, accepted r12 worktree and the active r13 build are preserved.
+
+The user's full Linux build has now completed the backend probe: repair,
+independently empty-journal guarded fsck, fresh RO mount, exact ownership/modes,
+updated contents through BOTH hardlink aliases, symlink and Case/case all PASS.
+Build proceeds to APFS copying into the new 16GiB OUT. Final rootfs acceptance
+and successful iOS boot are still pending. Publish as a draft while that full
+run is pending. Agent-side Git/GitHub API network calls are blocked; remote
+publication must execute from the user's normal shell. No remote push/PR is
+claimed merely from preparing this branch.
 
 Current hardware milestone is **BSD root selected, HFS mount rejected**. The
 verified r12 kernel from Actions run `41523222878`, exact source
@@ -241,10 +257,43 @@ cache/version/marker failures; five lifecycle cases cover normal completion,
 header repair, bad data, bad fsck and a live writer. All PASS, plus independent
 static review. These checks do NOT execute Linux guestmount or copy Apple files.
 Current tool hashes:
-`mkiosroot.sh`: `68e300ddd07b31fc6ed697607786f2c71e06d429983a0019ad9d66914f36ceec`;
+`mkiosroot.sh`: `605bebf408d338b8e8162dde30c1a006504446d0a535d7fadc00609487026995`;
 `sweet-root-tweaks.py`: `9d2b0c61e7031d021301966000e3330f891bf0b414a7748c3e43c0bf3f372e8c`.
-A successful Linux backend probe, OS copy, filesystem acceptance and iOS boot
-are still pending; package installation is not a rootfs build.
+
+Real run of parent commit `7d180f9` stopped before OUT allocation on strict
+`fsck.hfsplus -f -n`: `Volume header needs minor repair (1, 0)`.
+Closed 64MiB probe `C:\ports\r13-rootfs\ios16-root-20H392-r13.img.probe.Td1luL`
+has SHA256 `2f3237d3486f028d03056537271b6d2ce5a25332f637e4cdac6eae2adf02fd7c`.
+Independent raw catalog inspection confirms both aliases point to the SAME
+HFS hardlink inode: uid501/gid20/mode0640/nlink2, exact updated 16-byte payload.
+Case/case and symlink also match. Proof: `probe-Td1luL-inspection.json` outside Git.
+
+Debug fsck identifies PRIMARY VHB read result35 = EDEADLK (cache buffer conflict),
+not a field comparison failure. Repeat repair on a separate copy reports OK but
+changes zero bytes; read-only check repeats EDEADLK. Source archive downloaded
+by user: diskdev_cmds tag540.1, kept outside Git. SControl calls IsJournalEmpty
+only for no-write/non-live checks; cache.c returns EDEADLK for an active buffer.
+GetJournalInfoBlock has unreleased-buffer error paths, but the exact branch
+taken by the installed Linux port is not yet established. Stale alternate
+counts are permitted by Linux's conditional backup-header update and are not
+the demonstrated cause. Do not manually equalize the headers.
+
+User's actual `fsck.hfsplus -d -l -f -n` on the closed regular probe PASS:
+NO WRITE, all seven filesystem stages, appears OK, unchanged SHA256.
+Current builder retains strict -d/-f/-n first. A fallback is allowed only for
+540.1-Linux's exact primary-VHB/EDEADLK with no tree/catalog status errors.
+Independent binary checks then require matching HX5 clean journaled headers,
+valid geometry, matching JIB, internal needsInit flags5, bounded aligned and
+ALL-ZERO journal. Only then -l/-f/-n is allowed; it must exit0 and print every
+tree/bitmap/volume stage and NO WRITE/OK. Upstream -l on an unmounted regular
+file skips the problematic journal reader, not filesystem checks. Actual Linux
+execution above confirms the stages. Unknown failures and initialized/nonempty
+journals remain refused. Probe/output writer closure is still mandatory.
+
+Syntax, embedded Python, actual probe/log guard checks, damaged-copy refusals
+and independent review PASS. Receipt `C:\ports\r13-rootfs\fsck-workaround-verification.json`.
+No new wrapper, kernel build, CI, remote push or device command. Full cold
+backend probe, OS copy, rootfs acceptance and iOS boot remain pending.
 
 Next: run the existing builder in the user's WSL prompt with
 `SWEET_HFS_BACKEND=guestmount SWEET_ROOT_TWEAKS=1` against the verified DMGs into a **new**
