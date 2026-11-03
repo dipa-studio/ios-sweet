@@ -4,6 +4,7 @@
 #
 #   mkiosroot.sh OS.dmg SYSTEMOS.dmg APPOS.dmg OUT.img [SIZE]     (SIZE default 16G)
 #   SWEET_HFS_BACKEND=auto|native|guestmount (default auto)
+#   SWEET_HFS_ACCEL=auto|kvm|tcg controls guestmount CPU acceleration (default auto).
 #   SWEET_ROOT_TWEAKS=1 also applies the existing 20H392 bring-up tweaks.
 #   The guestmount backend requires root, guestmount/guestunmount and a guest
 #   Linux kernel with HFS+ support; it also works when the host kernel lacks HFS+.
@@ -34,6 +35,13 @@ tweaks_tool="$(dirname "$0")/sweet-root-tweaks.py"
 	{ echo "missing existing root tweaks tool: $tweaks_tool" >&2; exit 1; }
 
 backend=${SWEET_HFS_BACKEND:-auto}
+acceleration=${SWEET_HFS_ACCEL:-auto}
+case $acceleration in
+	auto) guest_acceleration='' ;;
+	kvm) guest_acceleration=force_kvm ;;
+	tcg) guest_acceleration=force_tcg ;;
+	*) echo "unknown HFS acceleration: $acceleration" >&2; exit 1 ;;
+esac
 case $backend in
 	auto)
 		if grep -qw hfsplus /proc/filesystems ||
@@ -65,6 +73,28 @@ if [[ ${#missing_tools[@]} -gt 0 ]]; then
 	echo "    Ubuntu/Debian: sudo apt install apfs-fuse hfsprogs rsync" >&2
 	echo "    Fedora:        sudo dnf install apfs-fuse hfsplus-tools rsync" >&2
 	exit 1
+fi
+
+# Explicit KVM must work before allocating any image. Auto lets libguestfs
+# choose hardware acceleration when available and TCG otherwise.
+if [[ $backend == guestmount && $acceleration == kvm ]]; then
+	python3 - <<'PY_KVM'
+import fcntl, os, sys
+kvm = vm = -1
+try:
+    kvm = os.open("/dev/kvm", os.O_RDWR)
+    if fcntl.ioctl(kvm, 0xAE00, 0) != 12:
+        sys.exit("unsupported KVM API version")
+    vm = fcntl.ioctl(kvm, 0xAE01, 0)
+except OSError as error:
+    sys.exit("KVM acceleration unavailable: " + str(error))
+finally:
+    if vm >= 0:
+        os.close(vm)
+    if kvm >= 0:
+        os.close(kvm)
+print("KVM acceleration preflight passed")
+PY_KVM
 fi
 
 work=$(mktemp -d)
@@ -144,7 +174,7 @@ hfs_mount() {
 		guest_mount=$point
 		# guestmount escapes commas inside each -o value. Keep just the
 		# required FUSE access option; current guestmount rejects use_ino.
-		sudo env LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg \
+		sudo env LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS="$guest_acceleration" \
 			guestmount "$guest_access" --format=raw -a "$image" \
 			-m "/dev/sda:/:$mount_options:hfsplus" --pid-file "$guest_pidfile" \
 			-o allow_other "$point" || return
@@ -251,7 +281,7 @@ image_resolve() {
 
 # Exercise the actual mount backend before allocating the output image or
 # opening the Apple volumes. HFSX case handling and Unix metadata are required.
-echo "checking HFSX backend: $backend"
+echo "checking HFSX backend: $backend (acceleration: $acceleration)"
 mkdir "$work/probe"
 probe_image=$(mktemp "${out}.probe.XXXXXX")
 truncate -s 64M "$probe_image"

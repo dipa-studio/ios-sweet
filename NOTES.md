@@ -135,11 +135,26 @@ is superseded by the evidence above and the current C:\ports\handoff.md.
 
 ### 2026-11-03 — r13 rootfs: fsck cache workaround verified; full Linux build pending
 
-Publication branch `codex/cas-bringup-pr-20261103` contains the same nine real
+Performance follow-up: the active original r13 build explicitly uses force_tcg
+and scans tens of thousands of small files through APFS-FUSE/guestmount/DrvFS.
+Its displayed rsync average fell below 0.5MB/s; this is not an SSD benchmark.
+User's independent root KVM probe returned API12 and KVM_CREATE_VM_OK.
+This publication worktree now supports SWEET_HFS_ACCEL=auto|kvm|tcg and defaults
+to libguestfs automatic selection instead of forcing software CPU emulation.
+Explicit kvm checks API12 and creates/closes an empty VM before allocation,
+then forces KVM in libguestfs. An unavailable KVM is an error, not silent TCG.
+The original running builder was NOT edited. All writer-close, empty-journal,
+filesystem and cold contents/metadata acceptance checks are unchanged.
+New command must use a separate OUT/log (`ios16-root-20H392-r13-kvm.img`,
+`build-r13-kvm.log`). No speedup, new Linux guestmount probe or full image is
+claimed before running it. The old copy remains partial; do not reuse it.
+
+Initial publication candidate `codex/cas-bringup-pr-20261103` contained the same nine real
 changes as `origin/main..4a572fd`, attributed to the repository owner's supplied
 GitHub email. Their original author dates are retained; accepted source/artifact
 references below still refer to the original frozen commits, not rewritten CI
-run IDs. Implementation files are byte-identical to the original working branch.
+run IDs. Those implementation files were byte-identical to the original working
+branch; the subsequent KVM performance change is described above.
 Original dirty main, accepted r12 worktree and the active r13 build are preserved.
 
 The user's full Linux build has now completed the backend probe: repair,
