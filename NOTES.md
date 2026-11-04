@@ -1,128 +1,65 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-04:2338 TRIAL AUTHORIZED BY USER; BLOCKED ON DEVICE CONNECTION <<<
+## >>> ACTIVE 2026-11-04:2338 TRIAL DONE - GPU CLOCK IS FINE, MCU STILL NEVER EXECUTES <<<
 
-Gap closed: vendor kbase powers the GPU in TWO steps - gpufreq_power_control
-then gpufreq_commit (gpufreq_v2.c:853/:912; kbase caller mtk_common_gpufreq_commit
-at kbase-full-disasm.txt:2692). Through2337 the shim sent only CMD_POWER_CONTROL(6)
-and never CMD_COMMIT(7), and never read back the gpufreq shared status. GPU
-frequency/voltage has therefore been whatever LK left, unmeasured. That is why
-2332-2336 could not separate "MCU never fetches" from "clock not usable"; the
-vendor's own wait_ready() comment names slow/unstable GPU clock.
+One authorized boot_a trial ran on hardware: image ad07f492, --dvfs-commit
+current. boot_a is back to the full original 2931647a and the phone is in
+Recovery; sha256sum of the block device was re-read independently after the
+run. Nothing is pending.
 
-NEW offline code: xnu/gpu/mtk_gpufreq.{c,h} decodes the first0x70 bytes of
-struct gpufreq_shared_status (offsets pinned from gpufreq_ipi.h: cur_oppidx_gpu0x00,
-opp_num_gpu0x08, cur_fgpu0x10, cur_vgpu0x18, cur_vsram_gpu0x20, power_control0x60,
-dvfs_state0x64, shader_present0x68, power_count0x6c) and encodes CMD_COMMIT and
-CMD_GET_FREQ_BY_IDX in the existing32-byte message layout. mtk_gpueb_protocol gains
-CMD_FREQ(1)/CMD_COMMIT(7) and admits both in the reply whitelist.
+THE DVFS QUESTION IS ANSWERED. gpufreq status sampled after INIT and after
+POWER_ON+SPM, cross-checked against the coherent IPI answer, then re-sampled
+after CMD_COMMIT - validity 0xf, all four observation bits set:
+  oppidx=2 opp_num=5 power_count=1 freq_khz=610000 power_ctrl=1
+  dvfs_state=0 (DVFS_FREE, not DISABLE/POWEROFF/DEBUG_AVS_AGING_KEEP)
+  commit_result=0 (CMD_COMMIT accepted)
+The device's own banner independently printed q=f f=094ed0 pc=1, and 0x94ED0
+is 610000. So the GPU is clocked at 610 MHz, the power reference is held once,
+DVFS is free, and the second half of the vendor power-on sequence - the commit
+that was never implemented through 2337 - is accepted.
 
-mtk_gpueb_boot.c samples status after INIT (valid bit0) and after POWER_ON+SPM
-(bit1), cross-checks cur_fgpu against the coherent IPI answer (bit2), and only
-if SWEET_GPU_DVFS_COMMIT=1 sends COMMIT then re-samples (bit3). Observing never
-fails the transaction; only an issued COMMIT that is rejected, or is accepted
-but does not move the reported index, fails closed (-29) and still powers off.
-New stage SWEET_GPU_DVFS=11 appended; earlier numbers unchanged.
+volt_uv=65000 and vsram_uv=75000 are ten times off a plausible microvolt
+scale, so no conclusion uses them; they are recorded raw only.
 
-sweet_gpu_boot_report grows72->112 bytes, still inside the existing128-byte
-sweet-gpu-report ADT slot, so ADT layout, the696-byte CSF report and the whole
-CSF evidence patch chain are untouched. Patches0136 (marks300..313, words[28],
-i<14) and0137 (SWEET_BUILD_ID 0x2338). Both verified to apply cleanly - dry run
-against the real post-0135 tree at xnu/out/local/xnu; that tree was then restored
-to2337 source. tools/matisse-shim-gpu-image.py accepts0x2338, requires it to keep
-the2337 probe set (--entry-probe --inline-entry --entry-pte-guard), adds
---dvfs-commit{off,current,<idx>} and -DSWEET_SHIM_BUILD_LABEL so the console
-banner cannot silently reuse an older build string.
+THEREFORE: the "slow or unstable GPU clock" hypothesis behind the vendor's own
+wait_ready() comment is EXCLUDED. 2332-2336 could not separate "MCU never
+fetches" from "clock not usable"; they are now separated.
 
-OBSERVATION: 200 offline tests PASS, 3 skipped (Unicorn). Covers exact COMMIT
-wire bytes, untouched-on-error, every decode bound, all-zero/all-ones rejection,
-valid-bit rejection, and the full INIT->POWER_ON->FREQ->COMMIT->OFF mock mailbox
-with commit accepted, rejected and accepted-but-not-applied.
+GPU and CSF sections are FIELD-IDENTICAL to 2337: stage 8, error -53,
+mcu_status 1, version 0, job_raw 0, as_present 0xff, reset_raw 0x200,
+spm 3/7/3. Adding DVFS changed no release condition, which is what the design
+intended: observation never gates, only a rejected or ineffective commit does.
 
-BUILT LOCALLY. Xcode16.4 sits at /Users/xiaohuasheng/Downloads/Xcode.app and is
-not selected by xcode-select; DEVELOPER_DIR points at it without touching system
-state. Three things had to exist first: /usr/local/include (the kernel private
-headers and libfirehose_kernel.a from fakeroot/usr/local, whose absence is what
-the -I/usr/local/include/kernel lint complains about), an empty
-SDK/.../Kernel.framework/Versions/A/PrivateHeaders/platform directory (xnu never
-actually includes <platform/...>), and CC/CXX wrappers that append -Wno-error
-because clang17 promotes -Wpre-c11-compat and -Wpoison-system-directories to
-errors that xnu-8796 predates. Advisory only: those were warnings, not
-miscompiles.
+THE FAILURE IS NOW LOCALIZED TO THE MCU ITSELF, by three independent facts:
+ 1. entry_marker_observed=false. The entry guard's checkpoint sits at the
+    firmware entry (VA 0x010018ec, shared+0xffc); the MCU writes it on its
+    first instruction. It is 0 before AUTO and 0 after the wait.
+ 2. job_raw=0: the global-interface bit31 never appears.
+ 3. disable_status=1: cleanup writes MCU_CONTROL=0 and polls MCU_STATUS to 0,
+    which times out with the status STUCK AT 1.
+Meanwhile MCU_STATUS=1 means the enable bit is set and HALTED(bit1) is clear.
+So at the register level the MCU is "enabled and not halted", and at the
+hardware level it executes nothing and does not respond to a disable.
 
-Kernel a3904b8e123a6af4f88b4426aa1a8d847f540fabaa045f840835016c73d1f5dc,
-17123904 bytes. CAVEAT: it is built by a different compiler than2337, so it is
-not byte-comparable to ddc8b3c0. That does not affect the experiment - the GPU
-power/CSF/MCU stages all run in the shim before XNU is copied - it only affects
-how marks are recorded. The2337 kernel is preserved at
-research/.../kernel-2337.development.sweet.
+THREE HYPOTHESES FOR THE NEXT ROUND, all filterable offline first:
+ (a) MCU_CONTROL should be 3 (ENABLE|AUTO) or an explicit ENABLE then AUTO,
+     not AUTO alone;
+ (b) the MCU has a clock/reset gate that GPUEB CMD_POWER_CONTROL does not
+     cover - it only owns the MFG domain;
+ (c) the entry address needs explicit programming rather than relying on the
+     firmware's own layout.
 
-Image research/matisse/20261031-gpu/shim2338-dvfs-ready/matisse-shim-gpu2338.img,
-27119616 bytes, SHA256
-ad07f4929292a868498f6499b585ce9bc39455919f5116e3f0e9c7742234dcca,
-built with --entry-probe --inline-entry --entry-pte-guard --dvfs-commit current,
-so CMD_COMMIT is exercised against the OPP GPUEB already reports and the GPU
-frequency is NOT changed. cmdline carries sweettrial=2338 rootrw=0 ufsrw=0.
+TRIAL INFRA BUG FOUND AND FIXED: pyusb is absent from both the system python3
+and research/.../venv, so raw_restore_if_present() died on import AFTER the
+image had been written, leaving boot_a dirty with no automatic restore. I
+recovered by hand (fastboot flash boot_a stock-trim, reboot recovery, then
+`restore-only`, which captured after-marks and restored all 64MiB). The runner
+now falls back to the fastboot CLI when pyusb is missing, records
+raw_transport=fastboot-cli, and still never retries blindly.
 
-Adding the gpufreq text moved the CSF arena anchor by exactly one page:
-0x77000 -> 0x78000. The builder now pins the anchor per build instead of
-dropping the check, so further silent drift still fails.
-
-Independent verify2338-dvfs.py PASS: image/ADT/fallback/ramdisk/signature bytes,
-sources, frozen objects, firmware blob, no R_AARCH64_ABS64, GPU report128B slot
-with112 used and the tail zero, CSF report still696, and arena replay giving
-leaf0x3000000040082fc7 / entry PA0x400828ec / entry word0x4803b672 /293 pages,
-identical to2337 modulo the page shift. Report at
-shim2338-dvfs-ready/independent-verification.json. 200 offline tests PASS,
-3 skipped.
-
-OBSERVATION: no device access this round. Last verified state remains root
-Recovery, full original boot_a SHA
-2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
-No journal, no pending restoration, no partition write.
-
-CORRECTION recorded from user: /dev/mali0 and /dev/mem do not exist on this
-device in Recovery (CONFIG_DEVMEM off, no Mali/GPUEB/gpufreq binding), so
-neither the vendor runtime_resume path nor raw /dev/mem poking is available.
-The shim's GPUEB mailbox probe is the only power path here. GPU_ID already
-reads0xa8620004 after POWER_ON and SPM&6==6 on every trial from2322 on, so
-the gpu_id gate is passed; the open problem is the MCU.
-
-AUTHORIZATION GIVEN. The user replied to the request for an explicit
-authorization of ad07f492 with a bare approval, so exactly one 2338 trial is
-approved for that SHA and no other. The runner is
-research/matisse/20261031-gpu/shim2338-dvfs-trials-run-once.py (gitignored with
-the rest of research/, like every earlier runner). It is the 2337 runner with
-only these constants changed: image path, 27119616 bytes, build0x2338, and the
-predicted post-write partition digest 9c027a6d0845dc0a7560c50dce3601f0161a607d90e7860574b35aec40820cb6
-= sha256(image || backup[len(image):]). Every safety property is inherited
-unchanged: Recovery identity gate (matisse/_a/recovery/uid0), 64MiB boot_a
-geometry, read-only preflight, journal refuses a second run, exact
---approved-image-sha256 argument, read-back before reboot, raw-fastboot
-fallback that stops rather than retries blind, and a full 64MiB restore whose
-digest must equal 2931647a or the run is marked failed.
-
-BLOCKED: no device is attached. adb devices and fastboot devices are both
-empty; the only Xiaomi entry on the USB tree is a USB2.0 hub with no product
-name or serial. Previous trials left clean journals:
-shim2336-inline-trials and shim2337-entry-guard-trials both ended
-complete-restored-Recovery with restored_sha256 2931647a, and no
-shim2338-dvfs-trials directory exists, so nothing is pending.
-
-PRE-TRIAL RE-CHECK of the one new command: gpufreq_ipi_data is
-{cmd_id, target, union}, and gpufreq_commit (gpufreq_v2.c:912) fills
-cmd_id=CMD_COMMIT(7), target=TARGET_GPU(1), u.oppidx. Our encoder writes
-exactly those three words and the boot path passes TARGET_GPU. gpufreq_v2.h:78
-confirms TARGET_GPU==1. Commit uses the OPP GPUEB already reports, so frequency
-and voltage do not move; only the command path is exercised.
-
-NEXT: when the phone is attached in Recovery, run
-  python3 shim2338-dvfs-trials-run-once.py preflight
-then, only if that reports readonly_preflight_passed,
-  python3 shim2338-dvfs-trials-run-once.py gpu-normal --approved-image-sha256=ad07f4929292a868498f6499b585ce9bc39455919f5116e3f0e9c7742234dcca
-Then read marks300..313. The gpufreq block is new: power_count, cur_fgpu,
-cur_vgpu, dvfs_state, and whether CMD_COMMIT is accepted. It still cannot prove
-MCU boot; GLB_VERSION must come from the MCU's own interrupt.
+Full write-up: docs/matisse-gpu-dvfs.md, section "2338 实测结果". Raw evidence
+in research/matisse/20261031-gpu/shim2338-dvfs-trials/gpu-normal/
+(after-marks.bin, gpu-result.json, after-console.txt).
 
 ## >>> HISTORICAL 2026-11-02:2337 ENTRY PTE GATE BUILT OFFLINE; NO DEVICE TRIAL <<<
 

@@ -117,3 +117,60 @@ XNU 侧由 `xnu/patches/0136-matisse-gpu-dvfs-evidence.patch` 把
 
 不能证明：MCU 能启动、固件就绪、shader 可执行、Vulkan/Metal 可用。
 `GLB_VERSION` 仍必须由 MCU 自己的 global-interface 中断来证。
+
+## 2338 实测结果（2026-11-04）
+
+一次被授权的 `boot_a` 试验，镜像 `ad07f492…34dcca`，
+`--dvfs-commit current`。跑完后 `boot_a` 已完整恢复为 `2931647a…`，
+设备回到 Recovery。
+
+```
+gpufreq.valid        15        四个观测位全部置位
+gpufreq.oppidx       2
+gpufreq.opp_num      5
+gpufreq.power_count  1
+gpufreq.freq_khz     610000    -> 610 MHz
+gpufreq.power_ctrl   1         GPUEB 认为电源已开
+gpufreq.dvfs_state   0         DVFS_FREE（不是 DISABLE/POWEROFF/KEEP）
+gpufreq.commit_result 0        CMD_COMMIT 被接受
+```
+
+设备自己的 banner 独立印证：`q=f f=094ed0 pc=1`（0x94ED0 = 610,000）。
+
+`volt_uv=65000` / `vsram_uv=75000` 的原始值与常见微伏量纲差十倍，
+因此本报告**不使用**这两个值做任何判断，只记录原始读数。
+
+### 这排除了什么
+
+"时钟不可用"这条假设可以排除。GPU 在 610 MHz 上、DVFS 处于 FREE、
+电源引用计数为 1、`CMD_COMMIT` 被接受。厂商 `wait_ready()` 注释里
+暗示的"slow/unstable GPU clock"不成立。
+
+### GPU / CSF 段与 2337 逐字段相同
+
+`stage=8`、`error=-53`、`mcu_status=1`、`version=0`、`job_raw=0`、
+`as_present=0xff`、`reset_raw=0x200`、`spm 3/7/3` —— 全部与 2337 一致。
+DVFS 层的加入没有改变任何既有的放行条件，这符合设计意图。
+
+### 失败点被收窄到 MCU 本身
+
+三条独立证据指向"MCU 一条指令都没执行"：
+
+1. `entry_marker_observed = false`。entry guard 把检查点放在固件入口
+   （VA `0x010018ec`，shared+0xffc）；MCU 只要执行第一条指令就会写它。
+   试验前后都是 0。
+2. `job_raw = 0`，global-interface 的 bit31 从未出现。
+3. `disable_status = 1`。cleanup 写 `MCU_CONTROL=0` 后轮询 `MCU_STATUS`
+   直到 0 超时，状态**卡在 1 不动** —— MCU 对控制位没有响应。
+
+另一方面 `MCU_STATUS=1` 表示 enable 位置起且 `HALTED`(bit1) 为 0。
+即：寄存器层面"已启用、未停机"，硬件层面完全不执行。
+
+### 下一步的假设
+
+- `MCU_CONTROL` 写 2(AUTO) 是否应改为 3(ENABLE|AUTO)，或先 ENABLE 再 AUTO；
+- MCU 是否有独立于 GPU 核心时钟/复位的门控，GPUEB 的
+  `CMD_POWER_CONTROL` 只覆盖 MFG 域；
+- 固件入口地址是否需要显式编程（当前依赖固件自身布局）。
+
+这三条都能在离线用厂商源码与反汇编先筛，再决定要不要再花一次试验。
