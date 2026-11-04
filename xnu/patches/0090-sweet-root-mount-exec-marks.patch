@@ -1,0 +1,150 @@
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -998,9 +998,18 @@
+ #endif
+ 
+ 		bsd_init_kprintf("vfs_mountroot\n");
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		printf("SWEETR 00 mountroot-in\n");
++#endif
+ 		if (0 == (err = vfs_mountroot())) {
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++			printf("SWEETR 01 mountroot-done ret 0\n");
++#endif
+ 			break;
+ 		}
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		printf("SWEETR 01 mountroot-done ret %d\n", err);
++#endif
+ 		rootdevice[0] = '\0';
+ #if CONFIG_NETBOOT
+ 		if (netboot) {
+@@ -1018,12 +1027,21 @@
+ 		printf("cannot mount root, errno = %d\n", err);
+ 	}
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETR 02 secure-root-in\n");
++#endif
+ 	IOSecureBSDRoot(rootdevice);
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETR 03 secure-root-done\n");
++#endif
+ 
+ 	mountlist.tqh_first->mnt_flag |= MNT_ROOTFS;
+ 
+ 	bsd_init_kprintf("calling VFS_ROOT\n");
+ 	/* Get the vnode for '/'.  Set fdp->fd_fd.fd_cdir to reference it. */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETR 04 root-vnode-in\n");
++#endif
+ 	if (VFS_ROOT(mountlist.tqh_first, &init_rootvnode, vfs_context_kernel())) {
+ 		panic("bsd_init: cannot find root vnode: %s", PE_boot_args());
+ 	}
+@@ -1034,6 +1052,9 @@
+ 	set_rootvnode(init_rootvnode);
+ 	lck_rw_unlock_exclusive(&rootvnode_rw_lock);
+ 	init_rootvnode = NULLVP;  /* use rootvnode after this point */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETR 05 root-vnode-ready\n");
++#endif
+ 
+ 
+ 	if (!bsd_rooted_ramdisk()) {
+@@ -1163,7 +1184,13 @@
+ 	siginit(kernproc);
+ 
+ 	bsd_init_kprintf("calling bsd_utaskbootstrap\n");
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETR 06 user-bootstrap-in\n");
++#endif
+ 	bsd_utaskbootstrap();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETR 07 user-bootstrap-returned\n");
++#endif
+ 
+ 	pal_kernel_announce();
+ 
+@@ -1196,6 +1223,9 @@
+ {
+ 	proc_t p = current_proc();
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETR 08 bsdinit-task-in\n");
++#endif
+ 	process_name("init", p);
+ 
+ 	/* Set up exception-to-signal reflection */
+@@ -1205,7 +1235,13 @@
+ 	mac_cred_label_associate_user(proc_ucred(p));
+ #endif
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETR 0B vm-before-launchd-in\n");
++#endif
+ 	vm_init_before_launchd();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETR 0C vm-before-launchd-done\n");
++#endif
+ 
+ #if CONFIG_XNUPOST
+ 	int result = bsd_list_tests();
+@@ -1217,7 +1253,13 @@
+ 
+ 	bsd_init_kprintf("bsd_do_post - done");
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETR 09 init-exec-in\n");
++#endif
+ 	load_init_program(p);
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEETR 0A init-exec-returned\n");
++#endif
+ 	lock_trace = 1;
+ }
+ 
+--- a/bsd/sweet_hfs/core/hfs_vfsutils.c
++++ b/bsd/sweet_hfs/core/hfs_vfsutils.c
+@@ -969,6 +969,12 @@
+ 	/*
+ 	 * Allow hot file clustering if conditions allow.
+ 	 */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	if (vfs_flags(HFSTOVFS(hfsmp)) & MNT_ROOTFS) {
++		printf("SWEETR 10 hfs-media ssd %d fusion %d\n",
++		    !!(hfsmp->hfs_flags & HFS_SSD), !!(hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN));
++	}
++#endif
+ 	if ((hfsmp->hfs_flags & HFS_METADATA_ZONE)  && !(hfsmp->hfs_flags & HFS_READ_ONLY) &&
+ 	    ((hfsmp->hfs_flags & HFS_SSD) == 0 || (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN))) {
+ 		//
+@@ -993,7 +999,17 @@
+ 		 *       clean that up at this point.  Since HotFiles are
+ 		 *       optional, this is not a big deal.
+ 		 */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		if (vfs_flags(HFSTOVFS(hfsmp)) & MNT_ROOTFS) {
++			printf("SWEETR 11 hotfiles-in\n");
++		}
++#endif
+ 		(void) hfs_recording_init(hfsmp);
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		if (vfs_flags(HFSTOVFS(hfsmp)) & MNT_ROOTFS) {
++			printf("SWEETR 12 hotfiles-returned\n");
++		}
++#endif
+ 	}
+ 
+ 	/* Force ACLs on HFS+ file systems. */
+@@ -1002,6 +1018,11 @@
+ 	/* Enable extent-based extended attributes by default */
+ 	hfsmp->hfs_flags |= HFS_XATTR_EXTENTS;
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	if (vfs_flags(HFSTOVFS(hfsmp)) & MNT_ROOTFS) {
++		printf("SWEETR 13 hfsplus-mount-done\n");
++	}
++#endif
+ 	return (0);
+ 
+ ErrorExit:

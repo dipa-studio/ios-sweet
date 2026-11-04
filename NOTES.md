@@ -1,3 +1,49 @@
+### 2026-11-04 — r14: report UFS as flash and trace root mount through init exec
+
+The user's manual r13 writable boot now reports userdata read-write, passes
+IOFindBSDRoot and proceeds beyond journal initialization into hotfile creation.
+The last known new line is `hfs: created HFBT on iOSRoot`. The user recalls a
+stationary screen but cannot confirm elapsed time or later launchd output.
+This line is inside hfc_btree_create before truncate, the initial node write,
+transaction completion/flush and a potentially long catalog scan. It confirms
+creation of a catalog object, not completed HFS/VFS mount or iOS userland.
+The repeated SWEETP/UFS tail is older framebuffer content, not a new retry trace.
+
+Confirmed driver defect: sweet_ufs_ioctl previously returned ENOTTY for
+DKIOCISSOLIDSTATE. HFS therefore did not set HFS_SSD and selected its optional
+HDD hotfile path. Patch 0089 answers that UFS is flash storage. The existing HFS
+SSD path skips hotfiles without changing journal replay, UFS transfer/DMA,
+write gates or partition bounds. CoreStorage pinning remains absent; this query
+does not enable TRIM/UNMAP. For the accepted rootfs, the catalog has no overflow
+extents, so this fix preserves the existing asynchronous bitmap-scan mode.
+
+Patch 0090 adds 18 guarded printf call sites around root mount, root-vnode
+publication, user bootstrap, vm_init_before_launchd and init exec. HFS messages
+are scoped to MNT_ROOTFS; no per-I/O output is added. Existing mount retries
+remain intact, so there is no hard per-boot message count. A return marker is
+evidence of the named call returning, not proof that launchd or the UI ran.
+Expected normal order includes HFS SSD=1/Fusion=0, hfsplus-mount-done and
+mountroot-done ret0. The child init task can run before the parent bootstrap
+return marker; do not impose one global order on those threads.
+
+Isolated worktree: C:/ports/ios-cas-r14-rootmount, branch
+proshivka/r14-ufs-rootmount-20261104, base bf2fa31be23b030d9ca71a73672eb1f1346f88f8.
+The full preceding patch chain and kernel workflow match accepted r12 source
+4d8e6ab7a4614bf1c0636332fc81a2f5fb4395b5/run41523222878. Both new patches apply
+to its actual buildtree. Independent LF Git replay reproduces all three
+candidate source files exactly; removing the SSD query and guarded diagnostics
+restores every baseline byte. Independent final review passed.
+Report: C:/ports/r14-rootmount/source-check-r14.json.
+
+No local clang is available. Native compilation, linked kernel/source/marker
+acceptance and a new temporary boot remain pending the r14 GitHub Actions run.
+Keep the accepted raw/sparse rootfs and r13 writable boot as evidence. Package
+only the new exact CI kernel after validation, preserving donor shim/DTB/ADT,
+memory 0xb0000000/0x4cf00000 and ufsrw=1 rootrw=1 sweetlog=0/input/USB disabled.
+The agent's network is blocked; the next direct clipboard block pushes this
+exact proshivka branch and dispatches xnu.yml from the user's PowerShell.
+No new wrapper, device command, rootfs rebuild or partition-table change was made.
+
 ### 2026-11-04 — r13: HFSX journal reached; writable temporary boot prepared
 
 The user's new console reaches successful SCSI/GPT lookup, finds userdata on

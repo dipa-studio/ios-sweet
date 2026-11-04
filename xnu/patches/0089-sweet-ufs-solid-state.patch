@@ -1,0 +1,13 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -553,6 +553,10 @@
+ 	case DKIOCGETPHYSICALBLOCKSIZE:
+ 		*f = UFS_BLOCK;
+ 		return 0;
++	case DKIOCISSOLIDSTATE:
++		/* UFS is flash storage; HFS must not use HDD hot-file clustering. */
++		*f = 1;
++		return 0;
+ 	case DKIOCGETBLOCKCOUNT:
+ 		*o = su.nblocks * UFS_BLOCK / su.secsize;
+ 		return 0;
