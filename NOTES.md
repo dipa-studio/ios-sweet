@@ -1,65 +1,69 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-04:2338 TRIAL DONE - GPU CLOCK IS FINE, MCU STILL NEVER EXECUTES <<<
+## >>> ACTIVE 2026-11-04:2339 MCU STORE-REDIRECT IMAGE BUILT; NEEDS ITS OWN AUTHORIZATION <<<
 
-One authorized boot_a trial ran on hardware: image ad07f492, --dvfs-commit
-current. boot_a is back to the full original 2931647a and the phone is in
-Recovery; sha256sum of the block device was re-read independently after the
-run. Nothing is pending.
+The2338 trial excluded the clock: 610MHz, power_count1, DVFS_FREE,
+CMD_COMMIT accepted, and every GPU/CSF field identical to2337 (full write-up
+in docs/matisse-gpu-dvfs.md, section "2338 实测结果"). This round went after
+the actual stop point and found one.
 
-THE DVFS QUESTION IS ANSWERED. gpufreq status sampled after INIT and after
-POWER_ON+SPM, cross-checked against the coherent IPI answer, then re-sampled
-after CMD_COMMIT - validity 0xf, all four observation bits set:
-  oppidx=2 opp_num=5 power_count=1 freq_khz=610000 power_ctrl=1
-  dvfs_state=0 (DVFS_FREE, not DISABLE/POWEROFF/DEBUG_AVS_AGING_KEEP)
-  commit_result=0 (CMD_COMMIT accepted)
-The device's own banner independently printed q=f f=094ed0 pc=1, and 0x94ED0
-is 610000. So the GPU is clocked at 610 MHz, the power reference is held once,
-DVFS is free, and the second half of the vendor power-on sequence - the commit
-that was never implemented through 2337 - is accepted.
+THE RESET VECTOR AND ENTRY ARE REAL AND NOW DISASSEMBLED. VA0 is a standard
+Cortex-M vector table: SP=0x02040000, Reset=0x010018ed (Thumb), and NMI through
+UsageFault share0x010019b1. So0x010018ec is genuinely the reset handler and
+2335/2336 did not patch the wrong address. Disassembly of the entry:
+  cpsid i
+  ldr r0,=0x40022000 ; mov r1,#0xb ; str r1,[r0]   <- first MCU peripheral store
+  ldr r0,=0x40022004 ; mov r1,#0x7 ; str r1,[r0]   <- second
+  ldr r0,=0xE000ED24 ; mov r1,#0x70000 ; str r1,[r0]  (SCB SHCSR, core private)
+  ldr r0,=0x0203F000 ; msr psp,r0 ; mov r0,#2 ; msr control,r0
+  ldr r0,=0x40003034 ; ldr r4,[r0] ; and r4,#0x80
+Before touching any private memory the MCU writes two peripheral words. If that
+window does not answer, the store stalls the bus on the fifth instruction and
+nothing after it ever happens - which is exactly the observed shape:
+MCU_STATUS1, no fault, version0, entry checkpoint absent.
 
-volt_uv=65000 and vsram_uv=75000 are ten times off a plausible microvolt
-scale, so no conclusion uses them; they are recorded raw only.
+THIS ALSO EXPLAINS2334. That stub replaced the whole20-byte entry with a
+self-loop, so it skipped both stores, and that is why it was the only trial
+whose marker fired.2335/2336 routed control back into the original code and
+never got anywhere.
 
-THEREFORE: the "slow or unstable GPU clock" hypothesis behind the vendor's own
-wait_ready() comment is EXCLUDED. 2332-2336 could not separate "MCU never
-fetches" from "clock not usable"; they are now separated.
+BUILD2339 does not replace an instruction. It repoints the two load literals:
+container offset0x281c 0x40022000 ->0x04000ffc, and0x2820 0x40022004 ->
+0x04000ffc. Each constant occurs exactly once in the pinned container, so
+nothing else can read them; the container length is unchanged, only8 bytes
+differ, and the entry word is still the original0x4826b672. shared+0xffc
+becomes a progress word: 0 nothing, 0xb first store, 0x7 both stores.
 
-GPU and CSF sections are FIELD-IDENTICAL to 2337: stage 8, error -53,
-mcu_status 1, version 0, job_raw 0, as_present 0xff, reset_raw 0x200,
-spm 3/7/3. Adding DVFS changed no release condition, which is what the design
-intended: observation never gates, only a rejected or ineffective commit does.
+Artifacts: kernel bbdfa95a0121a8919a9c5bbcf5da508803e7f17493b68de70976c3659c22a998
+(17123904B, patch0138), image
+research/matisse/20261031-gpu/shim2339-mcu-ready/matisse-shim-gpu2339.img,
+27119616B, SHA256
+fb059ab3f941e1e2a74dd6d2cba68a39ddfabe7821472c524d0493a02fce78ec, built with
+--redirect-mcu-stores --dvfs-commit current. Predicted post-write partition
+digest1f2e156ff99f17bcb175346b590f4f5ea39d205264b438d062aa9edeba264362.
 
-THE FAILURE IS NOW LOCALIZED TO THE MCU ITSELF, by three independent facts:
- 1. entry_marker_observed=false. The entry guard's checkpoint sits at the
-    firmware entry (VA 0x010018ec, shared+0xffc); the MCU writes it on its
-    first instruction. It is 0 before AUTO and 0 after the wait.
- 2. job_raw=0: the global-interface bit31 never appears.
- 3. disable_status=1: cleanup writes MCU_CONTROL=0 and polls MCU_STATUS to 0,
-    which times out with the status STUCK AT 1.
-Meanwhile MCU_STATUS=1 means the enable bit is set and HALTED(bit1) is clear.
-So at the register level the MCU is "enabled and not halted", and at the
-hardware level it executes nothing and does not respond to a disable.
+No entry probe is compiled in, so the shim text loses the page the2338 probe
+added and the CSF arena anchor returns to0x77000. Pinned, not relaxed:
+entry offset0xa8ec, leaf PTE0x3000000040081fc7, entry PA0x400818ec,293 pages,
+CSF report696B, GPU slot128B. verify2339-mcu.py PASS,205 offline tests pass,
+3 skipped. Objects identical to2338: start, loader, csf_boot, csf_memory,
+csf_firmware, gpueb_boot, gpueb_protocol, gpufreq. Differ: gpu (build label),
+csf (checkpoint define), csf_blob (patched container).
 
-THREE HYPOTHESES FOR THE NEXT ROUND, all filterable offline first:
- (a) MCU_CONTROL should be 3 (ENABLE|AUTO) or an explicit ENABLE then AUTO,
-     not AUTO alone;
- (b) the MCU has a clock/reset gate that GPUEB CMD_POWER_CONTROL does not
-     cover - it only owns the MFG domain;
- (c) the entry address needs explicit programming rather than relying on the
-     firmware's own layout.
+Runner ready: research/matisse/20261031-gpu/shim2339-mcu-trials-run-once.py,
+same state machine as2337/2338 including the fastboot-CLI fallback added after
+the pyusb failure. It refuses to run without
+--approved-image-sha256=fb059ab3f941e1e2a74dd6d2cba68a39ddfabe7821472c524d0493a02fce78ec.
 
-TRIAL INFRA BUG FOUND AND FIXED: pyusb is absent from both the system python3
-and research/.../venv, so raw_restore_if_present() died on import AFTER the
-image had been written, leaving boot_a dirty with no automatic restore. I
-recovered by hand (fastboot flash boot_a stock-trim, reboot recovery, then
-`restore-only`, which captured after-marks and restored all 64MiB). The runner
-now falls back to the fastboot CLI when pyusb is missing, records
-raw_transport=fastboot-cli, and still never retries blindly.
+NEXT: this image needs its own boot_a authorization naming that SHA. If
+granted, run one bounded trial and read shared+0xffc (decoder field
+entry_marker_after / mcu_store_progress). 0x7 plus a nonzero version means the
+MCU is running and the CSF stages can proceed. 0 or 0xb means the stall is
+earlier than these stores and the fetch path itself needs instrumenting.
 
-Full write-up: docs/matisse-gpu-dvfs.md, section "2338 实测结果". Raw evidence
-in research/matisse/20261031-gpu/shim2338-dvfs-trials/gpu-normal/
-(after-marks.bin, gpu-result.json, after-console.txt).
+Device state unchanged and clean: root Recovery, boot_a =
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1,
+no journal, no pending restoration.
 
 ## >>> HISTORICAL 2026-11-02:2337 ENTRY PTE GATE BUILT OFFLINE; NO DEVICE TRIAL <<<
 

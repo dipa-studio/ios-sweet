@@ -1,0 +1,94 @@
+import importlib.util
+import struct
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+TOOLS = ROOT / 'tools'
+FIRMWARE = ROOT / 'research/matisse/20261031-gpu/extracted/vendor_a-mali_csffw.bin'
+SHA = 'de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f7229a'
+
+STORE_SITES = (0x010018f4, 0x010018fc)
+LITERALS = ((0x281c, 0x40022000), (0x2820, 0x40022004))
+SCRATCH = 0x04000ffc
+
+
+def load_builder():
+    if str(TOOLS) not in sys.path:
+        sys.path.insert(0, str(TOOLS))
+    spec = importlib.util.spec_from_file_location(
+        'shim_gpu_image', TOOLS / 'matisse-shim-gpu-image.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@unittest.skipUnless(FIRMWARE.exists(), 'pinned vendor CSF container is not present')
+class McuStoreRedirectTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_builder()
+        cls.original = FIRMWARE.read_bytes()
+
+    def test_redirect_only_repoints_the_two_literals(self):
+        embedded, patch = self.module.redirect_mcu_stores(FIRMWARE, SHA)
+        self.assertEqual(len(embedded), len(self.original))
+        changed = [i for i in range(len(self.original)) if self.original[i] != embedded[i]]
+        allowed = {offset + i for offset, _ in LITERALS for i in range(4)}
+        self.assertTrue(changed)
+        self.assertTrue(set(changed) <= allowed, [hex(i) for i in set(changed) - allowed])
+        for offset, original in LITERALS:
+            self.assertEqual(struct.unpack_from('<I', self.original, offset)[0], original)
+            self.assertEqual(struct.unpack_from('<I', embedded, offset)[0], SCRATCH)
+        # The reset handler instructions themselves must be untouched.
+        for va in STORE_SITES:
+            offset = 0x0e94 + va - 0x01000000
+            self.assertEqual(self.original[offset:offset + 2], b'\x01\x60')
+            self.assertEqual(embedded[offset:offset + 2], b'\x01\x60')
+        self.assertTrue(patch['diagnostic_only'])
+        self.assertEqual(patch['scratch_va'], '0x4000ffc')
+        self.assertEqual([site['written_value'] for site in patch['sites']], [0xb, 0x7])
+        self.assertEqual(patch['original_container_sha256'], SHA)
+
+    def test_redirect_is_deterministic(self):
+        first, _ = self.module.redirect_mcu_stores(FIRMWARE, SHA)
+        second, _ = self.module.redirect_mcu_stores(FIRMWARE, SHA)
+        self.assertEqual(first, second)
+
+    def test_rejects_a_changed_container(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            other = Path(directory) / 'other.bin'
+            data = bytearray(self.original)
+            data[0] ^= 0xff
+            other.write_bytes(bytes(data))
+            with self.assertRaises(ValueError):
+                self.module.redirect_mcu_stores(other, SHA)
+
+    def test_rejects_a_shifted_literal(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            other = Path(directory) / 'shifted.bin'
+            data = bytearray(self.original)
+            struct.pack_into('<I', data, 0x281c, 0x40022010)
+            other.write_bytes(bytes(data))
+            digest = __import__('hashlib').sha256(bytes(data)).hexdigest()
+            with self.assertRaises(ValueError):
+                self.module.redirect_mcu_stores(other, digest)
+
+    def test_only_build2339_may_redirect(self):
+        for build in (0x2334, 0x2335, 0x2337, 0x2338):
+            with self.assertRaises(ValueError):
+                self.module.diagnostic_firmware(
+                    FIRMWARE, SHA, build, build == 0x2334,
+                    entry_probe=build in (0x2335, 0x2336, 0x2337, 0x2338),
+                    inline_entry=build in (0x2336, 0x2337, 0x2338),
+                    entry_pte_guard=build in (0x2337, 0x2338),
+                    mcu_store_redirect=True)
+        with self.assertRaises(ValueError):
+            self.module.diagnostic_firmware(FIRMWARE, SHA, 0x2339, False)
+
+
+if __name__ == '__main__':
+    unittest.main()

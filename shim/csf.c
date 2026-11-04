@@ -79,7 +79,7 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
         .shared_bytes=memory.shared_bytes,.timeout_ms=1000,.noncoherent=1,
         .pte_group_requested=6,.vendor_ina0=1,.vendor_cached_memattr=1,
         .platform_snapshot=1,.access_snapshot=1,.platform_path=1};
-#ifdef SHIM_CSF_ENTRY_PROBE
+#if defined(SHIM_CSF_ENTRY_PROBE) || defined(SHIM_CSF_ENTRY_CHECKPOINT)
     c.entry_checkpoint=1;
 #endif
     for(uint32_t i=0;i<memory.mapping_count;i++) {

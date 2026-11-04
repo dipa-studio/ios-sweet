@@ -96,7 +96,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -206,9 +206,9 @@ def decode(data, expected_build=0x2321):
                 'do not measure clock rate or lock, MCU enabled does not trace execution.')
         if expected_build >= 0x2332:
             flags, reserved, va, pa_lo, pa_hi, word = struct.unpack_from('<6I', raw, 440)
-            if flags & ~3 or flags == 2 or (reserved and expected_build not in (0x2335,0x2336,0x2337,0x2338)):
+            if flags & ~3 or flags == 2 or (reserved and expected_build not in (0x2335,0x2336,0x2337,0x2338,0x2339)):
                 raise ValueError('invalid CSF access snapshot flags/reserved word')
-            if expected_build in (0x2335,0x2336,0x2337,0x2338):
+            if expected_build in (0x2335,0x2336,0x2337,0x2338,0x2339):
                 csf['entry_marker_before'] = reserved
             pa = pa_hi << 32 | pa_lo
             root = csf['transtab_hi'] << 32 | csf['transtab_lo']
@@ -228,9 +228,9 @@ def decode(data, expected_build=0x2321):
                 'Native shim CPU MMU/caches are off; barriers precede readback.')
         if expected_build >= 0x2333:
             flags, reserved = struct.unpack_from('<2I', raw, 560)
-            if flags & ~3 or flags == 2 or (reserved and expected_build not in (0x2335,0x2336,0x2337,0x2338)):
+            if flags & ~3 or flags == 2 or (reserved and expected_build not in (0x2335,0x2336,0x2337,0x2338,0x2339)):
                 raise ValueError('invalid CSF platform path flags/reserved word')
-            if expected_build in (0x2335,0x2336,0x2337,0x2338):
+            if expected_build in (0x2335,0x2336,0x2337,0x2338,0x2339):
                 csf['entry_marker_after'] = reserved
             if flags and csf['access_sample_flags'] & 1 == 0:
                 raise ValueError('platform path snapshot without preceding access snapshot')
@@ -351,6 +351,21 @@ def decode(data, expected_build=0x2321):
                     'contain the walked leaf or prove an MCU fetch.')
             ready = ready and csf['version'] not in (0x53545542,0x5452414d)
             csf['firmware_ready_observed'] = ready
+        if expected_build == 0x2339:
+            # The unmodified reset handler stores0xb to0x40022000 and7 to
+            # 0x40022004. Build2339 repoints both literals at shared+0xffc
+            # without touching an instruction, so the word records how far the
+            # MCU got: 0 nothing, 0xb the first store, 0x7 both.
+            marker = csf['entry_marker_after']
+            csf['entry_marker_va'] = 0x04000ffc
+            csf['entry_marker_sampled'] = csf['access_snapshot_complete']
+            csf['mcu_store_progress'] = {0: 'none', 0xb: 'first-store', 0x7: 'both-stores'}.get(
+                marker, 'other')
+            csf['entry_marker_observed'] = csf['entry_marker_sampled'] and marker in (0xb, 0x7)
+            csf['entry_marker_note'] = ('Original reset handler with its two MCU peripheral store '
+                'literals repointed at shared+0xffc; no instruction was replaced. 0=none, '
+                '0xb=first store, 0x7=both. A nonzero word proves the MCU executed the reset '
+                'handler, not that the runtime interface is ready.')
         result['csf_firmware_boot_verified'] = (success and ready and cleanup and
                                                csf['stage'] == 7 and csf['error'] == 0)
     result.update(error_details(result, result.get('csf')))
@@ -361,7 +376,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2338)')
+                   help='expected kernel/report build (0x2321 through 0x2339)')
     a=p.parse_args()
     try:
         report=decode(a.marks.read_bytes(),a.build)
