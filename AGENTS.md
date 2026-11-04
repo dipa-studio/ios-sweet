@@ -1,4 +1,10 @@
-# Working on ios-sweet
+# Working on ios-cas
+
+- Publish GitHub work as `proshivka`. Set both Git author and committer to
+  `proshivka <kasikminecraft@mail.ru>`; verify the authenticated GitHub account
+  before remote writes. Do not add assistant/model attribution or co-author
+  trailers to commits, PR titles/bodies or workflow labels.
+- Use `proshivka/` for new branch names.
 
 - Read `NOTES.md` before starting; it contains the project goal, hardware facts,
   current blocker, local artifact locations and the next concrete action.

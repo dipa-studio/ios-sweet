@@ -1,4 +1,21 @@
-### 2026-11-04 — r13: native GitHub Actions rootfs workflow ready; hosted run pending
+### 2026-11-04 — r13: native rootfs CI in progress; draft PR 2 published
+
+The user's successful publication created draft PR
+https://github.com/proshivka/ios-cas/pull/2 and rootfs run
+https://github.com/proshivka/ios-cas/actions/runs/41798068342 at published source
+`b6c0ec10bb8bdf6b7d04ae94c75e62dd8cc7af3a`.
+Their exact gh run view confirms native HFSX host/space preparation, pinned
+APFS-reader build and all four verified IPSW members passed. Source fetch and
+verification took 49 seconds. Native image assembly/verification started at
+2026-11-04 08:19:30 UTC and was in progress in the latest supplied snapshot.
+Compression and image upload were still pending; no full image or iOS boot
+acceptance is claimed. Shared snapshot: C:\ports\r13-rootfs\ci-41798068342.json.
+
+The user requires all GitHub work and attribution to use proshivka.
+All 13 published commits were audited: author and committer are proshivka with
+kasikminecraft@mail.ru, and there are no co-author trailers. AGENTS now records
+this rule and proshivka/ as the prefix for new branches. Historical accepted
+source/artifact references remain evidence of the builds that actually ran.
 
 The user requested moving the slow rootfs assembly to GitHub Actions.
 The new rootfs workflow uses Ubuntu 22.04 with native hfsplus loop mounts,
@@ -22,8 +39,9 @@ results are not yet established. The user supplied the known-working
 sudo git rev-parse; that exact commit is now pinned in the workflow.
 The host container is made readable by the runner only after successful builder
 exit and image closure, so packaging works with the builder's root:0600 output.
-Agent Git/GitHub network remains blocked, so publication will use direct
-commands in the user's shell. No hosted run or uploaded root image is claimed.
+Agent Git/GitHub network remains blocked; remote commands run in the user's
+shell. Publication and the hosted run are now confirmed above; uploaded image
+acceptance is still pending.
 No new wrapper script, device command or edit to the running builder was made.
 
 ---
