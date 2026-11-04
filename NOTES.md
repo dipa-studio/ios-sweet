@@ -1,4 +1,18 @@
-### 2026-11-04 — r13: native rootfs CI succeeded; artifact download pending
+### 2026-11-04 — r13: full rootfs downloaded and independently accepted
+
+The user completed the eight-connection download and Windows decompression in
+32m23s. Independent local acceptance also passed source/provenance pins, both
+HFSX version-5 headers and geometry, the full compressed/raw SHA256, and the
+previously accepted r12 noinput boot image hash. Rootfs is exactly 16GiB:
+`C:/ports/r13-rootfs/ci-41798068342/image/ios16-root-20H392-r13-native.img`,
+SHA256 `e7a8eedc2421c009cd82dc96c5d8dd1135e840d6f7400e018a6dd82a900e8fdf`.
+Acceptance: `ci-41798068342/rootfs-accepted.json`; compressed SHA256
+`18a1e0a4360f1198bb6f22e5e708021c4ce95bb067b532c2e2dcfb22c6af712d`.
+The user explicitly confirmed cas in the bootloader and requested commands
+to flash rootfs themselves. Commands use the known private target, write only
+userdata with fastboot sparse splitting, then temporarily boot the accepted
+r12 noinput boot.img. No agent flash or device root-mount success is claimed.
+The earlier pending-download observations below describe the preceding state.
 
 The user's successful publication created draft PR
 https://github.com/proshivka/ios-cas/pull/2 and rootfs run
