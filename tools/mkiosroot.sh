@@ -16,8 +16,11 @@
 # Owners, modes, symlinks and hard links are preserved (rsync -aH as root).
 #
 # The volume is journaled (XNU replays the journal after a panic; Linux only
-# mounts it read-write with -o force and leaves the journal empty). SWEET
-# additions: /System/Library/Caches/com.apple.dyld hard-links the SystemOS
+# mounts it read-write with -o force and leaves the journal empty).
+# First boot needs ufsrw=1 for the journal-header write; use rootrw=1 as well
+# when /private/var lives on this root. A ufsrw=0 diagnostic boot cannot
+# initialize the fresh journal, even when the filesystem mount is read-only.
+# SWEET additions: /System/Library/Caches/com.apple.dyld hard-links the SystemOS
 # cryptex shared cache (ignition_level=1 looks there), and
 # /private/var/keybags/systembag.kb is the plain-plist system keybag that
 # keybagd reads with /defaults/no-effaceable-storage (tools/mkadt.py).

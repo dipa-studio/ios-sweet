@@ -1,3 +1,36 @@
+### 2026-11-04 — r13: HFSX journal reached; writable temporary boot prepared
+
+The user's new console reaches successful SCSI/GPT lookup, finds userdata on
+LUN 0 and returns IOFindBSDRoot=0. HFS then tries to initialize its 8MiB journal
+at offset 0x82000. The accepted r12 noinput image still has ufsrw=0: the block
+strategy rejects the journal-header write with EROFS (0x1e), followed by HFS
+initialization error 22 and root-mount error 19. This is a journal write gate,
+not the previous UFS polling or missing filesystem-signature stop point.
+No successful root mount or iOS userland is established.
+
+Independent local header/JIB inspection confirms HX version 5, attributes
+0x80002100, JIB block 129 with flags 0x5 (internal journal, needs initialization),
+offset 0x82000, size 0x800000 and an entirely zero journal. First initialization
+is expected after the native Linux builder leaves a fresh journal empty.
+
+Prepared `C:/ports/r13-rootfs/boot-rootrw/boot.img`, 17756160 bytes, SHA256
+`ac9ca24625c2ddb201a91e855e3bdec855b86160f9eaf85c5b1a5461fa28ad27`.
+Only the embedded payload command line and Android v2 SHA1 ID differ from the
+accepted noinput boot: ufsrw=1 enables writes within userdata; rootrw=1 permits
+/private/var on the shared root. Both flags already exist in the accepted kernel.
+All loaded segments match the exact CI kernel (source 4d8e6ab7, run 41523222878);
+shim, DTB, ADT, memory and the disabled input/USB/log settings are preserved.
+Strict readback parsing and an independent Android ID recomputation passed.
+Receipt: `r13-rootfs/boot-rootrw/derivation.json`.
+
+The clipboard now contains a checked direct PowerShell block for this image's
+temporary boot, with the known private cas target and a local image hash check.
+It does not repeat the rootfs flash. The user performs all device writes/boots;
+no agent device command was executed. Next: user returns to fastboot and runs
+the clipboard block, then provides the actual HFS mount/launchd stop point.
+The next boot may initialize/update the installed journal and filesystem;
+its hardware result is pending.
+
 ### 2026-11-04 — r13: verified Android sparse image after Windows fastboot allocation failure
 
 The user's raw-image flash aborted after 6.72s with libc++abi/std::bad_alloc;
