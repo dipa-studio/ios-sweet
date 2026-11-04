@@ -2,6 +2,7 @@
  * wrapper. No vendor implementation is incorporated. See
  * docs/matisse-gpu-shim.md for exact evidence and the test boundary. */
 #include "mtk_gpueb_boot.h"
+#include "mtk_gpufreq.h"
 
 static int range(uint64_t base, uint64_t bytes)
 {
@@ -71,6 +72,40 @@ static int request(const struct sweet_gpu_boot_config *c,
     return 0;
 }
 
+/* Reads the gpufreq shared-status head through the caller's physical-memory
+ * callback. On success the decoded values are written to *s. A failure means
+ * "this region cannot be a published status" (still unwritten, or already
+ * corrupted); it is never by itself evidence that the GPU is unpowered. */
+static int sample_gpufreq(const struct sweet_gpu_boot_config *c,
+                          const struct sweet_gpu_io *io,
+                          struct sweet_gpufreq_status *s)
+{
+    uint8_t raw[SWEET_GPUFREQ_DECODE_WORDS * 4];
+
+    if (!s || c->layout.status_bytes < sizeof(raw) ||
+        !range(c->layout.status_pa, sizeof(raw)))
+        return SWEET_GPUFREQ_ARGUMENT;
+    for (unsigned i = 0; i < SWEET_GPUFREQ_DECODE_WORDS; i++) {
+        uint32_t v = rd(io, c->layout.status_pa + 4u * i);
+        for (unsigned j = 0; j < 4; j++)
+            raw[4 * i + j] = (uint8_t)(v >> (8 * j));
+    }
+    return sweet_gpufreq_decode(raw, sizeof(raw), s);
+}
+
+static void record_gpufreq(struct sweet_gpu_boot_report *r,
+                           const struct sweet_gpufreq_status *s)
+{
+    r->gpufreq_oppidx = s->cur_oppidx_gpu;
+    r->gpufreq_power_count = s->power_count;
+    r->gpufreq_opp_num = (uint32_t)s->opp_num_gpu;
+    r->gpufreq_freq_khz = s->cur_fgpu;
+    r->gpufreq_volt_uv = s->cur_vgpu;
+    r->gpufreq_vsram_uv = s->cur_vsram_gpu;
+    r->gpufreq_dvfs_state = s->dvfs_state;
+    r->gpufreq_power_ctrl = s->power_control;
+}
+
 int sweet_gpu_boot(const struct sweet_gpu_boot_config *c,
                    const struct sweet_gpu_io *io, struct sweet_gpu_boot_report *r)
 {
@@ -81,7 +116,8 @@ int sweet_gpu_boot(const struct sweet_gpu_boot_config *c,
     if (!r)
         return SWEET_GPU_ARGUMENT;
     *r = (struct sweet_gpu_boot_report){ .stage = SWEET_GPU_CONFIG,
-        .init_result = INT32_MIN, .on_result = INT32_MIN, .off_result = INT32_MIN };
+        .init_result = INT32_MIN, .on_result = INT32_MIN, .off_result = INT32_MIN,
+        .gpufreq_commit_result = INT32_MIN };
     if (!c || !io || !io->read32 || !io->write32 || !io->ticks ||
         !io->barrier || !io->frequency || io->frequency > 1000000000 ||
         !c->timeout_ms || c->timeout_ms > 1000 ||
@@ -93,6 +129,8 @@ int sweet_gpu_boot(const struct sweet_gpu_boot_config *c,
         !range(c->shared_base, c->shared_bytes) || c->shared_bytes != 0x200000 ||
         c->shared_base < 0x40000000 || c->shared_base + c->shared_bytes > 0x800000000ULL ||
         (c->shared_base & 0xffff) || !range(c->xnu_base, c->xnu_bytes) ||
+        c->dvfs_commit > 1 || c->dvfs_commit_opp < -1 ||
+        c->dvfs_commit_opp >= (int32_t)SWEET_GPUFREQ_MAX_OPP ||
         c->layout.status_pa != c->shared_base || c->layout.status_bytes != 0x400 ||
         c->layout.debug_pa != c->shared_base + 0x400 || c->layout.debug_bytes != 0xc00) {
         r->error = SWEET_GPU_ARGUMENT;
@@ -136,6 +174,16 @@ int sweet_gpu_boot(const struct sweet_gpu_boot_config *c,
         r->error = rc ? rc : r->init_result;
         return r->error;
     }
+    /* Baseline sample. LK may already leave a reference held, so recording
+     * this before we ask for our own makes the POWER_ON delta observable.
+     * An undecodable region here is expected and is not an error. */
+    {
+        struct sweet_gpufreq_status s;
+        if (!sample_gpufreq(c, io, &s)) {
+            r->gpufreq_valid |= 1u;
+            record_gpufreq(r, &s);
+        }
+    }
     r->stage = SWEET_GPU_ON;
     sweet_gpueb_encode_power(1, message);
     rc = request(c, io, message, SWEET_GPUEB_CMD_POWER, budget, &r->on_result);
@@ -159,6 +207,59 @@ int sweet_gpu_boot(const struct sweet_gpu_boot_config *c,
     if (rc) {
         r->error = rc;
         goto power_off;
+    }
+    /* Decisive sample: the state the vendor driver commits an OPP from.
+     * The shared region may be stale, so a successful decode is
+     * cross-checked against the coherent IPI answer for the same index.
+     * Observation alone never fails the transaction; only a commit we
+     * actually issue can. */
+    r->stage = SWEET_GPU_DVFS;
+    {
+        struct sweet_gpufreq_status s, after;
+        if (!sample_gpufreq(c, io, &s)) {
+            r->gpufreq_valid |= 2u;
+            record_gpufreq(r, &s);
+            if (s.cur_oppidx_gpu >= 0) {
+                uint8_t query[SWEET_GPUFREQ_MESSAGE_BYTES];
+                int32_t khz = INT32_MIN;
+                uint64_t qbudget = budget / 4u;
+                if (!qbudget)
+                    qbudget = 1;
+                if (!sweet_gpufreq_encode_query(SWEET_GPUFREQ_CMD_GET_FREQ,
+                        SWEET_GPUFREQ_TARGET_GPU, s.cur_oppidx_gpu, query) &&
+                    !request(c, io, query, SWEET_GPUEB_CMD_FREQ, qbudget, &khz) &&
+                    khz > 0 && (uint32_t)khz == s.cur_fgpu)
+                    r->gpufreq_valid |= 4u;
+            }
+            if (c->dvfs_commit) {
+                int32_t want = c->dvfs_commit_opp < 0 ?
+                    s.cur_oppidx_gpu : c->dvfs_commit_opp;
+                uint8_t commit[SWEET_GPUFREQ_MESSAGE_BYTES];
+                if (want < 0 || want >= s.opp_num_gpu ||
+                    sweet_gpufreq_encode_commit(SWEET_GPUFREQ_TARGET_GPU,
+                                                want, commit)) {
+                    r->error = SWEET_GPU_ARGUMENT;
+                    goto power_off;
+                }
+                rc = request(c, io, commit, SWEET_GPUEB_CMD_COMMIT, budget,
+                             &r->gpufreq_commit_result);
+                if (rc || r->gpufreq_commit_result < 0) {
+                    r->error = rc ? rc : r->gpufreq_commit_result;
+                    goto power_off;
+                }
+                /* An accepted commit must be visible in the next sample.
+                 * An undecodable region stays inconclusive, as above. */
+                if (!sample_gpufreq(c, io, &after)) {
+                    record_gpufreq(r, &after);
+                    if (after.cur_oppidx_gpu != want ||
+                        after.power_count != s.power_count) {
+                        r->error = SWEET_GPU_FREQUENCY;
+                        goto power_off;
+                    }
+                    r->gpufreq_valid |= 8u;
+                }
+            }
+        }
     }
     r->stage = SWEET_GPU_ID;
     r->gpu_id = rd(io, c->gpu);

@@ -7,6 +7,23 @@
 #include "csf.h"
 #endif
 
+/* Second half of the vendor power-on sequence: gpufreq_commit after
+ * gpufreq_power_control. Default 0 reproduces the 2337 behaviour (power
+ * only). -DSWEET_GPU_DVFS_COMMIT=1 with OPP -1 sends CMD_COMMIT for the
+ * index GPUEB already reports, which exercises the whole command path
+ * without moving frequency. */
+#ifndef SWEET_GPU_DVFS_COMMIT
+#define SWEET_GPU_DVFS_COMMIT 0
+#endif
+#ifndef SWEET_GPU_DVFS_COMMIT_OPP
+#define SWEET_GPU_DVFS_COMMIT_OPP (-1)
+#endif
+/* Build label for the two console banners. The image builder derives it
+ * from --build-id so a new trial cannot silently reuse an older string. */
+#ifndef SWEET_SHIM_BUILD_LABEL
+#define SWEET_SHIM_BUILD_LABEL "2333"
+#endif
+
 static int equal(const char *a, const char *b)
 {
     while (*a && *a == *b) a++, b++;
@@ -120,6 +137,8 @@ int shim_gpu_prepare(uintptr_t dtb, uint64_t xnu_base, uint64_t xnu_bytes,
                      struct sweet_gpu_boot_report *r, uint64_t *shared)
 {
     struct sweet_gpu_boot_config c = { .timeout_ms = 250,
+        .dvfs_commit = SWEET_GPU_DVFS_COMMIT,
+        .dvfs_commit_opp = SWEET_GPU_DVFS_COMMIT_OPP,
         .xnu_base = xnu_base, .xnu_bytes = xnu_bytes };
     const void *raw; uint32_t bytes, used = 0, rx_channel;
     char path[192], gpu_path[192], freq_path[192];
@@ -236,29 +255,17 @@ int shim_gpu_publish(uintptr_t adt, uint32_t bytes,
 #endif
     for (unsigned i = 0; i < 128; i++) raw[i] = 0, a[i] = 0, b[i] = 0;
     for (unsigned i = 0; i < sizeof(*r); i++) raw[i] = ((const uint8_t *)r)[i];
-#ifdef SHIM_CSF_ENTRY_PTE_GUARD
-    char *p = text(a, "sweet-shim/gpu2337 s=");
-#elif defined(SHIM_CSF_INLINE_ENTRY_PROBE)
-    char *p = text(a, "sweet-shim/gpu2336 s=");
-#elif defined(SHIM_CSF_ENTRY_PROBE)
-    char *p = text(a, "sweet-shim/gpu2335 s=");
-#else
-    char *p = text(a, "sweet-shim/gpu2333 s=");
-#endif
+    char *p = text(a, "sweet-shim/gpu" SWEET_SHIM_BUILD_LABEL " s=");
     p = hex(p, r->stage, 2); p = text(p, " e="); p = hex(p, (uint32_t)r->error, 8);
     p = text(p, " id="); p = hex(p, r->gpu_id, 8);
     p = text(p, " rst="); p = hex(p, r->reset_rawstat, 8);
     p = text(p, " on="); p = hex(p, (uint32_t)r->on_result, 8);
-    p = text(p, " off="); p = hex(p, (uint32_t)r->off_result, 8); *p = 0;
-#ifdef SHIM_CSF_ENTRY_PTE_GUARD
-    p = text(b, "sweet-shim/gpu2337 shared=");
-#elif defined(SHIM_CSF_INLINE_ENTRY_PROBE)
-    p = text(b, "sweet-shim/gpu2336 shared=");
-#elif defined(SHIM_CSF_ENTRY_PROBE)
-    p = text(b, "sweet-shim/gpu2335 shared=");
-#else
-    p = text(b, "sweet-shim/gpu2333 shared=");
-#endif
+    p = text(p, " off="); p = hex(p, (uint32_t)r->off_result, 8);
+    /* gpufreq observation: validity bits, reported kHz, power_count. */
+    p = text(p, " q="); p = hex(p, r->gpufreq_valid, 1);
+    p = text(p, " f="); p = hex(p, r->gpufreq_freq_khz, 6);
+    p = text(p, " pc="); p = hex(p, (uint32_t)r->gpufreq_power_count, 1); *p = 0;
+    p = text(b, "sweet-shim/gpu" SWEET_SHIM_BUILD_LABEL " shared=");
     p = hex(p, shared, 16);
     p = text(p, " fw="); p = hex(p, r->firmware_memory, 16);
     p = text(p, " magic="); p = hex(p, r->firmware_magic, 8);

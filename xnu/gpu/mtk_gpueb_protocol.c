@@ -116,7 +116,9 @@ int sweet_gpueb_decode_response(const uint8_t *data, size_t bytes,
     uint32_t value;
     if (!data || !result ||
         (expected_command != SWEET_GPUEB_CMD_INIT &&
-         expected_command != SWEET_GPUEB_CMD_POWER))
+         expected_command != SWEET_GPUEB_CMD_FREQ &&
+         expected_command != SWEET_GPUEB_CMD_POWER &&
+         expected_command != SWEET_GPUEB_CMD_COMMIT))
         return SWEET_GPUEB_ARGUMENT;
     if (bytes != SWEET_GPUEB_MESSAGE_BYTES ||
         le32(data) != expected_command || le32(data + 4) != 0)

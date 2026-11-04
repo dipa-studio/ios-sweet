@@ -28,6 +28,8 @@ struct model {
     uint32_t magic, fw, gpu_id, as_present;
     int init_error, on_error, off_error, timeout_command;
     int stale, bad_reply, reset_timeout, stuck_timer, on_count, probe_error;
+    uint32_t status[32];
+    int commit_error, commit_apply, freq_reply;
 };
 static uint32_t read32(void *p, uint64_t at) {
     struct model *m=p; m->reads++;
@@ -37,6 +39,7 @@ static uint32_t read32(void *p, uint64_t at) {
     if(at==0x13c62000)return 0;
     if(at==0x13c62078)return m->pending | (m->stale?2:0);
     if(at>=0x13c5fe3c && at<0x13c5fe5c)return m->rx[(at-0x13c5fe3c)/4];
+    if(at>=0x240000000ULL && at<0x240000080ULL)return m->status[(at-0x240000000ULL)/4];
     assert(at>=0x13000000 && at<=0x13000034);
     assert((m->spm&6)==6); m->gpu_reads++;
     switch(at-0x13000000) {
@@ -58,6 +61,14 @@ static void write32(void *p,uint64_t at,uint32_t value) {
             assert(m->tx[4]==0x40000400 && m->tx[5]==2);
             assert(m->tx[6]==0x400 && m->tx[7]==0xc00);
             m->rx[2]=(uint32_t)m->init_error;
+        } else if(m->tx[0]==1) {
+            assert(m->tx[1]==1);              /* TARGET_GPU */
+            m->rx[2]=(uint32_t)m->freq_reply;
+        } else if(m->tx[0]==7) {
+            assert(m->tx[1]==1);              /* TARGET_GPU */
+            m->rx[2]=(uint32_t)m->commit_error;
+            if(!m->commit_error && m->commit_apply)
+                m->status[0]=m->tx[2];        /* tx[2] is the oppidx */
         } else {
             assert(m->tx[0]==6);
             if(m->tx[2]) {m->rx[2]=(uint32_t)(m->on_error?m->on_error:m->on_count);if(!m->on_error)m->spm=6;}
@@ -89,6 +100,19 @@ static struct sweet_gpu_boot_config config(void) {
 static int run(struct model *m,struct sweet_gpu_boot_config *c,struct sweet_gpu_boot_report *r) {
     struct sweet_gpu_io io={m,read32,write32,ticks,barrier,1000};
     return sweet_gpu_boot(c,&io,r);
+}
+/* A plausible MT6983 gpufreq_shared_status head. Field offsets are pinned
+ * against the vendor struct, so this also guards the decoder's layout. */
+static void status_init(struct model *m) {
+    m->status[0]=2;       /* cur_oppidx_gpu  */
+    m->status[2]=8;       /* opp_num_gpu     */
+    m->status[4]=500000;  /* cur_fgpu   kHz  */
+    m->status[6]=750000;  /* cur_vgpu   uV   */
+    m->status[8]=700000;  /* cur_vsram_gpu   */
+    m->status[24]=1;      /* power_control   */
+    m->status[25]=1;      /* dvfs_state      */
+    m->status[26]=0xff;   /* shader_present  */
+    m->status[27]=1;      /* power_count     */
 }
 static int powered(void *p,const struct sweet_gpu_io *io,uint64_t gpu) {
     struct model *m=p;(void)io;assert(gpu==0x13000000 && m->spm==6 && m->resets==1 && m->requests==2);
@@ -127,7 +151,33 @@ int main(void) {
         assert(r.reset_rawstat==0x100);
     }
     c=config();m=model();m.stuck_timer=1;m.timeout_command=0;assert(run(&m,&c,&r)==SWEET_GPU_TIMEOUT);
-    puts("PASS: success, mode/address/ownership gates, stale/negative/malformed replies, bounded waits, reset and cleanup");
+    /* 2338: gpufreq observation, then the optional second power-on step. */
+    m=model();c=config();
+    assert(!run(&m,&c,&r));assert(r.gpufreq_valid==0 && m.requests==3);
+    m=model();c=config();status_init(&m);m.freq_reply=500000;
+    assert(!run(&m,&c,&r));assert((r.gpufreq_valid&7)==7);
+    assert(r.gpufreq_oppidx==2 && r.gpufreq_opp_num==8 && r.gpufreq_power_count==1);
+    assert(r.gpufreq_freq_khz==500000 && r.gpufreq_volt_uv==750000);
+    assert(r.gpufreq_commit_result==INT32_MIN && m.requests==4);
+    m=model();c=config();status_init(&m);m.freq_reply=600000;
+    assert(!run(&m,&c,&r));assert((r.gpufreq_valid&7)==3);assert(m.requests==4);
+    m=model();c=config();status_init(&m);m.freq_reply=500000;m.commit_apply=1;
+    c.dvfs_commit=1;c.dvfs_commit_opp=-1;
+    assert(!run(&m,&c,&r));assert((r.gpufreq_valid&15)==15);
+    assert(r.gpufreq_commit_result==0 && m.requests==5);
+    m=model();c=config();status_init(&m);m.freq_reply=500000;m.commit_error=-4;
+    c.dvfs_commit=1;c.dvfs_commit_opp=3;
+    assert(run(&m,&c,&r)==-4);assert(m.requests==5 && !r.power_acquired);
+    assert(r.gpufreq_commit_result==-4 && r.stage==SWEET_GPU_DVFS);
+    m=model();c=config();status_init(&m);m.freq_reply=500000;
+    c.dvfs_commit=1;c.dvfs_commit_opp=5;
+    assert(run(&m,&c,&r)==SWEET_GPU_FREQUENCY);assert(m.requests==5 && !r.power_acquired);
+    m=model();c=config();status_init(&m);m.freq_reply=500000;
+    c.dvfs_commit=1;c.dvfs_commit_opp=9;
+    assert(run(&m,&c,&r)==SWEET_GPU_ARGUMENT);assert(m.requests==4 && !r.power_acquired);
+    m=model();c=config();c.dvfs_commit_opp=-2;
+    assert(run(&m,&c,&r)==SWEET_GPU_ARGUMENT);assert(!m.reads && !m.writes);
+    puts("PASS: success, mode/address/ownership gates, stale/negative/malformed replies, bounded waits, reset and cleanup, gpufreq observation and commit");
     return 0;
 }
 '''
@@ -144,6 +194,7 @@ class GpuBootTests(unittest.TestCase):
                             '-fsanitize=address,undefined', '-I', str(ROOT / 'xnu/gpu'),
                             str(source), str(ROOT / 'xnu/gpu/mtk_gpueb_boot.c'),
                             str(ROOT / 'xnu/gpu/mtk_gpueb_protocol.c'),
+                            str(ROOT / 'xnu/gpu/mtk_gpufreq.c'),
                             '-o', str(binary)], check=True, capture_output=True)
             result = subprocess.run([str(binary)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -1,0 +1,29 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -888,18 +888,19 @@
+ /* Preserve the shim report independently from console setup and userland.
+- * ABI: 13 u32 fields, 4 bytes alignment padding, u64 firmware PA, 2 u32.
+- * No MMIO is performed here; only the preallocated ADT report is copied. */
++ * ABI: 13 u32 fields, 4 bytes alignment padding, u64 firmware PA, 2 u32,
++ * then the 2338 gpufreq block: 10 more u32, 112 bytes total, marks 300..313.
++ * No MMIO is performed here; only the preallocated ADT report is copied. */
+ static void
+ sweet_gpu_report_marks(void)
+ {
+ 	DTEntry chosen;
+ 	const uint32_t *report;
+ 	unsigned int size;
+ 	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
+ 	    SecureDTGetProperty(chosen, "sweet-gpu-report",
+ 	    (void const **)&report, &size) != kSuccess || size != 128) {
+ 		return;
+ 	}
+-	uint32_t words[18];
++	uint32_t words[28];
+ 	memcpy(words, report, sizeof(words));
+-	for (uint32_t i = 0; i < 9; i++) {
++	for (uint32_t i = 0; i < 14; i++) {
+ 		uint64_t a = (uint64_t)words[2 * i] | (uint64_t)words[2 * i + 1] << 32;
+ 		sweet_mark(300 + i, a, SWEET_BUILD_ID);
+ 	}
+ }

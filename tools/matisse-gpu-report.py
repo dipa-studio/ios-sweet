@@ -6,12 +6,19 @@ from pathlib import Path
 import struct
 
 STAGES = {1:'config',2:'power-domain',3:'firmware',4:'memory',5:'shared-init',
-          6:'power-on',7:'gpu-id',8:'soft-reset',9:'power-off',10:'complete'}
+          6:'power-on',7:'gpu-id',8:'soft-reset',9:'power-off',10:'complete',
+          11:'gpufreq-dvfs'}
 ERRORS = {0:'success',-20:'argument',-21:'handoff',-22:'overlap',-23:'timeout',
-          -24:'stale-reply',-25:'invalid-reply',-26:'ownership',-27:'unpowered',-28:'gpu-model'}
+          -24:'stale-reply',-25:'invalid-reply',-26:'ownership',-27:'unpowered',
+          -28:'gpu-model',-29:'frequency'}
 KEYS = ['stage','error','init_result','on_result','off_result','spm_before',
         'spm_after','spm_second','firmware_magic','gpu_id','gpu_status',
         'reset_rawstat','as_present','firmware_memory','power_acquired','cleanup_attempted']
+# 2338 appends 10 words (112 bytes total). These are decoded from the
+# gpufreq shared-status region GPUEB was handed in CMD_INIT: they say what
+# the firmware published, not what the shim commanded.
+GPUFREQ_KEYS = ['valid','oppidx','power_count','opp_num','freq_khz','volt_uv',
+                'vsram_uv','dvfs_state','power_ctrl','commit_result']
 CSF_KEYS = ['stage','error','cleanup_error','mmu_features','l2_present','l2_present_hi',
             'l2_ready','mcu_status','job_raw','mmu_raw','as_fault','as_fault_lo',
             'as_fault_hi','version','features','input_va','output_va','groups',
@@ -89,7 +96,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -100,8 +107,15 @@ def decode(data, expected_build=0x2321):
     builds = [a for code,pad,a,b in records if code == 99]
     if builds != [expected_build]:
         raise ValueError('missing/ambiguous/unexpected kernel build mark')
-    raw = report_bytes(records,300,9,expected_build,'GPU')
-    fields = dict(zip(KEYS,struct.unpack('<I4i8I4xQ2I',raw)))
+    raw = report_bytes(records,300,14 if expected_build >= 0x2338 else 9,expected_build,'GPU')
+    fields = dict(zip(KEYS,struct.unpack('<I4i8I4xQ2I',raw[:72])))
+    gpufreq = None
+    if expected_build >= 0x2338:
+        gpufreq = dict(zip(GPUFREQ_KEYS,struct.unpack('<I2i6Ii',raw[72:112])))
+        if gpufreq['valid'] & ~0xf:
+            raise ValueError('invalid gpufreq validity bits')
+        if gpufreq['commit_result'] not in (-0x80000000,) and gpufreq['commit_result'] > 0:
+            raise ValueError('invalid gpufreq commit result')
     if fields['stage'] not in STAGES:
         raise ValueError('invalid GPU report stage')
     success = (fields['stage'] == 10 and fields['error'] == 0 and
@@ -116,6 +130,11 @@ def decode(data, expected_build=0x2321):
     result = dict(kernel_build=hex(expected_build),stage_name=STAGES[fields['stage']],
                 error_name=ERRORS.get(fields['error'],'unclassified-error'),
                 power_reset_verified=success,csf_firmware_boot_verified=False,**fields)
+    if gpufreq is not None:
+        # Observation, not readiness: valid bit0/bit1 mean the region looked
+        # like a published status before/after POWER_ON, bit2 that the
+        # coherent IPI answer agreed, bit3 that an issued commit took effect.
+        result['gpufreq'] = gpufreq
     # Keep aggregate success strict, expose the observed earlier power/reset
     # separately when a later CSF callback fails. Never infer it from zeros.
     result['initial_power_reset_observed'] = (
@@ -187,9 +206,9 @@ def decode(data, expected_build=0x2321):
                 'do not measure clock rate or lock, MCU enabled does not trace execution.')
         if expected_build >= 0x2332:
             flags, reserved, va, pa_lo, pa_hi, word = struct.unpack_from('<6I', raw, 440)
-            if flags & ~3 or flags == 2 or (reserved and expected_build not in (0x2335,0x2336,0x2337)):
+            if flags & ~3 or flags == 2 or (reserved and expected_build not in (0x2335,0x2336,0x2337,0x2338)):
                 raise ValueError('invalid CSF access snapshot flags/reserved word')
-            if expected_build in (0x2335,0x2336,0x2337):
+            if expected_build in (0x2335,0x2336,0x2337,0x2338):
                 csf['entry_marker_before'] = reserved
             pa = pa_hi << 32 | pa_lo
             root = csf['transtab_hi'] << 32 | csf['transtab_lo']
@@ -209,9 +228,9 @@ def decode(data, expected_build=0x2321):
                 'Native shim CPU MMU/caches are off; barriers precede readback.')
         if expected_build >= 0x2333:
             flags, reserved = struct.unpack_from('<2I', raw, 560)
-            if flags & ~3 or flags == 2 or (reserved and expected_build not in (0x2335,0x2336,0x2337)):
+            if flags & ~3 or flags == 2 or (reserved and expected_build not in (0x2335,0x2336,0x2337,0x2338)):
                 raise ValueError('invalid CSF platform path flags/reserved word')
-            if expected_build in (0x2335,0x2336,0x2337):
+            if expected_build in (0x2335,0x2336,0x2337,0x2338):
                 csf['entry_marker_after'] = reserved
             if flags and csf['access_sample_flags'] & 1 == 0:
                 raise ValueError('platform path snapshot without preceding access snapshot')
@@ -311,7 +330,7 @@ def decode(data, expected_build=0x2321):
                 'is separate from CSF firmware readiness; an absent marker does not localize the stall.')
             ready = False
             csf['firmware_ready_observed'] = False
-        if expected_build in (0x2335,0x2336,0x2337):
+        if expected_build in (0x2335,0x2336,0x2337,0x2338):
             csf['entry_marker_va'] = 0x04000ffc
             csf['entry_marker_sampled'] = csf['access_snapshot_complete']
             csf['entry_marker_observed'] = (csf['entry_marker_sampled'] and
@@ -342,7 +361,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2337)')
+                   help='expected kernel/report build (0x2321 through 0x2338)')
     a=p.parse_args()
     try:
         report=decode(a.marks.read_bytes(),a.build)

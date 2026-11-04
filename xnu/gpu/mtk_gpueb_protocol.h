@@ -11,7 +11,9 @@
 #define SWEET_GPUEB_MESSAGE_BYTES 32u
 #define SWEET_GPUEB_STATUS_BYTES 0x400u
 #define SWEET_GPUEB_CMD_INIT 0u
+#define SWEET_GPUEB_CMD_FREQ 1u
 #define SWEET_GPUEB_CMD_POWER 6u
+#define SWEET_GPUEB_CMD_COMMIT 7u
 
 enum sweet_gpueb_result {
     SWEET_GPUEB_OK = 0,

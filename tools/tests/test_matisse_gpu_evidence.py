@@ -57,8 +57,11 @@ class PersistentReportPatchTests(unittest.TestCase):
         # locally edited build tree must not conceal a broken source patch.
         names = subprocess.check_output(['git','ls-files','--','xnu/patches/*.patch'],
                                         cwd=ROOT,text=True).splitlines()
-        latest='xnu/patches/0135-matisse-csf-entry-guard-identity.patch'
-        if latest not in names:names=sorted(names+[latest])
+        latest='xnu/patches/0137-matisse-gpu-dvfs-identity.patch'
+        evidence='xnu/patches/0136-matisse-gpu-dvfs-evidence.patch'
+        for name in (evidence, latest):
+            if name not in names:
+                names = sorted(names + [name])
         self.assertTrue(names)
         with tempfile.TemporaryDirectory(prefix='csf-evidence-patches-') as directory:
             for name in names:
@@ -67,7 +70,7 @@ class PersistentReportPatchTests(unittest.TestCase):
                     cwd=directory,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,name+': '+result.stderr)
             source = (Path(directory)/'bsd/dev/sweet_ufs.c').read_text()
-        self.assertIn('#define SWEET_BUILD_ID 0x2337u',source)
+        self.assertIn('#define SWEET_BUILD_ID 0x2338u',source)
         begin = source.index('static void\nsweet_gpu_report_marks(void)\n{')
         end = source.index('\n}\n',begin)
         report = source[begin:end]
@@ -75,6 +78,10 @@ class PersistentReportPatchTests(unittest.TestCase):
         self.assertIn('uint32_t csf[174];',report)
         self.assertIn('i < 87;',report)
         self.assertIn('sweet_mark(320 + i, a, SWEET_BUILD_ID);',report)
+        # 2338 widens the GPU report to 112 bytes without touching the CSF ABI.
+        self.assertIn('uint32_t words[28];',report)
+        self.assertIn('for (uint32_t i = 0; i < 14; i++) {',report)
+        self.assertIn('sweet_mark(300 + i, a, SWEET_BUILD_ID);',report)
         self.assertIn('for (uint32_t i = 0; i < 16; i++) {\n'
                       '\t\tsweet_mark(70 + i, i, sweet_disp_trace[i]);',source)
 
@@ -106,6 +113,42 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertTrue(result['power_reset_verified'])
         self.assertFalse(result['csf_firmware_boot_verified'])
         self.assertEqual(result['firmware_memory'],0x250000000)
+
+    def marks_dvfs(self, valid=0xf, oppidx=2, power_count=1, freq=500000,
+                   commit=0, omit=None):
+        import struct
+        block = self.csf_marks(build=0x2338)
+        raw = struct.pack('<I2i6Ii', valid, oppidx, power_count, 8, freq, 750000,
+                          700000, 1, 1, commit)
+        count = struct.unpack_from('<I', block, 12)[0]
+        for i in range(5):
+            if i == omit:
+                continue
+            struct.pack_into('<IIQQ', block, 16 + count*24 + i*24,
+                             309 + i, 0, struct.unpack_from('<Q', raw, i*8)[0], 0x2338)
+        struct.pack_into('<I', block, 12, count + (5 if omit is None else 4))
+        return block
+
+    def test_2338_gpufreq_block_is_decoded(self):
+        result = self.module.decode(self.marks_dvfs(), 0x2338)
+        self.assertTrue(result['power_reset_verified'])
+        g = result['gpufreq']
+        self.assertEqual((g['valid'], g['oppidx'], g['power_count'], g['opp_num']),
+                         (0xf, 2, 1, 8))
+        self.assertEqual((g['freq_khz'], g['volt_uv'], g['vsram_uv']),
+                         (500000, 750000, 700000))
+        self.assertEqual(g['commit_result'], 0)
+
+    def test_2338_gpufreq_rejections_and_older_builds(self):
+        with self.assertRaises(ValueError):
+            self.module.decode(self.marks_dvfs(valid=0x10), 0x2338)
+        with self.assertRaises(ValueError):
+            self.module.decode(self.marks_dvfs(omit=4), 0x2338)
+        # A 2338 capture read under the2337 ABI must be rejected, not truncated.
+        with self.assertRaises(ValueError):
+            self.module.decode(self.marks_dvfs(), 0x2337)
+        # A 2337 capture must never grow a gpufreq section.
+        self.assertNotIn('gpufreq', self.module.decode(self.marks()))
 
     def test_failure_is_not_success(self):
         self.assertFalse(self.module.decode(self.marks(error=-23))['power_reset_verified'])

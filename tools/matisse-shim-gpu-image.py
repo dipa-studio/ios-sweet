@@ -38,17 +38,17 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
     firmware = pinned(path, expected)
     if expected != 'de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f7229a':
         raise ValueError('CSF probe requires the measured device firmware')
-    if inline_entry and (not entry_probe or build_id not in (0x2336,0x2337)):
-        raise ValueError('inline entry requires build2336/2337 and entry probe')
-    if entry_pte_guard != (build_id == 0x2337):
-        raise ValueError('build2337 requires the entry PTE guard; other builds forbid it')
+    if inline_entry and (not entry_probe or build_id not in (0x2336,0x2337,0x2338)):
+        raise ValueError('inline entry requires build2336/2337/2338 and entry probe')
+    if entry_pte_guard != (build_id in (0x2337,0x2338)):
+        raise ValueError('build2337 requires the entry PTE guard (build2338 does too); other builds forbid it')
     if entry_probe:
-        if (build_id not in ((0x2336,0x2337) if inline_entry else (0x2335,)) or
+        if (build_id not in ((0x2336,0x2337,0x2338) if inline_entry else (0x2335,)) or
                 reset_store_stub):
-            raise ValueError('entry probe requires build2335/2336/2337 and original firmware')
+            raise ValueError('entry probe requires build2335/2336/2337/2338 and original firmware')
         return firmware, None
-    if build_id in (0x2335,0x2336,0x2337):
-        raise ValueError('build2335/2336/2337 requires the entry probe')
+    if build_id in (0x2335,0x2336,0x2337,0x2338):
+        raise ValueError('build2335/2336/2337/2338 requires the entry probe')
     if (build_id == 0x2334) != reset_store_stub:
         raise ValueError('build2334 requires the reset-store stub; other builds must retain stock firmware')
     if not reset_store_stub:
@@ -96,6 +96,8 @@ def build(a):
     if out.exists():
         raise ValueError('refuse existing output directory')
     kernel = pinned(a.kernel, a.kernel_sha256)
+    if a.build_id == 0x2338 and not (a.entry_probe and a.inline_entry and a.entry_pte_guard):
+        raise ValueError('build2338 must preserve the2337 CSF probe configuration')
     firmware, reset_patch = diagnostic_firmware(a.firmware, a.firmware_sha256,
                                                a.build_id, a.reset_store_stub, a.entry_probe,
                                                a.inline_entry, a.entry_pte_guard)
@@ -120,8 +122,19 @@ def build(a):
                                  allow_matisse_root_write=False)
     (out / (label + '.payload')).write_bytes(payload)
     ndk = Path(a.ndk)
+    if a.dvfs_commit == 'off':
+        dvfs = ['-DSWEET_GPU_DVFS_COMMIT=0']
+    elif a.dvfs_commit == 'current':
+        dvfs = ['-DSWEET_GPU_DVFS_COMMIT=1', '-DSWEET_GPU_DVFS_COMMIT_OPP=-1']
+    else:
+        index = int(a.dvfs_commit, 0)
+        if not 0 <= index < 64:
+            raise ValueError('dvfs-commit index out of range')
+        dvfs = ['-DSWEET_GPU_DVFS_COMMIT=1', '-DSWEET_GPU_DVFS_COMMIT_OPP=%d' % index]
     definitions = ['-DSHIM_GPU_PROBE', '-DSHIM_CSF_PROBE', '-DSHIM_RECOVERY_FALLBACK',
                    '-DSHIM_RECOVERY_OFFSET=' + str(FALLBACK_OFFSET),
+                   '-DSWEET_SHIM_BUILD_LABEL="%x"' % a.build_id,
+                   *dvfs,
                    '-DEMBEDDED_XNU_BYTES=' + str(len(payload))]
     if a.entry_probe:
         definitions.append('-DSHIM_CSF_ENTRY_PROBE')
@@ -132,6 +145,7 @@ def build(a):
     source = {'start': ROOT / 'shim/start.S', 'loader': ROOT / 'shim/loader.c',
               'gpu': ROOT / 'shim/gpu.c', 'gpueb_boot': ROOT / 'xnu/gpu/mtk_gpueb_boot.c',
               'gpueb_protocol': ROOT / 'xnu/gpu/mtk_gpueb_protocol.c',
+              'gpufreq': ROOT / 'xnu/gpu/mtk_gpufreq.c',
               'csf': ROOT / 'shim/csf.c', 'csf_memory': ROOT / 'xnu/gpu/mali_csf_memory.c',
               'csf_firmware': ROOT / 'xnu/gpu/mali_csf_firmware.c', 'csf_boot': ROOT / 'xnu/gpu/mali_csf_boot.c'}
     for name, path in source.items():
@@ -145,7 +159,7 @@ def build(a):
     (out / 'csf_blob.S').write_text(assembly)
     subprocess.run([str(ndk / 'clang'), *FLAGS, '-c', str(out / 'csf_blob.S'), '-o', str(out / 'csf_blob.o')],check=True)
     names = ['start' ,'shim','console','display','diag','mmu','fdt','board','loader',
-             'ufs','str','logstore','gpu','gpueb_boot','gpueb_protocol','csf','csf_memory','csf_firmware','csf_boot','csf_blob']
+             'ufs','str','logstore','gpu','gpueb_boot','gpueb_protocol','gpufreq','csf','csf_memory','csf_firmware','csf_boot','csf_blob']
     objects = [out / (n + '.o') if n in source or n == 'csf_blob' else frozen / 'out' / (n + '.o') for n in names]
     subprocess.run([str(ndk / 'clang'), *FLAGS, '-static', '-T', str(frozen / 'shim.ld'),
                     '-fuse-ld=lld', '-Wl,--build-id=none', *map(str, objects),
@@ -204,6 +218,9 @@ def build(a):
                 autorecovery_seconds=60, automatic_recovery_verified=False,
                 gpu_csf_firmware_embedded_sha256=digest(firmware), gpu_csf_boot_hardware_verified=False)
     info['csf_leaf_memory_group'] = 6
+    info['gpu_boot_report_bytes'] = 112
+    info['gpufreq_dvfs'] = dict(commit=a.dvfs_commit, definitions=dvfs,
+                                report_abi='2338', hardware_verified=False)
     info['csf_mapping_metadata_hardware_readback'] = False
     info['csf_arena'] = dict(shim_offset=arena, bytes=2 << 20,
                              bss_end=symbol['_bss_end'], shim_end=end,
@@ -242,7 +259,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
@@ -250,7 +267,10 @@ def main():
     p.add_argument('--inline-entry', action='store_true',
                    help='build2336/2337: inline STUB before remote fetch, then TRAM in tail')
     p.add_argument('--entry-pte-guard', action='store_true',
-                   help='build2337 only: reject PTE/backing mismatch before MCU_CONTROL')
+                   help='build2337/2338 only: reject PTE/backing mismatch before MCU_CONTROL')
+    p.add_argument('--dvfs-commit', default='off', metavar='{off,current,<oppidx>}',
+                   help='send CMD_COMMIT after POWER_ON: off (default), current (the '
+                        'index GPUEB already reports, no frequency change), or an index')
     for key in ('firmware','firmware-sha256','kernel','kernel-sha256','template','template-sha256','adt','adt-sha256',
                 'stock','stock-sha256','frozen','cmdline','ndk','out'):
         p.add_argument('--' + key, required=True)

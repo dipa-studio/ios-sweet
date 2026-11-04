@@ -1,6 +1,71 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-02:2337 ENTRY PTE GATE BUILT OFFLINE; NO DEVICE TRIAL <<<
+## >>> ACTIVE 2026-11-04:2338 DVFS LAYER IMPLEMENTED OFFLINE; NO BUILD, NO TRIAL <<<
+
+Gap closed: vendor kbase powers the GPU in TWO steps - gpufreq_power_control
+then gpufreq_commit (gpufreq_v2.c:853/:912; kbase caller mtk_common_gpufreq_commit
+at kbase-full-disasm.txt:2692). Through2337 the shim sent only CMD_POWER_CONTROL(6)
+and never CMD_COMMIT(7), and never read back the gpufreq shared status. GPU
+frequency/voltage has therefore been whatever LK left, unmeasured. That is why
+2332-2336 could not separate "MCU never fetches" from "clock not usable"; the
+vendor's own wait_ready() comment names slow/unstable GPU clock.
+
+NEW offline code: xnu/gpu/mtk_gpufreq.{c,h} decodes the first0x70 bytes of
+struct gpufreq_shared_status (offsets pinned from gpufreq_ipi.h: cur_oppidx_gpu0x00,
+opp_num_gpu0x08, cur_fgpu0x10, cur_vgpu0x18, cur_vsram_gpu0x20, power_control0x60,
+dvfs_state0x64, shader_present0x68, power_count0x6c) and encodes CMD_COMMIT and
+CMD_GET_FREQ_BY_IDX in the existing32-byte message layout. mtk_gpueb_protocol gains
+CMD_FREQ(1)/CMD_COMMIT(7) and admits both in the reply whitelist.
+
+mtk_gpueb_boot.c samples status after INIT (valid bit0) and after POWER_ON+SPM
+(bit1), cross-checks cur_fgpu against the coherent IPI answer (bit2), and only
+if SWEET_GPU_DVFS_COMMIT=1 sends COMMIT then re-samples (bit3). Observing never
+fails the transaction; only an issued COMMIT that is rejected, or is accepted
+but does not move the reported index, fails closed (-29) and still powers off.
+New stage SWEET_GPU_DVFS=11 appended; earlier numbers unchanged.
+
+sweet_gpu_boot_report grows72->112 bytes, still inside the existing128-byte
+sweet-gpu-report ADT slot, so ADT layout, the696-byte CSF report and the whole
+CSF evidence patch chain are untouched. Patches0136 (marks300..313, words[28],
+i<14) and0137 (SWEET_BUILD_ID 0x2338). Both verified to apply cleanly - dry run
+against the real post-0135 tree at xnu/out/local/xnu; that tree was then restored
+to2337 source. tools/matisse-shim-gpu-image.py accepts0x2338, requires it to keep
+the2337 probe set (--entry-probe --inline-entry --entry-pte-guard), adds
+--dvfs-commit{off,current,<idx>} and -DSWEET_SHIM_BUILD_LABEL so the console
+banner cannot silently reuse an older build string.
+
+OBSERVATION: 200 offline tests PASS, 3 skipped (Unicorn). Covers exact COMMIT
+wire bytes, untouched-on-error, every decode bound, all-zero/all-ones rejection,
+valid-bit rejection, and the full INIT->POWER_ON->FREQ->COMMIT->OFF mock mailbox
+with commit accepted, rejected and accepted-but-not-applied.
+
+NO KERNEL AND NO IMAGE WERE BUILT. This host has CommandLineTools only, no
+Xcode: an incremental make of xnu/out/local stops on missing
+Kernel.framework/PrivateHeaders/platform, missing EXPORT_HDRS/libsa and
+absent iig. The2337 kernel is untouched, SHA
+ddc8b3c09e5007e41baa1a156e45213c31ab9297659ad8fb98578ab3476291cc.
+2338 needs a kernel built from0136/0137 before an image can be produced.
+
+OBSERVATION: no device access this round. Last verified state remains root
+Recovery, full original boot_a SHA
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No journal, no pending restoration, no partition write.
+
+CORRECTION recorded from user: /dev/mali0 and /dev/mem do not exist on this
+device in Recovery (CONFIG_DEVMEM off, no Mali/GPUEB/gpufreq binding), so
+neither the vendor runtime_resume path nor raw /dev/mem poking is available.
+The shim's GPUEB mailbox probe is the only power path here. GPU_ID already
+reads0xa8620004 after POWER_ON and SPM&6==6 on every trial from2322 on, so
+the gpu_id gate the user set is passed; the open problem is the MCU.
+
+NEXT: (1) build the2338 kernel from0136/0137 - push to the fork and use the
+xnu workflow, or supply the local Xcode/KDK recipe; (2) build
+matisse-shim-gpu2338.img with --dvfs-commit current and verify it; (3) present
+the exact image SHA and request its own boot_a authorization; then run once,
+capture gpu-report marks300..313, and restore all64MiB before interpreting.
+
+
+## >>> HISTORICAL 2026-11-02:2337 ENTRY PTE GATE BUILT OFFLINE; NO DEVICE TRIAL <<<
 
 User corrected active reference to MT6983 Linux5.10 mali_kbase+GPUEB, not
 v6.12 panthor. Local pinned mali-r32p1/mali_kbase_csf_firmware.c checks
