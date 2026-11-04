@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-04:2338 DVFS IMAGE BUILT AND VERIFIED; NO DEVICE TRIAL <<<
+## >>> ACTIVE 2026-11-04:2338 TRIAL AUTHORIZED BY USER; BLOCKED ON DEVICE CONNECTION <<<
 
 Gap closed: vendor kbase powers the GPU in TWO steps - gpufreq_power_control
 then gpufreq_commit (gpufreq_v2.c:853/:912; kbase caller mtk_common_gpufreq_commit
@@ -88,11 +88,41 @@ The shim's GPUEB mailbox probe is the only power path here. GPU_ID already
 reads0xa8620004 after POWER_ON and SPM&6==6 on every trial from2322 on, so
 the gpu_id gate is passed; the open problem is the MCU.
 
-NEXT: this image needs its own boot_a authorization naming SHA ad07f492. If
-granted, run one bounded trial, then read marks300..313 (the gpufreq block is
-new) and restore all64MiB before interpreting. What2338 adds: power_count,
-cur_fgpu, cur_vgpu, dvfs_state and whether CMD_COMMIT is accepted. It still
-cannot prove MCU boot; GLB_VERSION must come from the MCU's own interrupt.
+AUTHORIZATION GIVEN. The user replied to the request for an explicit
+authorization of ad07f492 with a bare approval, so exactly one 2338 trial is
+approved for that SHA and no other. The runner is
+research/matisse/20261031-gpu/shim2338-dvfs-trials-run-once.py (gitignored with
+the rest of research/, like every earlier runner). It is the 2337 runner with
+only these constants changed: image path, 27119616 bytes, build0x2338, and the
+predicted post-write partition digest 9c027a6d0845dc0a7560c50dce3601f0161a607d90e7860574b35aec40820cb6
+= sha256(image || backup[len(image):]). Every safety property is inherited
+unchanged: Recovery identity gate (matisse/_a/recovery/uid0), 64MiB boot_a
+geometry, read-only preflight, journal refuses a second run, exact
+--approved-image-sha256 argument, read-back before reboot, raw-fastboot
+fallback that stops rather than retries blind, and a full 64MiB restore whose
+digest must equal 2931647a or the run is marked failed.
+
+BLOCKED: no device is attached. adb devices and fastboot devices are both
+empty; the only Xiaomi entry on the USB tree is a USB2.0 hub with no product
+name or serial. Previous trials left clean journals:
+shim2336-inline-trials and shim2337-entry-guard-trials both ended
+complete-restored-Recovery with restored_sha256 2931647a, and no
+shim2338-dvfs-trials directory exists, so nothing is pending.
+
+PRE-TRIAL RE-CHECK of the one new command: gpufreq_ipi_data is
+{cmd_id, target, union}, and gpufreq_commit (gpufreq_v2.c:912) fills
+cmd_id=CMD_COMMIT(7), target=TARGET_GPU(1), u.oppidx. Our encoder writes
+exactly those three words and the boot path passes TARGET_GPU. gpufreq_v2.h:78
+confirms TARGET_GPU==1. Commit uses the OPP GPUEB already reports, so frequency
+and voltage do not move; only the command path is exercised.
+
+NEXT: when the phone is attached in Recovery, run
+  python3 shim2338-dvfs-trials-run-once.py preflight
+then, only if that reports readonly_preflight_passed,
+  python3 shim2338-dvfs-trials-run-once.py gpu-normal --approved-image-sha256=ad07f4929292a868498f6499b585ce9bc39455919f5116e3f0e9c7742234dcca
+Then read marks300..313. The gpufreq block is new: power_count, cur_fgpu,
+cur_vgpu, dvfs_state, and whether CMD_COMMIT is accepted. It still cannot prove
+MCU boot; GLB_VERSION must come from the MCU's own interrupt.
 
 ## >>> HISTORICAL 2026-11-02:2337 ENTRY PTE GATE BUILT OFFLINE; NO DEVICE TRIAL <<<
 
