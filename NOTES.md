@@ -1,60 +1,62 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-04:2340 PROVED THE MCU EXECUTES; 2341 ISOLATES THE DEAD WORD <<<
+## >>> ACTIVE 2026-11-04:2341 SHOWED THE WHOLE PAGE TAKES WRITES EXCEPT 0xffc <<<
 
-2340 RAN AND IS THE FIRST POSITIVE RESULT ON THE MCU. Image 4e801cc5, one
-authorized trial, boot_a restored to 2931647a automatically.
+2341 RAN. Image 3a098759, one authorized trial, boot_a restored to 2931647a.
+version=11 (0xb) and features=7 (0x7). Both entry stores executed, into two
+adjacent words of the SAME 4KB shared page. So shared+0 and shared+4 take
+writes and shared+0xffc does not. 2335/2336/2337/2339 all sited their entry
+checkpoint on 0xffc, so their "marker absent" readings are NOT evidence that
+the MCU failed to arrive and must not be cited as such again.
 
-version=11 (0xb), version_before=0, features=0, private_early_after=0,
-mcu_store_progress=none, entry_marker_after=0, mcu_status=1, job_raw=0.
+TWO SPECULATIONS ALSO DIED. The sign-extend path reads0x0302bc78 and copies
+from0x03800000; neither address is in ANY firmware section. A set bit7 would
+therefore fault inside the vendor's own code. So the real peripheral at
+0x40003034 must return bit7 =0, which means forcing r4 to0 in2340/2341
+reproduced hardware behaviour rather than changing it. 2341 is trustworthy.
 
-WHY THAT IS DECISIVE: csf_boot.o is BYTE-IDENTICAL between2339 and2340 (checked
-with cmp, along with csf, csf_memory, csf_firmware, gpueb_boot, gpufreq; only
-gpu.o differs, and only by the build label). The sole behavioural difference is
-two firmware literals. So version going0 ->0xb can only be the MCU executing the
-str at0x010018f4 with r1=0xb and r0=0x04000000. The MCU fetches, decodes and
-writes to the shared page. "The MCU is dead" is finished as a hypothesis.
+THE ENTRY, NOW FULLY DISASSEMBLED:
+  cpsid i
+  ldr r0,=0x40022000 ; mov r1,#0xb ; str r1,[r0]     store1
+  ldr r0,=0x40022004 ; mov r1,#0x7 ; str r1,[r0]     store2
+  ldr r0,=0xE000ED24 ; mov r1,#0x70000 ; str r1,[r0] SHCSR: enables3 fault kinds
+  ldr r0,=0x0203F000 ; msr psp,r0 ; mov r0,#2 ; msr control,r0 ; isb
+  ldr r0,=0x40003034 ; ldr r4,[r0] ; and r4,#0x80
+  bl 0x01003126   MPU init (writes MPU_RBAR/RASR at0xE000ED9C/0xE000EDA0)
+  bl 0x010019d8   writes0 to0xE000ED84
+  bl 0x010019e2   ICIALLU + CCR bit17 (I-cache on)
+  bl 0x01001a2a
+  cbz r4,0x01001982 ; b.w 0x01002aec   into the firmware body
+The stack0x0203E000..0x0203FFFF IS mapped read-write, so the pushes are fine.
+CPU and MCU both stall somewhere after store2 and before the firmware writes
+0x0202c934 (private_early_after stays0).
 
-AND IT LOCALISES THE PROBLEM TO ONE WORD. One instruction, one 4KB page
-(0x04000000..0x04000fff, PA0x40110000): a store to shared+0 holds, a store to
-shared+0xffc does not.2335,2336,2337 and2339 all put their entry checkpoint at
-shared+0xffc, which is why they all read0 - it may never have been "the MCU
-never got there" but "that word never takes the write".2334 is the only other
-trial that looked successful, and it wrote shared+0.
+BUILD2342 ISOLATES THE ONE REMAINING VARIABLE: does the REAL peripheral accept
+its store? It leaves the vendor's 0x40022000 store and the 0x40003034 load
+byte-for-byte intact and repoints only the second store at shared+4. Three
+bytes change in the whole container.
+  features0x7 -> the real peripheral write completed and execution reached
+                 store2, so the stall is in the later init
+  features0   -> writing0x40022000 is what hangs, and that peripheral has to be
+                 brought up from the AP side first
+  version0x01010000 -> the MCU booted
 
-BUILD2341 moves only the SECOND store, one word in: 0x281c->0x04000000 (0xb,
-proven), 0x2820->0x04000004 (0x7, the features word), 0x282c->0x04000ff8 (still
-bypasses the peripheral load and the unmapped0x03800000 copy). features is
-already decoded, so the report ABI does not move.
-  version0xb + features0x7 -> the page takes writes and0xffc alone is broken;
-                              re-site the entry checkpoint and re-run
-  version0xb + features0    -> the second store never executes; the stop is
-                              between the two stores
-  version0x01010000         -> the MCU booted
-
-Artifacts: kernel 2e79d85e114b8fc95837172132dd17d2ebd07865dfc91d877a8006848c7f1069
-(patch0140), image shim2341-sharedpage-ready/matisse-shim-gpu2341.img,
-27119616B, SHA256 3a098759d02c3341c1a6eeaadf573e4ee543624a0b280adbfb046604ea1c0b70,
+Artifacts: kernel a22e9ef60e0d137676e1fc527aa9cb9d0e93c510c9bab31608318789527753e5
+(patch0141), image shim2342-realperiph-ready/matisse-shim-gpu2342.img,
+27119616B, SHA256 01a3905ba3dc52baf5287ea9adee2b319498b8e672aa57503c874e9b8d4f9bbf,
 predicted partition digest
-10fbddacf0a9b09888deae01aa1b3cc9491561592b3efdd1b2da9b078a4f2ca2,
-embedded container c7360ebe,9 bytes changed. verify2341-sharedpage.py PASS
-(anchor0x77000, entry offset0xa8ec, leaf0x3000000040081fc7, entry PA0x400818ec,
-entry word0x4826b672 untouched,293 pages).207 offline tests pass,3 skipped.
+68f633785ee0ad6aadf514f2fed037131907b3b3aa36c562dc88651d614b2763,
+embedded container c173dd1e. verify2342-realperiph.py PASS.208 offline tests
+pass,3 skipped.
 
-Runner: shim2341-sharedpage-trials-run-once.py, refuses to run without
---approved-image-sha256=3a098759d02c3341c1a6eeaadf573e4ee543624a0b280adbfb046604ea1c0b70.
-
-IMPORTANT RE-READ OF HISTORY: if0xffc never takes a write, then2335/2336/2337's
-"entry marker absent" conclusions are not evidence about the MCU at all. They
-should be re-interpreted, not trusted, until the marker is re-sited. The entry
-PTE guard (2337) still proves the tables were walkable; it does not prove a
-fetch.
+Runner: shim2342-realperiph-trials-run-once.py, refuses to run without
+--approved-image-sha256=01a3905ba3dc52baf5287ea9adee2b319498b8e672aa57503c874e9b8d4f9bbf.
 
 Device clean: root Recovery, boot_a
 2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1, no journal,
 no pending restoration.
 
-NEXT: 2341 needs its own boot_a authorization naming that SHA.
+NEXT: 2342 needs its own boot_a authorization naming that SHA.
 
 ## >>> HISTORICAL 2026-11-02:2337 ENTRY PTE GATE BUILT OFFLINE; NO DEVICE TRIAL <<<
 

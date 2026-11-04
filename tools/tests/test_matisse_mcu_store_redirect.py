@@ -111,6 +111,22 @@ class McuStoreRedirectTests(unittest.TestCase):
         self.assertEqual(changed, allowed)
         self.assertEqual(struct.unpack_from('<I', embedded, 0x2820)[0], 0x04000004)
 
+    def test_build2342_keeps_the_real_peripheral_store(self):
+        # 2341 showed both stores execute and every shared word but 0xffc takes
+        # a write. 2342 leaves the 0x40022000 store and the 0x40003034 load
+        # exactly as the vendor wrote them and moves only the second store, so a
+        # set features word proves the REAL peripheral write completed.
+        embedded, patch = self.module.redirect_mcu_accesses(FIRMWARE, SHA, 0x2342)
+        self.assertEqual(len(embedded), len(self.original))
+        self.assertEqual([(site['kind'], site['literal_va'], site['target'])
+                          for site in patch['sites']],
+                         [('store', '0x100198c', '0x4000004')])
+        changed = {i for i in range(len(self.original)) if self.original[i] != embedded[i]}
+        self.assertEqual(changed, {0x2821, 0x2822, 0x2823})
+        # The vendor's first peripheral store and the peripheral load survive.
+        self.assertEqual(struct.unpack_from('<I', embedded, 0x281c)[0], 0x40022000)
+        self.assertEqual(struct.unpack_from('<I', embedded, 0x282c)[0], 0x40003034)
+
     def test_only_redirect_builds_may_redirect(self):
         for build in (0x2334, 0x2335, 0x2337, 0x2338):
             with self.assertRaises(ValueError):
