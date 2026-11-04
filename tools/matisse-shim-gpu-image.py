@@ -162,6 +162,78 @@ def redirect_mcu_stores(path, expected):
     return redirect_mcu_accesses(path, expected, 0x2339)
 
 
+# Every Cortex-M fault vector in this container points at0x010019b1, so a single
+# storm-free stub answers the one question static analysis cannot: does the MCU
+# fault, and at which instruction. The stub reads the stacked PC out of the
+# exception frame on PSP (the entry switches to PSP at0x01001910) and parks it
+# in a shared word the shim already decodes. The periphals and the rest of the
+# entry stay exactly as the vendor shipped them.
+FAULT_VECTOR_PROBE = {
+    0x2343: dict(
+        stub_va=0x010019b0,
+        # mrs r0,psp / ldr r1,[r0,#0x18] / ldr r2,[pc,#8] / str r1,[r2] /
+        # b . / nop / nop / .word0x04000010
+        stub=bytes.fromhex('eff309808169' '024a1160' 'fee7' '00bf' '00bf' '10000004'),
+        marker_va=0x04000010,
+    ),
+}
+
+
+def fault_vector_probe(path, expected, build_id):
+    firmware = pinned(path, expected)
+    if expected != 'de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f7229a':
+        raise ValueError('fault vector probe requires the measured device firmware')
+    spec = FAULT_VECTOR_PROBE.get(build_id)
+    if not spec:
+        raise ValueError('build %#x has no fault vector probe' % build_id)
+    fetch = importlib.util.module_from_spec(
+        importlib.util.spec_from_file_location('csf_fetch', ROOT / 'tools/matisse-csf-fetch-audit.py'))
+    importlib.util.spec_from_file_location('csf_fetch', ROOT / 'tools/matisse-csf-fetch-audit.py').loader.exec_module(fetch)
+    _, plan = fetch.build_arena(Path(path), 0x40077000, memory_group=6)
+    section = next(s for s in plan['sections'] if s['va'] == 0x01000000)
+
+    def offset(va):
+        if not (section['va'] <= va and va + 4 <= section['va'] + section['data_bytes']):
+            raise ValueError('probe site %#x is outside the code section' % va)
+        return section['data_start'] + va - section['va']
+
+    # The vector table lives in the VA-zero config section, not at file offset0.
+    config = next(s for s in plan['sections'] if s['va'] == 0)
+    # SP at0x0 and Reset at0x4 are not fault vectors.
+    for entry in (0x08, 0x0c, 0x10, 0x14, 0x18):
+        at = config['data_start'] + entry
+        word = int.from_bytes(firmware[at:at + 4], 'little')
+        if word != 0x010019b1:
+            raise ValueError('vector %#x is %#x, expected0x010019b1' % (entry, word))
+
+    stub_at = offset(spec['stub_va'])
+    stub = spec['stub']
+    if len(stub) % 4:
+        raise ValueError('stub must keep four-byte alignment')
+    embedded = bytearray(firmware)
+    replaced = bytes(embedded[stub_at:stub_at + len(stub)])
+    embedded[stub_at:stub_at + len(stub)] = stub
+    embedded = bytes(embedded)
+    if len(embedded) != len(firmware):
+        raise ValueError('fault probe changed the container size')
+    changed = sorted(i for i in range(len(firmware)) if firmware[i] != embedded[i])
+    if any(not (stub_at <= i < stub_at + len(stub)) for i in changed):
+        raise ValueError('fault probe touched bytes outside the stub')
+    with tempfile.TemporaryDirectory(prefix='csf-fault-probe-') as directory:
+        candidate = Path(directory) / 'diagnostic.bin'
+        candidate.write_bytes(embedded)
+        _, rebuilt = fetch.build_arena(candidate, 0x40077000, memory_group=6)
+    if rebuilt != plan:
+        raise ValueError('fault probe changed firmware mappings')
+    patch = dict(diagnostic_only=True, kind='fault-vector',
+                 stub_va='%#x' % spec['stub_va'], stub_bytes=stub.hex(),
+                 replaced_bytes=replaced.hex(), marker_va='%#x' % spec['marker_va'],
+                 container_bytes_changed=len(changed),
+                 original_container_sha256=digest(firmware),
+                 embedded_container_sha256=digest(embedded))
+    return embedded, patch
+
+
 def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=False,
                         inline_entry=False, entry_pte_guard=False, mcu_store_redirect=False):
     firmware = pinned(path, expected)
@@ -233,10 +305,15 @@ def build(a):
     kernel = pinned(a.kernel, a.kernel_sha256)
     if a.build_id == 0x2338 and not (a.entry_probe and a.inline_entry and a.entry_pte_guard):
         raise ValueError('build2338 must preserve the2337 CSF probe configuration')
-    firmware, reset_patch = diagnostic_firmware(a.firmware, a.firmware_sha256,
-                                               a.build_id, a.reset_store_stub, a.entry_probe,
-                                               a.inline_entry, a.entry_pte_guard,
-                                               a.redirect_mcu_stores)
+    if a.fault_probe:
+        if a.redirect_mcu_stores or a.entry_probe or a.inline_entry or a.entry_pte_guard or a.reset_store_stub:
+            raise ValueError('the fault vector probe replaces the handler and takes no other patch')
+        firmware, reset_patch = fault_vector_probe(a.firmware, a.firmware_sha256, a.build_id)
+    else:
+        firmware, reset_patch = diagnostic_firmware(a.firmware, a.firmware_sha256,
+                                                   a.build_id, a.reset_store_stub, a.entry_probe,
+                                                   a.inline_entry, a.entry_pte_guard,
+                                                   a.redirect_mcu_stores)
     template = pinned(a.template, a.template_sha256)
     original_adt = pinned(a.adt, a.adt_sha256)
     stock = pinned(a.stock, a.stock_sha256)
@@ -387,6 +464,16 @@ def build(a):
             name: digest((ROOT / name).read_bytes()) for name in
             ('xnu/gpu/mali_csf_boot.c', 'tools/matisse-csf-fetch-audit.py',
              'tools/matisse-shim-gpu-image.py')}
+    if a.build_id in FAULT_VECTOR_PROBE:
+        if reset_patch is None:
+            raise ValueError('build%x requires the fault vector probe' % a.build_id)
+        if arena != 0x77000:
+            raise ValueError('fault probe builds must keep the measured pre-probe arena placement '
+                             '(expected 0x77000, got %#x)' % arena)
+        info['fault_vector_probe'] = reset_patch
+        info['fault_vector_probe']['source_sha256'] = {
+            name: digest((ROOT / name).read_bytes()) for name in
+            ('tools/matisse-csf-fetch-audit.py', 'tools/matisse-shim-gpu-image.py')}
     if a.entry_probe:
         # The gpufreq layer adds one page of shim text, so from2338 the arena
         # anchor moves by exactly0x1000. Pinning it per build keeps the drift
@@ -418,7 +505,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
@@ -427,6 +514,9 @@ def main():
                    help='build2336/2337: inline STUB before remote fetch, then TRAM in tail')
     p.add_argument('--entry-pte-guard', action='store_true',
                    help='build2337/2338 only: reject PTE/backing mismatch before MCU_CONTROL')
+    p.add_argument('--fault-probe', action='store_true',
+                   help='build2343 only: replace the shared fault vector entry with a stub that '
+                        'records the stacked PC in shared+0x10, leaving the entry untouched')
     p.add_argument('--redirect-mcu-stores', action='store_true',
                    help='build2339/2340 only: repoint the reset handler\'s MCU peripheral access '
                         'literals at shared words, leaving the original code intact')

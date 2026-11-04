@@ -1,62 +1,55 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-04:2341 SHOWED THE WHOLE PAGE TAKES WRITES EXCEPT 0xffc <<<
+## >>> ACTIVE 2026-11-04:2342 CLEARED THE PERIPHERAL; 2343 ASKS WHETHER IT FAULTS <<<
 
-2341 RAN. Image 3a098759, one authorized trial, boot_a restored to 2931647a.
-version=11 (0xb) and features=7 (0x7). Both entry stores executed, into two
-adjacent words of the SAME 4KB shared page. So shared+0 and shared+4 take
-writes and shared+0xffc does not. 2335/2336/2337/2339 all sited their entry
-checkpoint on 0xffc, so their "marker absent" readings are NOT evidence that
-the MCU failed to arrive and must not be cited as such again.
+2342 RAN. Image 01a3905b, one authorized trial, boot_a restored to2931647a.
+version=0, features=7. In this build store1 went to the REAL0x40022000 and
+store2 to shared+4, so features=7 proves the real peripheral accepted its
+store and execution continued to the next instruction. THE PERIPHERAL IS NOT
+THE BLOCKER, and "the AP must power that block first" is dead.
 
-TWO SPECULATIONS ALSO DIED. The sign-extend path reads0x0302bc78 and copies
-from0x03800000; neither address is in ANY firmware section. A set bit7 would
-therefore fault inside the vendor's own code. So the real peripheral at
-0x40003034 must return bit7 =0, which means forcing r4 to0 in2340/2341
-reproduced hardware behaviour rather than changing it. 2341 is trustworthy.
+Where it stops is now bounded: after store2 and before the firmware writes
+0x0202c934. 0x01002aec then writes7 to0x40022008 and0x40022100..0x40022600,
+sets NVIC->ISER=0x7ffd, and dispatches on the state word at0x0202c7a0 through
+a TBB table into dozens of bl calls. Static analysis stops being useful there.
 
-THE ENTRY, NOW FULLY DISASSEMBLED:
-  cpsid i
-  ldr r0,=0x40022000 ; mov r1,#0xb ; str r1,[r0]     store1
-  ldr r0,=0x40022004 ; mov r1,#0x7 ; str r1,[r0]     store2
-  ldr r0,=0xE000ED24 ; mov r1,#0x70000 ; str r1,[r0] SHCSR: enables3 fault kinds
-  ldr r0,=0x0203F000 ; msr psp,r0 ; mov r0,#2 ; msr control,r0 ; isb
-  ldr r0,=0x40003034 ; ldr r4,[r0] ; and r4,#0x80
-  bl 0x01003126   MPU init (writes MPU_RBAR/RASR at0xE000ED9C/0xE000EDA0)
-  bl 0x010019d8   writes0 to0xE000ED84
-  bl 0x010019e2   ICIALLU + CCR bit17 (I-cache on)
-  bl 0x01001a2a
-  cbz r4,0x01001982 ; b.w 0x01002aec   into the firmware body
-The stack0x0203E000..0x0203FFFF IS mapped read-write, so the pushes are fine.
-CPU and MCU both stall somewhere after store2 and before the firmware writes
-0x0202c934 (private_early_after stays0).
+NOTE ON AN EARLIER INFERENCE: private_early is written with strb r3,[0x0202c934]
+where r3 = [0x40030000] & 0x3f capped at0xa. A zero there therefore does NOT
+prove the firmware never arrived; it can mean it arrived and computed0. Only
+version=0 is proof that init did not complete.
 
-BUILD2342 ISOLATES THE ONE REMAINING VARIABLE: does the REAL peripheral accept
-its store? It leaves the vendor's 0x40022000 store and the 0x40003034 load
-byte-for-byte intact and repoints only the second store at shared+4. Three
-bytes change in the whole container.
-  features0x7 -> the real peripheral write completed and execution reached
-                 store2, so the stall is in the later init
-  features0   -> writing0x40022000 is what hangs, and that peripheral has to be
-                 brought up from the AP side first
-  version0x01010000 -> the MCU booted
+BUILD2343 ASKS THE ONE QUESTION LEFT. All five Cortex-M fault vectors (NMI,
+HardFault, MemManage, BusFault, UsageFault) point at the same0x010019b1, so
+replacing that one handler answers "did it fault" and "where". A20-byte stub
+overwrites0x010019b0:
+  mrs r0,psp / ldr r1,[r0,#0x18] / ldr r2,[pc,#8] / str r1,[r2] / b .
+  .word0x04000010
+The stacked PC lands in shared+0x10, which the report already exposes as the
+groups field. The reset entry, both peripheral stores, the peripheral load and
+the vector table are untouched; exactly20 bytes of the container change.
+  groups 0x0100xxxx -> it faulted, and that is the faulting instruction
+  groups 8          -> no fault; it is spinning somewhere
+  version0x01010000 -> it booted
 
-Artifacts: kernel a22e9ef60e0d137676e1fc527aa9cb9d0e93c510c9bab31608318789527753e5
-(patch0141), image shim2342-realperiph-ready/matisse-shim-gpu2342.img,
-27119616B, SHA256 01a3905ba3dc52baf5287ea9adee2b319498b8e672aa57503c874e9b8d4f9bbf,
+Artifacts: kernel ea4f9fe315332f21e64d625f718cd588816d174070d10251a1b4c570d918971f
+(patch0142), image shim2343-faultprobe-ready/matisse-shim-gpu2343.img,
+27119616B, SHA256 59caac477a7b227efb033f50317515c020ae607e9ccec42c33388a720c46861f,
 predicted partition digest
-68f633785ee0ad6aadf514f2fed037131907b3b3aa36c562dc88651d614b2763,
-embedded container c173dd1e. verify2342-realperiph.py PASS.208 offline tests
-pass,3 skipped.
+25fe0dc2768553e0491cf07d3941edf50b3086be65275f803a96e1a6e7d5e2ce,
+embedded container37311174991f366d8e7958fd0a3f54d901b50444bd89e84854ba55def097e0f9.
+verify2343-faultprobe.py PASS (stub bytes, five fault vectors still0x010019b1,
+entry literals untouched, anchor0x77000, entry offset0xa8ec, leaf
+0x3000000040081fc7, entry PA0x400818ec, entry word0x4826b672,293 pages).
+210 offline tests pass,3 skipped.
 
-Runner: shim2342-realperiph-trials-run-once.py, refuses to run without
---approved-image-sha256=01a3905ba3dc52baf5287ea9adee2b319498b8e672aa57503c874e9b8d4f9bbf.
+Runner: shim2343-faultprobe-trials-run-once.py, refuses to run without
+--approved-image-sha256=59caac477a7b227efb033f50317515c020ae607e9ccec42c33388a720c46861f.
 
 Device clean: root Recovery, boot_a
 2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1, no journal,
 no pending restoration.
 
-NEXT: 2342 needs its own boot_a authorization naming that SHA.
+NEXT: 2343 needs its own boot_a authorization naming that SHA.
 
 ## >>> HISTORICAL 2026-11-02:2337 ENTRY PTE GATE BUILT OFFLINE; NO DEVICE TRIAL <<<
 

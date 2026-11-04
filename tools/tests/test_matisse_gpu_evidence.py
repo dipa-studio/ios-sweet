@@ -57,7 +57,7 @@ class PersistentReportPatchTests(unittest.TestCase):
         # locally edited build tree must not conceal a broken source patch.
         names = subprocess.check_output(['git','ls-files','--','xnu/patches/*.patch'],
                                         cwd=ROOT,text=True).splitlines()
-        latest='xnu/patches/0141-matisse-mcu-real-peripheral-identity.patch'
+        latest='xnu/patches/0142-matisse-mcu-fault-probe-identity.patch'
         evidence='xnu/patches/0136-matisse-gpu-dvfs-evidence.patch'
         for name in (evidence, latest):
             if name not in names:
@@ -70,7 +70,7 @@ class PersistentReportPatchTests(unittest.TestCase):
                     cwd=directory,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,name+': '+result.stderr)
             source = (Path(directory)/'bsd/dev/sweet_ufs.c').read_text()
-        self.assertIn('#define SWEET_BUILD_ID 0x2342u',source)
+        self.assertIn('#define SWEET_BUILD_ID 0x2343u',source)
         begin = source.index('static void\nsweet_gpu_report_marks(void)\n{')
         end = source.index('\n}\n',begin)
         report = source[begin:end]

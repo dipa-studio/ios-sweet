@@ -127,6 +127,32 @@ class McuStoreRedirectTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from('<I', embedded, 0x281c)[0], 0x40022000)
         self.assertEqual(struct.unpack_from('<I', embedded, 0x282c)[0], 0x40003034)
 
+    def test_build2343_records_the_faulting_pc(self):
+        # All five fault vectors point at0x010019b1. The probe overwrites that
+        # handler with a stub that reads the stacked PC off PSP and parks it in
+        # shared+0x10, so a run says both whether a fault happened and where.
+        embedded, patch = self.module.fault_vector_probe(FIRMWARE, SHA, 0x2343)
+        self.assertEqual(len(embedded), len(self.original))
+        self.assertEqual(patch['stub_va'], '0x10019b0')
+        self.assertEqual(patch['marker_va'], '0x4000010')
+        self.assertEqual(patch['stub_bytes'],
+                         'eff309808169024a1160fee700bf00bf10000004')
+        changed = {i for i in range(len(self.original)) if self.original[i] != embedded[i]}
+        self.assertEqual(len(changed), 20)
+        # mrs r0,psp / ldr r1,[r0,#0x18] / ldr r2,[pc,#8] / str r1,[r2] / b .
+        self.assertEqual(embedded[0x2844:0x2850],
+                         bytes.fromhex('eff309808169' '024a1160' 'fee7'))
+        # The literal sits where the PC-relative load says it does.
+        self.assertEqual(struct.unpack_from('<I', embedded, 0x2854)[0], 0x04000010)
+        # The entry itself is untouched: both peripheral stores stay.
+        self.assertEqual(struct.unpack_from('<I', embedded, 0x281c)[0], 0x40022000)
+        self.assertEqual(struct.unpack_from('<I', embedded, 0x2820)[0], 0x40022004)
+        self.assertEqual(struct.unpack_from('<I', embedded, 0x282c)[0], 0x40003034)
+
+    def test_fault_probe_rejects_other_builds(self):
+        with self.assertRaises(ValueError):
+            self.module.fault_vector_probe(FIRMWARE, SHA, 0x2342)
+
     def test_only_redirect_builds_may_redirect(self):
         for build in (0x2334, 0x2335, 0x2337, 0x2338):
             with self.assertRaises(ValueError):
