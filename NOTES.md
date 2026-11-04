@@ -1,57 +1,60 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-04:2340 MCU ACCESS-REDIRECT IMAGE READY; NEEDS AUTHORIZATION <<<
+## >>> ACTIVE 2026-11-04:2340 PROVED THE MCU EXECUTES; 2341 ISOLATES THE DEAD WORD <<<
 
-2339 RAN AND WAS NEGATIVE. Image fb059ab3, one authorized trial. mcu_store_
-progress=none: repointing both store literals at shared+0xffc still produced
-no write. version0, mcu_status1, job_raw0, entry_marker0. boot_a restored to
-2931647a automatically - the fastboot-CLI fallback added after the pyusb
-failure worked exactly as intended, so no manual recovery was needed.
+2340 RAN AND IS THE FIRST POSITIVE RESULT ON THE MCU. Image 4e801cc5, one
+authorized trial, boot_a restored to 2931647a automatically.
 
-What that rules out:2334's own stub used ldr literal loads from the code page
-and stored successfully into shared+0, so MCU data loads and stores both work.
-2339's silence cannot be a broken data path. Two explanations remain:
- (a) execution stalls somewhere around the first store and the write never
-     drains out of the buffer;
- (b) shared+0xffc specifically does not take the write - and2336, which used
-     the same word, also read0.
+version=11 (0xb), version_before=0, features=0, private_early_after=0,
+mcu_store_progress=none, entry_marker_after=0, mcu_status=1, job_raw=0.
 
-The entry also performs a peripheral LOAD right after the two stores:
-  0x1918 ldr r0,=0x40003034 ; 0x191a ldr r4,[r0] ; 0x191c and r4,#0x80
-and only then, if bit7 was set, copies initialised data from0x03800000. That
-address is in NO firmware section, so a set bit7 sends the MCU to an unmapped
-read.
+WHY THAT IS DECISIVE: csf_boot.o is BYTE-IDENTICAL between2339 and2340 (checked
+with cmp, along with csf, csf_memory, csf_firmware, gpueb_boot, gpufreq; only
+gpu.o differs, and only by the build label). The sole behavioural difference is
+two firmware literals. So version going0 ->0xb can only be the MCU executing the
+str at0x010018f4 with r1=0xb and r0=0x04000000. The MCU fetches, decodes and
+writes to the shared page. "The MCU is dead" is finished as a hypothesis.
 
-BUILD2340 SEPARATES (a) FROM (b) AND FROM THE LOAD. Still no instruction is
-replaced; three literals move:
-  0x281c 0x40022000 ->0x04000000  first store hits the version word, the one
-                                  location2334 proved writable from this entry
-  0x2820 0x40022004 ->0x04000ffc  second store keeps the marker word
-  0x282c 0x40003034 ->0x04000ff8  the load reads a zero word, so r4 becomes0
-                                  and the unmapped0x03800000 copy is skipped
-Reading it: version0 and marker0 means execution never reaches the first
-store; version0xb and marker0 means the first store lands and0xffc is the
-culprit; version0xb and marker7 means both ran and the stall was the
-peripheral load; version0x01010000 means the MCU booted.
+AND IT LOCALISES THE PROBLEM TO ONE WORD. One instruction, one 4KB page
+(0x04000000..0x04000fff, PA0x40110000): a store to shared+0 holds, a store to
+shared+0xffc does not.2335,2336,2337 and2339 all put their entry checkpoint at
+shared+0xffc, which is why they all read0 - it may never have been "the MCU
+never got there" but "that word never takes the write".2334 is the only other
+trial that looked successful, and it wrote shared+0.
 
-Artifacts: kernel efe601c6cbc772c139a21657e5a7c45ad90ac3f1dbb19c2bb70bb4a53192d7da
-(patch0139), image shim2340-mcu-ready/matisse-shim-gpu2340.img, 27119616B,
-SHA256 4e801cc5f25155aecb961d7382933b121f6b6089cc1c57568513f9cfd7ccaf18,
+BUILD2341 moves only the SECOND store, one word in: 0x281c->0x04000000 (0xb,
+proven), 0x2820->0x04000004 (0x7, the features word), 0x282c->0x04000ff8 (still
+bypasses the peripheral load and the unmapped0x03800000 copy). features is
+already decoded, so the report ABI does not move.
+  version0xb + features0x7 -> the page takes writes and0xffc alone is broken;
+                              re-site the entry checkpoint and re-run
+  version0xb + features0    -> the second store never executes; the stop is
+                              between the two stores
+  version0x01010000         -> the MCU booted
+
+Artifacts: kernel 2e79d85e114b8fc95837172132dd17d2ebd07865dfc91d877a8006848c7f1069
+(patch0140), image shim2341-sharedpage-ready/matisse-shim-gpu2341.img,
+27119616B, SHA256 3a098759d02c3341c1a6eeaadf573e4ee543624a0b280adbfb046604ea1c0b70,
 predicted partition digest
-89af9821ec34066a1fa4fac4e8aefa46e4bd3b0211121be8f22fa62ff0da128b.
-Embedded container 92a4fac8, 11 bytes changed. verify2340-mcu.py PASS with
-the usual invariants: anchor0x77000, entry offset0xa8ec, leaf
-0x3000000040081fc7, entry PA0x400818ec, entry word0x4826b672 untouched,
-293 pages, report ABIs unchanged.206 offline tests pass,3 skipped.
+10fbddacf0a9b09888deae01aa1b3cc9491561592b3efdd1b2da9b078a4f2ca2,
+embedded container c7360ebe,9 bytes changed. verify2341-sharedpage.py PASS
+(anchor0x77000, entry offset0xa8ec, leaf0x3000000040081fc7, entry PA0x400818ec,
+entry word0x4826b672 untouched,293 pages).207 offline tests pass,3 skipped.
 
-Runner: shim2340-mcu-trials-run-once.py, refuses to run without
---approved-image-sha256=4e801cc5f25155aecb961d7382933b121f6b6089cc1c57568513f9cfd7ccaf18.
+Runner: shim2341-sharedpage-trials-run-once.py, refuses to run without
+--approved-image-sha256=3a098759d02c3341c1a6eeaadf573e4ee543624a0b280adbfb046604ea1c0b70.
+
+IMPORTANT RE-READ OF HISTORY: if0xffc never takes a write, then2335/2336/2337's
+"entry marker absent" conclusions are not evidence about the MCU at all. They
+should be re-interpreted, not trusted, until the marker is re-sited. The entry
+PTE guard (2337) still proves the tables were walkable; it does not prove a
+fetch.
 
 Device clean: root Recovery, boot_a
 2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1, no journal,
 no pending restoration.
 
-NEXT: this image needs its own boot_a authorization naming that SHA.
+NEXT: 2341 needs its own boot_a authorization naming that SHA.
 
 ## >>> HISTORICAL 2026-11-02:2337 ENTRY PTE GATE BUILT OFFLINE; NO DEVICE TRIAL <<<
 

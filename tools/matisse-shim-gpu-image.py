@@ -62,6 +62,21 @@ MCU_ACCESS_REDIRECTS = {
         dict(kind='load', literal_va=0x01001998, original=0x40003034,
              insn_va=0x01001918, insn=b'\x1f\x48', target=0x04000ff8, value=None),
     ),
+    0x2341: (
+        # 2340 proved the first store executes: version read0xb, the value it
+        # writes, on a byte-identical shim. Its second store, aimed at the same
+        # shared+0xffc that2335/2336/2339 also used, still did not land. So ask
+        # the narrow question: does the rest of that first page take writes, or
+        # is0xffc alone broken? The second store now targets shared+4, one word
+        # further in, and features is already decoded, so nothing in the report
+        # ABI moves.
+        dict(kind='store', literal_va=0x01001988, original=0x40022000,
+             insn_va=0x010018f4, insn=b'\x01\x60', target=0x04000000, value=0xb),
+        dict(kind='store', literal_va=0x0100198c, original=0x40022004,
+             insn_va=0x010018fc, insn=b'\x01\x60', target=0x04000004, value=0x7),
+        dict(kind='load', literal_va=0x01001998, original=0x40003034,
+             insn_va=0x01001918, insn=b'\x1f\x48', target=0x04000ff8, value=None),
+    ),
 }
 
 
@@ -391,7 +406,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',

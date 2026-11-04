@@ -93,6 +93,24 @@ class McuStoreRedirectTests(unittest.TestCase):
         changed = {i for i in range(len(self.original)) if self.original[i] != embedded[i]}
         self.assertTrue(changed <= {off, off + 1, off + 2, off + 3} | {0x281c, 0x281d, 0x281e, 0x281f, 0x2820, 0x2821, 0x2822, 0x2823})
 
+    def test_build2341_checks_the_rest_of_the_first_shared_page(self):
+        # 2340 proved the first store lands at shared+0 while a second store to
+        # shared+0xffc still does not. 2341 moves only that second store, one
+        # word in, so a set features word proves the page takes writes and
+        # isolates 0xffc.
+        embedded, patch = self.module.redirect_mcu_accesses(FIRMWARE, SHA, 0x2341)
+        self.assertEqual(len(embedded), len(self.original))
+        targets = [(site['kind'], site['target'], site['written_value'])
+                   for site in patch['sites']]
+        self.assertEqual(targets, [('store', '0x4000000', 0xb),
+                                   ('store', '0x4000004', 0x7),
+                                   ('load', '0x4000ff8', None)])
+        changed = {i for i in range(len(self.original)) if self.original[i] != embedded[i]}
+        allowed = {0x281d, 0x281e, 0x281f, 0x2821, 0x2822, 0x2823,
+                   0x282c, 0x282d, 0x282f}
+        self.assertEqual(changed, allowed)
+        self.assertEqual(struct.unpack_from('<I', embedded, 0x2820)[0], 0x04000004)
+
     def test_only_redirect_builds_may_redirect(self):
         for build in (0x2334, 0x2335, 0x2337, 0x2338):
             with self.assertRaises(ValueError):
