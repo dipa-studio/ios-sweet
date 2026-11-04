@@ -1,4 +1,13 @@
-### 2026-11-04 — r13: interrupted TCG build stopped; KVM restart ready
+### 2026-11-04 — r13: KVM backend probe passed; full image copying
+
+The user has now started the prepared KVM command. `build-r13-kvm.log` records
+`KVM acceleration preflight passed`, guestmount acceleration kvm, both persisted
+HFSX metadata/hardlink/symlink/case checks and `HFSX backend probe passed`.
+The new 16GiB image is allocated and the OS-root rsync stage is progressing;
+SystemOS/AppOS copies, layout/tweaks and final cold rootfs acceptance are pending.
+No full image acceptance or measured general speedup is claimed. Copying uses
+APFS-FUSE sources and a guestmount HFSX destination; a manual copy through the
+same mounts retains those per-file layers. The running builder was not edited.
 
 The user powered off the laptop before the original r13 builder finished its
 cleanup. After restarting, their exact `ps -C` query for guestmount,
@@ -13,8 +22,8 @@ SHA256 `f19a1f1e3e885cbfbf0fa22ebab11989e4bba595f19ab72349dccd9cc6c53df3`.
 The user's prior API12/create-VM test passed. The next direct WSL command uses
 this worktree, `SWEET_HFS_BACKEND=guestmount SWEET_HFS_ACCEL=kvm SWEET_ROOT_TWEAKS=1`,
 and separate output/log `ios16-root-20H392-r13-kvm.img` / `build-r13-kvm.log`.
-Both new paths are absent at the current host check; .NET DriveInfo reports
-154.22GiB available on C:. A real KVM backend probe, full rootfs build and all
+Both new paths were absent before the user's KVM launch; the pre-launch .NET
+DriveInfo check reported 154.22GiB available on C:. The full rootfs build and
 final cold checks are still pending. No device command or remote publication
 was performed. Earlier entries describing an active TCG copy are history.
 
