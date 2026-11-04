@@ -1,15 +1,23 @@
-### 2026-11-04 — r13: native rootfs CI in progress; draft PR 2 published
+### 2026-11-04 — r13: native rootfs CI succeeded; artifact download pending
 
 The user's successful publication created draft PR
 https://github.com/proshivka/ios-cas/pull/2 and rootfs run
 https://github.com/proshivka/ios-cas/actions/runs/41798068342 at published source
 `b6c0ec10bb8bdf6b7d04ae94c75e62dd8cc7af3a`.
-Their exact gh run view confirms native HFSX host/space preparation, pinned
-APFS-reader build and all four verified IPSW members passed. Source fetch and
-verification took 49 seconds. Native image assembly/verification started at
-2026-11-04 08:19:30 UTC and was in progress in the latest supplied snapshot.
-Compression and image upload were still pending; no full image or iOS boot
-acceptance is claimed. Shared snapshot: C:\ports\r13-rootfs\ci-41798068342.json.
+The saved final gh run view now confirms the entire build job succeeded.
+Native HFSX assembly and verification took 6m18s (08:19:30-08:25:48 UTC),
+compression and provenance took 2m34s, and image upload took 55s. The full job
+finished at 08:29:24 UTC after 14m10s. All four pinned source members, native
+host preparation and the pinned APFS-reader build also passed. Shared final
+snapshot: C:\ports\r13-rootfs\ci-41798068342.json.
+
+The uploaded image artifact is 13306409063, 5,654,398,442 bytes, with API ZIP
+SHA256 ef05ad8ecc9037760ed2e3dfc0e6519f66ea3bafc27814a5a997e6970e8cfb4e.
+It expires at 2026-11-05 08:28:22 UTC. The user's authenticated curl transfer is
+in progress at approximately 420-450 KiB/s; this is artifact download throughput,
+not the native filesystem build rate. Local ZIP/compressed/raw image checks
+remain pending. No device installation, successful iOS root mount or userland
+boot is established by this CI result.
 
 The user requires all GitHub work and attribution to use proshivka.
 All 13 published commits were audited: author and committer are proshivka with
@@ -33,8 +41,8 @@ YAML/Bash/embedded-Python syntax passed. Source pins match the real verified
 BuildManifest and saved DMG receipt. Fourteen offline execution cases passed
 for the download verification stage, including wrong source URLs, versions,
 products, hashes, duplicate/missing members and inconsistent manifest digests.
-These are preparation checks; hosted native HFSX, download, upload and speed
-results are not yet established. The user supplied the known-working
+Hosted native HFSX assembly, source download and image upload are now confirmed
+by the final run above; local artifact validation remains pending. The user supplied the known-working
 /opt/apfs-fuse commit `66b86bd525e8cb90f9012543be89b1f092b75cf3` using
 sudo git rev-parse; that exact commit is now pinned in the workflow.
 The host container is made readable by the runner only after successful builder
