@@ -116,6 +116,27 @@ img2simg ios16-root.img ios16-root.simg
 
 `mkiosroot.sh` copies the OS volume and both cryptexes into one case-sensitive journaled HFS+ volume. It adds the dyld cache links, the plain system keybag and the log directories the daemons expect. `sweet-root-tweaks.py` applies the bring-up changes: it skips Setup, seeds the activation state, removes the baseband daemon, disables the watchdogs that kill slow apps and the crash-looping media paths, and so on. The script's header explains each change.
 
+For cas bring-up, the **iOS rootfs** Actions workflow builds the pinned iPhone X
+20H392 image on Ubuntu with a native HFSX loop mount. It downloads only the
+BuildManifest and three DMGs from Apple's CDN, checks their pinned sizes and
+digests, and runs the existing builder with `SWEET_ROOT_TWEAKS=1`. Its first
+push on `codex/cas-bringup-pr-20261103` starts the job; after the workflow exists
+on the default branch, it is also available through **Run workflow**.
+
+A successful run publishes `ios16-root-20H392-r13-native`, containing the
+compressed 16GiB image, SHA256 checksums and source/run provenance. Download
+this artifact within its one-day retention period. In its extracted directory:
+
+```sh
+zstd -d --sparse ios16-root-20H392-r13-native.img.zst -o ios16-root-20H392-r13-native.img
+sha256sum -c ios16-root-20H392-r13-native.img.sha256
+```
+
+The workflow publishes the image only after the builder closes all mounts,
+checks the filesystem and verifies persisted root files through a fresh read-only
+mount. Build diagnostics are retained separately, including on failure. This
+prepares the root filesystem; the existing verified cas boot image is separate.
+
 The device tree builder copies `/product` from the real iPhone X device tree, which MobileGestalt needs. Extract it once, without downloading the whole IPSW:
 
 ```sh

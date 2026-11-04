@@ -1,3 +1,33 @@
+### 2026-11-04 — r13: native GitHub Actions rootfs workflow ready; hosted run pending
+
+The user requested moving the slow rootfs assembly to GitHub Actions.
+The new rootfs workflow uses Ubuntu 22.04 with native hfsplus loop mounts,
+reclaims unused hosted-runner SDKs and requires 35GiB free before downloading.
+It resolves the pinned iPhone X 20H392 IPSW, extracts only BuildManifest and
+three DMGs with the existing range downloader, and checks both local source
+pins and BuildManifest component digests. It invokes the unchanged builder
+with SWEET_HFS_BACKEND=native and SWEET_ROOT_TWEAKS=1, then compresses only a
+successfully verified/closed image and records source/run/checksum provenance.
+The image artifact has one-day retention; failure diagnostics have three days.
+The feature-branch push trigger bootstraps a new workflow without requiring a
+default-branch merge. The existing xnu workflow and accepted boot image are unchanged.
+
+YAML/Bash/embedded-Python syntax passed. Source pins match the real verified
+BuildManifest and saved DMG receipt. Fourteen offline execution cases passed
+for the download verification stage, including wrong source URLs, versions,
+products, hashes, duplicate/missing members and inconsistent manifest digests.
+These are preparation checks; hosted native HFSX, download, upload and speed
+results are not yet established. The user supplied the known-working
+/opt/apfs-fuse commit `66b86bd525e8cb90f9012543be89b1f092b75cf3` using
+sudo git rev-parse; that exact commit is now pinned in the workflow.
+The host container is made readable by the runner only after successful builder
+exit and image closure, so packaging works with the builder's root:0600 output.
+Agent Git/GitHub network remains blocked, so publication will use direct
+commands in the user's shell. No hosted run or uploaded root image is claimed.
+No new wrapper script, device command or edit to the running builder was made.
+
+---
+
 ### 2026-11-04 — r13: KVM backend probe passed; full image copying
 
 The user has now started the prepared KVM command. `build-r13-kvm.log` records

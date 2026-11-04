@@ -1,0 +1,208 @@
+name: iOS rootfs
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipsw_url:
+        description: Optional Apple HTTPS IPSW URL for iPhone10,3 / 20H392
+        type: string
+        required: false
+  # Bootstraps the new workflow before it exists on the default branch.
+  push:
+    branches: [codex/cas-bringup-pr-20261103]
+    paths:
+      - ".github/workflows/rootfs.yml"
+      - "tools/mkiosroot.sh"
+      - "tools/sweet-root-tweaks.py"
+      - "tools/remotezip.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rootfs-20H392-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  APFS_FUSE_COMMIT: "66b86bd525e8cb90f9012543be89b1f092b75cf3"
+  ROOT_IMAGE_NAME: ios16-root-20H392-r13-native.img
+
+jobs:
+  build:
+    if: github.repository == 'proshivka/ios-cas'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare native HFSX host and disk space
+        run: |
+          rootfs_dir="$RUNNER_TEMP/rootfs-ci"
+          mkdir -p "$rootfs_dir/inputs" "$rootfs_dir/out"
+          echo "ROOTFS_DIR=$rootfs_dir" >> "$GITHUB_ENV"
+          # These unused SDKs exist only on the disposable hosted runner.
+          sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential cmake pkg-config libfuse3-dev fuse3 libicu-dev libssl-dev zlib1g-dev libbz2-dev hfsprogs rsync curl zstd kmod
+          sudo modprobe loop
+          if ! sudo modprobe hfsplus; then
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+            sudo modprobe hfsplus
+          fi
+          grep -qw hfsplus /proc/filesystems
+          sudo apt-get clean
+          available=$(df -B1 --output=avail "$rootfs_dir" | tail -1)
+          if (( available < 35 * 1024 * 1024 * 1024 )); then
+            echo "Need at least 35 GiB free for inputs, image and compressed artifact; available: $available bytes" >&2
+            exit 1
+          fi
+          uname -a > "$rootfs_dir/out/host-tools.txt"
+          dpkg-query -W hfsprogs rsync fuse3 zstd cmake >> "$rootfs_dir/out/host-tools.txt"
+          df -h "$rootfs_dir"
+
+      - name: Build the pinned APFS reader
+        run: |
+          [[ $APFS_FUSE_COMMIT =~ ^[0-9a-f]{40}$ ]]
+          git init -q "$ROOTFS_DIR/apfs-fuse"
+          git -C "$ROOTFS_DIR/apfs-fuse" remote add origin https://github.com/sgan81/apfs-fuse.git
+          git -C "$ROOTFS_DIR/apfs-fuse" fetch --depth 1 origin "$APFS_FUSE_COMMIT"
+          git -C "$ROOTFS_DIR/apfs-fuse" checkout --detach FETCH_HEAD
+          test "$(git -C "$ROOTFS_DIR/apfs-fuse" rev-parse HEAD)" = "$APFS_FUSE_COMMIT"
+          git -C "$ROOTFS_DIR/apfs-fuse" submodule update --init --recursive --depth 1
+          cmake -S "$ROOTFS_DIR/apfs-fuse" -B "$ROOTFS_DIR/apfs-fuse/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_CXX_FLAGS='-include cstdint'
+          cmake --build "$ROOTFS_DIR/apfs-fuse/build" --parallel "$(nproc)"
+          sudo install -m 0755 "$ROOTFS_DIR/apfs-fuse/build/apfs-fuse" /usr/local/bin/apfs-fuse
+          git -C "$ROOTFS_DIR/apfs-fuse" submodule status --recursive >> "$ROOTFS_DIR/out/host-tools.txt"
+
+      - name: Fetch and verify the four pinned IPSW members
+        env:
+          IPSW_URL: ${{ inputs.ipsw_url || '' }}
+        run: |
+          python3 - <<'PY_DOWNLOAD'
+          import concurrent.futures, hashlib, json, os, pathlib, plistlib, runpy, subprocess, urllib.parse
+          root = pathlib.Path(os.environ["ROOTFS_DIR"])
+          url = os.environ.get("IPSW_URL", "").strip()
+          if not url:
+              response = subprocess.check_output(["curl", "--fail", "--silent", "--show-error", "--location", "--retry", "4", "--connect-timeout", "30", "--max-time", "120", "https://api.ipsw.me/v4/device/iPhone10,3?type=ipsw"])
+              firmwares = [f for f in json.loads(response)["firmwares"] if f["buildid"] == "20H392" and f["version"] == "16.7.16"]
+              if len(firmwares) != 1:
+                  raise SystemExit("Expected exactly one iPhone10,3 / 20H392 IPSW URL")
+              url = firmwares[0]["url"]
+          parsed = urllib.parse.urlsplit(url)
+          if parsed.scheme != "https" or parsed.hostname not in {"updates.cdn-apple.com", "appldnld.apple.com", "secure-appldnld.apple.com"} or parsed.username or parsed.password or parsed.port not in (None, 443):
+              raise SystemExit("IPSW URL must use Apple's HTTPS CDN")
+          wanted = {
+              "BuildManifest.plist": {"role": "BuildManifest", "size": 449774, "sha256": "2d1452103a2f5ad71cb78d94454977fc70632472201980a468c247fba14b10b7"},
+              "087-86698-044.dmg": {"role": "OS", "size": 4730814044, "sha384": "103b835176572a97ae36bc5ebe4c332c40b921e1f151b844116bbda49959c46c64364d343ceb0c4e9d95a51ba60d0e51"},
+              "087-86593-047.dmg": {"role": "Cryptex1,SystemOS", "size": 2743074816, "sha384": "775e110985ba8fd0dd2ad21d3fd5a896eec8887af219fc0dbc1e55ace791de1d51ecca2477f2e650b24c557cb74a0627"},
+              "087-86715-047.dmg": {"role": "Cryptex1,AppOS", "size": 10485760, "sha384": "853c4f945ea09b1614bedeaffc777aefdf2c5bcb15f1a66986e965207757246c2d3f8712a5a5c491cfc49a5a45e81502"},
+          }
+          remote = runpy.run_path("tools/remotezip.py")
+          entries = remote["central_dir"](url)
+          selected = []
+          for name in wanted:
+              matches = [entry for entry in entries if entry[0] == name]
+              if len(matches) != 1:
+                  raise SystemExit("Missing or duplicate IPSW member: " + name)
+              selected.append(matches[0])
+          with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+              futures = [pool.submit(remote["extract"], url, entry, str(root / "inputs")) for entry in selected]
+              for future in futures:
+                  future.result()
+          verified = []
+          for name, expected in wanted.items():
+              path = root / "inputs" / name
+              sha256, sha384 = hashlib.sha256(), hashlib.sha384()
+              with path.open("rb") as source:
+                  while chunk := source.read(4 << 20):
+                      sha256.update(chunk)
+                      sha384.update(chunk)
+              digests = {"sha256": sha256.hexdigest(), "sha384": sha384.hexdigest()}
+              if path.stat().st_size != expected["size"] or any(digests[key] != expected[key] for key in digests if key in expected):
+                  raise SystemExit("Pinned size or digest mismatch: " + name)
+              verified.append({"name": name, "role": expected["role"], "size": path.stat().st_size, **digests})
+          with (root / "inputs/BuildManifest.plist").open("rb") as source:
+              manifest = plistlib.load(source)
+          if manifest["ProductVersion"] != "16.7.16" or manifest["ProductBuildVersion"] != "20H392" or "iPhone10,3" not in manifest["SupportedProductTypes"]:
+              raise SystemExit("Wrong IPSW product or version")
+          for item in verified:
+              if item["role"] == "BuildManifest":
+                  continue
+              components = [identity["Manifest"].get(item["role"], {}) for identity in manifest["BuildIdentities"]]
+              matching = [component for component in components if component.get("Info", {}).get("Path") == item["name"]]
+              if not matching or any(component.get("Digest") != bytes.fromhex(item["sha384"]) for component in matching):
+                  raise SystemExit("BuildManifest digest mismatch: " + item["name"])
+          report = {"status": "PASS_SOURCE_DMGS", "product_version": "16.7.16", "build_version": "20H392", "archive_url": url, "images": verified}
+          (root / "out/source-inputs.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+          print("All source sizes, pinned digests and BuildManifest identities passed")
+          PY_DOWNLOAD
+
+      - name: Assemble and verify the root image with native HFSX
+        run: |
+          sudo env PATH="$PATH" SWEET_HFS_BACKEND=native SWEET_ROOT_TWEAKS=1 bash tools/mkiosroot.sh "$ROOTFS_DIR/inputs/087-86698-044.dmg" "$ROOTFS_DIR/inputs/087-86593-047.dmg" "$ROOTFS_DIR/inputs/087-86715-047.dmg" "$ROOTFS_DIR/out/$ROOT_IMAGE_NAME" 16G 2>&1 | tee "$ROOTFS_DIR/out/build.log"
+          grep -Fx "iOS root image verified and closed: $ROOTFS_DIR/out/$ROOT_IMAGE_NAME" "$ROOTFS_DIR/out/build.log"
+          test "$(stat -c %s "$ROOTFS_DIR/out/$ROOT_IMAGE_NAME")" -eq "$((16 * 1024 * 1024 * 1024))"
+          # The root-run builder creates its container as root:0600.
+          # Give the runner access only after the image has been closed.
+          sudo chown "$(id -u):$(id -g)" "$ROOTFS_DIR/out/$ROOT_IMAGE_NAME"
+
+      - name: Compress the closed image and record provenance
+        run: |
+          # The builder exited successfully, including source-mount cleanup.
+          rm -f -- "$ROOTFS_DIR/inputs/087-86698-044.dmg" "$ROOTFS_DIR/inputs/087-86593-047.dmg" "$ROOTFS_DIR/inputs/087-86715-047.dmg"
+          cd "$ROOTFS_DIR/out"
+          sha256sum "$ROOT_IMAGE_NAME" > "$ROOT_IMAGE_NAME.sha256"
+          zstd -T0 -3 --check "$ROOT_IMAGE_NAME" -o "$ROOT_IMAGE_NAME.zst"
+          zstd -t "$ROOT_IMAGE_NAME.zst"
+          sha256sum "$ROOT_IMAGE_NAME.zst" > "$ROOT_IMAGE_NAME.zst.sha256"
+          cd "$GITHUB_WORKSPACE"
+          python3 - <<'PY_PROVENANCE'
+          import hashlib, json, os, pathlib, platform
+          out = pathlib.Path(os.environ["ROOTFS_DIR"]) / "out"
+          name = os.environ["ROOT_IMAGE_NAME"]
+          sources = json.loads((out / "source-inputs.json").read_text(encoding="utf-8"))
+          report = {
+              "status": "VERIFIED_AND_CLOSED",
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "source_commit": os.environ["GITHUB_SHA"],
+              "run_url": os.environ["GITHUB_SERVER_URL"] + "/" + os.environ["GITHUB_REPOSITORY"] + "/actions/runs/" + os.environ["GITHUB_RUN_ID"],
+              "product_version": sources["product_version"], "build_version": sources["build_version"],
+              "backend": "native", "host_kernel": platform.release(),
+              "apfs_fuse_commit": os.environ["APFS_FUSE_COMMIT"],
+              "builder_sha256": hashlib.sha256(pathlib.Path("tools/mkiosroot.sh").read_bytes()).hexdigest(),
+              "root_tweaks": True, "images": [],
+          }
+          for filename in (name, name + ".zst"):
+              report["images"].append({"name": filename, "size": (out / filename).stat().st_size, "sha256": (out / (filename + ".sha256")).read_text().split()[0]})
+          (out / "rootfs-provenance.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+          print(json.dumps(report, indent=2))
+          PY_PROVENANCE
+
+      - name: Upload the compressed verified image
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios16-root-20H392-r13-native
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            ${{ env.ROOTFS_DIR }}/out/*.img.zst
+            ${{ env.ROOTFS_DIR }}/out/*.sha256
+            ${{ env.ROOTFS_DIR }}/out/rootfs-provenance.json
+            ${{ env.ROOTFS_DIR }}/out/source-inputs.json
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios16-root-20H392-r13-native-logs
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            ${{ env.ROOTFS_DIR }}/out/build.log
+            ${{ env.ROOTFS_DIR }}/out/host-tools.txt
+            ${{ env.ROOTFS_DIR }}/out/source-inputs.json
