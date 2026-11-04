@@ -1,3 +1,25 @@
+### 2026-11-04 — r13: verified Android sparse image after Windows fastboot allocation failure
+
+The user's raw-image flash aborted after 6.72s with libc++abi/std::bad_alloc;
+temporary boot was not reached. PE inspection confirms installed fastboot
+37.0.1-15733141 is x86 with Large Address Aware. Sparse transfer size does not
+bound RAW preparation memory. No successful write or unchanged-partition claim
+is made from the absence of visible Sending/Writing lines.
+
+The existing x64 img2simg converter produced Android sparse v1.0. Local
+normalization caps RAW/FILL chunks at 63MiB and encodes every block, including
+FILL(0) for zeros. Full stored-file and expanded-image validation passed:
+`ci-41798068342/image/ios16-root-20H392-r13-native.simg`, 12145268800 bytes,
+SHA256 `fc775be3f8c341b2015c56abfae7ecbdb09904035aa4f08d95355b4fde373286`.
+Expanded size/hash exactly match the accepted 16GiB raw rootfs below.
+All 27938 chunks are RAW/FILL; there are no DONT_CARE chunks. Converter fixture,
+normalization/zero-fill/hash checks and three rejection cases passed.
+Receipt: `ci-41798068342/sparse-rootfs-ready.json`. No new wrapper script or
+agent device write was made. The user's new clipboard command uses this .simg
+with one fastboot process and -S128M, then temporary r12 boot after flash success.
+The sparse artifact is accepted; successful current CAS flashing still awaits
+the user's next result. The previous raw-image command is superseded.
+
 ### 2026-11-04 — r13: full rootfs downloaded and independently accepted
 
 The user completed the eight-connection download and Windows decompression in
