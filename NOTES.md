@@ -1,3 +1,25 @@
+### 2026-11-04 — r13: interrupted TCG build stopped; KVM restart ready
+
+The user powered off the laptop before the original r13 builder finished its
+cleanup. After restarting, their exact `ps -C` query for guestmount,
+guestunmount, both qemu-system-x86 command names, rsync, umount and apfs-fuse
+returned only the header. No old writer is reported running. This establishes
+process termination, not a clean unmount or acceptance of the interrupted image.
+The old `C:\ports\r13-rootfs\ios16-root-20H392-r13.img` remains a partial,
+unaccepted 16GiB file; the last saved copy log ends at 408,176,521 bytes.
+
+The KVM builder implementation remains source commit `837376dc6ed8da9cdeea5660f8ad3557b85c2d9f`,
+SHA256 `f19a1f1e3e885cbfbf0fa22ebab11989e4bba595f19ab72349dccd9cc6c53df3`.
+The user's prior API12/create-VM test passed. The next direct WSL command uses
+this worktree, `SWEET_HFS_BACKEND=guestmount SWEET_HFS_ACCEL=kvm SWEET_ROOT_TWEAKS=1`,
+and separate output/log `ios16-root-20H392-r13-kvm.img` / `build-r13-kvm.log`.
+Both new paths are absent at the current host check; .NET DriveInfo reports
+154.22GiB available on C:. A real KVM backend probe, full rootfs build and all
+final cold checks are still pending. No device command or remote publication
+was performed. Earlier entries describing an active TCG copy are history.
+
+---
+
 ### 2026-11-02 — r12: instrument UFS root lookup and keep early polling runnable
 
 **New r11 console observation:** the user supplied `SWEETM 31 IOKitBSDInit ret 0`,
