@@ -33,75 +33,106 @@ def pinned(path, expected):
         raise ValueError('SHA256 mismatch: ' + str(path))
     return data
 
-# The real reset handler at0x010018ec stores to two MCU peripherals before it
-# touches anything else: 0xb to0x40022000 and7 to0x40022004. Both constants
-# occur exactly once in the pinned container, so they are the load literals of
-# those two str instructions and of nothing else. Build2339 repoints both at
-# one shared word so a nonzero sample proves the MCU executed them, while the
-# peripheral writes that may be stalling the boot are bypassed.
-MCU_STORE_REDIRECT_SITES = ((0x01001988, 0x40022000), (0x0100198c, 0x40022004))
-MCU_STORE_INSN_VAS = (0x010018f4, 0x010018fc)
-MCU_STORE_SCRATCH_VA = 0x04000ffc
+# The real reset handler at0x010018ec touches the MCU peripheral window before
+# it touches anything else: it stores0xb to0x40022000, stores7 to0x40022004,
+# and then loads0x40003034. Every one of those constants occurs exactly once in
+# the pinned container, so each is the load literal of exactly one instruction.
+# A variant repoints them at words inside the shared page, which leaves the
+# instructions themselves untouched while (a) bypassing the peripheral accesses
+# that may be stalling the bus and (b) leaving an observable trace.
+MCU_ACCESS_REDIRECTS = {
+    0x2339: (
+        dict(kind='store', literal_va=0x01001988, original=0x40022000,
+             insn_va=0x010018f4, insn=b'\x01\x60', target=0x04000ffc, value=0xb),
+        dict(kind='store', literal_va=0x0100198c, original=0x40022004,
+             insn_va=0x010018fc, insn=b'\x01\x60', target=0x04000ffc, value=0x7),
+    ),
+    0x2340: (
+        # First store goes to the global-interface version word, which is the
+        # one location2334 proved writable from this same entry. That splits
+        # "the code never ran" from "shared+0xffc specifically does not take
+        # the write", which2336 and2339 could not distinguish.
+        dict(kind='store', literal_va=0x01001988, original=0x40022000,
+             insn_va=0x010018f4, insn=b'\x01\x60', target=0x04000000, value=0xb),
+        dict(kind='store', literal_va=0x0100198c, original=0x40022004,
+             insn_va=0x010018fc, insn=b'\x01\x60', target=0x04000ffc, value=0x7),
+        # The load itself cannot fault the way a store can, but a peripheral
+        # read that never answers stalls exactly the same way. Point it at a
+        # zero word so r4 becomes0 and the guarded0x03800000 copy is skipped.
+        dict(kind='load', literal_va=0x01001998, original=0x40003034,
+             insn_va=0x01001918, insn=b'\x1f\x48', target=0x04000ff8, value=None),
+    ),
+}
 
 
-def redirect_mcu_stores(path, expected, scratch_va=MCU_STORE_SCRATCH_VA):
+def redirect_mcu_accesses(path, expected, build_id):
     firmware = pinned(path, expected)
     if expected != 'de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f7229a':
-        raise ValueError('MCU store redirect requires the measured device firmware')
+        raise ValueError('MCU access redirect requires the measured device firmware')
+    sites = MCU_ACCESS_REDIRECTS.get(build_id)
+    if not sites:
+        raise ValueError('build %#x has no MCU access redirect' % build_id)
     spec = importlib.util.spec_from_file_location('csf_fetch', ROOT / 'tools/matisse-csf-fetch-audit.py')
     fetch = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fetch)
     _, plan = fetch.build_arena(Path(path), 0x40077000, memory_group=6)
     section = next(s for s in plan['sections'] if s['va'] == 0x01000000)
-    if not (section['va'] <= min(MCU_STORE_INSN_VAS) and
-            max(MCU_STORE_INSN_VAS) + 2 <= section['va'] + section['data_bytes']):
-        raise ValueError('reset-handler store sites are outside the code section')
 
     def offset(va):
+        if not (section['va'] <= va and va + 4 <= section['va'] + section['data_bytes']):
+            raise ValueError('redirect site %#x is outside the code section' % va)
         return section['data_start'] + va - section['va']
 
-    for va in MCU_STORE_INSN_VAS:
-        site = offset(va)
-        if firmware[site:site + 2] != b'\x01\x60':
-            raise ValueError('reset-handler store site %#x is not str r1,[r0]' % va)
     edits = []
-    for va, old in MCU_STORE_REDIRECT_SITES:
-        site = offset(va)
-        have = int.from_bytes(firmware[site:site + 4], 'little')
-        if have != old:
-            raise ValueError('literal %#x is %#x, expected %#x' % (va, have, old))
-        if firmware.count(old.to_bytes(4, 'little')) != 1:
-            raise ValueError('constant %#x is not unique in the container' % old)
-        edits.append((site, old, scratch_va))
+    for site in sites:
+        insn = offset(site['insn_va'])
+        if firmware[insn:insn + 2] != site['insn']:
+            raise ValueError('instruction at %#x is %s, expected %s' %
+                             (site['insn_va'], firmware[insn:insn + 2].hex(), site['insn'].hex()))
+        literal = offset(site['literal_va'])
+        have = int.from_bytes(firmware[literal:literal + 4], 'little')
+        if have != site['original']:
+            raise ValueError('literal %#x is %#x, expected %#x' %
+                             (site['literal_va'], have, site['original']))
+        if firmware.count(site['original'].to_bytes(4, 'little')) != 1:
+            raise ValueError('constant %#x is not unique in the container' % site['original'])
+        if site['target'] & 3:
+            raise ValueError('redirect target %#x is not aligned' % site['target'])
+        edits.append((literal, site['original'], site['target']))
 
     embedded = bytearray(firmware)
-    for site, _, new in edits:
-        embedded[site:site + 4] = new.to_bytes(4, 'little')
+    for literal, _, target in edits:
+        embedded[literal:literal + 4] = target.to_bytes(4, 'little')
     embedded = bytes(embedded)
     if len(embedded) != len(firmware):
         raise ValueError('redirect changed the container size')
     changed = [i for i in range(len(firmware)) if firmware[i] != embedded[i]]
     if not changed or any(
-            not any(site <= i < site + 4 for site, _, _ in edits) for i in changed):
-        raise ValueError('redirect touched bytes outside the two literals')
-    for site, _, _ in edits:
-        if firmware[site:site + 4] == embedded[site:site + 4]:
-            raise ValueError('literal at container offset %#x was not changed' % site)
-    with tempfile.TemporaryDirectory(prefix='csf-store-redirect-') as directory:
+            not any(literal <= i < literal + 4 for literal, _, _ in edits) for i in changed):
+        raise ValueError('redirect touched bytes outside the redirected literals')
+    for literal, _, _ in edits:
+        if firmware[literal:literal + 4] == embedded[literal:literal + 4]:
+            raise ValueError('literal at container offset %#x was not changed' % literal)
+    with tempfile.TemporaryDirectory(prefix='csf-access-redirect-') as directory:
         candidate = Path(directory) / 'diagnostic.bin'
         candidate.write_bytes(embedded)
         _, rebuilt_plan = fetch.build_arena(candidate, 0x40077000, memory_group=6)
     if rebuilt_plan != plan:
-        raise ValueError('store redirect changed firmware mappings')
-    patch = dict(diagnostic_only=True, scratch_va='%#x' % scratch_va,
-                 sites=[dict(literal_va='%#x' % va, original='%#x' % old,
-                             written_value=(0xb if index == 0 else 0x7),
-                             container_offset='%#x' % site)
-                        for index, ((va, old), (site, _, _)) in
-                        enumerate(zip(MCU_STORE_REDIRECT_SITES, edits))],
+        raise ValueError('access redirect changed firmware mappings')
+    patch = dict(diagnostic_only=True,
+                 sites=[dict(kind=site['kind'], literal_va='%#x' % site['literal_va'],
+                             original='%#x' % site['original'], target='%#x' % site['target'],
+                             written_value=site['value'],
+                             insn_va='%#x' % site['insn_va'],
+                             container_offset='%#x' % literal)
+                        for site, (literal, _, _) in zip(sites, edits)],
                  original_container_sha256=digest(firmware),
                  embedded_container_sha256=digest(embedded))
     return embedded, patch
+
+
+def redirect_mcu_stores(path, expected):
+    return redirect_mcu_accesses(path, expected, 0x2339)
 
 
 def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=False,
@@ -109,12 +140,12 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
     firmware = pinned(path, expected)
     if expected != 'de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f7229a':
         raise ValueError('CSF probe requires the measured device firmware')
-    if build_id == 0x2339:
+    if build_id in MCU_ACCESS_REDIRECTS:
         if not mcu_store_redirect or entry_probe or inline_entry or entry_pte_guard or reset_store_stub:
-            raise ValueError('build2339 requires only the MCU store redirect')
-        return redirect_mcu_stores(path, expected)
+            raise ValueError('build%x requires only the MCU access redirect' % build_id)
+        return redirect_mcu_accesses(path, expected, build_id)
     if mcu_store_redirect:
-        raise ValueError('only build2339 redirects the MCU store literals')
+        raise ValueError('only the redirect builds may repoint MCU access literals')
     if inline_entry and (not entry_probe or build_id not in (0x2336,0x2337,0x2338)):
         raise ValueError('inline entry requires build2336/2337/2338 and entry probe')
     if entry_pte_guard != (build_id in (0x2337,0x2338)):
@@ -220,7 +251,7 @@ def build(a):
         definitions.append('-DSHIM_CSF_INLINE_ENTRY_PROBE')
     if a.entry_pte_guard:
         definitions.append('-DSHIM_CSF_ENTRY_PTE_GUARD')
-    if a.build_id == 0x2339:
+    if a.build_id in MCU_ACCESS_REDIRECTS:
         # Sample shared+0xffc without installing any entry overlay: the marker
         # is now written by the original reset handler itself.
         definitions.append('-DSHIM_CSF_ENTRY_CHECKPOINT')
@@ -315,14 +346,14 @@ def build(a):
             name: digest((ROOT / name).read_bytes()) for name in
             ('tools/matisse-csf-reset-store.S', 'tools/matisse-csf-fetch-audit.py',
              'tools/matisse-shim-gpu-image.py')}
-    if a.build_id == 0x2339:
+    if a.build_id in MCU_ACCESS_REDIRECTS:
         if reset_patch is None:
-            raise ValueError('build2339 requires the MCU store redirect')
+            raise ValueError('build%x requires the MCU access redirect' % a.build_id)
         # No entry-probe translation unit is compiled in, so the shim text
         # shrinks by the same page the2338 probe added and the anchor returns
         # to the2334 measurement. Pin it rather than dropping the check.
         if arena != 0x77000:
-            raise ValueError('build2339 must keep the measured pre-probe arena placement '
+            raise ValueError('redirect builds must keep the measured pre-probe arena placement '
                              '(expected 0x77000, got %#x)' % arena)
         info['mcu_store_redirect'] = reset_patch
         info['mcu_store_redirect']['source_sha256'] = {
@@ -360,7 +391,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
@@ -370,8 +401,8 @@ def main():
     p.add_argument('--entry-pte-guard', action='store_true',
                    help='build2337/2338 only: reject PTE/backing mismatch before MCU_CONTROL')
     p.add_argument('--redirect-mcu-stores', action='store_true',
-                   help='build2339 only: repoint the reset handler\'s two MCU peripheral '
-                        'store literals at one shared word, leaving the original code intact')
+                   help='build2339/2340 only: repoint the reset handler\'s MCU peripheral access '
+                        'literals at shared words, leaving the original code intact')
     p.add_argument('--dvfs-commit', default='off', metavar='{off,current,<oppidx>}',
                    help='send CMD_COMMIT after POWER_ON: off (default), current (the '
                         'index GPUEB already reports, no frequency change), or an index')

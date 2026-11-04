@@ -47,7 +47,7 @@ class McuStoreRedirectTests(unittest.TestCase):
             self.assertEqual(self.original[offset:offset + 2], b'\x01\x60')
             self.assertEqual(embedded[offset:offset + 2], b'\x01\x60')
         self.assertTrue(patch['diagnostic_only'])
-        self.assertEqual(patch['scratch_va'], '0x4000ffc')
+        self.assertEqual([site['target'] for site in patch['sites']], ['0x4000ffc'] * 2)
         self.assertEqual([site['written_value'] for site in patch['sites']], [0xb, 0x7])
         self.assertEqual(patch['original_container_sha256'], SHA)
 
@@ -77,7 +77,23 @@ class McuStoreRedirectTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.module.redirect_mcu_stores(other, digest)
 
-    def test_only_build2339_may_redirect(self):
+    def test_build2340_also_redirects_the_peripheral_load(self):
+        embedded, patch = self.module.redirect_mcu_accesses(FIRMWARE, SHA, 0x2340)
+        self.assertEqual(len(embedded), len(self.original))
+        kinds = [site['kind'] for site in patch['sites']]
+        self.assertEqual(kinds, ['store', 'store', 'load'])
+        targets = [site['target'] for site in patch['sites']]
+        # The first store goes to the version word, the one location2334
+        # proved writable from this entry; the second still uses the marker word.
+        self.assertEqual(targets, ['0x4000000', '0x4000ffc', '0x4000ff8'])
+        # The load literal only shares one byte with its replacement.
+        off = 0x282c
+        self.assertEqual(struct.unpack_from('<I', self.original, off)[0], 0x40003034)
+        self.assertEqual(struct.unpack_from('<I', embedded, off)[0], 0x04000ff8)
+        changed = {i for i in range(len(self.original)) if self.original[i] != embedded[i]}
+        self.assertTrue(changed <= {off, off + 1, off + 2, off + 3} | {0x281c, 0x281d, 0x281e, 0x281f, 0x2820, 0x2821, 0x2822, 0x2823})
+
+    def test_only_redirect_builds_may_redirect(self):
         for build in (0x2334, 0x2335, 0x2337, 0x2338):
             with self.assertRaises(ValueError):
                 self.module.diagnostic_firmware(

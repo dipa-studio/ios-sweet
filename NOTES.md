@@ -1,69 +1,57 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-04:2339 MCU STORE-REDIRECT IMAGE BUILT; NEEDS ITS OWN AUTHORIZATION <<<
+## >>> ACTIVE 2026-11-04:2340 MCU ACCESS-REDIRECT IMAGE READY; NEEDS AUTHORIZATION <<<
 
-The2338 trial excluded the clock: 610MHz, power_count1, DVFS_FREE,
-CMD_COMMIT accepted, and every GPU/CSF field identical to2337 (full write-up
-in docs/matisse-gpu-dvfs.md, section "2338 实测结果"). This round went after
-the actual stop point and found one.
+2339 RAN AND WAS NEGATIVE. Image fb059ab3, one authorized trial. mcu_store_
+progress=none: repointing both store literals at shared+0xffc still produced
+no write. version0, mcu_status1, job_raw0, entry_marker0. boot_a restored to
+2931647a automatically - the fastboot-CLI fallback added after the pyusb
+failure worked exactly as intended, so no manual recovery was needed.
 
-THE RESET VECTOR AND ENTRY ARE REAL AND NOW DISASSEMBLED. VA0 is a standard
-Cortex-M vector table: SP=0x02040000, Reset=0x010018ed (Thumb), and NMI through
-UsageFault share0x010019b1. So0x010018ec is genuinely the reset handler and
-2335/2336 did not patch the wrong address. Disassembly of the entry:
-  cpsid i
-  ldr r0,=0x40022000 ; mov r1,#0xb ; str r1,[r0]   <- first MCU peripheral store
-  ldr r0,=0x40022004 ; mov r1,#0x7 ; str r1,[r0]   <- second
-  ldr r0,=0xE000ED24 ; mov r1,#0x70000 ; str r1,[r0]  (SCB SHCSR, core private)
-  ldr r0,=0x0203F000 ; msr psp,r0 ; mov r0,#2 ; msr control,r0
-  ldr r0,=0x40003034 ; ldr r4,[r0] ; and r4,#0x80
-Before touching any private memory the MCU writes two peripheral words. If that
-window does not answer, the store stalls the bus on the fifth instruction and
-nothing after it ever happens - which is exactly the observed shape:
-MCU_STATUS1, no fault, version0, entry checkpoint absent.
+What that rules out:2334's own stub used ldr literal loads from the code page
+and stored successfully into shared+0, so MCU data loads and stores both work.
+2339's silence cannot be a broken data path. Two explanations remain:
+ (a) execution stalls somewhere around the first store and the write never
+     drains out of the buffer;
+ (b) shared+0xffc specifically does not take the write - and2336, which used
+     the same word, also read0.
 
-THIS ALSO EXPLAINS2334. That stub replaced the whole20-byte entry with a
-self-loop, so it skipped both stores, and that is why it was the only trial
-whose marker fired.2335/2336 routed control back into the original code and
-never got anywhere.
+The entry also performs a peripheral LOAD right after the two stores:
+  0x1918 ldr r0,=0x40003034 ; 0x191a ldr r4,[r0] ; 0x191c and r4,#0x80
+and only then, if bit7 was set, copies initialised data from0x03800000. That
+address is in NO firmware section, so a set bit7 sends the MCU to an unmapped
+read.
 
-BUILD2339 does not replace an instruction. It repoints the two load literals:
-container offset0x281c 0x40022000 ->0x04000ffc, and0x2820 0x40022004 ->
-0x04000ffc. Each constant occurs exactly once in the pinned container, so
-nothing else can read them; the container length is unchanged, only8 bytes
-differ, and the entry word is still the original0x4826b672. shared+0xffc
-becomes a progress word: 0 nothing, 0xb first store, 0x7 both stores.
+BUILD2340 SEPARATES (a) FROM (b) AND FROM THE LOAD. Still no instruction is
+replaced; three literals move:
+  0x281c 0x40022000 ->0x04000000  first store hits the version word, the one
+                                  location2334 proved writable from this entry
+  0x2820 0x40022004 ->0x04000ffc  second store keeps the marker word
+  0x282c 0x40003034 ->0x04000ff8  the load reads a zero word, so r4 becomes0
+                                  and the unmapped0x03800000 copy is skipped
+Reading it: version0 and marker0 means execution never reaches the first
+store; version0xb and marker0 means the first store lands and0xffc is the
+culprit; version0xb and marker7 means both ran and the stall was the
+peripheral load; version0x01010000 means the MCU booted.
 
-Artifacts: kernel bbdfa95a0121a8919a9c5bbcf5da508803e7f17493b68de70976c3659c22a998
-(17123904B, patch0138), image
-research/matisse/20261031-gpu/shim2339-mcu-ready/matisse-shim-gpu2339.img,
-27119616B, SHA256
-fb059ab3f941e1e2a74dd6d2cba68a39ddfabe7821472c524d0493a02fce78ec, built with
---redirect-mcu-stores --dvfs-commit current. Predicted post-write partition
-digest1f2e156ff99f17bcb175346b590f4f5ea39d205264b438d062aa9edeba264362.
+Artifacts: kernel efe601c6cbc772c139a21657e5a7c45ad90ac3f1dbb19c2bb70bb4a53192d7da
+(patch0139), image shim2340-mcu-ready/matisse-shim-gpu2340.img, 27119616B,
+SHA256 4e801cc5f25155aecb961d7382933b121f6b6089cc1c57568513f9cfd7ccaf18,
+predicted partition digest
+89af9821ec34066a1fa4fac4e8aefa46e4bd3b0211121be8f22fa62ff0da128b.
+Embedded container 92a4fac8, 11 bytes changed. verify2340-mcu.py PASS with
+the usual invariants: anchor0x77000, entry offset0xa8ec, leaf
+0x3000000040081fc7, entry PA0x400818ec, entry word0x4826b672 untouched,
+293 pages, report ABIs unchanged.206 offline tests pass,3 skipped.
 
-No entry probe is compiled in, so the shim text loses the page the2338 probe
-added and the CSF arena anchor returns to0x77000. Pinned, not relaxed:
-entry offset0xa8ec, leaf PTE0x3000000040081fc7, entry PA0x400818ec,293 pages,
-CSF report696B, GPU slot128B. verify2339-mcu.py PASS,205 offline tests pass,
-3 skipped. Objects identical to2338: start, loader, csf_boot, csf_memory,
-csf_firmware, gpueb_boot, gpueb_protocol, gpufreq. Differ: gpu (build label),
-csf (checkpoint define), csf_blob (patched container).
+Runner: shim2340-mcu-trials-run-once.py, refuses to run without
+--approved-image-sha256=4e801cc5f25155aecb961d7382933b121f6b6089cc1c57568513f9cfd7ccaf18.
 
-Runner ready: research/matisse/20261031-gpu/shim2339-mcu-trials-run-once.py,
-same state machine as2337/2338 including the fastboot-CLI fallback added after
-the pyusb failure. It refuses to run without
---approved-image-sha256=fb059ab3f941e1e2a74dd6d2cba68a39ddfabe7821472c524d0493a02fce78ec.
+Device clean: root Recovery, boot_a
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1, no journal,
+no pending restoration.
 
-NEXT: this image needs its own boot_a authorization naming that SHA. If
-granted, run one bounded trial and read shared+0xffc (decoder field
-entry_marker_after / mcu_store_progress). 0x7 plus a nonzero version means the
-MCU is running and the CSF stages can proceed. 0 or 0xb means the stall is
-earlier than these stores and the fetch path itself needs instrumenting.
-
-Device state unchanged and clean: root Recovery, boot_a =
-2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1,
-no journal, no pending restoration.
+NEXT: this image needs its own boot_a authorization naming that SHA.
 
 ## >>> HISTORICAL 2026-11-02:2337 ENTRY PTE GATE BUILT OFFLINE; NO DEVICE TRIAL <<<
 
