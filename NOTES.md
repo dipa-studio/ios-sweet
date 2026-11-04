@@ -39,10 +39,16 @@ wire bytes, untouched-on-error, every decode bound, all-zero/all-ones rejection,
 valid-bit rejection, and the full INIT->POWER_ON->FREQ->COMMIT->OFF mock mailbox
 with commit accepted, rejected and accepted-but-not-applied.
 
-NO KERNEL AND NO IMAGE WERE BUILT. This host has CommandLineTools only, no
-Xcode: an incremental make of xnu/out/local stops on missing
-Kernel.framework/PrivateHeaders/platform, missing EXPORT_HDRS/libsa and
-absent iig. The2337 kernel is untouched, SHA
+NO KERNEL AND NO IMAGE WERE BUILT. Xcode does exist here -
+/Users/xiaohuasheng/Downloads/Xcode.app, Xcode16.4, Apple clang17.0.0 - but it is
+not selected by xcode-select and it is TOO NEW for xnu-8796: an incremental make
+of xnu/out/local then fails on -Wpoison-system-directories for
+/usr/local/include/kernel plus hundreds of -Wpre-c11-compat errors in
+EXTERNAL_HEADERS/stdatomic.h, all promoted to errors. macOS SDK15.5 also has
+Kernel.framework/Headers but no PrivateHeaders/platform, and libsa/EXPORT_HDRS is
+absent. The CI workflow pins macos-14/Xcode15 for exactly this reason. The
+temporary directories created while testing were removed. The2337 kernel is
+untouched, SHA
 ddc8b3c09e5007e41baa1a156e45213c31ab9297659ad8fb98578ab3476291cc.
 2338 needs a kernel built from0136/0137 before an image can be produced.
 
