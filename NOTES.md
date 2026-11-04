@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-04:2338 DVFS LAYER IMPLEMENTED OFFLINE; NO BUILD, NO TRIAL <<<
+## >>> ACTIVE 2026-11-04:2338 DVFS IMAGE BUILT AND VERIFIED; NO DEVICE TRIAL <<<
 
 Gap closed: vendor kbase powers the GPU in TWO steps - gpufreq_power_control
 then gpufreq_commit (gpufreq_v2.c:853/:912; kbase caller mtk_common_gpufreq_commit
@@ -39,18 +39,42 @@ wire bytes, untouched-on-error, every decode bound, all-zero/all-ones rejection,
 valid-bit rejection, and the full INIT->POWER_ON->FREQ->COMMIT->OFF mock mailbox
 with commit accepted, rejected and accepted-but-not-applied.
 
-NO KERNEL AND NO IMAGE WERE BUILT. Xcode does exist here -
-/Users/xiaohuasheng/Downloads/Xcode.app, Xcode16.4, Apple clang17.0.0 - but it is
-not selected by xcode-select and it is TOO NEW for xnu-8796: an incremental make
-of xnu/out/local then fails on -Wpoison-system-directories for
-/usr/local/include/kernel plus hundreds of -Wpre-c11-compat errors in
-EXTERNAL_HEADERS/stdatomic.h, all promoted to errors. macOS SDK15.5 also has
-Kernel.framework/Headers but no PrivateHeaders/platform, and libsa/EXPORT_HDRS is
-absent. The CI workflow pins macos-14/Xcode15 for exactly this reason. The
-temporary directories created while testing were removed. The2337 kernel is
-untouched, SHA
-ddc8b3c09e5007e41baa1a156e45213c31ab9297659ad8fb98578ab3476291cc.
-2338 needs a kernel built from0136/0137 before an image can be produced.
+BUILT LOCALLY. Xcode16.4 sits at /Users/xiaohuasheng/Downloads/Xcode.app and is
+not selected by xcode-select; DEVELOPER_DIR points at it without touching system
+state. Three things had to exist first: /usr/local/include (the kernel private
+headers and libfirehose_kernel.a from fakeroot/usr/local, whose absence is what
+the -I/usr/local/include/kernel lint complains about), an empty
+SDK/.../Kernel.framework/Versions/A/PrivateHeaders/platform directory (xnu never
+actually includes <platform/...>), and CC/CXX wrappers that append -Wno-error
+because clang17 promotes -Wpre-c11-compat and -Wpoison-system-directories to
+errors that xnu-8796 predates. Advisory only: those were warnings, not
+miscompiles.
+
+Kernel a3904b8e123a6af4f88b4426aa1a8d847f540fabaa045f840835016c73d1f5dc,
+17123904 bytes. CAVEAT: it is built by a different compiler than2337, so it is
+not byte-comparable to ddc8b3c0. That does not affect the experiment - the GPU
+power/CSF/MCU stages all run in the shim before XNU is copied - it only affects
+how marks are recorded. The2337 kernel is preserved at
+research/.../kernel-2337.development.sweet.
+
+Image research/matisse/20261031-gpu/shim2338-dvfs-ready/matisse-shim-gpu2338.img,
+27119616 bytes, SHA256
+ad07f4929292a868498f6499b585ce9bc39455919f5116e3f0e9c7742234dcca,
+built with --entry-probe --inline-entry --entry-pte-guard --dvfs-commit current,
+so CMD_COMMIT is exercised against the OPP GPUEB already reports and the GPU
+frequency is NOT changed. cmdline carries sweettrial=2338 rootrw=0 ufsrw=0.
+
+Adding the gpufreq text moved the CSF arena anchor by exactly one page:
+0x77000 -> 0x78000. The builder now pins the anchor per build instead of
+dropping the check, so further silent drift still fails.
+
+Independent verify2338-dvfs.py PASS: image/ADT/fallback/ramdisk/signature bytes,
+sources, frozen objects, firmware blob, no R_AARCH64_ABS64, GPU report128B slot
+with112 used and the tail zero, CSF report still696, and arena replay giving
+leaf0x3000000040082fc7 / entry PA0x400828ec / entry word0x4803b672 /293 pages,
+identical to2337 modulo the page shift. Report at
+shim2338-dvfs-ready/independent-verification.json. 200 offline tests PASS,
+3 skipped.
 
 OBSERVATION: no device access this round. Last verified state remains root
 Recovery, full original boot_a SHA
@@ -62,14 +86,13 @@ device in Recovery (CONFIG_DEVMEM off, no Mali/GPUEB/gpufreq binding), so
 neither the vendor runtime_resume path nor raw /dev/mem poking is available.
 The shim's GPUEB mailbox probe is the only power path here. GPU_ID already
 reads0xa8620004 after POWER_ON and SPM&6==6 on every trial from2322 on, so
-the gpu_id gate the user set is passed; the open problem is the MCU.
+the gpu_id gate is passed; the open problem is the MCU.
 
-NEXT: (1) build the2338 kernel from0136/0137 - push to the fork and use the
-xnu workflow, or supply the local Xcode/KDK recipe; (2) build
-matisse-shim-gpu2338.img with --dvfs-commit current and verify it; (3) present
-the exact image SHA and request its own boot_a authorization; then run once,
-capture gpu-report marks300..313, and restore all64MiB before interpreting.
-
+NEXT: this image needs its own boot_a authorization naming SHA ad07f492. If
+granted, run one bounded trial, then read marks300..313 (the gpufreq block is
+new) and restore all64MiB before interpreting. What2338 adds: power_count,
+cur_fgpu, cur_vgpu, dvfs_state and whether CMD_COMMIT is accepted. It still
+cannot prove MCU boot; GLB_VERSION must come from the MCU's own interrupt.
 
 ## >>> HISTORICAL 2026-11-02:2337 ENTRY PTE GATE BUILT OFFLINE; NO DEVICE TRIAL <<<
 

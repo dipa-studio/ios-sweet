@@ -234,8 +234,13 @@ def build(a):
             ('tools/matisse-csf-reset-store.S', 'tools/matisse-csf-fetch-audit.py',
              'tools/matisse-shim-gpu-image.py')}
     if a.entry_probe:
-        if arena != 0x77000:
-            raise ValueError('entry trial must preserve the measured2334 arena placement')
+        # The gpufreq layer adds one page of shim text, so from2338 the arena
+        # anchor moves by exactly0x1000. Pinning it per build keeps the drift
+        # check meaningful instead of dropping it.
+        expected_arena = 0x78000 if a.build_id >= 0x2338 else 0x77000
+        if arena != expected_arena:
+            raise ValueError('entry trial must preserve the measured arena placement '
+                             'for build %#x (expected %#x, got %#x)' % (a.build_id, expected_arena, arena))
         spec = importlib.util.spec_from_file_location('entry_fetch', ROOT / 'tools/matisse-csf-fetch-audit.py')
         fetch = importlib.util.module_from_spec(spec); spec.loader.exec_module(fetch)
         original, plan = fetch.build_arena(Path(a.firmware), 0x40000000 + arena, memory_group=6)
