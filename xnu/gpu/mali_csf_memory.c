@@ -2,6 +2,16 @@
  * descriptor format. See docs/matisse-csf-bringup.md for source pins. */
 #include "mali_csf_memory.h"
 
+/* Diagnostic only, off unless a trial defines it.2375 and2377 showed reads and
+ * writes of the RW section complete while a data read of an R-X page hangs until
+ * its line is resident, and the section ABI sets no other difference between
+ * those leaves. If the hang is a read-miss fill that the read-only bit refuses,
+ * mapping the same page writable removes it. Nothing in the driver sets this:
+ * the shipping mapping keeps the firmware's own permissions. */
+#ifndef SWEET_CSF_RO_LEAVES_WRITABLE
+#define SWEET_CSF_RO_LEAVES_WRITABLE 0
+#endif
+
 static int collect(const struct sweet_csf_section *s, void *context)
 {
     struct sweet_csf_memory *m = context;
@@ -127,7 +137,7 @@ int sweet_csf_memory_build_group(const uint8_t *fw, size_t bytes, const struct s
             uint64_t desc = (pa + p->arena_offset + off) | 3 | 0x800 | 0x400 | 0x40;
             desc |= cached ? 0x004 : 0x000;
             if (p->flags & (1u << 30)) desc |= 0x300;
-            if (!(p->flags & 2)) desc |= 0x80;
+            if (!(p->flags & 2) && !SWEET_CSF_RO_LEAVES_WRITABLE) desc |= 0x80;
             if (!(p->flags & 4)) desc |= UINT64_C(3) << 53;
             desc |= (uint64_t)memory_group << 59;
             put64(table + ((va >> 12) & 511) * 8, desc);

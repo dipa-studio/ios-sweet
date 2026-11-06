@@ -1206,6 +1206,7 @@ def build(a):
                    '-DSHIM_RECOVERY_OFFSET=' + str(FALLBACK_OFFSET),
                    '-DSWEET_SHIM_BUILD_LABEL="%x"' % a.build_id,
                    '-DSWEET_CSF_MCU_CONTROL=' + str(a.mcu_control),
+                   '-DSWEET_CSF_RO_LEAVES_WRITABLE=' + ('1' if a.ro_as_rw else '0'),
                    *dvfs,
                    '-DEMBEDDED_XNU_BYTES=' + str(len(payload))]
     if a.entry_probe:
@@ -1301,6 +1302,7 @@ def build(a):
     # carries. Without it a trial result cannot be tied back to its value.
     info['csf_mcu_control'] = dict(value=a.mcu_control, vendor_form=a.mcu_control == '3',
                                    report_field='platform_reserved')
+    info['csf_readonly_leaves_writable'] = bool(a.ro_as_rw)
     info['csf_mapping_metadata_hardware_readback'] = False
     info['csf_arena'] = dict(shim_offset=arena, bytes=2 << 20,
                              bss_end=symbol['_bss_end'], shim_end=end,
@@ -1370,7 +1372,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
@@ -1391,6 +1393,11 @@ def main():
     p.add_argument('--dvfs-commit', default='off', metavar='{off,current,<oppidx>}',
                    help='send CMD_COMMIT after POWER_ON: off (default), current (the '
                         'index GPUEB already reports, no frequency change), or an index')
+    p.add_argument('--ro-as-rw', action='store_true',
+                   help='map sections the firmware declares read-only as writable. Diagnostic '
+                        'only:2375/2377 showed RW leaves complete reads and writes while a data '
+                        'read of an R-X leaf hangs until its line is resident, so this isolates '
+                        'whether the read-only bit is what refuses the fill')
     p.add_argument('--mcu-control', default='2', choices=('2', '3'),
                    help='value written to MCU_CONTROL to start the MCU: 2 is AUTO alone and '
                         'the measured-good value on this SoC (default), 3 is the vendor '
