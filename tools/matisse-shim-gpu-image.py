@@ -1016,6 +1016,30 @@ TRACE_PROBE[0x2384] = dict(
     patches={0x01000200: ('01340a2c', '00bf7047'),
              **{va: body for va, body in TRACE_PROBE[0x2383]['patches'].items()
                 if va != 0x010018ec}})
+
+# 2385 asks the primitive question behind every cold stall: does the MCU ever
+# complete the fetch of a block it has never touched?  Every fetch seen to
+# complete came from a block that was already resident - the reset target
+# 0x010018ec sits in 0x01001800 - and every cold one hangs (the branch to
+# 0x01000200, the firmware's own literal load from 0x01001a00).  The first fetch
+# after reset cannot be warm, so this build moves the reset vector word itself
+# (VA 0x4, in the config section) from 0x010018ed to 0x0100E001 and parks that
+# block after writing the marker.  Marker present: a cold fetch completes at
+# boot, and the wall is the running core's fetch path.  Absent: the memory path
+# only ever serves lines something else filled, and the reset block worked
+# because it was already resident.
+# 0x0100E000 is 56 KB into the 64 KB code section and nothing else executes it.
+# Assembled from tools/matisse-csf-coldboot.S and checked by
+# tools/tests/test_matisse_csf_fetch_prime.py.
+COLD_BOOT_2385 = ('41114ff0000999652b46c0f200070021002527e0',
+                  '72b60124240604f5604401239b069c6000bffee7')
+TRACE_PROBE[0x2385] = dict(
+    TRACE_PROBE[0x2383], kind='cold-boot-fetch',
+    reset_vector=(0x010018ed, 0x0100E001),
+    # 0x010018ec is dead once the vector moves, so the vendor bytes stay there
+    # and the 2383 fault entry stays installed as a free CFSR capture.
+    patches={0x010019b0: TRACE_PROBE[0x2383]['patches'][0x010019b0],
+             0x0100E000: COLD_BOOT_2385})
 BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the low bytes
 
 
@@ -1063,6 +1087,22 @@ def fault_vector_probe(path, expected, build_id):
         word = int.from_bytes(firmware[at:at + 4], 'little')
         if word != 0x010019b1:
             raise ValueError('vector %#x is %#x, expected0x010019b1' % (entry, word))
+    # 2385 moves where the core starts, which is a different question from
+    # which handler a fault lands on: the word at VA 0x4, not a code patch.
+    vector_at = None
+    vector_new = None
+    if 'reset_vector' in spec:
+        want, new = spec['reset_vector']
+        vector_at = config['data_start'] + 4
+        have = int.from_bytes(firmware[vector_at:vector_at + 4], 'little')
+        if have != want:
+            raise ValueError('reset vector is %#x, expected %#x' % (have, want))
+        target = new & ~1
+        if not new & 1:
+            raise ValueError('reset vector %#x is not a Thumb address' % new)
+        if not (section['va'] <= target and target + 4 <= section['va'] + section['data_bytes']):
+            raise ValueError('reset vector target %#x is outside the code section' % target)
+        vector_new = new
 
     stub_at = offset(spec['stub_va'])
     stub = spec['stub']
@@ -1123,11 +1163,14 @@ def fault_vector_probe(path, expected, build_id):
         embedded[off:off + 4] = value.to_bytes(4, 'little')
     for at, new in patch_at.items():
         embedded[at:at + len(new)] = new
+    if vector_at is not None:
+        embedded[vector_at:vector_at + 4] = vector_new.to_bytes(4, 'little')
     embedded = bytes(embedded)
     if len(embedded) != len(firmware):
         raise ValueError('fault probe changed the container size')
     changed = sorted(i for i in range(len(firmware)) if firmware[i] != embedded[i])
     if any(not (stub_at <= i < stub_at + len(stub)) and
+           not (vector_at is not None and vector_at <= i < vector_at + 4) and
            not any(at <= i < at + 4 for at in site_at) and
            not any(at <= i < at + 4 for at in call_at) and
            not any(at <= i < at + len(new) for at, new in patch_at.items()) and
@@ -1175,6 +1218,12 @@ def fault_vector_probe(path, expected, build_id):
             # counter of9 here against 2379's9 says the hang does not follow the
             # physical pages this build moved it to.
             patch['fetch_prime']['code_section_relocated'] = True
+    if vector_new is not None:
+        patch['reset_vector'] = dict(
+            va='0x4', was='%#x' % spec['reset_vector'][0], now='%#x' % vector_new,
+            target='%#x' % (vector_new & ~1),
+            note=('the core starts at this word; no stack, literal pool or branch '
+                  'stands between reset and the marker write'))
     if build_id == 0x2384:
         patch['positive_control'] = dict(
             entry_va='0x10018ec', marker_value='0x1000200',
@@ -1183,6 +1232,12 @@ def fault_vector_probe(path, expected, build_id):
                 '20': 'the 2383 fault entry fired: the instrument works',
                 '30': 'the unmapped read completed without faulting',
                 '0 or 8': 'the read neither faulted nor completed'})
+    if build_id == 0x2385:
+        patch['cold_boot'] = dict(
+            target='0x100e000', marker_value='0x100e000', marker_field='input_va',
+            counter_field='groups', counter_seed=8, counter_meanings={
+                'present': 'the core fetched a never-touched block at boot',
+                'absent': 'the first fetch stalls exactly like every other cold one'})
     return embedded, patch
 
 
@@ -1315,14 +1370,14 @@ def build(a):
     #2382 is the2379 container patch on a plan that puts the R-X section after
     # the whole layout. Everything else - leaf encoding, probe, RO-as-RW, start
     # word - is held at2379's values so the PA is the only moved number.
-    if a.build_id in (0x2382, 0x2383, 0x2384):
+    if a.build_id in (0x2382, 0x2383, 0x2384, 0x2385):
         if not (a.trace_probe and a.ro_as_rw and a.relocate_code):
             raise ValueError('build%x requires --trace-probe --ro-as-rw --relocate-code' % a.build_id)
         if (a.vendor_memattr or a.global_init or a.fault_probe or a.entry_probe or
                 a.reset_store_stub or a.mcu_control != '2'):
-            raise ValueError('build%x may change only the code section PA' % a.build_id)
+            raise ValueError('build%x may change only the entry and its fetch target' % a.build_id)
     elif a.relocate_code:
-        raise ValueError('--relocate-code is only defined for build2382/2383')
+        raise ValueError('--relocate-code is only defined for build2382-2385')
     if a.fault_probe or a.trace_probe:
         if a.redirect_mcu_stores or a.entry_probe or a.inline_entry or a.entry_pte_guard or a.reset_store_stub:
             raise ValueError('the fault vector probe replaces the handler and takes no other patch')
@@ -1516,6 +1571,10 @@ def build(a):
                 for name in ('tools/matisse-csf-fault-entry.S',
                              'tools/matisse-csf-fault-control.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
+            if a.build_id == 0x2385:
+                for name in ('tools/matisse-csf-fault-entry.S',
+                             'tools/matisse-csf-coldboot.S'):
+                    info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
     if a.relocate_code:
         moved = relocation_evidence(firmware)
         base = 0x40000000 + arena
@@ -1555,7 +1614,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',

@@ -1,6 +1,50 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2384 RAN - THE REFUSAL REACHES THE MMU, NOT THE MCU <<<
+## >>> ACTIVE 2026-11-06:2385 RAN - A COLD FETCH DOES COMPLETE; THE WALL IS THE RUNNING CORE <<<
+
+**RESULT: `input_va = 0x0100E000` - the marker is present.** The core fetched the
+block at 0x0100E000, which nothing had ever touched, and executed it. Counter 8
+(the program never writes 16), `mmu_raw = 0`, `as_fault = 0`, `mcu_status = 1`,
+`relocation_observed = true`, `error = -53` (the shutdown probe timing out, as
+every probe build does).
+
+```
+image  c7e3e01d...d9eb  26,714,112 B   kernel 44180108 (byte-identical to 2384)
+part.  d1adf486...d952  written and read back
+boot_a restored to 2931647a...86b1 (restored_sha256 verified)
+outcome cold-boot-fetch-completes
+```
+
+**IMPORTANT - the mark on this capture is wrong.** The kernel was built without
+bumping `SWEET_BUILD_ID`, so its records are tagged `0x2384`, not `0x2385`. The
+report ABI is identical, the image sha identifies the run, and the capture decodes
+with `--build 0x2385 --mark 0x2384`. Bump that constant before the next kernel
+build, or the same mismatch returns.
+
+What it settles:
+
+- **Cold is not the wall.** A block that no access had ever reached was fetched
+  and executed on the first cycle after reset. Everything about "only resident
+  blocks work" was an artefact of *who* did the fetching.
+- **The wall is the fetch path a running core uses.** 2383's `bl 0x01000200` hangs
+  with no fault; 2385's reset word to a colder block does not. Same core, same
+  tables, same section, different entry.
+- **It also re-reads 2370/2371/2373.** Those read the second block of the code
+  section as *data* from a running program (`ldr` at 0x010019dc). The one access
+  pattern that never hangs is the one nobody had tried: start there.
+
+Still true and still load-bearing: 2384's `AS_FAULT` result, that a refused access
+hangs the MCU without an exception, so the fault entry cannot be the instrument.
+
+**NEXT: 2386 - point the reset word at 0x01000200.** That is the block every
+branch and every data read has failed to reach. Same marker/park program, same
+mapping, only the vector target changes. Marker present means the block is fine
+and the discriminator is reset-vs-running; marker absent means the block or its
+page is the problem, and the next step is offline - compare page 0's descriptor,
+PA and container bytes against page 14's. Do not build another fetch experiment
+before this one answers.
+
+## >>> PREVIOUS 2026-11-06:2384 RAN - THE REFUSAL REACHES THE MMU, NOT THE MCU <<<
 
 **RESULT: counter 8 with the marker set, `error = -54`, `mmu_raw = 1`,
 `AS_FAULT = 0x7cd002c2` at `0x03000000` - the exact fault status 2375 recorded

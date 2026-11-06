@@ -870,3 +870,57 @@ same warm block. The only cold targets ever tried are the ones that hang. The ne
 question is therefore the primitive one: does the MCU ever complete a fetch of a
 block that is not already resident - at reset, where the very first fetch must be
 cold by definition?
+
+## 31. 2385 ran: a cold fetch completes - the wall is the running core
+
+Trial 2026-11-06 21:33, image `c7e3e01d...d9eb`, fastboot at 85.64 s, `boot_a`
+restored to `2931647a...86b1`.
+
+```
+input_va (shared+8)            0x100e000  the marker: the block was fetched and run
+groups (shared+16)             8          the program writes only the marker
+mmu_raw, as_fault              0, 0       nothing was refused
+mcu_status, relocation         1, true
+error                           -53        the shutdown probe timing out, as always
+```
+
+2385 changed one word: the reset vector at VA 0x4 moved from `0x010018ed` to
+`0x0100E001`. At 0x0100E000 - 56 KB into the 64 KB code section, in a block no
+access had ever reached - sits 20 bytes: `cpsid i`, build `0x0100E000`, write it to
+shared+8, park. No stack, no literal pool, no branch. The core can only get there
+by fetching that block on its first cycle.
+
+It got there. **A cold fetch completes.**
+
+That retires the reading the last six trials were built on. "Only a resident block
+works" was never a property of the memory path: it was a property of *who* asked.
+The fetch the core issues from reset reaches a block nothing has touched; the
+fetch it issues from a running program - `bl 0x01000200` in 2379/2382/2383 - does
+not. The same is true of data: the only cold data reads ever attempted
+(2370/2371/2373, the `ldr` at 0x010019dc) were issued by a running program too.
+
+So the wall narrows to a difference of state, not of mapping:
+
+| who fetches | cold block | result |
+|---|---|---|
+| the core at reset, target 0x010018ec | warm (it is the reset target) | runs - 2376 onward |
+| the core at reset, target 0x0100E000 | cold | runs - 2385 |
+| a running program, `bl` 0x01000200 | cold | hangs, no fault - 2383 |
+| a running program, `ldr` 0x01001a00 | cold | hangs, no fault - 2373 |
+
+Nothing about the page tables differs between rows three and four and rows one and
+two: same section, same leaves, same PA base, same plan. What differs is that the
+first two happen before any state was established on the core.
+
+One defect in this run's provenance, recorded so it cannot be mistaken for a
+match: the kernel was built without bumping `SWEET_BUILD_ID`, so the SWEETMRK
+records carry `0x2384`. The report ABI is identical, the image sha identifies the
+run, and the capture decodes with `--build 0x2385 --mark 0x2384` - the new
+`--mark` option exists for exactly this case.
+
+The next question is no longer "can a cold block be reached". It is whether the
+block the running core could not reach - `0x01000200` - is reachable at all when
+the reset word asks for it. Same 20 bytes, vector word `0x0100E001` -> `0x01000201`.
+If it runs, the discriminator is reset-versus-running and the block was never
+special; if it does not, page 0 differs from page 14 somewhere the plan does not
+show, and that is an offline question about descriptors, PA and container bytes.

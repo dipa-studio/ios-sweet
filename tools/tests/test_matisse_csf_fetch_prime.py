@@ -105,6 +105,75 @@ class FetchPrimeTests(unittest.TestCase):
         self.assertEqual(patch['kind'], 'fetch-prime')
         self.assertEqual(patch['fetch_prime']['fault_entry']['counter_value'], 20)
 
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2385_moves_only_the_reset_word_and_its_target(self):
+        original = FIRMWARE.read_bytes()
+        embedded, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2385)
+        config, code = 0x0380, 0x0e94
+        allowed = set(range(config + 4, config + 8))
+        allowed |= set(range(code + 0xe000, code + 0xe000 + 20))
+        expected = self.builder.COLD_BOOT_2385
+        allowed |= set(range(code + 0x200, code + 0x200 + len(bytes.fromhex(expected[0]))))
+        allowed |= set(range(code + 0x19b0, code + 0x19b0 + 40))
+        changed = {i for i, (a, b) in enumerate(zip(original, embedded)) if a != b}
+        self.assertTrue(changed)
+        self.assertLessEqual(changed, allowed)
+        self.assertEqual(int.from_bytes(embedded[config + 4:config + 8], 'little'), 0x0100e001)
+        # SP and the five fault vectors must not move with it
+        self.assertEqual(embedded[config:config + 4], original[config:config + 4])
+        self.assertEqual(embedded[config + 8:config + 0x20], original[config + 8:config + 0x20])
+        # The vendor entry program stays: reset never reaches 0x010018ec now.
+        self.assertEqual(embedded[code + 0x18ec:code + 0x18ec + 38],
+                         original[code + 0x18ec:code + 0x18ec + 38])
+        self.assertEqual(patch['reset_vector']['was'], '0x10018ed')
+        self.assertEqual(patch['reset_vector']['target'], '0x100e000')
+        self.assertEqual(patch['kind'], 'cold-boot-fetch')
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2385_refuses_a_vector_that_moved_or_a_target_outside_code(self):
+        spec = self.builder.TRACE_PROBE[0x2385]
+        # a word that is not the vendor reset / a target without the Thumb bit /
+        # a target outside the 64 KB code section
+        for bad in ((0x010018ec, 0x0100E001), (0x010018ed, 0x0100E000),
+                    (0x010018ed, 0x03000001)):
+            saved = spec['reset_vector']
+            spec['reset_vector'] = bad
+            try:
+                with self.assertRaises(ValueError):
+                    self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2385)
+            finally:
+                spec['reset_vector'] = saved
+
+    def test_cold_boot_assembly_matches_the_2385_patch(self):
+        """2385's boot program is the linked bytes too."""
+        bins = sorted((Path.home() / 'Library/Android/sdk/ndk').glob(
+            '*/toolchains/llvm/prebuilt/darwin-x86_64/bin'))
+        if not bins:
+            self.skipTest('requires ARM linker from Android NDK')
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory)
+            (p / 'cold.ld').write_text('SECTIONS { '
+                '.text.cold 0x0100E000 : { *(.text.cold) } }')
+            subprocess.run([str(bins[-1] / 'clang'), '--target=armv7m-none-eabi',
+                '-mcpu=cortex-m7', '-mthumb', '-nostdlib', '-Wl,--build-id=none',
+                '-Wl,-e,csf_cold_boot', '-Wl,-T,' + str(p / 'cold.ld'),
+                str(ROOT / 'tools/matisse-csf-coldboot.S'), '-o', str(p / 'cold.elf')],
+                check=True, capture_output=True)
+            elf = (p / 'cold.elf').read_bytes()
+            shoff, = struct.unpack_from('<I', elf, 32)
+            size, count, names_index = struct.unpack_from('<HHH', elf, 46)
+            sections = [struct.unpack_from('<10I', elf, shoff + i * size) for i in range(count)]
+            names_section = sections[names_index]
+            names = elf[names_section[4]:names_section[4] + names_section[5]]
+            actual = {names[s[0]:].split(b'\0', 1)[0].decode(): elf[s[4]:s[4] + s[5]]
+                      for s in sections}
+        want, stub = self.builder.COLD_BOOT_2385
+        self.assertEqual(actual['.text.cold'], bytes.fromhex(stub))
+        self.assertEqual(len(bytes.fromhex(stub)), len(bytes.fromhex(want)))
+        self.assertEqual(sections[1][3], 0x0100E000)
+        # nothing but the marker store, so no stack and no literal pool
+        self.assertEqual(bytes.fromhex(stub)[-4:], bytes.fromhex('00bffee7'))
+
     def test_control_entry_assembly_matches_the_2384_patch(self):
         """2384's positive control is the linked bytes too."""
         bins = sorted((Path.home() / 'Library/Android/sdk/ndk').glob(

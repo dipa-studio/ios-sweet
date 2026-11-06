@@ -103,8 +103,13 @@ def report_bytes(records, first, count, expected_build, name):
     return b''.join(struct.pack('<Q',report[code]) for code in range(first,first+count))
 
 
-def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384):
+def decode(data, expected_build=0x2321, mark=None):
+    # `mark` is the kernel's SWEET_BUILD_ID as it appears in the capture. It is
+    # normally the build under test, but a kernel built without bumping that
+    # constant tags its records with the previous trial's number. Passing the
+    # observed mark keeps such a capture decodable without pretending the tag
+    # matches: the image sha, not the tag, is what identifies the run.
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -112,10 +117,11 @@ def decode(data, expected_build=0x2321):
     if magic != b'SWEETMRK' or version != 1 or count > 160:
         raise ValueError('invalid marks header')
     records = [struct.unpack_from('<IIQQ',data,16+24*i) for i in range(count)]
+    mark = expected_build if mark is None else mark
     builds = [a for code,pad,a,b in records if code == 99]
-    if builds != [expected_build]:
+    if builds != [mark]:
         raise ValueError('missing/ambiguous/unexpected kernel build mark')
-    raw = report_bytes(records,300,14 if expected_build >= 0x2338 else 9,expected_build,'GPU')
+    raw = report_bytes(records,300,14 if expected_build >= 0x2338 else 9,mark,'GPU')
     fields = dict(zip(KEYS,struct.unpack('<I4i8I4xQ2I',raw[:72])))
     gpufreq = None
     if expected_build >= 0x2338:
@@ -153,7 +159,7 @@ def decode(data, expected_build=0x2321):
         fields['reset_rawstat'] & 0x100 != 0)
     if expected_build >= 0x2322:
         count = 87 if expected_build >= 0x2333 else 70 if expected_build >= 0x2332 else (55 if expected_build >= 0x2331 else (38 if expected_build >= 0x2328 else (37 if expected_build == 0x2327 else (36 if expected_build == 0x2326 else (24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11))))))
-        raw = report_bytes(records,320,count,expected_build,'CSF')
+        raw = report_bytes(records,320,count,mark,'CSF')
         csf = dict(zip(CSF_KEYS,struct.unpack('<I2i19I',raw[:88])))
         if expected_build >= 0x2323:
             csf.update(zip(CSF_DIAGNOSTIC_KEYS,struct.unpack('<7Ii2I',raw[88:128])))
@@ -473,6 +479,39 @@ def decode(data, expected_build=0x2321):
                 outcome = 'unexpected-counter'
                 verdict = 'the probe did not reach a defined 9/10/11 checkpoint'
             csf['fetch_prime_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2385:
+            # The reset vector is the only thing between the core and a block
+            # nothing has executed, so one word answers the primitive question.
+            target = 0x0100E000
+            csf['cold_boot_target'] = target
+            csf['cold_boot_marker_present'] = csf['input_va'] == target
+            csf['cold_boot_counter'] = csf['groups']
+            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a4000
+            if not csf['relocation_observed']:
+                outcome = 'not-relocated'
+                verdict = ('the executable probe PA is not the relocated one; this is not the '
+                           '2383 mapping the build reuses')
+            elif csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault']:
+                # A refusal here would mean the vector was read but the target
+                # page is not mapped - a build fault, not an answer.
+                outcome = 'cold-boot-refused'
+                verdict = ('the MMU refused something before the marker appeared (AS_FAULT %#x at '
+                           '%#x); the reset target is not mapped the way the plan says, so this '
+                           'run cannot answer the fetch question' %
+                           (csf['as_fault'], csf['as_fault_hi'] << 32 | csf['as_fault_lo']))
+            elif csf['cold_boot_marker_present']:
+                outcome = 'cold-boot-fetch-completes'
+                verdict = ('the core fetched 0x0100E000 - a block nothing had ever touched - and '
+                           'executed it, so a cold fetch does complete when the reset word asks '
+                           'for one: the wall is the fetch path a running core uses, not the '
+                           'memory path itself')
+            else:
+                outcome = 'cold-boot-fetch-stalls'
+                verdict = ('the marker is absent and nothing faulted: the very first fetch, of a '
+                           'block nothing has touched, does not complete either - the block that '
+                           'works was already resident, and no cold fill ever lands')
+            csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
         if expected_build == 0x2384:
             # Positive control for the 2383 fault entry: identical mapping and
@@ -1195,10 +1234,13 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2384)')
+                   help='expected kernel/report build (0x2321 through 0x2385)')
+    p.add_argument('--mark',type=lambda s:int(s,0),default=None,
+                   help='kernel SWEET_BUILD_ID observed in the capture, when it was '
+                        'not bumped for this trial')
     a=p.parse_args()
     try:
-        report=decode(a.marks.read_bytes(),a.build)
+        report=decode(a.marks.read_bytes(),a.build,a.mark)
     except ValueError as exc:
         p.exit(1,str(exc)+'\n')
     print(json.dumps(report,indent=2))
