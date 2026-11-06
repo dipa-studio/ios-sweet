@@ -597,6 +597,24 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertEqual(csf['cold_boot_outcome'], 'encoding-not-applied')
         self.assertFalse(csf['code_leaf_uncached'])
 
+    def test_2396_ladder_names_the_section_that_stalls(self):
+        for marker, outcome in ((1, 'bit9-hangs-in-shared'),
+                                (2, 'bit9-hangs-in-stack'),
+                                (3, 'bit9-hangs-in-code-only'),
+                                (4, 'bit9-not-reproduced')):
+            with self.subTest(marker=marker):
+                csf = self.cold_report(build=0x2396, input_va=marker,
+                                       leaf=self.LEAVES)['csf']
+                self.assertEqual(csf['cold_boot_outcome'], outcome)
+                self.assertTrue(csf['cold_boot_marker_present'])
+                self.assertEqual(len(csf['cold_boot_ladder']), 4)
+        csf = self.cold_report(build=0x2396, input_va=0x04002000, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'no-marker')
+        self.assertFalse(csf['cold_boot_marker_present'])
+
+        csf = self.cold_report(build=0x2396, input_va=3, leaf=self.LEAVES)['csf']
+        self.assertIn('XN is the only leaf field never varied', csf['instrument_verdict'])
+
     def test_2394_positive_control_decides_whether_2393_closes(self):
         csf = self.cold_report(build=0x2394, input_va=0x0100E000, leaf=self.LEAVES)['csf']
         self.assertEqual(csf['cold_boot_outcome'], 'positive-control-runs')

@@ -231,6 +231,31 @@ class FetchPrimeTests(unittest.TestCase):
         self.assertEqual(patch['leaf_probe']['marks'], '420..423')
 
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2396_ladder_reads_bit_nine_in_three_sections(self):
+        embedded_2394, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2394)
+        embedded_2396, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2396)
+        config, code = 0x0380, 0x0e94
+        stub = bytes.fromhex(self.builder.COLD_BOOT_2396[1])
+        self.assertEqual(len(stub), 48)
+        # Same vector, same fault entry, same 0x200 stub: only the program at
+        # 0xE000 grows from twenty bytes to the ladder.
+        changed = {i for i, (a, b) in enumerate(zip(embedded_2394, embedded_2396)) if a != b}
+        self.assertTrue(changed)
+        self.assertLessEqual(changed, set(range(code + 0xE000, code + 0xE000 + 48)))
+        self.assertEqual(int.from_bytes(embedded_2396[config + 4:config + 8], 'little'),
+                         0x0100E001)
+        self.assertEqual(embedded_2396[code + 0xE000:code + 0xE000 + 48], stub)
+        # Marker N is written before read N, and the reads sit in three sections.
+        self.assertIn(0x04000200, (0x04000200,))
+        read_vas = [step['read_va'] for step in patch['cold_boot']['ladder']]
+        self.assertEqual(read_vas, ['0x04000200', '0x02000200', '0x01001200', None])
+        self.assertEqual([step['marker'] for step in patch['cold_boot']['ladder']],
+                         ['0x1', '0x2', '0x3', '0x4'])
+        for va in (0x04000200, 0x02000200, 0x01001200):
+            self.assertEqual((va >> 9) & 1, 1, hex(va))
+        self.assertEqual(patch['cold_boot']['target'], '0x100e000')
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2394_is_the_2385_control_under_vendor_attributes(self):
         embedded_2385, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2385)
         embedded_2394, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2394)

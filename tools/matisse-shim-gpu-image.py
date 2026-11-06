@@ -1208,6 +1208,25 @@ BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the l
 # the point: nothing in the image can explain a different answer.
 TRACE_PROBE[0x2395] = dict(TRACE_PROBE[0x2393], kind='cold-boot-fetch')
 
+# 2396 asks whether bit 9 is a property of the address or of the executable
+# section. Every bit-9 datum this port owns sits in the code section; the stack,
+# heap and shared sections are RW and NX and have never been read at bit 9 = 1.
+# One ladder, one boot: write marker N, then read a bit-9 address, three times.
+# The highest marker in input_va names the read that stopped the core, so a
+# single capture separates "the rule is global" from "the rule only bites inside
+# an executable page". Entry and encoding stay at 2394's, which ran.
+COLD_BOOT_2396 = ('41114ff0000999652b46c0f200070021002527e040f294370021c0f200071de0'
+                  '44f220010622c4f20301725044f22003',
+                  '72b60124a40601252d06012676060120a060f8d402000220a060f8d602000320a06'
+                  '041f20027e8590420a060fee700bf')
+TRACE_PROBE[0x2396] = dict(
+    TRACE_PROBE[0x2394], kind='cold-boot-fetch',
+    stub_original=bytes.fromhex(COLD_BOOT_2396[0]),
+    stub=bytes.fromhex(COLD_BOOT_2396[1]),
+    patches={0x010019b0: TRACE_PROBE[0x2383]['patches'][0x010019b0],
+             0x01000200: ('01340a2c', '00bf7047'),
+             0x0100E000: COLD_BOOT_2396})
+
 
 def encode_bl(src, dst):
     """Thumb-2 BL from src to dst, as the four bytes the core will fetch."""
@@ -1402,17 +1421,41 @@ def fault_vector_probe(path, expected, build_id):
                 '20': 'the 2383 fault entry fired: the instrument works',
                 '30': 'the unmapped read completed without faulting',
                 '0 or 8': 'the read neither faulted nor completed'})
-    if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395):
+    if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
+                    0x2396):
         target = {0x2385: '0x100e000', 0x2386: '0x1000200',
                   0x2387: '0x1000600', 0x2388: '0x1001200',
                   0x2389: '0x1001000', 0x2390: '0x10018ec',
                   0x2391: '0x1001a00', 0x2393: '0x100ea00',
-                  0x2394: '0x100e000', 0x2395: '0x100ea00'}[build_id]
+                  0x2394: '0x100e000', 0x2395: '0x100ea00',
+                  0x2396: '0x100e000'}[build_id]
         patch['cold_boot'] = dict(
             target=target, marker_value=target, marker_field='input_va',
             counter_field='groups', counter_seed=8, counter_meanings={
                 'present': 'the core fetched this block at reset and executed it',
                 'absent': 'the first fetch stalls exactly like every other cold one'})
+        if build_id == 0x2396:
+            # Not a landing: a ladder. Marker N is written before read N, so the
+            # highest marker in input_va names the read that stopped the core.
+            patch['cold_boot'] = dict(
+                target='0x100e000', marker_field='input_va', marker_value='0x1..0x4',
+                counter_field='groups', counter_seed=8,
+                ladder=[dict(marker='0x1', read_va='0x04000200',
+                             section='shared, RW coherent',
+                             meaning='reached this read; it is the one that stalled'),
+                        dict(marker='0x2', read_va='0x02000200',
+                             section='stack, RW non-executable',
+                             meaning='the shared read returned; this one stalled'),
+                        dict(marker='0x3', read_va='0x01001200',
+                             section='code, R-X',
+                             meaning='the stack read returned; this one stalled'),
+                        dict(marker='0x4', read_va=None, section='none',
+                             meaning='all three bit-9 reads returned')],
+                counter_meanings={
+                    '0x1': 'stopped in the shared section: the bit-9 rule is global',
+                    '0x2': 'shared returned, the stack stalled',
+                    '0x3': 'shared and stack returned, only the code section stalled',
+                    '0x4': 'all three returned: the bit-9 rule does not reproduce here'})
         if build_id in (0x2391, 0x2393, 0x2395):
             # Three landings instrumented at once, so the marker names not just
             # whether the vector was used but which of the three rules applied.
@@ -1540,7 +1583,8 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
 # two drifted apart once already (2388 shipped with the property, 2389 with
 # neither), and a build that declares a leaf_probe without the property fails
 # closed at decode time, which is the right failure but a wasted trial.
-LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395)
+LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
+                    0x2396)
 
 
 def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False):
@@ -1596,7 +1640,7 @@ def build(a):
     #2393 is the vendor-faithful repeat of 2391's 512-byte-aligned target:
     # leaf AttrIdx 0/5, vendor MEMATTR, no nG, read-only code. The entry and
     # its fetch target are the only other things that move.
-    if a.build_id in (0x2393, 0x2394, 0x2395):
+    if a.build_id in (0x2393, 0x2394, 0x2395, 0x2396):
         if not (a.trace_probe and a.vendor_leaves and a.relocate_code and a.mcu_control == '2'):
             raise ValueError('build%x requires --trace-probe --vendor-leaves --relocate-code --mcu-control 2' % a.build_id)
         if a.uncached_code != (a.build_id == 0x2395):
@@ -1814,7 +1858,8 @@ def build(a):
                 for name in ('tools/matisse-csf-fault-entry.S',
                              'tools/matisse-csf-fault-control.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
-            if a.build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395):
+            if a.build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
+                             0x2396):
                 for name in ('tools/matisse-csf-fault-entry.S',
                              'tools/matisse-csf-coldboot.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
@@ -1857,7 +1902,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
