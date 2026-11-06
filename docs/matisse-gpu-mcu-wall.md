@@ -1421,6 +1421,11 @@ access this port has ever made, fetch and data alike:
 
 > an MCU access hangs iff bit 9 of the address is set.
 
+**Correction (2396, section 42):** this holds for the code section, which is
+where all twenty-one points below were taken. A bit-9 read in the shared and
+stack sections returns. Read the table as evidence about R-X pages, not about
+addresses in general.
+
 | addr | bit 9 | offset | kind | observed | build |
 |---|---|---|---|---|---|
 | `0x01000000` | 0 | `0x000` | read | ok | 2373 |
@@ -1521,3 +1526,49 @@ the low field). Nine attribute experiments, all null.
 
 Order matters: (1) is one ladder in one build, (2) needs the arena aligned to
 2 MB and is the more expensive change.
+
+## 42. 2396 ran: bit 9 only bites inside the executable section
+
+The ladder wrote marker 1, read `0x04000200` in the shared section, wrote marker
+2, read `0x02000200` in the stack, wrote marker 3, read `0x01001200` in the code
+section and stopped there. `input_va = 3`, so the first two reads returned.
+
+| field | value |
+|---|---|
+| image | `e05405f9...c6ae`, 26,714,112 B |
+| kernel | `82882120...a9e7`, `SWEET_BUILD_ID 0x2396` |
+| entry / encoding | `0x0100E001`, 2394's vendor leaves, `0x...4c3` |
+| `input_va` | **3** - marker 3 was written, so reads 1 and 2 completed |
+| `groups` / `cleanup_error` | 8 / -53 |
+| `as_fault` / `mmu_raw` | 0 / 0 |
+| fastboot | 83.38 s, `boot_a` restored to `2931647a...86b1` |
+
+**Section 40 is too wide and this corrects it.** The uniform rule "an access
+hangs iff bit 9 is set" was fitted to twenty-one points that all happened to
+live in the code section. 2396 puts a bit-9 read in two other sections and both
+complete:
+
+| read | section | bit 9 | result |
+|---|---|---|---|
+| `0x04000200` | shared, RW coherent | 1 | **returned** |
+| `0x02000200` | stack, RW non-executable | 1 | **returned** |
+| `0x01001200` | code, R-X | 1 | stalled |
+
+So the property belongs to the executable section, not to the address. Everything
+section 40 says about the *code* section stands - the entry targets, the literal
+read at `0x01001BC4`, the `as_fault = 0` signature - but the law is narrower:
+bit 9 inside a page the MCU can execute.
+
+**What that leaves.** Between the stack leaf and the code leaf the differences
+are now only `AP[2]` and `XN`. `AP[2]` was varied in 2378 - the code pages were
+mapped writable and the firmware still stopped at the same literal read - so XN
+is the only leaf field this port has never moved. 2397 answers it: same ladder,
+same entry, same everything, with the executable section mapped non-executable
+and the read at `0x01001200` as the answer. If it returns, XN is the switch and
+the reason lives in the fetch/data split inside an executable page; if it still
+stalls, XN is exonerated and the next instrument is the level-2 block.
+
+One confound is recorded, not hidden: the three probes differ in physical page
+as well as in section, because each section has its own arena offset. 2382 moved
+the code section by 1.2 MB without moving the wall, which argues the PA is not
+the variable, but it is an argument, not a measurement.

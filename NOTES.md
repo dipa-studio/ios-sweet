@@ -1,36 +1,37 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-07 00:36: 2395 RAN - CACHEABILITY IS NOT THE LEVER <<<
+## >>> ACTIVE 2026-11-07 00:45: 2396 RAN - BIT 9 ONLY BITES IN AN EXECUTABLE PAGE <<<
 
-**RESULT: no landing, `cleanup_error = -53`, and the leaf read back exactly as
-asked (`0x30000000401a44d7`, AttrIndx 5, SH clear).**
+**RESULT: `input_va = 3`.** The ladder wrote marker 1, read `0x04000200` in the
+shared section, wrote marker 2, read `0x02000200` in the stack, wrote marker 3,
+read `0x01001200` in the code section and stopped. The first two reads returned.
 
 ```
-image  e9652ef8...760e  26,714,112 B  kernel ff844738 (SWEET_BUILD_ID 0x2395)
-part.  139e3fa6...6ac6 written and read back, fastboot 82.73 s
+image  e05405f9...c6ae  26,714,112 B  kernel 82882120 (SWEET_BUILD_ID 0x2396)
+part.  c9aa7477...3851 written and read back, fastboot 83.38 s
 boot_a restored 2931647a...86b1
 ```
 
-The container is 2393's byte for byte; only the code section's leaf moved from
-cached to non-cacheable. Same no-landing. So the stall is **below the cache**.
+| read | section | bit 9 | result |
+|---|---|---|---|
+| `0x04000200` | shared, RW coherent | 1 | returned |
+| `0x02000200` | stack, RW non-executable | 1 | returned |
+| `0x01001200` | code, R-X | 1 | stalled |
 
-**The wall is one bit, and it is not an attribute.** An MCU access hangs iff
-bit 9 of the address is set - 21 observations, fetch and data reads alike
-(`docs/matisse-gpu-mcu-wall.md` section 40). `as_fault` is 0 on both sides, so
-the walk succeeds and the transaction stops downstream; every leaf is 4 KiB
-aligned so `PA bit 9 == VA bit 9` always, which is why no mapping change and no
-relocation ever moved it.
+**This corrects section 40.** The uniform "bit 9 anywhere" law was fitted to 21
+points that all sat in the code section. It is narrower: bit 9 inside a page the
+MCU can execute. Everything section 40 says about the code section still holds -
+the entry targets, the literal read at `0x01001BC4`, the `as_fault = 0`
+signature - but the address itself was never the variable.
 
-**C is answered without a new flight.** 2376's unpatched firmware stops at
-`0x010019dc  ldr r0,[pc,#0x1e4]` -> `0x01001BC4`, bit 9 = 1, after getting
-through a successful `bl 0x01003126`. The next two literals of that helper are
-bit 9 = 1 as well.
+**What is left: XN.** Stack leaf and code leaf now differ only in `AP[2]` and
+`XN`, and 2378 already cleared `AP[2]` on the code pages without moving the
+firmware's stop. XN is the one leaf field this port has never varied.
 
-**Next (section 41):** every bit-9 data point so far lives in the code section.
-2396 is one ladder in one boot - read `0x04000200` (shared), `0x02000200`
-(stack), `0x01001200` (code) - to decide whether bit 9 is global or is a
-property of an executable page. If the stack returns and the code hangs, XN is
-the only leaf field never varied.
+**2397:** the same ladder, the same entry, the same encoding, with the code
+section mapped non-executable and `0x01001200` as the read that answers it.
+Returns -> XN is the switch. Stalls -> XN is exonerated and the next instrument
+is a 2 MB level-2 block that bypasses the level-3 walk.
 
 ## >>> PREVIOUS 2026-11-06 23:59: 2393 RAN - VENDOR PAGE ATTRS, SAME 512 WALL <<<
 
