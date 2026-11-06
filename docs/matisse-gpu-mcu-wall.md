@@ -258,3 +258,55 @@ Same loop, five probes, one per section, each incrementing the counter:
 was never the subject; if all five return, the wall is specific to the code region
 and `MEMATTR` is the remaining difference. Either answer removes a whole line of
 work, which is what 2371-2374 could not do.
+
+## 12. 2375: data reads work, and the hang is not a permission fault
+
+Five probes, one address per section, in the order code (control), stack,
+read-only data, heap, shared, each followed by its own counter increment. Image
+`54d732cd...`, `boot_a` verified back to `2931647a...86b1`. `groups = 11`:
+
+| probe | section | flags | result |
+|---|---|---|---|
+| 0x01001900 | code | R-X cached | returned |
+| 0x02000000 | stack | RW- cached | returned, never touched before |
+| 0x02800000 | read-only data | R-- cached | returned, never touched before |
+| 0x03000000 | heap | RW- **protected** | stopped the core |
+| 0x04000000 | shared | RW- coherent | never reached |
+
+Two things fall out of this at once.
+
+**The data path is fine.** The stack and read-only pages had never been fetched or
+read by this core and both returned, so the "every data access that leaves the GPU
+hangs" reading of 2374 is dead. Only the RX page hangs.
+
+**The heap probe proves the difference between a fault and a hang.** 2375 ended
+with `error = -54` (FAULT), `mmu_raw = 1`, `as_fault = 0x7cd002c2`. 2373 and 2374
+ended with `error = -53` (TIMEOUT) and `mmu_raw = 0`. The 0x03000000 sections are
+`CSF_FIRMWARE_ENTRY_PROTECTED` and `sweet_csf_memory.c` skips protected sections,
+so that address is unmapped and the MMU faults immediately. An unmapped read
+faults; the RX read does not fault, it never completes. Two mechanisms that the
+earlier reports could not tell apart, now separable by `error` and `mmu_raw`.
+
+**Which narrows the wall to one property.** Between 0x01000200 (hangs) and
+0x02000000 (returns) the leaves differ only as the section flags dictate: the code
+page is read-only (`AP[2]=1`) and executable (`XN=0`); the stack page is read-write
+and `XN`. Since a permission violation faults, and the RX read does not fault, the
+difference is not permission. It is that a read of an RX page only completes while
+its line is already resident - exactly what 2371 measured, and 2373/2374 could not
+change by touching shareability.
+
+## 13. 2376: stop probing, boot the firmware
+
+Every trial from 2363 to 2375 replaced the reset vector, so the probe reads code as
+data - an access pattern the vendor firmware never performs. Whether this GPU
+supports it is a property of the hardware, not of our driver, and nothing in the
+OEM tree asks it.
+
+The driver now has the explicit halt/start state machine, the section-ABI share
+bits and the measured-good `MCU_CONTROL` value. What has not been asked since 2358
+removed the stack is the only question that matters: **does the unpatched firmware
+boot?** 2376 therefore carries no trace probe and no entry patch - it runs the
+normal power-on path and reads `firmware_ready`, `version` and the interface
+handshake. A firmware that reports ready makes the RX read property a curiosity; a
+firmware that does not boot with every other variable now measured is worth far
+more than a sixth attribute guess.

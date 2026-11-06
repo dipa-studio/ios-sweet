@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2374 KILLED SHAREABILITY - EVERY DATA ACCESS THAT LEAVES THE GPU HANGS <<<
+## >>> ACTIVE 2026-11-06:2375 - DATA READS WORK; ONLY UNFETCHED RX LINES HANG, AND THEY HANG WITHOUT FAULTING <<<
 
 READ THIS FIRST. Trials 2357-2370 all ran. Until this entry their results existed
 only as comments above the per-build `TRACE_PROBE` table in
@@ -160,6 +160,47 @@ GPU data path itself (the GMPU the MT6983 device tree describes with
 `gmpu_table_size = 0x400000`, or the memory attributes the data path uses).
 If 0x02000000 reads, the wall really is specific to the code region and the
 remaining attribute difference is the memattr index.
+
+**2375: the wall is the code section after all - and it is not permission.** Five
+probes, one per section, each with its own counter increment. Image `54d732cd...`,
+`boot_a` back to `2931647a...86b1`. Result `groups = 11`, i.e. three returned:
+
+| probe | section | result |
+|---|---|---|
+| 0x01001900 | code | returned |
+| 0x02000000 | stack | **returned, never touched before** |
+| 0x02800000 | read-only data | **returned, never touched before** |
+| 0x03000000 | heap | stopped the core |
+| 0x04000000 | shared | never reached |
+
+The stack and the read-only data had never been read or fetched by this core, and
+both returned. So data reads to ordinary sections work; the earlier idea that the
+whole data path is dead was wrong.
+
+**The heap probe was not a hang, and that matters.** 2375 ended with
+`error = -54` (FAULT), `mmu_raw = 1`, `as_fault = 0x7cd002c2`, while 2373 and 2374
+ended with `error = -53` (TIMEOUT) and `mmu_raw = 0`. The 0x03000000 sections carry
+`CSF_FIRMWARE_ENTRY_PROTECTED`, and `sweet_csf_memory.c` skips protected sections -
+so that address is simply unmapped, and an unmapped read **faults immediately**.
+A mapped-but-unreadable read **hangs without faulting**. Two mechanisms, previously
+conflated; now separable in the report.
+
+**What that leaves is narrower than before and stranger.** 0x01000200 is mapped, is
+permitted (no fault), and never completes; 0x02000000 is mapped, permitted, never
+touched, and completes. The only differences between those two leaves are the ones
+the section flags produce: the code page is read-only (AP[2]=1) and executable
+(XN=0), the stack page is read-write and XN. Permission cannot be the cause, or the
+read would fault like the heap did. So an RX page can be read as data only while
+its line is already in the GPU - which is what 2371 measured and 2373/2374
+reproduced.
+
+**Before another attribute guess: does the real firmware boot?** Every trial from
+2363 to 2375 replaced the reset vector with our own loop, so the probe reads code
+as data - something the vendor firmware never does. With the state machine, the
+corrected share bits and MCU_CONTROL=2 now in place, the question "does the driver's
+power-on sequence work" has not actually been asked since 2358 fixed the stack.
+2376 should boot the firmware unpatched and read `firmware_ready`, `version` and
+the interface handshake, with no trace probe at all.
 
 **Driver, this round:** `mali_csf_boot.c` drives the MCU through an explicit state
 machine instead of the bare `wr(MCU_CONTROL, 2)`: halt (write 0, poll
