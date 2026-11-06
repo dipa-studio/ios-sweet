@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2376 - THE UNPATCHED FIRMWARE RUNS, DOES NOT FAULT, AND NEVER REACHES READY <<<
+## >>> ACTIVE 2026-11-06:2377 - THE STACK PAGE TAKES WRITES; THE FIRMWARE DIES ON A LITERAL IN THE UNREADABLE BLOCK <<<
 
 READ THIS FIRST. Trials 2357-2370 all ran. Until this entry their results existed
 only as comments above the per-build `TRACE_PROBE` table in
@@ -140,8 +140,9 @@ section `SH=11`. Fixed, rebuilt, same map, one variable: image
 **`groups = 10` again - exactly 2373**. Two probes, same two, same hang at
 0x01000200. So shareability is not the wall.
 
-**What that leaves.** Put 2374 next to 2358 and the shape changes: 2358 found the
-PSP at 0x0203f000 cannot be written, and 2374 shows a data read at 0x01000200
+**What that leaves.** (2377 later retracted the 2358 half of this - the page does take
+writes; see the ACTIVE section.) Put 2374 next to 2358: 2358 believed the
+PSP at 0x0203f000 could not be written, and 2374 shows a data read at 0x01000200
 cannot be completed, while instruction fetch to the same DRAM at 0x010018ec works
 millions of times per second. Every data access that has to leave the GPU hangs;
 every instruction fetch does not. The addresses that read are exactly the ones
@@ -259,6 +260,46 @@ firmware itself executes on its way to `main` - one patched word deep inside the
 init path that writes a marker and parks, leaving the entry vector, the section
 table and the page table alone. Walking that trap forward a few words at a time
 turns "it does not reach ready" into a PC.
+
+**2377: the stack page takes writes, so 2358's inference was wrong.** Two pages, one
+pattern, DSB in between, read back and restored, with the counter stepped after each
+stage so it names where execution stopped. Image `c63f4c12...`, `boot_a` back to
+`2931647a...86b1`, `groups = 11`:
+
+| probe | page | result |
+|---|---|---|
+| A | 0x02000000 | write landed and read back |
+| B | 0x0203f000 | write landed and read back |
+
+`groups = 11` is the "both pages held a write" value; 9 would have meant B's read
+stalled and 10 its store. 2358 never tested a store - it ran a stub with a PSP stack,
+saw the ladder die, and *inferred* the page was not writable. The page is writable.
+The stack was not why 2376 failed.
+
+**2376 explained without another boot: the firmware reads a literal in the block
+2371 proved unreadable.** Disassemble the reset handler at 0x010018ec and its three
+cache helpers at 0x010019dc, 0x010019ee and 0x010019f2 load literals from
+**0x01001bc4..0x01001bd0**. Those three instruction addresses sit in block
+0x01001800..0x010019ff; the literals sit in block **0x01001a00..0x01001bff** - the
+exact block 2370, 2371 and 2373 measured as stopping the core. Everything before
+0x010019dc uses literals at 0x0100198a..0x010019ac, inside the executing block, which
+is why the core gets that far.
+
+So the firmware runs, reaches 0x010019dc, issues `ldr r0,[pc,#0x1e4]`, and hangs on a
+data read of an RX page whose line is not resident - no fault, exactly as 2376
+reported. It also re-reads 2359-2362: that ladder kept dying at rung 2 (0x010019e2)
+inside this same cache helper, and the experiments there blamed the CCR read; the
+stall was always this literal.
+
+**Next: 2378 must make that read complete, and there is now exactly one leaf
+difference to test.** 2375 proves reads of RW pages complete; 2373/2374 prove reads
+of RX pages hang unless resident; 2377 proves writes to RW pages complete. Between
+the code leaf and the stack leaf the only differences are `AP[2]=1` (read-only) and
+`XN=0` (executable). 2378 boots the unpatched firmware with `AP[2]` cleared for
+sections the firmware declares read-only, one variable, and reads `version`,
+`features` and `firmware_ready`. If it reaches ready, the wall was the read-only
+attribute; if it still stops, XN or the cache mode is next and the ladder is
+unnecessary - 0x010019dc is already the known stop address.
 
 **Driver, this round:** `mali_csf_boot.c` drives the MCU through an explicit state
 machine instead of the bare `wr(MCU_CONTROL, 2)`: halt (write 0, poll

@@ -355,3 +355,65 @@ where the firmware was.
 Walking that trap forward a few words at a time converts "it does not reach ready"
 into a PC, which is the first thing this port has needed since 2358 and the first
 thing the probe loop could never provide.
+
+## 17. 2377: the page takes writes
+
+Two pages in the RW section, one pattern, DSB after each store, read back and
+restored. The counter steps after each stage so it names the stage that stopped:
+
+```
+A  0x02000000  write, dsb, read back
+B  0x0203f000  read, write, dsb, read back
+```
+
+Image `c63f4c12...`, `boot_a` verified back to `2931647a...86b1`, `groups = 11` -
+the value reserved for "both pages held a write". 9 would have meant B stalled on
+its read, 10 on its store, 24/26 would have meant a page returned the wrong value.
+
+So **2358's conclusion was an inference, not a measurement**, and it was wrong.
+2358 ran a stub that pushed to a PSP stack, saw the ladder die, and reasoned that a
+stack in a hole would explain it. Removing the stack made the ladder advance, which
+confirmed the reasoning as a story but never tested a store. The store lands.
+
+## 18. What actually stops the firmware - and it is the wall we already measured
+
+Disassembling the reset handler at 0x010018ec and following its literal loads:
+
+| instruction | literal | literal block | same block as the code? |
+|---|---|---|---|
+| 0x010018ee .. 0x01001964 | 0x0100198a .. 0x010019ac | 0x01001800 | yes |
+| **0x010019dc** | **0x01001bc4** | **0x01001a00** | **no** |
+| **0x010019ee** | **0x01001bca** | **0x01001a00** | **no** |
+| **0x010019f2** | **0x01001bce** | **0x01001a00** | **no** |
+
+The first ten literal loads are inside the 512-byte block the core is executing
+from, which is why execution gets that far. The three in the cache helper load from
+**0x01001a00** - the block 2370, 2371 and 2373 each measured as stopping the core.
+
+That is 2376, exactly: the firmware runs, reaches 0x010019dc, issues
+`ldr r0, [pc, #0x1e4]`, and hangs on a data read of an RX page whose line is not
+resident. A store or load that never completes raises no fault, so the report shows
+`mcu_status = 1`, `mmu_raw = 0` and nothing else.
+
+It also re-reads 2359-2362. That ladder kept dying at rung 2, 0x010019e2, inside
+this same cache helper; the experiments there nop'd ICIALLU and the CCR store and
+blamed the CCR read, because the ladder could not see a stall one instruction
+earlier. The stall was always this literal load.
+
+## 19. 2378: the one leaf field left
+
+The measured facts now line up without a gap:
+
+- reads of RW pages complete (2375), writes to RW pages complete (2377);
+- reads of RX pages complete only while the line is resident (2371, 2373, 2374);
+- the firmware's stop address is a read of an RX page whose line is not resident.
+
+Between the code leaf and the stack leaf the only two differences are `AP[2] = 1`
+(read-only) and `XN = 0` (executable). 2378 boots the unpatched container with
+`AP[2]` cleared on the sections the firmware declares read-only - one variable, no
+probe, `version` / `features` / `firmware_ready` as the answer.
+
+- reaches ready -> the read-only attribute was the wall, and the driver change is
+  the fix;
+- still stops at the same place -> `XN` or the cache mode is next, and the search is
+  cheap because 0x010019dc is already the address.
