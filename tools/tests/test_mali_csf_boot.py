@@ -37,7 +37,7 @@ static uint32_t rd(void *p,uint64_t a) {
   m->platform_reads++;return (uint32_t)a+(m->enabled?1:0);
  }
  if(a==0x1c001f3c||a==0x1c001f40)return m->unpowered?2:6;
- if(a==0x90010ffc){assert(!m->resets && m->as_updates==2 && m->control==(m->enabled?(m->expected_control?m->expected_control:3):0));m->marker_reads++;return m->enabled?0x53545542:0;}
+ if(a==0x90010ffc){assert(!m->resets && m->as_updates==2 && m->control==(m->enabled?(m->expected_control?m->expected_control:2):0));m->marker_reads++;return m->enabled?0x53545542:0;}
  if(a==0x90006000){assert(!m->resets && m->as_updates==2);return 0x12345678;}
  if(a>=0x90010000 && a<0x90010020) {
   assert(m->as_updates==2);
@@ -120,7 +120,7 @@ static void wr(void*p,uint64_t a,uint32_t v) {
    if(!m->disable_fail)m->mcu=0;return;
   }
   assert(m->halted && !m->started);
-  assert(v==(m->expected_control?m->expected_control:3));
+  assert(v==(m->expected_control?m->expected_control:2));
   assert(m->l2 && m->as_updates==2 && m->transcfg==(m->vendor_ina0?0x42000006:0x420001c6));
   assert((m->gpu_mask&0x103)==0x103 && m->job_mask==UINT32_MAX && (m->mmu_mask&0xff)==0xff);
   m->started=1;m->enabled++;m->mcu=1;
@@ -162,10 +162,10 @@ int main(void) {
  assert(r.sample_flags==15 && r.version_before==r.version && !r.disable_error && !r.disable_status);
  assert(r.transcfg_lo==0x420001c6 && r.transtab_lo==0x90000000 && !r.transtab_hi);
  /*2372: one measured halt before the start, and the start word recorded. */
- assert(r.platform_reserved==0x303 && m.halt_writes==1 && m.started==1);
- c=cfg();c.mcu_control_value=2;m=model();m.expected_control=2;
+ assert(r.platform_reserved==0x202 && m.halt_writes==1 && m.started==1);
+ c=cfg();c.mcu_control_value=3;m=model();m.expected_control=3;
  assert(!run(&m,&c,&r));clean(&m,&r);
- assert(r.platform_reserved==0x202 && m.halt_writes==1);
+ assert(r.platform_reserved==0x303 && m.halt_writes==1);
  c=cfg();c.mcu_control_value=1;m=model();assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
  c=cfg();m=model();m.halt_fail=1;
  assert(run(&m,&c,&r)==-52 && r.stage==8 && !m.started && m.halt_writes==1);
@@ -206,8 +206,8 @@ int main(void) {
  }
  m=model();c.vendor_cached_memattr=2;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
  c=cfg();c.platform_snapshot=1;m=model();assert(!run(&m,&c,&r));clean(&m,&r);
- assert(r.platform_sample_flags==3 && r.platform_reserved==0x303 && m.platform_reads==16);
- assert(r.platform_before.mcu_control==0 && r.platform_after.mcu_control==3);
+ assert(r.platform_sample_flags==3 && r.platform_reserved==0x202 && m.platform_reads==16);
+ assert(r.platform_before.mcu_control==0 && r.platform_after.mcu_control==2);
  assert(!r.platform_before.job_stat && r.platform_after.job_stat==0x80000000);
  assert(r.platform_before.mfg_pll_con1==0x13fa000c && r.platform_after.mfg_pll_con1==0x13fa000d);
  assert(r.platform_before.mfg_power3==0x1c001ec4 && r.platform_after.mfg_power3==0x1c001ec5);

@@ -16,12 +16,13 @@ static uint8_t arena[2u<<20] __attribute__((aligned(4096)));
 extern const uint8_t sweet_csf_blob_start[],sweet_csf_blob_end[];
 struct sweet_csf_boot_report shim_csf_report;
 _Static_assert(sizeof(struct sweet_csf_boot_report)==696, "CSF2333 platform path ABI");
-/* Value written to MCU_CONTROL to start the MCU. 3 is ENABLE|AUTO, the form
- * the vendor driver uses; 2 reproduces every build up to2371, which set AUTO
- * alone. The image builder sets this from --mcu-control so a trial changes one
- * number. */
+/* Value written to MCU_CONTROL to start the MCU. 2 is AUTO alone and is what
+ * every build up to2371 used; 3 is the vendor driver's ENABLE|AUTO. 2372 measured
+ * 3 on this SoC: the write reads back, but MCU_STATUS stays0 for the whole
+ * budget and the firmware never runs, so AUTO alone is the start value here.
+ * The halt step in front of it is unaffected. */
 #ifndef SWEET_CSF_MCU_CONTROL
-#define SWEET_CSF_MCU_CONTROL 3
+#define SWEET_CSF_MCU_CONTROL 2
 #endif
 _Static_assert(SWEET_CSF_MCU_CONTROL==2 || SWEET_CSF_MCU_CONTROL==3,
                "MCU_CONTROL must be AUTO alone or ENABLE|AUTO");

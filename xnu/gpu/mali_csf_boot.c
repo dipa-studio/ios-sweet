@@ -289,13 +289,14 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
         if(rc) {r->error=SWEET_CSF_BOOT_STATE;goto cleanup;}
     }
     r->stage=SWEET_CSF_BOOT_MCU;
-    /* Vendor kbase_csf_firmware_enable_mcu writes ENABLE|AUTO(3). Every build
-     * up to2371 wrote AUTO alone(2); keeping that value available behind a
-     * config word means a trial moves exactly one number. The written and
+    /* Every build up to2371 wrote AUTO alone(2). The vendor driver writes
+     * ENABLE|AUTO(3), but2372 measured3 on this SoC and MCU_STATUS stayed0 for
+     * the whole budget, so2 is the default here and3 stays reachable through
+     * the config word for a single-variable trial. The written and
      * immediately read-back bytes go to platform_reserved so the696-byte
      * report ABI stays unchanged. path_reserved keeps its2335 checkpoint
      * meaning; do not reuse it here. */
-    uint32_t control=c->mcu_control_value?c->mcu_control_value:3;
+    uint32_t control=c->mcu_control_value?c->mcu_control_value:2;
     wr(io,c->gpu+0x700,control);
     r->platform_reserved=(control<<8)|(rd(io,c->gpu+0x700)&0xff);
     uint64_t begin=io->ticks(io->context);

@@ -875,6 +875,22 @@ TRACE_PROBE = {
                               '0124240601239b069c601a6901263602206804f5807401321a61013ef8d1fee7')},
         literals={},
     ),
+    # 2372 ran the same map with the vendor ENABLE|AUTO start value(3) and the MCU
+    # never left MCU_STATUS0, so the map itself was never executed and the result
+    # could not say anything about reads. 2373 repeats the map unchanged with the
+    # measured-good AUTO-alone value(2). The container bytes are identical to2372;
+    # only the shim's start word differs, which the container cannot show.
+    0x2373: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={},
+        patches={0x010018ec: ('72b626484ff00b01016025484ff00701016024484ff4e0210160234880f30988',
+                              '0124240601239b069c601a6901263602206804f5807401321a61013ef8d1fee7')},
+        literals={},
+    ),
 }
 BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the low bytes
 
@@ -1292,7 +1308,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
@@ -1313,10 +1329,10 @@ def main():
     p.add_argument('--dvfs-commit', default='off', metavar='{off,current,<oppidx>}',
                    help='send CMD_COMMIT after POWER_ON: off (default), current (the '
                         'index GPUEB already reports, no frequency change), or an index')
-    p.add_argument('--mcu-control', default='3', choices=('2', '3'),
-                   help='value written to MCU_CONTROL to start the MCU: 3 is the vendor '
-                        'ENABLE|AUTO form (default), 2 reproduces every build up to2371 '
-                        'that set AUTO alone')
+    p.add_argument('--mcu-control', default='2', choices=('2', '3'),
+                   help='value written to MCU_CONTROL to start the MCU: 2 is AUTO alone and '
+                        'the measured-good value on this SoC (default), 3 is the vendor '
+                        'ENABLE|AUTO form, which 2372 measured as leaving MCU_STATUS at0')
     for key in ('firmware','firmware-sha256','kernel','kernel-sha256','template','template-sha256','adt','adt-sha256',
                 'stock','stock-sha256','frozen','cmdline','ndk','out'):
         p.add_argument('--' + key, required=True)

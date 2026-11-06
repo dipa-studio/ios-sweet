@@ -96,7 +96,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -195,8 +195,18 @@ def decode(data, expected_build=0x2321):
             raise ValueError('invalid CSF report stage')
         if expected_build >= 0x2331:
             flags, reserved = struct.unpack_from('<2I', raw, 304)
-            if flags & ~3 or reserved or flags == 2:
+            #2372 repurposes the2331 reserved word: bits15..8 are the value
+            # written to MCU_CONTROL, bits7..0 the byte read back after it.
+            # Earlier builds always wrote zero there.
+            if flags & ~3 or flags == 2:
                 raise ValueError('invalid CSF platform snapshot flags/reserved word')
+            if expected_build < 0x2372 and reserved:
+                raise ValueError('invalid CSF platform snapshot flags/reserved word')
+            if expected_build >= 0x2372:
+                csf['mcu_control_written'] = reserved >> 8
+                csf['mcu_control_readback'] = reserved & 0xFF
+                csf['mcu_control_roundtrip'] = (csf['mcu_control_written'] != 0 and
+                                                csf['mcu_control_written'] == csf['mcu_control_readback'])
             csf['platform_sample_flags'] = flags
             for name, offset in (('before', 312), ('after', 376)):
                 values = dict(zip(CSF_PLATFORM_KEYS, struct.unpack_from('<16I', raw, offset)))
