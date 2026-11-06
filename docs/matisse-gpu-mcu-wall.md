@@ -310,3 +310,48 @@ normal power-on path and reads `firmware_ready`, `version` and the interface
 handshake. A firmware that reports ready makes the RX read property a curiosity; a
 firmware that does not boot with every other variable now measured is worth far
 more than a sixth attribute guess.
+
+## 14. 2376: the unpatched firmware runs, faults nothing, and never says ready
+
+No trace probe, no entry patch. The embedded container is byte identical to the
+vendor file (`de22d2fc...`), 0x010018ec still holds `72b62648`, and the manifest
+carries neither `trace_probe` nor `fault_vector_probe`. Image `ab6c5fc0...`,
+`boot_a` verified back to `2931647a...86b1`.
+
+| field | value | meaning |
+|---|---|---|
+| `mcu_status` | 1 | the MCU is enabled - halt/start and `MCU_CONTROL=2` work |
+| `mmu_raw` | 0 | no GPU MMU fault |
+| `as_fault` | 0 | none either |
+| `version` | 0 | the firmware never wrote the output page |
+| `features` | 0 | same |
+| `firmware_ready` | 0 | never signalled |
+| `error` | -53 | timeout |
+
+`version` and `features` are `rd(shared)` and `rd(shared+4)`, the words the
+firmware publishes when it is up. Zero says it never got that far. So the firmware
+starts, runs, does not fault, and stops somewhere in its own initialisation.
+
+## 15. What that does to the previous thirteen trials
+
+All of 2363-2375 ran a probe loop we had written into the reset vector. The
+"unfetched RX line" property those trials measured is real, and 2375 showed it is
+not a permission fault - but it belongs to an access pattern the firmware never
+performs. It was never why the port is stuck, and no further page-table work on it
+will boot anything.
+
+What the port actually has, measured rather than assumed, is: power and clocks
+(2338), EB handshake and MCU start (`MCU_CONTROL=2` reaches `MCU_STATUS=1`), a page
+table the MMU walks without faulting, and a firmware that runs and then goes quiet.
+
+## 16. 2377: put a trap on the firmware's own path
+
+The reset vector must stay untouched, so the instrument has to sit on an
+instruction the firmware executes later. Pick a word inside the init path, replace
+it with a marker store and a park, and leave the entry vector and the section table
+alone. The marker's value is the instruction address, so the report says exactly
+where the firmware was.
+
+Walking that trap forward a few words at a time converts "it does not reach ready"
+into a PC, which is the first thing this port has needed since 2358 and the first
+thing the probe loop could never provide.

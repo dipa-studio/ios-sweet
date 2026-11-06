@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2375 - DATA READS WORK; ONLY UNFETCHED RX LINES HANG, AND THEY HANG WITHOUT FAULTING <<<
+## >>> ACTIVE 2026-11-06:2376 - THE UNPATCHED FIRMWARE RUNS, DOES NOT FAULT, AND NEVER REACHES READY <<<
 
 READ THIS FIRST. Trials 2357-2370 all ran. Until this entry their results existed
 only as comments above the per-build `TRACE_PROBE` table in
@@ -201,6 +201,36 @@ corrected share bits and MCU_CONTROL=2 now in place, the question "does the driv
 power-on sequence work" has not actually been asked since 2358 fixed the stack.
 2376 should boot the firmware unpatched and read `firmware_ready`, `version` and
 the interface handshake, with no trace probe at all.
+
+**2376 BOOTED THE UNPATCHED FIRMWARE: IT DOES NOT REACH READY.** No trace probe, no
+entry patch - the embedded container is byte identical to the vendor file and
+0x010018ec still holds `72b62648`. Image `ab6c5fc0...`, `boot_a` back to
+`2931647a...86b1`. Result:
+
+- `mcu_status = 1` - the MCU is enabled, so the halt/start state machine and
+  `MCU_CONTROL=2` do work;
+- `mmu_raw = 0`, `as_fault = 0` - no fault at all;
+- `version = 0`, `features = 0`, `firmware_ready = 0`, `error = -53` timeout.
+
+`version` and `features` are `rd(shared)` and `rd(shared+4)` - the words the
+**firmware** writes into the output page once it is up. Zero means it never got
+that far. So the firmware starts, runs, does not fault, and never completes its
+own initialisation.
+
+**What this invalidates.** Everything 2363-2375 concluded was about a probe loop we
+had installed ourselves: the "unfetched RX line" property is real but belongs to an
+access pattern the firmware never performs. It was never the reason the port is
+stuck, and no further attribute work on it will boot anything. The port's actual
+state is now measured rather than assumed for the first time since 2358: power,
+clocks, MCU start and MMU configuration all work, and the firmware dies silently
+somewhere after its reset vector.
+
+**Next: 2377 must find where it stops without replacing the reset vector.** The
+firmware runs, so the useful instrument is a trap placed on an instruction the
+firmware itself executes on its way to `main` - one patched word deep inside the
+init path that writes a marker and parks, leaving the entry vector, the section
+table and the page table alone. Walking that trap forward a few words at a time
+turns "it does not reach ready" into a PC.
 
 **Driver, this round:** `mali_csf_boot.c` drives the MCU through an explicit state
 machine instead of the bare `wr(MCU_CONTROL, 2)`: halt (write 0, poll
