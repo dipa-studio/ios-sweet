@@ -25,6 +25,16 @@ there is no fallback: `0x18EC` is reachable only when the vendor word names it.
 `0x18EC` (runs), `0x1A00` (nothing): the only separating property is the low
 9 bits.
 
+**Vendor audit (2026-11-06 23:40).** The r32p1 driver has no reset-entry or
+512-byte constraint at all: boot is one `MCU_CONTROL=2` write plus a wait on
+`JOB_IRQ.bit31`. But the current image is **not** vendor-faithful in its page
+attributes: AttrIdx 1 / MEMATTR `0x4c4c9f4c` / leaf nG / writable code, versus
+vendor AttrIdx 0 / `0x888d8f88` / no nG / read-only code. 2380 verified the
+vendor values; 2381-2391 never enabled them again. So the 512 rule is demoted
+to "observed under the current attribute encoding". Details:
+`docs/matisse-gpu-vendor-audit.md`; next is 2392 (single variable) then 2393
+(vendor attributes).
+
 Caveat: this is a cross-build fit, not a controlled test. 2392 repeats it at
 `0x0100EA01` inside the known-good `0xE000` page. Details in
 `docs/matisse-gpu-csf-status.md` and `docs/matisse-gpu-mcu-wall.md` section 37.
