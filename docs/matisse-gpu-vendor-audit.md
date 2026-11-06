@@ -259,3 +259,26 @@ shim 的报告门要求 `version != 0`，但 `version` 只在固件写 `GLB_VERS
 - shim AS：`xnu/gpu/mali_csf_boot.c:330-352`
 - shim 叶子：`xnu/gpu/mali_csf_memory.c:157-176`
 - shim MCU：`xnu/gpu/mali_csf_boot.c:399-416`、`shim/csf.c:47-56`
+
+
+---
+
+## 7. 交叉核对：三个参照给出的结论（2026-11-07）
+
+这一轮把三个外部实现与本 shim 逐项对了：
+
+1. **本仓库 `x9` 分支（OPPO Find X9 / MT6993，CSF 真正跑起来）**：
+   叶片编码、`AS_MEMATTR = 0x00084c8d888d8f88`、`TRANSCFG = 0x42000006`、
+   `MCU_CONTROL = 2`、等 `JOB_IRQ bit31`、启动后读 `0x04000000` 的 `version`
+   ——与 shim 同构。差异都在平台层：显式 SMMU bypass、`HOST_POWER` L2 上电、
+   shader 委派。**它的叶片不写 bits 59..62（memory group = 0）。**
+2. **OnePlus `android_kernel_5.10_oneplus_mt6983`**：`mali-r32p1` 与小米版
+   逐字节相同（唯一差异是 `mali_kbase_mem_linux.c` 的一个 shrinker 补丁），
+   CSF/MMU 路径无新信息。
+3. **SMMU 是否相关**：厂商 MT6983 kbase 全树**没有任何 iommu/smmu 代码**，
+   `mt6983.dts` 的 mali 节点也没有 `iommus`，只有 `physical-memory-group-manager`
+   与 `protected-memory-allocator`。**GPU 不在 SMMU 后面**，x9 的 bypass 步骤
+   对本平台不适用。
+4. **memory group 的真实用途**：kbase 里 group id 只是分配提示
+   （`kbase_native_mgm_alloc()` 把 `group_id` 标为 `CSTD_UNUSED`），
+   从不进入叶片。shim 长期写入的 6 没有厂商依据；2398 改为 0 后仍挂。

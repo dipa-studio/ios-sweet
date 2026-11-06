@@ -1,38 +1,37 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-07 00:44: 2397 RAN - XN IS OUT; THE LEVERS ARE SPENT <<<
+## >>> ACTIVE 2026-11-07 01:05: 2398 RAN - GROUP TAG OUT; THE LEAF IS EXHAUSTED <<<
 
-**RESULT: `input_va = 3` again.** 2397's container is 2396's byte for byte; the
-only change was forcing the page at `0x01001000` non-executable. The leaf read
-back `0x30600000401a54c3` (XN set, PA `0x401a5000`) and the read of `0x01001200`
-stalled anyway.
+**RESULT: `input_va = 3`.** 2398's container is 2396's byte for byte; the only
+change was clearing the physical memory group tag (leaf bits 59..62) from 6 to 0.
+The leaves read back `0x401a44c3` / `0x401a54c3` / `0x401b24c3` / `0x401b34c3`,
+tags `[0,0,0,0]`, and the code read stalled anyway.
 
 ```
-image  8a651666...b308  26,714,112 B  kernel 7043c805 (SWEET_BUILD_ID 0x2397)
-leaf   0x01001000 = 0x30600000401a54c3  probe_page_xn = true
-part.  fb6cf621...299c written and read back, fastboot 85.71 s
+image  d953fa3a...ef47  26,714,112 B  kernel aa81f1e1 (SWEET_BUILD_ID 0x2398)
+part.  e56f242d...134b written and read back, fastboot 83.40 s
 boot_a restored 2931647a...86b1
 ```
 
-**Every leaf field has now been varied and none of them moves the wall:**
-AttrIdx/MemAttr (2393), cacheability (2395), AP (2378), SH (2374), nG (2393),
-XN (2397), memory group (always 6).
+The tag was worth a flight because no driver ever writes one: kbase uses the
+group id as an allocation hint only (`kbase_native_mgm_alloc` marks it
+`CSTD_UNUSED`) and the working MT6993 port writes 0. The shim's 6 had no vendor
+grounding.
 
-**Physical address bit 9 dies with it.** The shared read at `0x04000200` sits at
-PA `0x40110200` and the stack read at `0x02000200` at PA `0x40090200`, both bit 9
-set, both returned. And any page-aligned mapping preserves `PA bit9 == VA bit9`,
-so no remap and no granule change - including a 2 MB block - can separate them.
+**The leaf is now exhausted**: AttrIndx/MemAttr (2393), cacheability (2395),
+AP (2378), SH (2374), nG (2393), XN (2397), group tag (2398) - all null.
 
-**The model now has a crack that matters.** Within one page, one leaf and one
-physical page, offset `0x000` reads and `0x200` stalls, in the MCU code window
-only. Yet the vendor prologue calls `0x01001A2A` and its helper reads
-`0x01001BC4`, both bit 9 set, and the GPU boots on Android. Either those paths
-are never taken, or our image differs in something not yet looked at.
+**References checked, no new variable.** x9 (MT6993, CSF running) is structurally
+identical to us - same leaf encoding, MEMATTR, TRANSCFG, MCU_CONTROL=2, JOB
+bit31 wait; its extras are platform-only (SMMU bypass, L2 power, shader
+delegation) and the vendor MT6983 kbase has no iommu code at all. OnePlus's
+MT6983 kernel is byte-identical to Xiaomi's in this path.
 
-**Next is not another build.** Stop varying our own image; read the vendor live
-mapping instead - `AS_TRANSTAB`/`AS_TRANSCFG` and the code-section leaf on a
-booted Android - or re-read `load_fw_image_section()` against
-`mali_csf_memory.c` line by line.
+**Next: 2399 decides which side owns the bit.** Alias VA `0x01001000` onto a
+stack page (PA `0x40091000`, so the read at `0x01001200` lands at PA
+`0x40091200`, bit 9 still set). Returns -> the wall follows the code section's
+physical pages and the firmware allocation can move. Stalls -> it follows the
+virtual range and no mapping change can fix it.
 
 ## >>> PREVIOUS 2026-11-06 23:59: 2393 RAN - VENDOR PAGE ATTRS, SAME 512 WALL <<<
 

@@ -1629,3 +1629,44 @@ boots on Android. So either those paths are never taken on real hardware, or our
 image still differs from the vendor's in something we have not looked at. Every
 lever we can pull inside the shim has now been pulled; the next instrument
 should stop varying our own image and read the vendor's live mapping instead.
+
+## 44. 2398 ran: the memory group tag is not the wall either
+
+2398's container is 2396's byte for byte. One leaf input moved: bits 59..62,
+the physical memory group tag, from 6 to 0. Every build since 2327 had published
+6 there, inherited from the pinned mali_mgm helper; the tag is the last leaf
+input that had never been varied.
+
+| field | value |
+|---|---|
+| image | `d953fa3a...ef47`, 26,714,112 B |
+| kernel | `aa81f1e1...f859`, `SWEET_BUILD_ID 0x2398` |
+| leaves | `0x401a44c3`, `0x401a54c3`, `0x401b24c3`, `0x401b34c3` - tag 0, AttrIndx 0, AF, type 3 |
+| `leaf_group_tags` | `[0, 0, 0, 0]`, `leaf_group_zero = true` |
+| `input_va` | **3** - shared and stack reads returned, the code read did not |
+| `groups` / `cleanup_error` | 8 / -53 |
+| `as_fault` / `mmu_raw` | 0 / 0 |
+| fastboot | 83.40 s, `boot_a` restored to `2931647a...86b1` |
+
+**Why the tag was worth a flight.** The vendor driver never writes a group id
+into a page-table entry: `kbase_native_mgm_alloc()` ignores its `group_id`
+argument (`CSTD_UNUSED`), and no file in the midgard tree shifts anything into
+bits 59..62. The working MT6993 port in this repository's `x9` branch writes 0 as
+well. So the shim's 6 was its own invention, and it was the only leaf field never
+varied.
+
+**Now the leaf is exhausted.** AttrIndx/MemAttr (2393), cacheability (2395),
+AP (2378), SH (2374), nG (2393), XN (2397), memory group (2398) - all null on a
+container that differs from 2396's by nothing.
+
+**What the two surviving data points still say.** Within one 4 KiB page, one
+leaf and one physical page, offset `0x000` reads and `0x200` stalls, in
+`0x01000000`-`0x0100FFFF` only, while the same offset pattern in the stack and
+shared sections returns. Since every page-aligned mapping preserves
+`PA bit 9 == VA bit 9`, the remaining question is not "which bit" but "which
+side of the translation owns it". 2399 can answer that without moving the
+pattern: alias the page at VA `0x01001000` onto a stack page (PA `0x40091000`,
+offset `0x200` = PA `0x40091200`, bit 9 still set). If that read returns, the
+wall follows the code section's physical pages and the firmware allocation can be
+moved; if it still stalls, the wall follows the virtual range and no mapping
+change can ever fix it.
