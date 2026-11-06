@@ -483,6 +483,14 @@ def decode(data, expected_build=0x2321):
             csf['control_counter'] = raw
             csf['control_marker_present'] = csf['input_va'] == 0x01000200
             csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a4000
+            # The MMU is a second, independent instrument for the same event.
+            # 2375 read an unmapped address and the shim saw mmu_raw=1 and a
+            # fault status; if the control's read is refused, those words move
+            # even when the entry program never advances.
+            refused = (csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault'])
+            if refused:
+                csf['control_fault_status'] = csf['as_fault']
+                csf['control_fault_va'] = csf['as_fault_hi'] << 32 | csf['as_fault_lo']
             if not csf['relocation_observed']:
                 outcome = 'not-relocated'
                 verdict = ('the executable probe PA is not the relocated one; this is not the '
@@ -507,6 +515,16 @@ def decode(data, expected_build=0x2321):
                 verdict = ('the read of the unmapped protected section completed, so the reachable '
                            'address space is larger than the built tables and the 2383 counter 9 '
                            'must be re-read before any conclusion')
+            elif raw in (0, 8) and refused:
+                outcome = 'refusal-not-signalled'
+                verdict = ('the MMU refused the read (%s) but the entry program never advanced, so '
+                           'the refusal reached the MCU as a hang rather than as an exception: the '
+                           'exception entry is not an instrument on this machine. The MMU words '
+                           'are - and 2383 read both of them clear, which does exclude a refusal '
+                           'for that fetch' %
+                           ('AS_FAULT %#x at %#x, mmu_raw %#x' %
+                            (csf['control_fault_status'], csf.get('control_fault_va', 0),
+                             csf['mmu_raw'])))
             elif raw in (0, 8):
                 outcome = 'unmapped-read-stalled'
                 verdict = ('the marker is set but the counter still holds its template seed: the '
@@ -529,6 +547,11 @@ def decode(data, expected_build=0x2321):
             csf['relocation_observed'] = relocated
             csf['fault_entry_counter'] = raw
             csf['fault_taken'] = raw == 20
+            csf['fault_instrument_note'] = (
+                '2384 measured that a refused access reaches the MCU as a hang: the control '
+                'program wrote its marker and then stopped without ever entering the fault '
+                'handler. A clear fault counter therefore cannot, on its own, exclude a refusal; '
+                'the load-bearing evidence in this build is as_fault and mmu_raw reading 0.')
             if raw == 20:
                 # shared+12 and shared+20 are repurposed only on this path.
                 csf['fault_stacked_pc'] = csf['output_va']

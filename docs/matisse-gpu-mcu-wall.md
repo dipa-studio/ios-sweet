@@ -814,3 +814,59 @@ The counter now has three meanings and no fourth:
 Image `be2c5cdb...393d`, 26,714,112 B, kernel `44180108` (19 bytes from 2383),
 partition prediction `786879f2...7839`, reproduced to the same sha. Built and
 preflighted offline; `boot_a` untouched at `2931647a...86b1`.
+
+## 30. 2384 ran: the refusal is visible to the MMU and invisible to the MCU
+
+Trial 2026-11-06 21:14, image `be2c5cdb...393d`, fastboot at 81.32 s, `boot_a`
+restored to `2931647a...86b1`.
+
+```
+control_counter                8      the template seed: the entry program stopped
+control_marker_present         true   ...after writing the marker, before writing 30
+positive_control_outcome       refusal-not-signalled
+error / mmu_raw                -54 / 1
+AS_FAULT                       0x7cd002c2
+AS_FAULT_LO / HI               0x3000000 / 0
+relocation_observed            true   (probe PA 0x401a4000)
+```
+
+The counter says the intended control - 20, the fault entry - did not fire. The
+MMU words say why, and they say it in the same encoding 2375 recorded when its
+probe read the same unmapped address:
+
+| trial | access | `error` | `mmu_raw` | `as_fault` | `as_fault_lo` |
+|---|---|---|---|---|---|
+| 2375 | MCU reads 0x03000000 | -54 | 1 | 0x7cd002c2 | 0x03000000 |
+| 2384 | MCU reads 0x03000000 | -54 | 1 | 0x7cd002c2 | 0x03000000 |
+
+So the read was issued, walked and refused, and the refusal was latched against
+the exact address. What did not happen is delivery: the entry program never
+advanced past the `ldr`, and the stub at 0x010019b0 never wrote its 20. An AS
+refusal reaches the MCU as a transaction that never completes, not as a bus error
+that would raise a PreciseBusFault.
+
+There is a second reason the stub could not have fired in this build, and it is
+worth naming before anyone builds on it: the entry program replaces the reset
+handler's prologue, so it runs with SP never loaded. An exception entry has
+nowhere to stack its frame. The 2383 negative therefore never rested on the stub
+being able to run.
+
+**What survives, and on what evidence.** 2383 read `as_fault = 0` and
+`mmu_raw = 0`, and this trial shows those two words are set by a refusal at this
+very AS. The cold fetch was not refused. The 2383 conclusion - a fetch that
+stalls without a fault, tied to the block and not to its PA or its attributes -
+now rests on the MMU words instead of on an exception that could not have been
+taken. The instrument changed; the measurement did not.
+
+**What it corrects.** 2375 was read as "the heap probe faults, the RX read hangs,
+and `-54` vs `-53` separates the two". The `-54`/`-53` split is real, but it is
+the *shim's* observation of `mmu_raw`/`AS_FAULT`, not a statement about what the
+core did. In 2375 the core hung on that read exactly as it hung in 2384.
+
+**What is left.** Every fetch that has been measured completing came from a block
+that was already resident: the reset target 0x010018ec sits inside 0x01001800,
+which the core fetched at reset, and the read of 0x01001900 (2375) came from that
+same warm block. The only cold targets ever tried are the ones that hang. The next
+question is therefore the primitive one: does the MCU ever complete a fetch of a
+block that is not already resident - at reset, where the very first fetch must be
+cold by definition?

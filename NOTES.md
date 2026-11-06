@@ -1,9 +1,45 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2384 BUILT OFFLINE - POSITIVE CONTROL FOR THE FAULT ENTRY <<<
+## >>> ACTIVE 2026-11-06:2384 RAN - THE REFUSAL REACHES THE MMU, NOT THE MCU <<<
 
-**STATUS: IMAGE READY, NOT FLASHED. `boot_a` at baseline `2931647a...86b1`,
-read-only preflight passed.**
+**RESULT: counter 8 with the marker set, `error = -54`, `mmu_raw = 1`,
+`AS_FAULT = 0x7cd002c2` at `0x03000000` - the exact fault status 2375 recorded
+for its unmapped heap read.** The intended positive control (20) did not fire;
+what fired is the other instrument, and it is the better one.
+
+```
+image be2c5cdb...393d  kernel 0x2384  81.32 s to fastboot
+boot_a restored to 2931647a...86b1 (restored_sha256 verified)
+outcome refusal-not-signalled  control_fault_va 0x3000000
+```
+
+Three sentences, each measured:
+
+- **The read was issued and refused at the AS.** `AS_FAULT_LO` holds exactly
+  `0x03000000`, the address the entry program loaded, and `mmu_raw` bit 0 is set.
+  Nothing else in this boot touches that address.
+- **The refusal never reached the core.** The entry program wrote its marker and
+  then stopped: counter 8 (the template seed), no 30, and the 0x010019b0 handler
+  never wrote 20. So an AS fault is a hang at the MCU, not an exception - and a
+  build whose entry program also runs before SP is loaded has nowhere to stack an
+  exception frame anyway.
+- **2383 changes instrument, not conclusion.** 2383 read `as_fault = 0` and
+  `mmu_raw = 0`; this run proves a refusal sets both. So the cold fetch was not
+  refused, and "the fetch stalls without a fault" survives on the MMU words
+  instead of on the stub.
+
+This also corrects 2375: `-54` there is the shim reading `mmu_raw`/`AS_FAULT`, not
+proof that the core took a fault. The MCU hung in that trial too.
+
+**NEXT: 2385 - can the MCU fetch a cold block at all?** Every fetch measured so far
+has been from a block that was already resident: the reset target 0x010018ec sits
+in 0x01001800, and 0x01000200 hangs. Point the reset vector itself at a distant
+cold block (patch the vector word and place `marker / park` at the new target,
+e.g. 0x01010000) and nothing else. Marker present means a cold fetch works at
+boot and the wall is the branch/return path inside a running program; absent means
+the boot fetch is served by something that never runs again.
+
+## >>> PREVIOUS 2026-11-06:2384 BUILT - A POSITIVE CONTROL FOR THE FAULT ENTRY <<<
 
 2383 concluded "no exception was taken" from a stub that had never been seen to
 fire. 2384 makes it fire on purpose: 2383 unchanged, except the 28-byte entry

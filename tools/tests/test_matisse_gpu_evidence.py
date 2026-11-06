@@ -393,6 +393,9 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertEqual(csf['fetch_prime_outcome'], 'no-fault-fetch-incomplete')
         self.assertNotIn('fault_stacked_pc', csf)
         self.assertIn('never completes', csf['instrument_verdict'])
+        # 2384 showed the counter alone cannot exclude a refusal; the note keeps
+        # that dependency visible in 2383's own record.
+        self.assertIn('as_fault and mmu_raw reading 0', csf['fault_instrument_note'])
 
     def test_2383_state_and_provenance_gate_the_counter(self):
         self.assertEqual(self.fault_report(firmware_probe_pa_lo=0x40080000)['csf']['fetch_prime_outcome'],
@@ -434,6 +437,26 @@ class ReportDecodeTests(unittest.TestCase):
                          'unmapped-read-stalled')
         self.assertEqual(self.control_report(groups=7)['csf']['positive_control_outcome'],
                          'unexpected-counter')
+
+    def test_2384_refusal_is_visible_to_the_mmu_not_to_the_mcu(self):
+        # The 2026-11-06 21:14 trial, field for field: counter 8 with the marker
+        # set, error -54, mmu_raw 1, AS_FAULT 0x7cd90382 at 0x03000000. The MMU
+        # answered the read; the entry program still never advanced, so the
+        # refusal reached the core as a hang.
+        csf = self.control_report(groups=8, error=-54, mmu_raw=1, as_fault=0x7cd90382,
+                                  as_fault_lo=0x03000000, as_fault_hi=0)['csf']
+        self.assertEqual(csf['positive_control_outcome'], 'refusal-not-signalled')
+        self.assertEqual(csf['control_fault_va'], 0x03000000)
+        self.assertEqual(csf['control_fault_status'], 0x7cd90382)
+        self.assertIn('hang rather than as an exception', csf['instrument_verdict'])
+        # A fault with a completed or failed-in-another-way counter stays where
+        # it was: the MMU words never overwrite a 20 or a 30.
+        self.assertEqual(self.control_report(groups=20, error=-54, mmu_raw=1,
+                                            as_fault=1)['csf']['positive_control_outcome'],
+                         'instrument-proven')
+        # No MMU evidence and counter 8 is still a plain stall.
+        self.assertEqual(self.control_report(groups=8, mmu_raw=0, as_fault=0)['csf']
+                         ['positive_control_outcome'], 'unmapped-read-stalled')
 
     def test_2384_requires_the_marker_and_the_2383_mapping(self):
         self.assertEqual(self.control_report(input_va=0)['csf']['positive_control_outcome'],
