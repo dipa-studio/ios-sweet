@@ -728,3 +728,57 @@ Reading it:
 Image `27b14944...1f7c`, 26,714,112 B, kernel `0c8d67a7` (18 bytes from 2382),
 partition prediction `e3398237...2858`. Built offline and reproduced to the same
 sha; `boot_a` untouched at `2931647a...86b1`.
+
+## 28. 2383 ran: no fault was taken
+
+Trial 2026-11-06 21:04. Image `27b14944...1f7c`, kernel mark `0x2383`, 153 marks,
+fastboot at 90.82 s, `boot_a` restored to `2931647a...86b1`.
+
+```
+groups / fault_entry_counter   9      -> the handler never ran
+fault_taken                    false
+relocation_observed            true   (probe PA 0x401a4000)
+input_va                       0x1000200   (the marker: the probe reached the call)
+output_va                      0x4002000   (template seed, never written by the stub)
+group_stride                   0xa0        (template seed, never written by the stub)
+stage / error / cleanup        4 / -53 / -53
+mcu_status, mmu_raw, as_fault  1, 0, 0
+```
+
+The two words the stub would have written still hold the template's seeds, which
+is the in-band proof that the exception entry never executed: had a fault been
+taken, `output_va` would hold the stacked PC and `group_stride` the CFSR.
+
+Why that negative is trustworthy, given the instrument is new:
+
+- all five fault vectors are 0x010019b1, checked by the builder on every
+  trace-probe build, so any fault - including a HardFault escalation - reaches
+  the stub;
+- the stub lives at 0x010019b0, inside the block 0x01001800..0x010019ff that
+  this same run executed (the patched entry at 0x010018ec wrote the marker and
+  the counter), so the block was already fetched when the call was made;
+- the marker 0x01000200 is present, so the probe really got to the `bl`.
+
+So the fresh-block call into 0x01000200 stops the MCU **without raising an
+exception**. That is not a translation refusal. A walker that rejected the
+access would raise IACCVIOL/IBUSERR/PRECISERR and the stub would have recorded
+it; instead the instruction never completes and nothing is signalled.
+
+What that leaves: the fetch of a cold 512-byte block stalls in a way that never
+reports. Together with 2373/2375 the picture is now:
+
+- data reads of cold pages in other sections: fine (2375);
+- data read of the second block of the code section: hangs (2373);
+- fetch of that block: hangs, no exception (2379, 2382, 2383);
+- moving the block's PA by 1.2 MB: no change (2382);
+- descriptor, attributes, index, share bits: no change (2378, 2380).
+
+A stall with no fault, tied to the block and not to its PA or attributes, points
+at the MCU-side access path itself (a fill/ready handshake that never returns),
+not at the page tables.
+
+One honest caveat before that conclusion is treated as final: the fault-entry
+stub has never been seen to fire. Its correctness is argued from the vector
+table, the block being warm and the marker being present - all offline-checkable
+facts, but not a measurement. A deliberate fault (2384) is the control that turns
+"the handler did not run" into "the handler cannot run, or would have".

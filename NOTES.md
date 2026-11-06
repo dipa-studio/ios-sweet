@@ -1,46 +1,45 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2383 BUILT OFFLINE - ASK THE FAULT ENTRY <<<
+## >>> ACTIVE 2026-11-06:2383 RAN - NO FAULT WAS TAKEN; THE FETCH JUST STALLS <<<
 
-**STATUS: IMAGE READY, NOT FLASHED. `boot_a` at baseline `2931647a...86b1`,
-read-only preflight passed.**
-
-2382 left exactly one question: when the call into 0x01000200 does not return,
-did the MCU **fault** or did the fetch never complete? Counter 9 covers both,
-because the vendor handler at 0x010019b1 parks and an MCU-side fault does not
-set `AS_FAULT` (which reads 0).
-
-2383 changes one thing on top of 2382: the 40 bytes at 0x010019b0, the address
-the vector table branches to (`0x010019b1`, Thumb bit). The stub
-(`tools/matisse-csf-fault-entry.S`, assembled and byte-compared by a test) reads
-the exception frame from the stack `EXC_RETURN` bit2 selects and writes:
+**RESULT: counter 9, `fault_taken = false`.** The call into 0x01000200 stops the
+MCU without raising any exception. In band: `input_va = 0x01000200` (the marker,
+so the probe reached the `bl`), `output_va = 0x04002000` and
+`group_stride = 0x000000a0` (the template's seeds, never overwritten by the
+stub), `relocation_observed = true`, stage 4 / -53 / `mcu_status 1` / `mmu_raw 0`
+/ `as_fault 0`.
 
 ```
-shared+12 <- stacked PC   (reported as output_va)
-shared+20 <- SCB->CFSR    (reported as group_stride)
-shared+16 <- 20           (reported as groups; never collides with 9/10/11)
+image 27b14944...1f7c  kernel 0x2383  153 marks  fastboot 90.82 s
+boot_a restored to 2931647a...86b1
 ```
 
-Nothing else changes: same relocated code section (PA `0x401a4000`), same 2379
-probe patch at 0x01000200 and 0x010018ec, same `--ro-as-rw`, same
-`MCU_CONTROL=2`. The two containers differ only at 0x2844..0x286b, and a unit
-test enforces that.
+Why the negative holds without a positive control yet:
 
-```
-kernel  0c8d67a7...4753  16,724,248 B, 18 bytes from 2382
-image   27b14944...1f7c  26,714,112 B, rebuilt to the same sha
-part.   e3398237...2858  predicted boot_a contents
-runner  research/matisse/20261031-gpu/shim2383-faultentry-trials-run-once.py
-```
+- every fault vector is 0x010019b1, re-checked by the builder each build, so a
+  HardFault escalation lands on the same stub;
+- the stub sits at 0x010019b0, inside 0x01001800..0x010019ff - the block this
+  run already executed to write the marker, so it was warm when the call was
+  made;
+- the marker is present, so the probe did get to the call.
 
-Reading it:
+So this is not a translation refusal: a walker that rejected the fetch would
+raise IACCVIOL/IBUSERR/PRECISERR and the stub would have recorded PC and CFSR.
+Nothing is signalled at all - the instruction simply never completes.
 
-| counter | meaning |
-|---|---|
-| 20, CFSR != 0 | fault taken; `output_va` is the faulting instruction, CFSR names the class -> the access is refused, not starved |
-| 20, CFSR == 0 | fault taken but escalated; HFSR (0xE000ED2C) was not captured, so a 2384 must record it before any mechanism claim |
-| 9 | the handler never ran -> no fault: the cold fetch really never completes, and the wall is the MCU-side fetch/ready path |
-| 10 / 11 | the call returned -> the fetch works at this target after all |
+Combined with 2373/2375/2378/2380/2382 the block-level picture is: cold *data*
+pages in other sections read fine; the second 512-byte block of the code section
+hangs for both a data read and a fetch; moving that block 1.2 MB in PA changes
+nothing; descriptor bits, AttrIndx, share bits and PA are all ruled out. A stall
+with no exception, tied to the block rather than to its mapping, points at the
+MCU-side access path (fill/ready handshake), not at the page tables.
+
+**NEXT: 2384 - positive control for the fault entry.** The stub has never been
+seen to fire, so "the handler did not run" still rests on an argument rather than
+a measurement. Put a deliberate fault in the 32-byte entry window (marker, then
+`ldr` from the unmapped 0x03000000, then 30, then park) and keep the 2383 fault
+stub. 20 + CFSR means the instrument works and 2383's 9 is final; 30 means the
+unmapped read did not fault; nothing means the entry window never ran.
 
 ## >>> PREVIOUS 2026-11-06:2382 RAN - MOVING THE CODE SECTION'S PA CHANGES NOTHING <<<
 
