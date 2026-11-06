@@ -488,6 +488,9 @@ class ReportDecodeTests(unittest.TestCase):
     # 2395: same page-0 leaf with AttrIndx 5 (bits[4:2]) and no SH bits, which
     # is what SWEET_CSF_UNCACHED_CODE produces for the executable section.
     LEAVES_UNCACHED_CODE = (0x30000000401a4cd7,) + LEAVES[1:]
+    # 2397: page 1 (the one holding the 0x01001200 read target) forced
+    # non-executable, PXN|UXN at bits 54:53, every other leaf untouched.
+    LEAVES_XN_PAGE = (LEAVES[0], LEAVES[1] | (3 << 53)) + LEAVES[2:]
 
     def test_2388_reads_the_live_leaves_out_of_the_arena(self):
         csf = self.cold_report(build=0x2388, input_va=0x01001200,
@@ -576,6 +579,29 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertIsNone(csf['cold_boot_start'])
         self.assertEqual(len(csf['cold_boot_landings']), 3)
         self.assertIn('survives AttrIdx 0/5', csf['instrument_verdict'])
+
+    def test_2397_forces_one_page_non_executable(self):
+        csf = self.cold_report(build=0x2397, input_va=4,
+                               leaf=self.LEAVES_XN_PAGE)['csf']
+        self.assertTrue(csf['probe_page_xn'])
+        self.assertEqual(csf['probe_page_leaf'], self.LEAVES_XN_PAGE[1])
+        self.assertEqual(csf['cold_boot_outcome'], 'xn-is-the-switch')
+        self.assertIn('keyed on the target page being executable', csf['instrument_verdict'])
+
+        csf = self.cold_report(build=0x2397, input_va=3,
+                               leaf=self.LEAVES_XN_PAGE)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'xn-exonerated')
+        self.assertIn('level-3 walk', csf['instrument_verdict'])
+
+        # Without the XN bits the run answers nothing about executability.
+        csf = self.cold_report(build=0x2397, input_va=4, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'xn-not-applied')
+        self.assertFalse(csf['probe_page_xn'])
+
+        # 2396's own reads must not come back as an XN result.
+        csf = self.cold_report(build=0x2397, input_va=2,
+                               leaf=self.LEAVES_XN_PAGE)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'stack-stalls-again')
 
     def test_2395_cacheability_is_the_first_lever(self):
         csf = self.cold_report(build=0x2395, input_va=0x0100EA00,

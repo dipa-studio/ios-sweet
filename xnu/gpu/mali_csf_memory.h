@@ -49,6 +49,19 @@
 #ifndef SWEET_CSF_UNCACHED_CODE
 #define SWEET_CSF_UNCACHED_CODE 0
 #endif
+/* 0 leaves every page on its section's own execute permission. 2397 sets it to
+ * one 4 KiB virtual address and forces only that page non-executable (PXN|UXN,
+ * bits 54:53) whatever the section flags say. 2396 showed that a bit-9 read in
+ * the shared and stack sections returns while the same read in the code section
+ * stalls, so the property belongs to the target page being executable rather
+ * than to the address. The page chosen is 0x01001000: it holds the read target
+ * 0x01001200 and nothing the core executes, while the entry page 0x0100E000
+ * keeps its X permission, so a read that returns names XN as the switch. A data
+ * access does not normally consult XN - that is what makes the experiment worth
+ * running on this part. */
+#ifndef SWEET_CSF_XN_VA
+#define SWEET_CSF_XN_VA 0
+#endif
 /* 0 keeps every build up to2380 byte-identical: each section's arena offset
  * follows the page tables in container order. 1 leaves every other section at
  * exactly that offset but appends the R-X section (VA0x01000000) after the

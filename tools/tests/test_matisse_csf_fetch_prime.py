@@ -153,6 +153,7 @@ class FetchPrimeTests(unittest.TestCase):
         self.assertIn(0x2390, self.builder.LEAF_PROBE_BUILDS)
         self.assertIn(0x2393, self.builder.LEAF_PROBE_BUILDS)
         self.assertIn(0x2394, self.builder.LEAF_PROBE_BUILDS)
+        self.assertIn(0x2397, self.builder.LEAF_PROBE_BUILDS)
         self.assertIn(0x2388, self.builder.LEAF_PROBE_BUILDS)
         source = (ROOT / 'tools/matisse-shim-gpu-image.py').read_text()
         self.assertIn('a.build_id in LEAF_PROBE_BUILDS)', source)
@@ -254,6 +255,22 @@ class FetchPrimeTests(unittest.TestCase):
         for va in (0x04000200, 0x02000200, 0x01001200):
             self.assertEqual((va >> 9) & 1, 1, hex(va))
         self.assertEqual(patch['cold_boot']['target'], '0x100e000')
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2397_keeps_2396_container_and_moves_one_page_permission(self):
+        embedded_2396, patch_2396 = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2396)
+        embedded_2397, patch_2397 = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2397)
+        # The whole point of 2397: nothing in the container moves. XN lives in
+        # the page tables the shim builds, not in the firmware bytes.
+        self.assertEqual(embedded_2396, embedded_2397)
+        self.assertEqual(patch_2397['cold_boot']['xn_page'], '0x1001000')
+        self.assertEqual(patch_2397['cold_boot']['target'], '0x100e000')
+        self.assertEqual([step['read_va'] for step in patch_2397['cold_boot']['ladder']],
+                         ['0x04000200', '0x02000200', '0x01001200', None])
+        self.assertIn('forced non-executable',
+                      patch_2397['cold_boot']['ladder'][2]['section'])
+        self.assertNotIn('xn_page', patch_2396['cold_boot'])
+        self.assertEqual(self.builder.TRACE_PROBE[0x2397]['xn_page'], 0x01001000)
 
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2394_is_the_2385_control_under_vendor_attributes(self):

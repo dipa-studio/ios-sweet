@@ -188,6 +188,12 @@ int sweet_csf_memory_build_group(const uint8_t *fw, size_t bytes, const struct s
 #endif
             if (!(p->flags & 2) && !SWEET_CSF_RO_LEAVES_WRITABLE) desc |= 0x80;
             if (!(p->flags & 4)) desc |= UINT64_C(3) << 53;
+#if SWEET_CSF_XN_VA
+            /* 2397: page-selective XN. The section keeps its own permissions and
+             * only this one 4 KiB page loses X, so the core still fetches from
+             * the entry page while a data read targets a non-executable one. */
+            if (va == (uint64_t)SWEET_CSF_XN_VA) desc |= UINT64_C(3) << 53;
+#endif
             desc |= (uint64_t)memory_group << 59;
             put64(table + ((va >> 12) & 511) * 8, desc);
         }
