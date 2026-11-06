@@ -908,6 +908,24 @@ TRACE_PROBE = {
                               '0124240601239b069c601a6901263602206804f5807401321a61013ef8d1fee7')},
         literals={},
     ),
+    # 2375 stops asking about the code section. 2374 held shareability constant and
+    # changed nothing, so the wall is not a code-section attribute; 2358 could not
+    # write the stack either. This probe reads one address per section in one boot,
+    # each read followed by its own counter increment, so the first hang names the
+    # section instead of the address: code 0x01001900 (known good, control), stack
+    # 0x02000000, read-only 0x02800000, heap 0x03000000, shared 0x04000000.
+    # If the control returns and the stack does not, every 2371-2374 experiment was
+    # measuring the wrong object.
+    0x2375: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={},
+        patches={0x010018ec: ('72b626484ff00b01016025484ff00701016024484ff4e0210160234880f309884ff0020080f31488bff36f8f1f48046804f08004204601f000fc00f0', '0124240601239b069c601a6904f5c854206801321a6101246406206801321a6104f50004206801321a6103242406206801321a61186801321a61fee7')},
+        literals={},
+    ),
 }
 BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the low bytes
 
@@ -1325,7 +1343,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
