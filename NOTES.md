@@ -1,38 +1,36 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-07 00:25: A AND C ARE ONE RULE - BIT 9; 2395 READY, NOT FLOWN <<<
+## >>> ACTIVE 2026-11-07 00:36: 2395 RAN - CACHEABILITY IS NOT THE LEVER <<<
 
-**The whole wall is one bit.** An MCU access hangs iff bit 9 of the address is
-set: 21 observations, no exception, fetch and data reads alike
-(`docs/matisse-gpu-mcu-wall.md` section 40).
-
-- the two data-read hangs that killed the "512-byte alignment" reading
-  (`0x01001AF8` in 2369, `0x01001BC4` in 2376) are not 512-aligned, but are
-  bit 9 = 1;
-- `as_fault` is 0 on both sides of the wall, so the walk succeeds and the
-  transaction stops downstream - which is why nine attribute experiments
-  changed nothing;
-- every leaf is 4 KiB aligned, so `PA bit 9 == VA bit 9` always, and no mapping
-  change can move it. That is why 2382's 1.2 MB relocation did nothing.
-
-**C is answered without a new flight.** 2376's unpatched firmware stops at
-`0x010019dc  ldr r0,[pc,#0x1e4]` -> `0x01001BC4`, a bit-9 read. The next two
-literals in that helper are bit 9 = 1 as well. The vendor handler gets from
-`0x010018EC` through a successful `bl 0x01003126` to `0x010019DC` and dies there.
-
-**2395 is built and preflighted, not flown.** Its container is byte-identical to
-2393's; the only change is that the executable section is mapped with
-`AS_MEMATTR` index 5 (non-cacheable) and no SH bits.
+**RESULT: no landing, `cleanup_error = -53`, and the leaf read back exactly as
+asked (`0x30000000401a44d7`, AttrIndx 5, SH clear).**
 
 ```
 image  e9652ef8...760e  26,714,112 B  kernel ff844738 (SWEET_BUILD_ID 0x2395)
-part.  predicted 139e3fa6...6ac6   boot_a now 2931647a...86b1 (untouched)
-code leaf expected 0x30000000401a4cd7 (AttrIdx 5, SH clear)
+part.  139e3fa6...6ac6 written and read back, fastboot 82.73 s
+boot_a restored 2931647a...86b1
 ```
 
-A marker at `0xEA00` says the stall is in the cached path and one attribute
-boots the firmware; no marker says it is below the cache and the memory-group
-tag is next.
+The container is 2393's byte for byte; only the code section's leaf moved from
+cached to non-cacheable. Same no-landing. So the stall is **below the cache**.
+
+**The wall is one bit, and it is not an attribute.** An MCU access hangs iff
+bit 9 of the address is set - 21 observations, fetch and data reads alike
+(`docs/matisse-gpu-mcu-wall.md` section 40). `as_fault` is 0 on both sides, so
+the walk succeeds and the transaction stops downstream; every leaf is 4 KiB
+aligned so `PA bit 9 == VA bit 9` always, which is why no mapping change and no
+relocation ever moved it.
+
+**C is answered without a new flight.** 2376's unpatched firmware stops at
+`0x010019dc  ldr r0,[pc,#0x1e4]` -> `0x01001BC4`, bit 9 = 1, after getting
+through a successful `bl 0x01003126`. The next two literals of that helper are
+bit 9 = 1 as well.
+
+**Next (section 41):** every bit-9 data point so far lives in the code section.
+2396 is one ladder in one boot - read `0x04000200` (shared), `0x02000200`
+(stack), `0x01001200` (code) - to decide whether bit 9 is global or is a
+property of an executable page. If the stack returns and the code hangs, XN is
+the only leaf field never varied.
 
 ## >>> PREVIOUS 2026-11-06 23:59: 2393 RAN - VENDOR PAGE ATTRS, SAME 512 WALL <<<
 

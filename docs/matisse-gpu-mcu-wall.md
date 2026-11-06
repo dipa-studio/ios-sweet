@@ -1470,3 +1470,54 @@ the `0x1A00` program as in 2391, and the code section mapped with the
 non-cacheable attribute instead of the cached one. A marker says the wall is
 cacheability and the firmware can boot by changing one attribute; no marker says
 the stall is below the cache and the next lever is the memory-group tag.
+
+## 41. 2395 ran: cacheability is not the lever either
+
+2395's container is 2393's, byte for byte - `0x0100EA01` at VA 0x4, the same
+twenty-byte marker at `0x0100EA00`, the same control landings, the same 103
+bytes against the vendor file. One thing changed: the executable section's leaf
+now selects `AS_MEMATTR` index 5 (non-cacheable) and carries no SH bits, which
+no build had ever done. 2393 hung at `0xEA00` with the cached index, 2394 ran at
+`0xE000` with it, so this is the first lever that reaches below the descriptor
+without changing the address.
+
+| field | value |
+|---|---|
+| image | `e9652ef8...760e`, 26,714,112 B |
+| kernel | `ff844738...3824`, `SWEET_BUILD_ID 0x2395` |
+| leaf, VA `0x01000000` | `0x30000000401a44d7` - AttrIndx 5, SH clear |
+| `input_va` | `0x04002000` (the seed: no landing ran) |
+| `groups` / `cleanup_error` | 8 / -53 |
+| `as_fault` / `mmu_raw` | 0 / 0 |
+| fastboot | 82.73 s, `boot_a` restored to `2931647a...86b1` |
+
+The readback is the point: `0x4d7` is exactly the value the compiler was asked
+for - `(leaf & ~0x31c) | 0x14` on the executable section - so the encoding
+travelled and the null result is about the hardware, not about the build. The
+report's own guard agrees: `code_leaf_attr_index = 5`,
+`code_leaf_uncached = true`.
+
+**What is now closed.** With cached (2393) and non-cacheable (2395) giving the
+same no-landing on a byte-identical container, the whole descriptor family is
+spent: AttrIndx, SH, nG, AP, XN-in-attr, memory group 6 (vendor-grounded: the
+`arm,physical-memory-group-manager` path substitutes 6), and `TRANSCFG` (we
+write `0x42000006`; the vendor writes `AS_TRANSCFG_ADRMODE_AARCH64_4K` = 6 in
+the low field). Nine attribute experiments, all null.
+
+**What is left.** Two families, and one of them has never been tested at all:
+
+1. **Is bit 9 global, or is it a property of the RX section?** Every bit-9
+   data point so far - `0x01000200`, `0x01001A00`, `0x01001AF8`, `0x01001BC4` -
+   lies in the code section. No probe has ever read a bit-9 address in the
+   stack, heap or shared section, all of which are RW and NX. If a stack read at
+   `0x02000200` returns while the code read at `0x01001200` hangs, the rule is
+   not "bit 9" but "bit 9 inside an executable page", and XN becomes the only
+   leaf field still unvaried.
+2. **The mapping granularity.** `ADRMODE_AARCH64_4K` walks a level-3 table for
+   every access. A 2 MB level-2 block for the code section would bypass that
+   walk entirely. If a block mapping starts while a leaf mapping stalls, the
+   level-3 walk is the fault; if it also stalls, the address path below the MMU
+   is.
+
+Order matters: (1) is one ladder in one build, (2) needs the arena aligned to
+2 MB and is the more expensive change.
