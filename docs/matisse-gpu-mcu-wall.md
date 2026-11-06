@@ -90,7 +90,9 @@ should be answered:
 2371 repeated the 2370 sweep with a 0x10 step between 0x01001900 and 0x01001a00.
 Image SHA256 `f4d107102129a8a6e6ca6f3adb2cb9f0593b9215ee02e36f066cf1d5c6ba76af`,
 26,714,112 B; the journal records `complete-restored-Recovery` and `boot_a`
-verified back to `2931647a...86b1`.
+verified back to `2931647a...86b1`. The boot itself did not come back to Recovery
+on its own - XNU reached `mount-phase-1` and then failed into fastboot - so the
+restore ran through the `restore-only` path.
 
 `groups = 24`, so 16 probes returned: 0x01001900, 0x01001910, ... 0x010019f0 all
 read fine and the read at **0x01001a00** stopped the core. The rest of the report

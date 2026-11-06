@@ -92,9 +92,16 @@ window); do not treat the window size as settled until a probe starts the loop a
 a different base address.
 
 **Next:** the leaf attributes in `mali_csf_memory.c` are still the suspect, and
-the 0x01001a00 edge is the coordinate to explain. A follow-up probe should start
-the same loop at 0x01001a00 and at 0x01002000 to separate "window relative to the
-executing code" from "absolute limit", before any attribute is changed.
+the 0x01001a00 edge is the coordinate to explain. The instrument is already
+designed and recorded in `.workbuddy/memory/2026-11-06.md` but never built: 2372
+replaces the fine sweep with a whole-section map, `r4 = 0x01000000`,
+`r5 = 0x01010000`, `ldr r0,[r4] / add.w r4,#0x100 / adds r2,#2 / str r2,[r3] /
+b loop`, so one boot yields the readable/unreadable map of the entire 64 KiB
+section. A readable prefix that ends at 0x1a00 means a region limit; scattered
+readable 0x100 blocks matching the two executed lines mean a fetch-derived window.
+Do not change any attribute before that map exists. Note 2371 also ended in
+fastboot rather than Recovery (XNU reached mount-phase-1 and the boot failed);
+the restore went through the `restore-only` path and still verified.
 
 **Driver, this round:** `mali_csf_boot.c` now drives the MCU through an explicit
 state machine instead of the bare `wr(MCU_CONTROL, 2)`: halt (write 0, poll
