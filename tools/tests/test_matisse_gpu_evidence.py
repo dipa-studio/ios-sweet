@@ -485,6 +485,9 @@ class ReportDecodeTests(unittest.TestCase):
 
     LEAVES = (0x30000000401a4cc3, 0x30000000401a5cc3,
               0x30000000401b2cc3, 0x30000000401b3cc3)
+    # 2395: same page-0 leaf with AttrIndx 5 (bits[4:2]) and no SH bits, which
+    # is what SWEET_CSF_UNCACHED_CODE produces for the executable section.
+    LEAVES_UNCACHED_CODE = (0x30000000401a4cd7,) + LEAVES[1:]
 
     def test_2388_reads_the_live_leaves_out_of_the_arena(self):
         csf = self.cold_report(build=0x2388, input_va=0x01001200,
@@ -573,6 +576,26 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertIsNone(csf['cold_boot_start'])
         self.assertEqual(len(csf['cold_boot_landings']), 3)
         self.assertIn('survives AttrIdx 0/5', csf['instrument_verdict'])
+
+    def test_2395_cacheability_is_the_first_lever(self):
+        csf = self.cold_report(build=0x2395, input_va=0x0100EA00,
+                               leaf=self.LEAVES_UNCACHED_CODE)['csf']
+        self.assertEqual(csf['code_leaf_attr_index'], 5)
+        self.assertTrue(csf['code_leaf_uncached'])
+        self.assertEqual(csf['cold_boot_outcome'], 'start-vector-literal')
+        self.assertEqual(csf['cold_boot_target'], 0x0100EA00)
+        self.assertIn('cacheability is the lever', csf['instrument_verdict'])
+
+        csf = self.cold_report(build=0x2395, input_va=0x04000200,
+                               leaf=self.LEAVES_UNCACHED_CODE)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'cold-boot-fetch-stalls')
+        self.assertIn('below the cache path', csf['instrument_verdict'])
+
+        # A run whose live leaf never carried index 5 cannot answer the
+        # question, and must not be read as a cacheability result.
+        csf = self.cold_report(build=0x2395, input_va=0x04000200, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'encoding-not-applied')
+        self.assertFalse(csf['code_leaf_uncached'])
 
     def test_2394_positive_control_decides_whether_2393_closes(self):
         csf = self.cold_report(build=0x2394, input_va=0x0100E000, leaf=self.LEAVES)['csf']

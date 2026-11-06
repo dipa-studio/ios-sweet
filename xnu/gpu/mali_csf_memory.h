@@ -37,6 +37,18 @@
 #ifndef SWEET_CSF_VENDOR_LEAVES
 #define SWEET_CSF_VENDOR_LEAVES 0
 #endif
+/* 0 keeps the code section on whatever AttrIndx the selected pairing gives it.
+ * 1 forces the R-X section (the only one the MCU fetches from) onto AS_MEMATTR
+ * index 5, the non-cacheable byte, and clears its SH bits. 2395 uses it: the
+ * bit-9 law measured across 2369-2394 says the stall is downstream of a
+ * translation that reports no fault, and a cacheable access is the only kind
+ * this port has ever issued to the code section, so cacheability is the first
+ * lever that has never been pulled. 2393 gave the same section vendor index 0,
+ * which convert_mem_flags() only reaches for CSF_FIRMWARE_CACHE_MODE_CACHED,
+ * so it is not this experiment. */
+#ifndef SWEET_CSF_UNCACHED_CODE
+#define SWEET_CSF_UNCACHED_CODE 0
+#endif
 /* 0 keeps every build up to2380 byte-identical: each section's arena offset
  * follows the page tables in container order. 1 leaves every other section at
  * exactly that offset but appends the R-X section (VA0x01000000) after the

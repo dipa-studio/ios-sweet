@@ -1388,3 +1388,85 @@ of the target differ. So 2393's no-marker is not an attribute artefact: the
 512-byte rule survives the vendor page encoding and lives below the driver.
 2392 and 2395 are unnecessary. The next instrument is C - place markers along
 the vendor handler that starts at `0x010018EC` and find where it stops.
+
+## 40. C, answered from evidence already on disk: the rule is bit 9
+
+C asks where the vendor handler stops after it starts at `0x010018EC`. The
+answer was already in the 2376 report; nobody had read it against the right
+rule.
+
+**2376's stop instruction, decoded.** The unpatched container runs, faults
+nothing and never reports ready. Disassembling from `0x010018EC` puts the stop
+at the third literal load of the cache helper:
+
+```
+0x010019d8  mov.w r1, #0
+0x010019dc  ldr   r0, [pc, #0x1e4]    @ 0x01001BC4   <- stops here
+0x010019de  str   r1, [r0]
+0x010019e0  bx    lr
+```
+
+The load reads `0x01001BC4`, and 2371/2373 already measured that a read in that
+block never completes. The same helper's next two literals are `0x01001BC8` and
+`0x01001BCC`. Nothing in the firmware can get past them.
+
+**The rule was stated one bit too wide.** "512-byte aligned but not a 4 KiB page
+base" fits the entry experiments, but two data-read hangs it cannot explain:
+
+- 2369/2370 hung reading `0x01001AF8` - not 512-byte aligned;
+- 2376 hung reading `0x01001BC4` - not 512-byte aligned.
+
+Both are 512-byte aligned **plus 0x200**: bit 9 is set. One rule covers every
+access this port has ever made, fetch and data alike:
+
+> an MCU access hangs iff bit 9 of the address is set.
+
+| addr | bit 9 | offset | kind | observed | build |
+|---|---|---|---|---|---|
+| `0x01000000` | 0 | `0x000` | read | ok | 2373 |
+| `0x01000100` | 0 | `0x100` | read | ok | 2373 |
+| `0x01000200` | 1 | `0x200` | read | hang | 2373 |
+| `0x01001900` | 0 | `0x900` | read | ok | 2375 |
+| `0x010019f0` | 0 | `0x9f0` | read | ok | 2371 |
+| `0x01001a00` | 1 | `0xa00` | read | hang | 2371 |
+| `0x010019f8` | 0 | `0x9f8` | read | ok | 2370 |
+| `0x01001af8` | 1 | `0xaf8` | read | hang | 2369 |
+| `0x01001bc4` | 1 | `0xbc4` | read | hang | 2376 |
+| `0x02000000` | 0 | `0x000` | read | ok | 2375 |
+| `0x02800000` | 0 | `0x000` | read | ok | 2375 |
+| `0x02000000` | 0 | `0x000` | write | ok | 2377 |
+| `0x0203f000` | 0 | `0x000` | write | ok | 2377 |
+| `0x01001000` | 0 | `0x000` | fetch | runs | 2389 |
+| `0x010018ec` | 0 | `0x8ec` | fetch | runs | 2390 |
+| `0x0100e000` | 0 | `0x000` | fetch | runs | 2394 |
+| `0x01000200` | 1 | `0x200` | fetch | nothing | 2386 |
+| `0x01000600` | 1 | `0x600` | fetch | nothing | 2387 |
+| `0x01001200` | 1 | `0x200` | fetch | nothing | 2388 |
+| `0x01001a00` | 1 | `0xa00` | fetch | nothing | 2391 |
+| `0x0100ea00` | 1 | `0xa00` | fetch | nothing | 2393 |
+
+21 points, no exception, across six different page encodings and two access
+kinds. The "touched 512-byte block" reading of 2373 needed 2366 as an admitted
+exception; it was fitting the block index, which is bit 9 divided by two.
+
+**What this rules out.** `as_fault` is 0 on both sides of the wall - 2394 (runs)
+and 2391/2393 (nothing) report `as_fault = 0`, `mmu_raw = 0`, and 2376 does too.
+A translation that produced no valid entry would fault, as the unmapped heap
+probe in 2375 did. So the walk succeeds and the transaction stops after it. That
+is why nine attribute experiments changed nothing: the descriptor is not the
+subject.
+
+**Why no mapping change can move it.** Every leaf this shim writes is 4 KiB
+aligned, so `PA bit 9 == VA bit 9` for every byte of every section. 2382's
+1.2 MB relocation preserved that equality, which is why the wall did not move.
+Any page-aligned translation preserves it. So the remaining levers are not in
+the page table at all; they are in the memory path the GPU uses for that PA -
+cache mode first, since a cacheable access is the only kind that has ever been
+made here.
+
+**2395 reuses the number that 2394 cancelled** (a `0x1A00` confirmation under
+vendor leaves, now pointless). It is the first lever test: entry `0x01001A01`,
+the `0x1A00` program as in 2391, and the code section mapped with the
+non-cacheable attribute instead of the cached one. A marker says the wall is
+cacheability and the firmware can boot by changing one attribute; no marker says
+the stall is below the cache and the next lever is the memory-group tag.

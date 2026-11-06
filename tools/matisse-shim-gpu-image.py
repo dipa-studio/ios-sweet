@@ -1199,6 +1199,15 @@ TRACE_PROBE[0x2394] = dict(
              0x0100E000: COLD_BOOT_2385})
 BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the low bytes
 
+# 2395 is 2393's container byte for byte - entry 0x0100EA01, the marker program
+# at 0x0100EA00, and both control landings - and changes only how the shim
+# encodes the code section's leaf: AS_MEMATTR index 5 (non-cacheable) instead of
+# the cached index. 2393 hung at 0xEA00 with index 0 and 2394 ran at 0xE000 with
+# the same encoding, so a marker here names cacheability as the lever and no
+# marker pushes the stall below the cache path. The container being identical is
+# the point: nothing in the image can explain a different answer.
+TRACE_PROBE[0x2395] = dict(TRACE_PROBE[0x2393], kind='cold-boot-fetch')
+
 
 def encode_bl(src, dst):
     """Thumb-2 BL from src to dst, as the four bytes the core will fetch."""
@@ -1393,18 +1402,18 @@ def fault_vector_probe(path, expected, build_id):
                 '20': 'the 2383 fault entry fired: the instrument works',
                 '30': 'the unmapped read completed without faulting',
                 '0 or 8': 'the read neither faulted nor completed'})
-    if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394):
+    if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395):
         target = {0x2385: '0x100e000', 0x2386: '0x1000200',
                   0x2387: '0x1000600', 0x2388: '0x1001200',
                   0x2389: '0x1001000', 0x2390: '0x10018ec',
                   0x2391: '0x1001a00', 0x2393: '0x100ea00',
-                  0x2394: '0x100e000'}[build_id]
+                  0x2394: '0x100e000', 0x2395: '0x100ea00'}[build_id]
         patch['cold_boot'] = dict(
             target=target, marker_value=target, marker_field='input_va',
             counter_field='groups', counter_seed=8, counter_meanings={
                 'present': 'the core fetched this block at reset and executed it',
                 'absent': 'the first fetch stalls exactly like every other cold one'})
-        if build_id in (0x2391, 0x2393):
+        if build_id in (0x2391, 0x2393, 0x2395):
             # Three landings instrumented at once, so the marker names not just
             # whether the vector was used but which of the three rules applied.
             patch['cold_boot'].update(
@@ -1531,7 +1540,7 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
 # two drifted apart once already (2388 shipped with the property, 2389 with
 # neither), and a build that declares a leaf_probe without the property fails
 # closed at decode time, which is the right failure but a wasted trial.
-LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394)
+LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395)
 
 
 def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False):
@@ -1587,9 +1596,11 @@ def build(a):
     #2393 is the vendor-faithful repeat of 2391's 512-byte-aligned target:
     # leaf AttrIdx 0/5, vendor MEMATTR, no nG, read-only code. The entry and
     # its fetch target are the only other things that move.
-    if a.build_id in (0x2393, 0x2394):
+    if a.build_id in (0x2393, 0x2394, 0x2395):
         if not (a.trace_probe and a.vendor_leaves and a.relocate_code and a.mcu_control == '2'):
             raise ValueError('build%x requires --trace-probe --vendor-leaves --relocate-code --mcu-control 2' % a.build_id)
+        if a.uncached_code != (a.build_id == 0x2395):
+            raise ValueError('build%x requires --uncached-code exactly when it is 2395' % a.build_id)
         if (a.ro_as_rw or a.vendor_memattr or a.global_init or a.fault_probe or
                 a.entry_probe or a.reset_store_stub or a.inline_entry or
                 a.entry_pte_guard or a.redirect_mcu_stores):
@@ -1601,7 +1612,9 @@ def build(a):
                 a.reset_store_stub or a.mcu_control != '2'):
             raise ValueError('build%x may change only the entry and its fetch target' % a.build_id)
     elif a.relocate_code:
-        raise ValueError('--relocate-code is only defined for build2382-2393')
+        raise ValueError('--relocate-code is only defined for build2382-2395')
+    elif a.uncached_code:
+        raise ValueError('--uncached-code is only defined for build2395')
     if a.fault_probe or a.trace_probe:
         if a.redirect_mcu_stores or a.entry_probe or a.inline_entry or a.entry_pte_guard or a.reset_store_stub:
             raise ValueError('the fault vector probe replaces the handler and takes no other patch')
@@ -1649,6 +1662,7 @@ def build(a):
                    '-DSWEET_CSF_RO_LEAVES_WRITABLE=' + ('1' if a.ro_as_rw else '0'),
                    '-DSWEET_CSF_VENDOR_MEMATTR=' + ('1' if (a.vendor_memattr or a.vendor_leaves) else '0'),
                    '-DSWEET_CSF_VENDOR_LEAVES=' + ('1' if a.vendor_leaves else '0'),
+                   '-DSWEET_CSF_UNCACHED_CODE=' + ('1' if a.uncached_code else '0'),
                    '-DSWEET_CSF_GLOBAL_INIT=' + ('1' if a.global_init else '0'),
                    '-DSWEET_CSF_RELOCATE_CODE=' + ('1' if a.relocate_code else '0'),
                    '-DSWEET_CSF_LEAF_PROBE=' + ('1' if a.build_id in LEAF_PROBE_BUILDS else '0'),
@@ -1750,6 +1764,7 @@ def build(a):
     info['csf_readonly_leaves_writable'] = bool(a.ro_as_rw)
     info['csf_vendor_memattr'] = bool(a.vendor_memattr or a.vendor_leaves)
     info['csf_vendor_leaves'] = bool(a.vendor_leaves)
+    info['csf_uncached_code'] = bool(a.uncached_code)
     # The shim publishes the96-byte block, but sweet_ufs.c does not forward it
     # into SWEETMRK yet, so2381 evidence is console-only until that lands.
     info['csf_global_init'] = (dict(enabled=True, report_bytes=96, kernel_marks_wired=False)
@@ -1799,7 +1814,7 @@ def build(a):
                 for name in ('tools/matisse-csf-fault-entry.S',
                              'tools/matisse-csf-fault-control.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
-            if a.build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394):
+            if a.build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395):
                 for name in ('tools/matisse-csf-fault-entry.S',
                              'tools/matisse-csf-coldboot.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
@@ -1842,7 +1857,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
@@ -1873,6 +1888,9 @@ def main():
     p.add_argument('--vendor-leaves', action='store_true',
                    help='2393: vendor-faithful leaf encoding (no nG, AttrIdx 0/5, vendor MemAttr); '
                         'implies --vendor-memattr and requires --ro-as-rw to stay off')
+    p.add_argument('--uncached-code', action='store_true',
+                   help='2395: give the R-X section AS_MEMATTR index 5 (non-cacheable) and no SH '
+                        'bits, holding every other leaf and the whole container at 2393 values')
     p.add_argument('--relocate-code', action='store_true',
                    help='2382: put the R-X section after the whole arena layout so its PA moves')
     p.add_argument('--global-init', action='store_true',

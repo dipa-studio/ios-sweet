@@ -377,7 +377,10 @@ class FetchPrimeTests(unittest.TestCase):
                  (0x2393, 0x0100EA00, 'COLD_BOOT_2393', False),
                  # 2394 is 2385's positive control under the vendor encoding:
                  # same container, different shim compile flags.
-                 (0x2394, 0x0100E000, 'COLD_BOOT_2385', False))
+                 (0x2394, 0x0100E000, 'COLD_BOOT_2385', False),
+                 # 2395 keeps 2393's container byte for byte and moves only the
+                 # code section's leaf attribute.
+                 (0x2395, 0x0100EA00, 'COLD_BOOT_2393', False))
         for build, target, pinned, wide in cases:
             with self.subTest(build=hex(build)), tempfile.TemporaryDirectory() as directory:
                 p = Path(directory)

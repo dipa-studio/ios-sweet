@@ -109,7 +109,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -616,6 +616,81 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 verdict = ('none of the three landings ran under vendor page attributes: the '
                            '512-byte rule survives AttrIdx 0/5, no nG and read-only code, so it '
                            'is below the driver. Next: 0x01001A00 with the same attributes')
+            if 'leaf_0x01000000' in csf:
+                csf['leaf_pa'] = {name: csf[name] & 0x0000fffffffff000 for name in
+                                  ('leaf_0x01000000', 'leaf_0x01001000',
+                                   'leaf_0x0100e000', 'leaf_0x0100f000')}
+                csf['leaf_page0_as_planned'] = csf['leaf_pa']['leaf_0x01000000'] == 0x401a4000
+            csf['cold_boot_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2395:
+            # 2393's container byte for byte, with the code section's leaf moved
+            # to AS_MEMATTR index 5 (non-cacheable). 2393 hung at 0xEA00 with the
+            # cached index and 2394 ran at 0xE000 with it, so this is the first
+            # test of cacheability as the lever behind the bit-9 law.
+            csf['cold_boot_counter'] = csf['groups']
+            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a4000
+            csf['cold_boot_landings'] = {
+                '0x100ea00': 'the bit-9 target, with the code section non-cacheable',
+                '0x1001000': 'the vector masked to its page base',
+                '0x10018ec': 'the vendor entry, if a non-aligned word is ignored'}
+            leaf = csf.get('leaf_0x01000000')
+            code_attr = None if leaf is None else (leaf >> 2) & 7
+            csf['code_leaf_attr_index'] = code_attr
+            csf['code_leaf_uncached'] = code_attr == 5
+            landing = {0x0100EA00: 'vector-literal', 0x01001000: 'page-base',
+                       0x010018EC: 'vendor-entry-fallback'}.get(csf['input_va'])
+            if not csf['relocation_observed']:
+                outcome = 'not-relocated'
+                verdict = ('the executable probe PA is not the relocated one; this is not the '
+                           '2382 mapping the build reuses')
+            elif csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault']:
+                outcome = 'cold-boot-refused'
+                verdict = ('the MMU refused something before any marker appeared (AS_FAULT %#x at '
+                           '%#x), so this run cannot say whether 0x0100EA00 starts' %
+                           (csf['as_fault'], csf['as_fault_hi'] << 32 | csf['as_fault_lo']))
+            elif code_attr is not None and code_attr != 5:
+                outcome = 'encoding-not-applied'
+                csf['cold_boot_target'] = 0x0100EA00
+                csf['cold_boot_marker_present'] = False
+                csf['cold_boot_start'] = None
+                verdict = ('the live code leaf still carries AttrIndx %s, so the image did not '
+                           'travel with the non-cacheable encoding and this run says nothing '
+                           'about cacheability' % code_attr)
+            elif landing == 'vector-literal':
+                outcome = 'start-vector-literal'
+                csf['cold_boot_target'] = 0x0100EA00
+                csf['cold_boot_marker_present'] = True
+                csf['cold_boot_start'] = landing
+                verdict = ('the core started at 0x0100EA00 with the code section non-cacheable '
+                           'and the same container that stalled in 2393. So cacheability is the '
+                           'lever: the bit-9 stall is in the cached path, and the firmware can be '
+                           'booted by mapping its code section index 5. Next: run the unpatched '
+                           'container with this encoding')
+            elif landing == 'page-base':
+                outcome = 'start-masked-to-page-base'
+                csf['cold_boot_target'] = 0x01001000
+                csf['cold_boot_marker_present'] = True
+                csf['cold_boot_start'] = landing
+                verdict = ('the core reached 0x01001000 while the word named 0x0100EA00, so '
+                           'dropping the low twelve bits reappears once the code is uncached. '
+                           'That is the mask reading, not cacheability')
+            elif landing == 'vendor-entry-fallback':
+                outcome = 'start-vendor-entry-fallback'
+                csf['cold_boot_target'] = 0x010018EC
+                csf['cold_boot_marker_present'] = True
+                csf['cold_boot_start'] = landing
+                verdict = ('the word named 0x0100EA00 and the core started at 0x010018ec: a '
+                           'non-page-aligned word is ignored once the code is uncached. That is '
+                           'the fallback reading, not cacheability')
+            else:
+                outcome = 'cold-boot-fetch-stalls'
+                csf['cold_boot_target'] = 0x0100EA00
+                csf['cold_boot_marker_present'] = False
+                csf['cold_boot_start'] = None
+                verdict = ('non-cacheable code does not move the bit-9 target: 2393\'s stall is '
+                           'below the cache path, so the next lever is the memory-group tag the '
+                           'leaf carries in bits 59..62 and then the platform blocks the EB owns')
             if 'leaf_0x01000000' in csf:
                 csf['leaf_pa'] = {name: csf[name] & 0x0000fffffffff000 for name in
                                   ('leaf_0x01000000', 'leaf_0x01001000',
@@ -1544,7 +1619,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2393)')
+                   help='expected kernel/report build (0x2321 through 0x2395)')
     p.add_argument('--allow-missing-leaf',action='store_true',
                    help='decode a build >=0x2388 whose image shipped without the '
                         'sweet-csf-leaf property (2389 did); leaf fields stay absent')

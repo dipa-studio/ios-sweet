@@ -175,6 +175,17 @@ int sweet_csf_memory_build_group(const uint8_t *fw, size_t bytes, const struct s
             desc |= cached ? 0x004 : 0x000;
             if (p->flags & (1u << 30)) desc |= 0x300;
 #endif
+#if SWEET_CSF_UNCACHED_CODE
+            /* 2395: the executable section takes AS_MEMATTR index 5 and loses
+             * every SH bit, whatever pairing the rest of the image selected.
+             * AttrIndx is bits[4:2] and SH is bits[9:8]; both are cleared
+             * before the index is installed so no branch above can leak
+             * through. */
+            if (p->flags & 4) {
+                desc &= ~(UINT64_C(0x1c) | UINT64_C(0x300));
+                desc |= UINT64_C(5) << 2;
+            }
+#endif
             if (!(p->flags & 2) && !SWEET_CSF_RO_LEAVES_WRITABLE) desc |= 0x80;
             if (!(p->flags & 4)) desc |= UINT64_C(3) << 53;
             desc |= (uint64_t)memory_group << 59;
