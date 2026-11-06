@@ -55,10 +55,12 @@ address outside them. Same page, same leaf descriptor, same attributes.
 
 ## 4. What that implies
 
-Only fetched bytes are readable as data. In a normal stage-1 mapping that is
-impossible: once a 4 KiB leaf is valid, every byte in it is equally readable. So
-the leaf built for the code section in `xnu/gpu/mali_csf_memory.c` must be
-routing data accesses somewhere the MCU cannot complete them.
+Reads stop 0x100 above the base the loop starts on, inside a page that the leaf
+covers completely. In a normal stage-1 mapping that is impossible: once a 4 KiB
+leaf is valid, every byte in it is equally readable. So the leaf built for the
+code section in `xnu/gpu/mali_csf_memory.c` must be routing data accesses
+somewhere the MCU cannot complete them - or the limit is not the mapping at all
+and the last section of this document is the honest answer.
 
 Relevant facts about the current leaves (`mali_csf_memory.c:116-125`):
 
@@ -83,19 +85,37 @@ should be answered:
 3. Does the memory-group tag (bits 59..62 = 6) apply to data accesses on this
    implementation, or only to instruction fetches?
 
-## 5. Next instrument: 2371
+## 5. 2371 ran, and the answer was not the one either hypothesis predicted
 
-2371 repeats the 2370 sweep with a 0x10 step between 0x01001900 and 0x01001a00.
+2371 repeated the 2370 sweep with a 0x10 step between 0x01001900 and 0x01001a00.
+Image SHA256 `f4d107102129a8a6e6ca6f3adb2cb9f0593b9215ee02e36f066cf1d5c6ba76af`,
+26,714,112 B; the journal records `complete-restored-Recovery` and `boot_a`
+verified back to `2931647a...86b1`.
 
-- `groups - 8 == 1` -> the window ends right after the loop's own last byte, which
-  is what "only fetched bytes are readable" predicts, and the fetch/data asymmetry
-  is confirmed.
-- `groups - 8 > 1` -> 0x01001900..0x010019ff is readable without being fetched, so
-  the limit is a region size or a boundary at a 0x100 granularity, not the fetch
-  stream.
+`groups = 24`, so 16 probes returned: 0x01001900, 0x01001910, ... 0x010019f0 all
+read fine and the read at **0x01001a00** stopped the core. The rest of the report
+is the familiar failure (`csf stage 4`, `error -53`, `version 0`, `mcu_status 1`).
 
-The image was built once but never run, and its artifacts are gone; it has to be
-rebuilt from `TRACE_PROBE[0x2371]` and re-verified by disassembly before use.
+That rules out both candidates the build was designed to separate:
+
+- not "only fetched bytes", which would have stopped after the loop's own last
+  byte, i.e. one or two probes;
+- not the 4 KiB page, because 0x010019f0 and 0x01001a00 are in the same page with
+  the same leaf and the same backing.
+
+The window is 0x01001900..0x010019ff: 256 bytes, ending on a 0x100 boundary, in
+the middle of a mapped page. The reading that fits the earlier trials is a
+512-byte aligned fetch window at 0x01001800..0x010019ff: 2363's literal at
+0x010018f8 and 2365's at 0x010019fc are inside it (2365 turned exactly once, at
+the last four bytes of the window), while 2368's and 2369's at 0x01001af8 are
+outside and died with no count at all. 2366 is the one trial it does not explain:
+its loop sat at 0x010019ee with the literal at 0x010019f8, both inside the window,
+and it still turned only once.
+
+So the honest state is: the boundary is measured and reproducible, but the shape
+is not settled. Before touching any attribute, the next probe should run the same
+loop from a different base - 0x01001a00 and 0x01002000 - which separates "a window
+that follows the executing code" from "an absolute limit at 0x01001a00".
 
 ## 6. Driver work in the same round
 

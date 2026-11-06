@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2358-2370 CLOSED THE MEASUREMENT QUESTION; THE WALL IS A DATA READ OF UNFETCHED CODE <<<
+## >>> ACTIVE 2026-11-06:2371 PUT THE EDGE AT 0x01001a00 - A 256-BYTE WINDOW, NOT A PAGE <<<
 
 READ THIS FIRST. Trials 2357-2370 all ran. Until this entry their results existed
 only as comments above the per-build `TRACE_PROBE` table in
@@ -67,16 +67,44 @@ cannot be a mapping difference between the two addresses.
 run". It is: **a data read by the MCU of code-section bytes it has not yet
 fetched hangs the core.** That is a property of the stage-1 leaves that
 `xnu/gpu/mali_csf_memory.c` builds for the code section, not of the CSF firmware,
-and it explains every ladder stall from 2351 on. 2371 (built, never run, artifacts
-lost) narrows the sweep to 0x10 steps between 0x01001900 and 0x01001a00: one probe
-means the window ends right after the loop's own last byte ("only fetched bytes
-are readable"), many probes mean a region-size limit.
+and it explains every ladder stall from 2351 on.
 
-**Next:** rebuild and run 2371 to pin the window; then fix the code-section leaf
-attributes in `mali_csf_memory.c`. In parallel, `mali_csf_boot.c` is being given an
-explicit MCU start state machine (halt -> poll MCU_STATUS 0 -> ENABLE|AUTO instead
-of the bare `wr(MCU_CONTROL,2)`), gated by its own config value so each trial still
-changes one thing.
+**2371 RAN, 2026-11-06 00:07, and it refuted the "only fetched bytes" reading.**
+Image SHA256 `f4d107102129a8a6e6ca6f3adb2cb9f0593b9215ee02e36f066cf1d5c6ba76af`,
+26,714,112 B, journal `complete-restored-Recovery`, `restored_sha256` back to
+`2931647a...86b1`. Same sweep as 2370 with the step cut from 0x100 to 0x10:
+
+- `groups = 24`, i.e. `groups - 8 = 16` probes returned. The probe pointer walks
+  0x01001900 + 0x10*n, so the reads that completed are 0x01001900 .. 0x010019f0
+  and the read at **0x01001a00** stopped the core. Every other report field is
+  the usual failure (`csf stage 4`, `error -53`, `version 0`, `mcu_status 1`).
+
+So the readable window is 0x01001900..0x010019ff: **256 bytes, ending exactly on
+a 0x100 boundary, inside a single 4 KiB page whose leaf covers all of it.** One
+probe would have meant "only fetched bytes"; sixteen means it is not a per-byte
+fetch property, and it is not the 4 KiB page either. The datum that fits is a
+512-byte aligned fetch window: the loop starts at 0x010018ec, so a window at
+0x01001800..0x010019ff makes 2363's literal at 0x010018f8 readable, 2365's at
+0x010019fc readable for exactly one turn, and 2368/2369's at 0x01001af8 dead -
+which is what those trials measured. The one datum this does not explain is 2366
+(loop at 0x010019ee turning once with its literal at 0x010019f8, inside that
+window); do not treat the window size as settled until a probe starts the loop at
+a different base address.
+
+**Next:** the leaf attributes in `mali_csf_memory.c` are still the suspect, and
+the 0x01001a00 edge is the coordinate to explain. A follow-up probe should start
+the same loop at 0x01001a00 and at 0x01002000 to separate "window relative to the
+executing code" from "absolute limit", before any attribute is changed.
+
+**Driver, this round:** `mali_csf_boot.c` now drives the MCU through an explicit
+state machine instead of the bare `wr(MCU_CONTROL, 2)`: halt (write 0, poll
+`MCU_STATUS == 0`, new `SWEET_CSF_BOOT_HALT` stage), then start with the vendor
+`ENABLE|AUTO` (3), then the existing wait loop, whose fault test is now "any
+status bit other than ENABLED" instead of only `== 3`. The written/read-back pair
+lands in the report's `platform_reserved` word (`path_reserved` keeps its 2335
+checkpoint meaning), so the 696-byte CSF ABI is unchanged. `--mcu-control 2|3` on
+the image builder selects the value, defaulting to 3, so the next trial moves one
+number. 210 tests pass, 3 skipped.
 
 Device discipline unchanged: `boot_a` must verify back to
 `2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1` after every
