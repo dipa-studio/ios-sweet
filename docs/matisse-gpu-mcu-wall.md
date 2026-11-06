@@ -1237,3 +1237,85 @@ declared `leaf_probe` for 2390, and the shim macro gate still read
 `sweet-csf-leaf` and no leaf reader - the same drift that cost 2389 its leaves.
 Both gates now read one list (`LEAF_PROBE_BUILDS`) and a test asserts the two
 cannot separate again.
+
+## 37. 2391 ran: the word is not a fallback, and four 512-byte boundaries fail
+
+Trial 2026-11-06 23:27, image `372fb8ea...d3dc24`, kernel `8df00489`
+(`SWEET_BUILD_ID` 0x2391), fastboot 89.65 s, `boot_a` restored to
+`2931647a...86b1`.
+
+```
+input_va (shared+8)      0x04002000   the seed, untouched by any landing
+groups (shared+16)       8            the counter seed; no program wrote
+mmu_raw, as_fault        0, 0
+mcu_status, relocation   1, true
+cleanup_error            -53
+leaves                   401a4000 / 401a5000 / 401b2000 / 401b3000
+```
+
+The word at VA 0x4 was changed to `0x01001A01`. Three twenty-byte programs were
+in place: at `0x01001A00` where the word taken literally lands, at `0x01001000`
+where masking it to the page base would land, and at `0x010018EC` where falling
+back to the vendor entry would land. None of them wrote. `cleanup_error = -53`
+puts this with 2386/2387/2388 - a real non-start, not a stale capture.
+
+**The fallback reading is dead.** If a non-page-aligned word were ignored and the
+core fell back to the vendor entry, `0x010018EC` would have marked. It did not.
+So 0x18EC is not a default entry: it ran in 2390 because the vendor word names
+it. Whether 2391 stalled at `0x1A00` or refused to start cannot be separated by
+this build alone, but the literal reading is the only one still standing.
+
+**All four failures are 512-byte aligned.** With 2391 added, the six earlier rows
+and this one form one table:
+
+| build | word | target | 4 KB aligned | 512 B aligned | result |
+|---|---|---|---|---|---|
+| 2385 | `0x0100E001` | `0xE000` | yes | yes | runs |
+| 2389 | `0x01001001` | `0x1000` | yes | yes | runs |
+| 2390 | vendor `0x010018ed` | `0x18EC` | no | no | runs |
+| 2386 | `0x01000201` | `0x200` | no | yes | nothing |
+| 2387 | `0x01000601` | `0x600` | no | yes | nothing |
+| 2388 | `0x01001201` | `0x1200` | no | yes | nothing |
+| 2391 | `0x01001A01` | `0x1A00` | no | yes | nothing |
+
+Page 1 is the controlled case. `0x1000` (offset 0), `0x1200` (offset 0x200),
+`0x18EC` (offset 0x8EC) and `0x1A00` (offset 0xA00) are in the same 4 KB page,
+the same L3 leaf `0x401a5000`, with the same flags `0xc47`. Two run and two do
+not, and the only property that separates them is whether the offset is a
+multiple of 512:
+
+```
+0x1000  offset 0x000  runs
+0x1200  offset 0x200  nothing
+0x18EC  offset 0x8EC  runs
+0x1A00  offset 0xA00  nothing
+```
+
+That is not a page, leaf, flag or Thumb-bit story. It is a reset-entry address
+rule: a 512-byte aligned target that is not also a 4 KB page base does not
+start. 2391 adds the fourth failure and the first one at an address this port
+chose on a page that is known to execute at its base.
+
+Two caveats belong with the table. The rows are cross-build - 0x1000 and 0x18EC
+ran under different words - so the rule is a fit, not a controlled experiment;
+2392 repeats the test inside the known-good `0xE000` page at offset `0xA00`.
+And `0x1A00` is the middle of a vendor function (`isb; bx lr` then the next
+prologue), so "no marker" cannot distinguish a fetch that stalls from a core
+that never accepted the word; it does show that overwriting those twenty bytes
+does not by itself prevent a start, because no start happened to run them.
+
+What this changes:
+
+- **A** is no longer "three cursed addresses". A single 512-byte rule fits all
+  seven data points, including 0x1A00.
+- **B** is answered: no fallback. The vendor entry is reachable only when the
+  vendor word names it.
+- **C** is unchanged and still the goal, but if the rule is about the fetch path
+  then the handler may be hanging on the same mechanism; instrumentation along
+  it should record the first 512-byte aligned fetch target it reaches.
+
+One repository defect was found while backfilling the patch series: `xnu/patches`
+stopped at 0182 (0x2384), and the 2388 leaf-descriptor consumer in `sweet_ufs.c`
+was never recorded. Patches 0183-0188 now carry both - 2385 is skipped because
+its kernel is byte-identical to 2384 - and replaying 0001-0188 reproduces the
+local build tree byte for byte.

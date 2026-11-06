@@ -1,14 +1,38 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> PAUSED 2026-11-06 22:50 - USER ASKED FOR DOCUMENTATION, NOT MORE TRIALS <<<
+## >>> ACTIVE 2026-11-06 23:27: 2391 RAN - NO LANDING; THE FALLBACK READING IS DEAD <<<
 
-**Summary of record: `docs/matisse-gpu-csf-status.md`** - current state, what is
-proven, what was retracted, the open questions, the tooling, and how to resume.
-Device is in recovery with `boot_a` at baseline `2931647a...86b1`; nothing pending
-on the hardware.  2391 is half prepared (kernel `8df00489`, spec + report + tests
-written) and was deliberately **not** built into an image or flashed.
+**RESULT: none of the three landings wrote. `input_va` stayed at the seed
+`0x04002000`, `groups = 8`, `mmu_raw = 0`, `as_fault = 0`, `mcu_status = 1`,
+`relocation_observed = true`, `cleanup_error = -53`.**
 
-## >>> ACTIVE 2026-11-06:2390 RAN - THE VENDOR ENTRY RUNS; THE MASK READING IS DEAD <<<
+```
+image  372fb8ea...d3dc24  26,714,112 B  kernel 8df00489 (SWEET_BUILD_ID 0x2391)
+part.  573cb892...9dfcb71 written and read back, fastboot 89.65 s
+boot_a restored to 2931647a...86b1 (verified)
+outcome cold-boot-fetch-stalls
+```
+
+The word at VA 0x4 was `0x01001A01`; twenty-byte programs sat at `0x1A00`
+(literal), `0x1000` (page base) and `0x18EC` (vendor fallback). None ran, so
+there is no fallback: `0x18EC` is reachable only when the vendor word names it.
+2390 looked like a fallback because the vendor word already pointed there.
+
+**New rule candidate.** All four failing targets - `0x200`, `0x600`, `0x1200`,
+`0x1A00` - are 512-byte aligned but not 4 KB aligned. The successes are either
+4 KB page bases (`0xE000`, `0x1000`) or not 512-byte aligned (`0x18EC`). In page
+1 the same leaf `0x401a5000` carries `0x1000` (runs), `0x1200` (nothing),
+`0x18EC` (runs), `0x1A00` (nothing): the only separating property is the low
+9 bits.
+
+Caveat: this is a cross-build fit, not a controlled test. 2392 repeats it at
+`0x0100EA01` inside the known-good `0xE000` page. Details in
+`docs/matisse-gpu-csf-status.md` and `docs/matisse-gpu-mcu-wall.md` section 37.
+
+Commit `9830e14` also backfills identity patches 0183-0188 (2385 is skipped:
+its kernel is byte-identical to 2384). Tests: 262 ran, 3 skipped.
+
+## >>> PREVIOUS 2026-11-06: 2390 RAN - THE VENDOR ENTRY RUNS; THE MASK READING IS DEAD <<<
 
 **RESULT: `input_va = 0x010018ec` - the marker is present at the vendor's own entry,
 with the reset vector word left exactly as it ships (`0x010018ed`).**
