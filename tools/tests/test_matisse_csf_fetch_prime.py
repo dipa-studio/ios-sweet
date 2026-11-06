@@ -170,6 +170,36 @@ class FetchPrimeTests(unittest.TestCase):
             self.assertEqual(len(prop) if prop is not None else None, size)
 
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2391_moves_only_the_word_and_adds_the_third_landing(self):
+        original = FIRMWARE.read_bytes()
+        embedded_2390, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2390)
+        embedded_2391, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2391)
+        config, code = 0x0380, 0x0e94
+        # the word moves, and the block it names becomes the program; 2390's two
+        # landings keep their bytes so the three controls stay comparable
+        allowed = set(range(config + 4, config + 8))
+        allowed |= set(range(code + 0x1A00, code + 0x1A00 + 20))
+        changed = {i for i, (a, b) in enumerate(zip(embedded_2390, embedded_2391)) if a != b}
+        self.assertTrue(changed)
+        self.assertLessEqual(changed, allowed)
+        self.assertEqual(int.from_bytes(embedded_2391[config + 4:config + 8], 'little'),
+                         0x01001A01)
+        self.assertEqual(embedded_2391[code + 0x1A00:code + 0x1A00 + 20],
+                         bytes.fromhex(self.builder.COLD_BOOT_2391[1]))
+        # 0x1A00 is code in the vendor blob, so the probe has to name it
+        self.assertEqual(embedded_2391[code + 0x1A00:code + 0x1A00 + 20][:2],
+                         bytes.fromhex('72b6'))
+        for landing, program in ((0x18ec, self.builder.COLD_BOOT_2390_ENTRY),
+                                 (0x1000, self.builder.COLD_BOOT_2390_PAGE)):
+            self.assertEqual(embedded_2391[code + landing:code + landing + 20],
+                             bytes.fromhex(program[1]), hex(landing))
+        self.assertEqual([item['target'] for item in patch['cold_boot']['landings']],
+                         ['0x1001a00', '0x1001000', '0x10018ec'])
+        self.assertEqual(patch['cold_boot']['target'], '0x1001a00')
+        self.assertNotIn('reset_vector_unchanged', patch['cold_boot'])
+        self.assertEqual(patch['leaf_probe']['marks'], '420..423')
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2390_leaves_the_vendor_word_alone_and_instruments_both_landings(self):
         original = FIRMWARE.read_bytes()
         embedded_2389, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2389)

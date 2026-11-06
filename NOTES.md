@@ -1,5 +1,13 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> PAUSED 2026-11-06 22:50 - USER ASKED FOR DOCUMENTATION, NOT MORE TRIALS <<<
+
+**Summary of record: `docs/matisse-gpu-csf-status.md`** - current state, what is
+proven, what was retracted, the open questions, the tooling, and how to resume.
+Device is in recovery with `boot_a` at baseline `2931647a...86b1`; nothing pending
+on the hardware.  2391 is half prepared (kernel `8df00489`, spec + report + tests
+written) and was deliberately **not** built into an image or flashed.
+
 ## >>> ACTIVE 2026-11-06:2390 RAN - THE VENDOR ENTRY RUNS; THE MASK READING IS DEAD <<<
 
 **RESULT: `input_va = 0x010018ec` - the marker is present at the vendor's own entry,

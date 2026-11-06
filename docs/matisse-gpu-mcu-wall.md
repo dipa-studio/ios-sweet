@@ -1,9 +1,15 @@
 # Matisse GPU: the MCU wall is a data read of unfetched code
 
-Status: 2026-11-06, trials 2321-2371. Everything below is device evidence unless
+Status: 2026-11-06, trials 2321-2390. Everything below is device evidence unless
 marked as inference. Source of truth for the instrument specs is the
 `TRACE_PROBE` table in `tools/matisse-shim-gpu-image.py`; this document explains
 what those probes found.
+
+**Read `docs/matisse-gpu-csf-status.md` first.** It is the consolidated summary:
+what is proven, which earlier conclusions were retracted, what is still open, and
+how to resume.  This document is the chronological evidence behind it, and several
+of its sections contain readings that a later trial disproved - the retractions are
+recorded where they happened rather than edited away.
 
 ## 1. What is already proven on hardware
 

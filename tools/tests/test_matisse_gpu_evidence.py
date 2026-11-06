@@ -527,6 +527,31 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertIn('alignment idea dies', csf['instrument_verdict'])
         self.assertIn('0x01002000', csf['instrument_verdict'])
 
+    def test_2391_three_landings_name_the_rule(self):
+        # One word moved, three landings instrumented: whichever marker appears
+        # is the rule the core follows.
+        csf = self.cold_report(build=0x2391, input_va=0x01001A00, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'start-vector-literal')
+        self.assertEqual(csf['cold_boot_start'], 'vector-literal')
+        self.assertIn('used as written even when it is not page aligned',
+                      csf['instrument_verdict'])
+
+        csf = self.cold_report(build=0x2391, input_va=0x01001000, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'start-masked-to-page-base')
+        self.assertEqual(csf['cold_boot_start'], 'page-base')
+        self.assertIn('never executed a byte the vendor wrote', csf['instrument_verdict'])
+
+        csf = self.cold_report(build=0x2391, input_va=0x010018EC, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'start-vendor-entry-fallback')
+        self.assertEqual(csf['cold_boot_start'], 'vendor-entry-fallback')
+        self.assertIn('page aligned by luck', csf['instrument_verdict'])
+
+        csf = self.cold_report(build=0x2391, input_va=0x04000200, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'cold-boot-fetch-stalls')
+        self.assertIsNone(csf['cold_boot_start'])
+        self.assertEqual(len(csf['cold_boot_landings']), 3)
+        self.assertIn('none of the three landings ran', csf['instrument_verdict'])
+
     def test_2390_names_the_landing_from_the_marker_alone(self):
         # The vendor word is untouched in this build, so the marker decides:
         # 0x010018ec means the vector is honoured exactly, 0x01001000 means the

@@ -109,7 +109,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -489,6 +489,77 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 outcome = 'unexpected-counter'
                 verdict = 'the probe did not reach a defined 9/10/11 checkpoint'
             csf['fetch_prime_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2391:
+            # Three landings instrumented and one word moved: the marker names
+            # which of the three rules the core actually follows.
+            csf['cold_boot_counter'] = csf['groups']
+            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a4000
+            csf['cold_boot_landings'] = {
+                '0x1001a00': 'the vector taken literally',
+                '0x1001000': 'the vector masked to its page base',
+                '0x10018ec': 'the vendor entry, if a non-aligned word is ignored'}
+            landing = {0x01001A00: 'vector-literal', 0x01001000: 'page-base',
+                       0x010018EC: 'vendor-entry-fallback'}.get(csf['input_va'])
+            if not csf['relocation_observed']:
+                outcome = 'not-relocated'
+                verdict = ('the executable probe PA is not the relocated one; this is not the '
+                           '2383 mapping the build reuses')
+            elif csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault']:
+                outcome = 'cold-boot-refused'
+                verdict = ('the MMU refused something before any marker appeared (AS_FAULT %#x at '
+                           '%#x), so this run cannot say which landing the core took' %
+                           (csf['as_fault'], csf['as_fault_hi'] << 32 | csf['as_fault_lo']))
+            elif landing == 'vector-literal':
+                outcome = 'start-vector-literal'
+                csf['cold_boot_target'] = 0x01001A00
+                csf['cold_boot_marker_present'] = True
+                csf['cold_boot_start'] = landing
+                verdict = ('the core started at 0x01001A00, the block the word names, so the '
+                           'reset vector is used as written even when it is not page aligned. '
+                           'The mask reading of 2388/2389 is dead for good, and 2386/2387/2388 '
+                           'failed for a reason of their own: their three addresses are the only '
+                           'ones that never ran, and they are the only ones that are 512-byte '
+                           'aligned inside a page. Next: one of them again, with the vendor entry '
+                           'also instrumented, to see whether the core went there instead')
+            elif landing == 'page-base':
+                outcome = 'start-masked-to-page-base'
+                csf['cold_boot_target'] = 0x01001000
+                csf['cold_boot_marker_present'] = True
+                csf['cold_boot_start'] = landing
+                verdict = ('the core reached 0x01001000 - the page base - while the word named '
+                           '0x01001A00, so the low 12 bits are dropped. That is 2389 rule restored '
+                           'with a witness that can tell it from the alternative, and 2390 marked '
+                           '0x010018ec only because 0x18ec and 0x1000 are in the same page: the '
+                           'vendor entry was never reached either, and this port has never executed '
+                           'a byte the vendor wrote')
+            elif landing == 'vendor-entry-fallback':
+                outcome = 'start-vendor-entry-fallback'
+                csf['cold_boot_target'] = 0x010018EC
+                csf['cold_boot_marker_present'] = True
+                csf['cold_boot_start'] = landing
+                verdict = ('the word named 0x01001A00 and the core started at 0x010018ec instead, '
+                           'so a reset vector that is not page aligned is ignored and the core '
+                           'falls back to the vendor entry. Every earlier build that got a marker '
+                           'was therefore page aligned by luck: 2385 at 0x0100E000 and 2389 at '
+                           '0x01001000. Moving the vector is not a usable instrument here, and '
+                           'the vendor firmware has been starting at 0x010018ec in every image, '
+                           'including the ones that patched it away')
+            else:
+                outcome = 'cold-boot-fetch-stalls'
+                csf['cold_boot_target'] = 0x01001A00
+                csf['cold_boot_marker_present'] = False
+                csf['cold_boot_start'] = None
+                verdict = ('none of the three landings ran: not the address the word names, not '
+                           'the page base, not the vendor entry. So the entry is neither the word '
+                           'nor its page base nor the vendor default, and the three earlier '
+                           'non-starts plus this one all point at the same unexplained rule')
+            if 'leaf_0x01000000' in csf:
+                csf['leaf_pa'] = {name: csf[name] & 0x0000fffffffff000 for name in
+                                  ('leaf_0x01000000', 'leaf_0x01001000',
+                                   'leaf_0x0100e000', 'leaf_0x0100f000')}
+                csf['leaf_page0_as_planned'] = csf['leaf_pa']['leaf_0x01000000'] == 0x401a4000
+            csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
         if expected_build == 0x2390:
             # The vendor's word is left exactly as it ships, so this capture is
