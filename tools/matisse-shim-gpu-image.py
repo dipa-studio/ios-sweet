@@ -953,6 +953,25 @@ TRACE_PROBE = {
                               '0124640601239b069c601a6901273f06773720682760bff34f8f21682060b94212d101321a610124640604f57c34206801321a612760bff34f8f21682060b94202d101321a6101e010321a61fee7')},
         literals={},
     ),
+    # 2378 made the code and stack leaves identical without making firmware
+    # ready. Ask whether instruction fetch makes a fresh code block readable.
+    # Assembled from matisse-csf-fetch-prime.S: no stack or literal loads.
+    # Only these two windows change; the fault handler stays vendor-original.
+    # Counter 9: call did not return; 10: call returned, data read did not;
+    # 11: the data read returned. Faults must be interpreted separately.
+    0x2379: dict(
+        kind='fetch-prime',
+        stub_va=0x01000200,
+        stub_original=bytes.fromhex('01340a2c'),
+        stub=bytes.fromhex('00bf7047'),  # nop / bx lr
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={},
+        patches={0x010018ec: (
+            '72b626484ff00b01016025484ff00701016024484ff4e0210160234880f309884ff0020080f3',
+            '72b60124240604f5007401239b069c601a6901321a61fef77dfc01321a61206901321a61fee7')},
+        literals={},
+    ),
 }
 BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the low bytes
 
@@ -1004,6 +1023,9 @@ def fault_vector_probe(path, expected, build_id):
 
     stub_at = offset(spec['stub_va'])
     stub = spec['stub']
+    if ('stub_original' in spec and
+            firmware[stub_at:stub_at + len(stub)] != spec['stub_original']):
+        raise ValueError('probe stub original bytes mismatch')
     if len(stub) % 4:
         raise ValueError('stub must keep four-byte alignment')
     sites = list(spec.get('markers', ()))
@@ -1075,8 +1097,8 @@ def fault_vector_probe(path, expected, build_id):
     if rebuilt != plan:
         raise ValueError('fault probe changed firmware mappings')
     patch = dict(diagnostic_only=True,
-                 kind=('branch-probe' if call_at else
-                       'trace-resume' if sites else 'fault-vector'),
+                 kind=spec.get('kind', 'branch-probe' if call_at else
+                               'trace-resume' if sites else 'fault-vector'),
                  stub_va='%#x' % spec['stub_va'], stub_bytes=stub.hex(),
                  replaced_bytes=replaced.hex(), marker_va='%#x' % spec['marker_va'],
                  markers=[dict(va='%#x' % va, mask=mask, bit='%#x' % mask)
@@ -1089,6 +1111,15 @@ def fault_vector_probe(path, expected, build_id):
                  container_bytes_changed=len(changed),
                  original_container_sha256=digest(firmware),
                  embedded_container_sha256=digest(embedded))
+    if build_id == 0x2379:
+        patch['fetch_prime'] = dict(
+            entry_va='0x10018ec', call_va='0x1001902', return_va='0x1001906',
+            fetch_va='0x1000200', read_insn_va='0x100190a', read_va='0x1000210',
+            marker_value='0x1000200', counter_va='0x4000010', counter_seed=8,
+            counter_meanings={'9': 'fresh-block call did not return',
+                              '10': 'call returned; data read did not return',
+                              '11': 'data read returned'},
+            fault_vectors_unchanged=True, block_size_hypothesis=512)
     return embedded, patch
 
 
@@ -1139,12 +1170,15 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
                  embedded_container_sha256=digest(embedded), diagnostic_only=True)
     return embedded, patch
 
-def diagnostic_adt(data, build_id=0x2333):
+def diagnostic_adt(data, build_id=0x2333, global_property=False):
     root, end = adt.parse(data)
     if end != len(data):
         raise ValueError('trailing ADT bytes')
     chosen = next(c for c in root.children if c.name == 'chosen')
-    for key in ('sweet-gpu-report', 'sweet-csf-report', 'sweet-gpu-autorecovery-seconds'):
+    keys = ['sweet-gpu-report', 'sweet-csf-report', 'sweet-gpu-autorecovery-seconds']
+    if global_property:
+        keys.append('sweet-csf-global')
+    for key in keys:
         if chosen.prop(key) is not None:
             raise ValueError('already a GPU diagnostic ADT')
     chosen.props = [(n, f, ('sweet-shim/gpu%x' % build_id).encode().ljust(128, b'\0')
@@ -1153,6 +1187,9 @@ def diagnostic_adt(data, build_id=0x2333):
     chosen.props += [('sweet-gpu-report', 0, bytes(128)),
                      ('sweet-csf-report', 0, bytes(696)),
                      ('sweet-gpu-autorecovery-seconds', 0, struct.pack('<I', 60))]
+    if global_property:
+        #2381: fixed96-byte global-interface evidence, separate from the696-byte ABI.
+        chosen.props.append(('sweet-csf-global', 0, bytes(96)))
     return adt.serialize(root)
 
 def build(a):
@@ -1161,8 +1198,19 @@ def build(a):
     if out.exists():
         raise ValueError('refuse existing output directory')
     kernel = pinned(a.kernel, a.kernel_sha256)
+    if a.build_id == 0x2379 and (not a.trace_probe or not a.ro_as_rw or a.mcu_control != '2'):
+        raise ValueError('build2379 requires --trace-probe --ro-as-rw --mcu-control 2')
     if a.build_id == 0x2338 and not (a.entry_probe and a.inline_entry and a.entry_pte_guard):
         raise ValueError('build2338 must preserve the2337 CSF probe configuration')
+    #2380 is a clean single-variable boot: vendor MemAttr only, no probe, no
+    # writable-RO leaves, no global stage. 2381 adds the global interface.
+    if a.build_id == 0x2380:
+        if not a.vendor_memattr:
+            raise ValueError('build2380 requires --vendor-memattr')
+        if a.ro_as_rw or a.trace_probe or a.fault_probe or a.global_init or a.entry_probe or a.reset_store_stub:
+            raise ValueError('build2380 must be a clean boot: no probe, no RO-as-RW, no global init')
+    if a.build_id == 0x2381 and not (a.vendor_memattr and a.global_init):
+        raise ValueError('build2381 requires --vendor-memattr --global-init')
     if a.fault_probe or a.trace_probe:
         if a.redirect_mcu_stores or a.entry_probe or a.inline_entry or a.entry_pte_guard or a.reset_store_stub:
             raise ValueError('the fault vector probe replaces the handler and takes no other patch')
@@ -1186,7 +1234,7 @@ def build(a):
     label = 'gpu%x' % a.build_id
     command = command.replace('sweettrial=2317', 'sweettrial=%x' % a.build_id)
     command = command.replace('rootrw=1', 'rootrw=0').replace('ufsrw=1', 'ufsrw=0')
-    tree = diagnostic_adt(original_adt, a.build_id)
+    tree = diagnostic_adt(original_adt, a.build_id, a.global_init)
     out.mkdir(parents=True)
     (out / (label + '.adt')).write_bytes(tree)
     payload, _ = mkpayload.build(Path(a.kernel), out / (label + '.adt'), command,
@@ -1207,6 +1255,8 @@ def build(a):
                    '-DSWEET_SHIM_BUILD_LABEL="%x"' % a.build_id,
                    '-DSWEET_CSF_MCU_CONTROL=' + str(a.mcu_control),
                    '-DSWEET_CSF_RO_LEAVES_WRITABLE=' + ('1' if a.ro_as_rw else '0'),
+                   '-DSWEET_CSF_VENDOR_MEMATTR=' + ('1' if a.vendor_memattr else '0'),
+                   '-DSWEET_CSF_GLOBAL_INIT=' + ('1' if a.global_init else '0'),
                    *dvfs,
                    '-DEMBEDDED_XNU_BYTES=' + str(len(payload))]
     if a.entry_probe:
@@ -1303,6 +1353,11 @@ def build(a):
     info['csf_mcu_control'] = dict(value=a.mcu_control, vendor_form=a.mcu_control == '3',
                                    report_field='platform_reserved')
     info['csf_readonly_leaves_writable'] = bool(a.ro_as_rw)
+    info['csf_vendor_memattr'] = bool(a.vendor_memattr)
+    # The shim publishes the96-byte block, but sweet_ufs.c does not forward it
+    # into SWEETMRK yet, so2381 evidence is console-only until that lands.
+    info['csf_global_init'] = (dict(enabled=True, report_bytes=96, kernel_marks_wired=False)
+                               if a.global_init else False)
     info['csf_mapping_metadata_hardware_readback'] = False
     info['csf_arena'] = dict(shim_offset=arena, bytes=2 << 20,
                              bss_end=symbol['_bss_end'], shim_end=end,
@@ -1341,6 +1396,9 @@ def build(a):
             ('tools/matisse-csf-fetch-audit.py', 'tools/matisse-shim-gpu-image.py')}
         if a.build_id in TRACE_PROBE:
             info['trace_probe'] = info.pop('fault_vector_probe')
+            if a.build_id == 0x2379:
+                name = 'tools/matisse-csf-fetch-prime.S'
+                info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
     if a.entry_probe:
         # The gpufreq layer adds one page of shim text, so from2338 the arena
         # anchor moves by exactly0x1000. Pinning it per build keeps the drift
@@ -1372,7 +1430,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
@@ -1385,8 +1443,8 @@ def main():
                    help='build2343 only: replace the shared fault vector entry with a stub that '
                         'records the stacked PC in shared+0x10, leaving the entry untouched')
     p.add_argument('--trace-probe', action='store_true',
-                   help='build2344/2345 only: resumable fault handler plus udf markers at bars; '
-                        'each hit ORs its bit into a shared word and execution continues')
+                   help='install the selected build\'s diagnostic probe; build2379 fetches a '
+                        'fresh block before reading it as data, with the fault handler untouched')
     p.add_argument('--redirect-mcu-stores', action='store_true',
                    help='build2339/2340 only: repoint the reset handler\'s MCU peripheral access '
                         'literals at shared words, leaving the original code intact')
@@ -1398,6 +1456,10 @@ def main():
                         'only:2375/2377 showed RW leaves complete reads and writes while a data '
                         'read of an R-X leaf hangs until its line is resident, so this isolates '
                         'whether the read-only bit is what refuses the fill')
+    p.add_argument('--vendor-memattr', action='store_true',
+                   help='2380: map firmware sections with the vendor MemAttr indexes/share bits')
+    p.add_argument('--global-init', action='store_true',
+                   help='2381: program the CSF global interface after boot')
     p.add_argument('--mcu-control', default='2', choices=('2', '3'),
                    help='value written to MCU_CONTROL to start the MCU: 2 is AUTO alone and '
                         'the measured-good value on this SoC (default), 3 is the vendor '

@@ -468,3 +468,77 @@ literal 0x1e4 bytes ahead of the instruction pointer, which lands in the next
 512-byte block, and that block has not been fetched. Answer 10 would say the model
 built from 2371-2375 is wrong and the search has to start over from the raw
 addresses rather than from a residency theory.
+
+## 22. 2379 ran: the counter stopped at 9
+
+The trial ran 2026-11-06 14:18 against image `9dc4467d...df6c` (26,714,112 B,
+partition `aead007c...f415` read back before boot). Journal
+`complete-restored-Recovery`; the phone did not return to a fresh Recovery, it
+fell to fastboot after 84.56 s and the raw prefix restore brought it back with
+`restored_sha256 = 2931647a...86b1`, i.e. the partition is byte-identical to the
+baseline again.
+
+```
+groups / fetch_prime_counter   9
+fetch_prime_outcome            fetch-call-incomplete
+stage / error                  4 / -53
+mcu_status, mmu_raw, as_fault  1, 0, 0
+version / firmware_ready       0 / 0
+memattr                         0x4c4c884c / 0x4c4c4c4c
+reset_raw / cleanup_error      0x200 / -53
+```
+
+So the branch into 0x01000200 never returned. That is narrower than "the data
+read hung" and wider than "fetch is broken":
+
+- the counter proves the stub stored 9, so the reset vector, the marker store and
+  the counter update all executed;
+- it does not prove the fetch faulted, because a lost return and a hanging fetch
+  are indistinguishable from a counter that stops;
+- it does not prove fetch *primes* a block, which was the question 2379 was built
+  to answer - that would have been 11.
+
+Combined with 2376 the useful part is: an RX block that has never been touched is
+not reachable, by either path, on this mapping. 2366 (the loop that turned once
+with its literal 12 bytes inside the executing block) still does not fit any
+512-byte model, so the block size is not settled.
+
+## 23. 2380: the two leaf facts that were never varied
+
+2378 made the code leaf's low twelve bits identical to the stack leaf's, which
+removed AP, XN, share bits, AF and nG from the search. Two differences to the
+vendor driver were still unvaried, because nobody had read them out of the
+blob:
+
+1. **AttrIndx numbering.** `mali_csf_memory.c` put a cached section on index 1.
+   The vendor `convert_mem_flags()` puts `CSF_FIRMWARE_CACHE_MODE_CACHED` on
+   `AS_MEMATTR_INDEX_IMPL_DEF_CACHE_POLICY`, which is **0**.
+2. **Share bits on the shared section.** This port set SH=3 (`0x300`) on the
+   leaf whose section declares `CSF_FIRMWARE_ENTRY_SHARED`. The vendor sets
+   share bits only for `KBASE_REG_SHARE_BOTH`, and on a `COHERENCY_NONE` SoC
+   `convert_mem_flags()` downgrades CACHED_COHERENT to UNCACHED_COHERENT and
+   then to CACHE_MODE_NONE before that branch is reached - so the shared leaf
+   carries **no** share bits and selects index 5.
+
+Both are now proven from the pinned `mali_kbase_mt6983.ko`, not inferred:
+`mmu_update` (text 0x4708C) and `kbase_mmu_get_as_setup` (text 0x47998) each
+build `0x00084C8D888D8F88` with a `mov/movk` chain;
+`kbase_mmu_hw_configure` stores that field to GPU+0x2408. Bytes are
+`[0]=88 [1]=8f [2]=8d [3]=88 [4]=8d [5]=4c [6]=08`, so index 0 is the cached
+byte and index 5 the non-cacheable one.
+
+What that means for reading the result: the *selected bytes* stay 0x88 for a
+cached section and 0x4c for the rest, so 2380 is really a test of the share
+bits, the index numbering and MEMATTR[0]. If it returns the 2376/2378 signature
+unchanged, the honest conclusion is "shareability and index numbering are not
+the wall", not "cacheability is not the wall".
+
+Readiness rules for this build, in the order the decoder applies them:
+
+| result | meaning | next |
+|---|---|---|
+| stage 7, error 0, version != 0, `mmu_raw & 0xffff == 0` | the firmware reached its interface | 2381: global input page + doorbell |
+| stage 4, error -53, `mcu_status 1`, version 0 | same as 2376/2378 | 2382: move the code section's PA, keep VA and attributes |
+| error -54, or `mmu_raw & 0xffff`, or `as_fault` | the vendor pairing faults translation | revert the leaf encoding first |
+| stage 8/9/10, or `cleanup_error != 0` | transaction incomplete | inconclusive, do not stack a variable |
+| `memattr` pair not `0x888d8f88`/`0x00084c8d` | not this image | discard the report |

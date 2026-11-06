@@ -3,6 +3,7 @@
 #include "mtk_gpueb_boot.h"
 #include "mali_csf_memory.h"
 
+struct sweet_csf_global_evidence;
 struct sweet_csf_boot_config {
     uint64_t gpu, root_pa, arena_pa, arena_bytes;
     uint32_t shared_offset, shared_bytes, timeout_ms;
@@ -37,7 +38,36 @@ struct sweet_csf_boot_config {
      * whole budget. Only0,2,3 are accepted so a trial moves one number.
      * The written/readback pair is recorded in platform_reserved. */
     uint32_t mcu_control_value;
+    /*2381: firmware shared-section VA. The CSF global interface lives inside
+     * that section and is addressed by VA, so the input/output pages can only
+     * be converted to arena offsets when the section base is known. */
+    uint32_t shared_va;
+    /*2381:0/1 program the post-boot global interface (input page + kernel
+     * doorbell + GLB_ACK). Zero preserves every build up to2380: not a single
+     * additional MMIO access is issued. Requires global_evidence. */
+    uint32_t global_init;
+    struct sweet_csf_global_evidence *global_evidence;
 };
+/*2381 evidence, published through a separate ADT property so the 696-byte
+ * report ABI is byte-identical. 24 words = 96 bytes = 12 SWEETMRK records;
+ * the kernel mark table is 160 entries and already holds about119, so this
+ * block must never grow past 12 records. flags: bit0 input page programmed,
+ * bit1 doorbell rung, bit2 ACK matched, bit3 ABORTED before any write. */
+struct sweet_csf_global_evidence {
+    uint32_t flags;
+    int32_t error;
+    uint32_t input_va, output_va;
+    uint32_t input_pa_lo, input_pa_hi, output_pa_lo, output_pa_hi;
+    uint32_t req_before, ack_before;
+    uint32_t protm_coherency, alloc_en_lo, alloc_en_hi;
+    uint32_t pwroff_timer, progress_timer, idle_timer, ack_irq_mask;
+    uint32_t req_written, ack_first, ack_last;
+    uint32_t polls, req_mask, ack_matched, doorbell_value;
+};
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(struct sweet_csf_global_evidence)==96,
+    "sweet-csf-global must stay 12 SWEETMRK records");
+#endif
 struct sweet_csf_platform_snapshot {
     uint32_t gpu_status, mcu_control, gpu_fault_status, gpu_fault_lo, gpu_fault_hi;
     uint32_t job_stat, spm_status, spm_status_second;
@@ -126,13 +156,24 @@ enum sweet_csf_boot_stage {
     /*2372: stop between the platform assertions and the start write, i.e. the
      * MCU did not return to a halt state we could measure. Earlier builds
      * never reported this stage. */
-    SWEET_CSF_BOOT_HALT=8
+    SWEET_CSF_BOOT_HALT=8,
+    /*2381: firmware reported ready and the global input page is being
+     * programmed, or the kernel doorbell has been rung and GLB_ACK is being
+     * polled. A successful transaction still finishes at COMPLETE(7), so the
+     * existing decoder readiness rule is unchanged. */
+    SWEET_CSF_BOOT_GLOBAL=9, SWEET_CSF_BOOT_GLOBAL_ACK=10
 };
 enum sweet_csf_boot_error {
     SWEET_CSF_BOOT_ARGUMENT=-50, SWEET_CSF_BOOT_MODEL=-51,
     SWEET_CSF_BOOT_STATE=-52, SWEET_CSF_BOOT_TIMEOUT=-53,
     SWEET_CSF_BOOT_FAULT=-54, SWEET_CSF_BOOT_INTERFACE=-55
 };
+/* 0 keeps every build up to2380 identical. 1 additionally programs the global
+ * interface after the firmware reports ready, i.e. the step
+ * kbase_csf_firmware_r32p1's global_init_on_boot() performs. */
+#ifndef SWEET_CSF_GLOBAL_INIT
+#define SWEET_CSF_GLOBAL_INIT 0
+#endif
 /* Called ONLY while the caller owns exactly one powered/reset GPU reference.
  * Uses polled raw IRQs with internal enables; GIC routing is untouched.
  * Always attempts soft reset

@@ -16,6 +16,12 @@ static uint8_t arena[2u<<20] __attribute__((aligned(4096)));
 extern const uint8_t sweet_csf_blob_start[],sweet_csf_blob_end[];
 struct sweet_csf_boot_report shim_csf_report;
 _Static_assert(sizeof(struct sweet_csf_boot_report)==696, "CSF2333 platform path ABI");
+#if SWEET_CSF_GLOBAL_INIT
+/*2381 evidence carrier. Published through its own ADT property, so the
+ *696-byte report above stays byte-identical. */
+struct sweet_csf_global_evidence shim_csf_global_evidence;
+_Static_assert(sizeof(struct sweet_csf_global_evidence)==96, "sweet-csf-global size");
+#endif
 /* Value written to MCU_CONTROL to start the MCU. 2 is AUTO alone and is what
  * every build up to2371 used; 3 is the vendor driver's ENABLE|AUTO. 2372 measured
  * 3 on this SoC: the write reads back, but MCU_STATUS stays0 for the whole
@@ -89,7 +95,12 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
         .shared_bytes=memory.shared_bytes,.timeout_ms=1000,.noncoherent=1,
         .pte_group_requested=6,.vendor_ina0=1,.vendor_cached_memattr=1,
         .platform_snapshot=1,.access_snapshot=1,.platform_path=1,
-        .mcu_control_value=SWEET_CSF_MCU_CONTROL};
+        .mcu_control_value=SWEET_CSF_MCU_CONTROL
+#if SWEET_CSF_GLOBAL_INIT
+        ,.shared_va=memory.shared_va,.global_init=1,
+        .global_evidence=&shim_csf_global_evidence
+#endif
+        };
 #if defined(SHIM_CSF_ENTRY_PROBE) || defined(SHIM_CSF_ENTRY_CHECKPOINT)
     c.entry_checkpoint=1;
 #endif
@@ -114,5 +125,13 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
     con_hex2("CSF start","ctl=",shim_csf_report.platform_reserved>>8,
              "back=",shim_csf_report.platform_reserved&0xff);
     con_hex2("CSF","mmu=",shim_csf_report.mmu_raw,"reset=",shim_csf_report.reset_raw);
+    con_hex2("CSF memattr","lo=",shim_csf_report.memattr_lo,
+             "hi=",shim_csf_report.memattr_hi);
+#if SWEET_CSF_GLOBAL_INIT
+    con_hex2("CSF global","flags=",shim_csf_global_evidence.flags,
+             "err=",(uint32_t)shim_csf_global_evidence.error);
+    con_hex2("CSF global ack","first=",shim_csf_global_evidence.ack_first,
+             "last=",shim_csf_global_evidence.ack_last);
+#endif
     return rc;
 }

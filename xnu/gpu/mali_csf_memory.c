@@ -135,8 +135,20 @@ int sweet_csf_memory_build_group(const uint8_t *fw, size_t bytes, const struct s
              * so the two disagreed about who owns the transaction. */
             int cached = (p->flags & 24) == 8;
             uint64_t desc = (pa + p->arena_offset + off) | 3 | 0x800 | 0x400 | 0x40;
+#if SWEET_CSF_VENDOR_MEMATTR
+            /*2380 vendor pairing. convert_mem_flags() at system_coherency NONE
+             * maps a CACHED section to AS_MEMATTR_INDEX_IMPL_DEF_CACHE_POLICY(0)
+             * and everything else, CACHED_COHERENT included, to
+             * AS_MEMATTR_INDEX_NON_CACHEABLE(5). Only KBASE_REG_SHARE_BOTH sets
+             * ENTRY_SHARE_BITS, and the coherent branches are downgraded to
+             * CACHE_MODE_NONE before reaching it, so no leaf carries SH bits.
+             * The attribute bytes selected from SWEET_CSF_VENDOR_MEMATTR_* stay
+             * 0x88/0x4c, i.e. identical to the index1/index0 pairing. */
+            desc |= (uint64_t)(cached ? 0u : 5u) << 2;
+#else
             desc |= cached ? 0x004 : 0x000;
             if (p->flags & (1u << 30)) desc |= 0x300;
+#endif
             if (!(p->flags & 2) && !SWEET_CSF_RO_LEAVES_WRITABLE) desc |= 0x80;
             if (!(p->flags & 4)) desc |= UINT64_C(3) << 53;
             desc |= (uint64_t)memory_group << 59;

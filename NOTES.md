@@ -1,6 +1,126 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2378 - READ-ONLY WAS NOT IT; NO LEAF FIELD DISTINGUISHES THE CODE PAGE ANY MORE <<<
+## >>> ACTIVE 2026-11-06:2380 - VENDOR MEMATTR; IMAGE READY, NOT YET FLASHED <<<
+
+2379 ran and its result is below. 2380 changes exactly one thing: the firmware
+sections are mapped the way the pinned r32p1 `convert_mem_flags()` maps them on
+a non-coherent SoC. `mali_csf_memory.c` now selects **AttrIndx 0 for a cached
+section, AttrIndx 5 for everything else, and no SH bits on any leaf**, and
+`mali_csf_boot.c` writes the vendor AS_MEMATTR table itself.
+
+WHY THIS IS PROVEN AND NOT GUESSED: `research/.../kbase-full-disasm.txt` builds
+`0x00084C8D888D8F88` twice with `mov/movk` chains - at 0x4708C (`mmu_update`
+storing into `mmu_hw_config.memattr`) and at 0x47998 (`kbase_mmu_get_as_setup`
+storing into `mmu_setup->memattr`). `kbase_mmu_hw_configure` then stores that
+struct field to GPU+0x2408; it is not an immediate, which is why grepping for a
+store of 0x2408 finds only the offset. Evidence archive:
+`research/matisse/20261031-gpu/memattr-disasm-2380.txt`. The 2330 guess
+`0x4c4c884c` is therefore retired for this path.
+
+WHAT ACTUALLY CHANGES: index0=0x88, index5=0x4c, so the *selected attribute
+byte* for cached and shared sections is the same 0x88/0x4c as before. The real
+deltas are (a) the shared leaf loses SH=3, (b) cached leaves move from index1 to
+index0, (c) MEMATTR[0] goes 0x4c -> 0x88. A NULL result therefore excludes the
+share bits and the index numbering - it does **not** exclude the cache mode.
+
+BUILD: kernel `9540f0ae...` (identity patch 0179, build id 0x2380), image
+`f9525b2692285c90e4527954bab9ba72144196eb319bcde57567cace7dd0613f`,
+26,652,672 B, embedded container byte-identical to the vendor file
+(`de22d2fc...f7229a`), partition prediction
+`ddee4ce082d3db214a58c264a37f3d466fff6ab400b3a34276ca5a5f9811a71d`. Manifest
+says `csf_vendor_memattr=true`, `csf_readonly_leaves_writable=false`,
+`csf_global_init=false`, arena offset 0x77000. Rebuilt into a second directory
+and got the identical image sha, so the ready directory matches the sources.
+
+CLEAN BOOT ON PURPOSE: no `--trace-probe`, no `--ro-as-rw`, `--mcu-control 2`.
+The comparison base is 2376/2378, not 2379. Runner:
+`research/matisse/20261031-gpu/shim2380-vendormemattr-trials-run-once.py`; it
+accepts only `--approved-image-sha256=` plus the full image sha in its `IH`
+constant (`f9525b2692285c90e4527954bab9ba72144196eb319bcde57567cace7dd0613f`).
+
+INIT/POWER-UP SCAFFOLDING LANDED THIS ROUND (all default-off, byte-identical
+when off): `sweet_csf_boot` gained stages 9/10 plus `csf_global_init()`, which
+programs the global **input** page (protm_coherency, core_en_mask, poweroff/
+progress/idle timers, ack_irq_mask 0x0480071e), toggles `GLB_REQ` against the
+firmware's own ACK with mask 0x40e, rings CSF doorbell 0 at GPU+0x80000 and
+polls `(ACK & 0x40e) == (REQ & 0x40e)` - the step
+`global_init_on_boot()` performs after boot. Compiled only with
+`-DSWEET_CSF_GLOBAL_INIT=1` (`--global-init`). Its 96-byte evidence block goes
+out through a new `sweet-csf-global` ADT property and the 696-byte report is
+untouched. OPEN: `sweet_ufs.c` does not forward that block into SWEETMRK yet,
+so 2381 evidence would be console-only; the builder records
+`kernel_marks_wired=false`. Do not describe 2381 as runnable until that lands.
+
+TESTS: 224 pass, 3 skip (baseline was 215/3). New coverage: legacy leaf encoding
+byte-identical, vendor pairing differs only in AttrIndx/SH, AS_MEMATTR pair
+written and verified per mode, global stage success/timeout/invalid-page/
+argument-rejection with zero doorbell writes when off, and four 2380 decoder
+verdicts.
+
+NEXT: one device trial of 2380 after explicit confirmation. Then read the
+matrix in `docs/matisse-gpu-mcu-wall.md`: ready -> run 2381; unchanged
+(stage4/-53/version0) -> the share bits are not the wall and 2382 (relocate the
+code section's PA) is the next single variable; a fault -> revert the leaf
+encoding before anything else. No device write has happened this session.
+
+## >>> PREVIOUS 2026-11-06:2379 - THE FRESH-BLOCK CALL DID NOT RETURN; FETCH ITSELF HANGS <<<
+
+RAN 2026-11-06 14:18. Counter `groups = 9`, outcome `fetch-call-incomplete`:
+the probe branched into 0x01000200 (patched to `nop; bx lr`) and never came
+back, so the stop is in the fetch/return path, *before* the explicit data read
+at 0x01000210. Combined with 2376 this is the strongest statement so far: it is
+not only a data read of an unfetched RX block that fails, a plain instruction
+fetch of one fails too. Stage 4, error -53, `mcu_status=1`, `mmu_raw=0`,
+`as_fault=0`, `version=0`, `firmware_ready=0`, memattr `0x4c4c884c` /
+`0x4c4c4c4c`, transcfg `0x42000006`, cleanup -53, `reset_raw=0x200`.
+Image `9dc4467d...df6c`, 26,714,112 B, partition `aead007c...f415` written and
+read back, journal `complete-restored-Recovery`, no fresh Recovery - it fell to
+fastboot after 84.56 s and the raw prefix restore brought it back,
+`restored_sha256 = 2931647a...86b1`.
+
+NOT PROVEN BY THIS: that fetch *primes* a block for data access. A non-returning
+call cannot distinguish "fetch hung" from "fetch worked and the return was
+lost", and the 2366 datum still contradicts the 512-byte-block model. Treat the
+exact stopped PC as unknown; 0x010019dc is still a disassembly inference.
+
+THE 2379 DESIGN, for the record:
+
+2378's negative result is unchanged. 2379 now has a literal-free, stack-free
+probe from `tools/matisse-csf-fetch-prime.S`: patch 38 bytes at reset handler
+0x010018ec and four bytes at 0x01000200 (`nop; bx lr`), with the config/vector
+table and original fault handler untouched. BL at 0x01001902 returns to
+0x01001906; only then does LDR at 0x0100190a read 0x01000210 into a discarded
+register. Marker shared+8 is 0x01000200. Counter shared+16 starts at 8:
+9 before BL, 10 after return, 11 after the data read. Keep the 2378 mapping
+(`--ro-as-rw`) and MCU_CONTROL=2. The builder enforces those inputs for 2379.
+
+OBSERVATIONS SO FAR: linked Cortex-M7 assembly matches both installed windows;
+exactly 40 container bytes differ within those two windows (42 bytes covered).
+Original firmware SHA de22d2fc...4f7229a; patched container SHA
+367eb386724f2a29f1b32ca39f4042954a804b667ab03228a38dd8941bd16d89.
+113 related tests ran successfully, 3 skipped. Full contextual replay of 177
+patches, including inherited untracked0093 (hash54f0aaa5...de65365b), exactly
+matches local kernel source after identity patch0178 -> build2379. Baseline
+2378 kernel/source saved in ignored `shim2379-fetchprime-prep/`.
+
+INFERENCE LIMITS: 9 localises a missing return to the fetch/return path; it
+does not expose the exact stopped PC. 10 says this fetch did not make the word
+at +0x10 readable. 11 supports fetch priming at this target, not an exact
+512-byte window or vendor firmware readiness. Decoder treats MMU faults,
+missing markers and unexpected states separately. The proposed vendor stop
+at 0x010019dc remains an inference from disassembly and prior probes, not a
+direct PC measurement of 2376/2378.
+
+NEXT: finish local incremental kernel/image build, independent image audit,
+full host tests, commit and record final hashes. No new CI dispatch or push;
+`gh` inspected the existing CI history (origin's most recent listed runs
+remain action_required); established local build retains inherited0093.
+No device write or boot has been performed in this session. Last verified
+device state remains Recovery/boot_a2931647a...86b1 from 2378; not remeasured yet.
+Preserve inherited untracked files. A destructive trial needs a separate
+confirmation naming the completed 2379 image under AGENTS.md.
+
+## >>> PREVIOUS 2026-11-06:2378 - READ-ONLY WAS NOT IT; NO LEAF FIELD DISTINGUISHES THE CODE PAGE ANY MORE <<<
 
 READ THIS FIRST. Trials 2357-2370 all ran. Until this entry their results existed
 only as comments above the per-build `TRACE_PROBE` table in

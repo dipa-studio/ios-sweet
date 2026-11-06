@@ -1,0 +1,19 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -1129,7 +1129,15 @@
+ 	thread_t thread;
+ 
+ 	PE_parse_boot_argn("sweetlog", &on, sizeof(on));
+-	if (!on || !su.writable || su.nblocks < 2 * SWEET_LOG_BLOCKS) {
++	/*
++	 * The ring is flushed with raw block writes to the last 4 MiB + 4 KiB
++	 * of the partition, so a read-only userdata (ufsrw=0) can still keep
++	 * the console: the VFS stays read-only, the mount cannot write, and
++	 * nothing above that area is touched. Without this the only console
++	 * on this board is the dark framebuffer, so a hung bring-up leaves no
++	 * evidence at all.
++	 */
++	if (!on || su.nblocks < 2 * SWEET_LOG_BLOCKS) {
+ 		return;
+ 	}
+ 	PE_parse_boot_argn("ufslogsecs", &sweet_log_secs, sizeof(sweet_log_secs));

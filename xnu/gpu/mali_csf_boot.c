@@ -129,6 +129,108 @@ static int platform_path(const struct sweet_csf_boot_config *c,const struct swee
         ((s->infra_enable|s->infra_status)&0xf) ||
         ((s->emi0_enable|s->emi0_status|s->emi1_enable|s->emi1_status)&0xc0000);
 }
+#if SWEET_CSF_GLOBAL_INIT
+/*2381 global interface field offsets, pinned by panthor_fw.h
+ * panthor_fw_global_input_iface and by the r32p1 global_init() code:
+ * 0x00 req, 0x04 ack_irq_mask, 0x10 progress_timer, 0x14 poweroff_timer,
+ * 0x18/0x1c core_en_mask lo/hi, 0x20 protm_coherency, 0x80 idle_timer.
+ * The output page carries ack at 0x00. */
+#define SWEET_CSF_GLB_REQ        0x00u
+#define SWEET_CSF_GLB_ACK_IRQ    0x04u
+#define SWEET_CSF_GLB_PROGRESS   0x10u
+#define SWEET_CSF_GLB_PWROFF     0x14u
+#define SWEET_CSF_GLB_ALLOC_LO   0x18u
+#define SWEET_CSF_GLB_ALLOC_HI   0x1cu
+#define SWEET_CSF_GLB_PROTM      0x20u
+#define SWEET_CSF_GLB_IDLE       0x80u
+/* CSF_GLB_REQ_CFG_MASK (firmware-r32p1.c:117) = ALLOC_EN|PROGRESS_TIMER|
+ * PWROFF_TIMER|IDLE_ENABLE = 0x40e. Only these bits are toggled and waited on;
+ * enabling the idle timer also pins bit10 directly, as panthor does. */
+#define SWEET_CSF_GLB_REQ_CFG    0x40eu
+#define SWEET_CSF_GLB_IDLE_EN    0x400u
+/* Vendor ack-mask immediate read from global_init (text0x6dec0). */
+#define SWEET_CSF_GLB_ACK_MASK   0x0480071eu
+/* PROGRESS_TIMEOUT_CYCLES(5*500*1024*1024)>>10, panthor_fw.c:30. */
+#define SWEET_CSF_GLB_TIMER      0x00271000u
+#define SWEET_CSF_DOORBELL0      0x80000u
+
+/* Program the global interface the way kbase global_init()/global_init_on_boot()
+ * do, then ring the kernel doorbell and wait for GLB_ACK. Runs only after the
+ * existing interface gate proved version/input/output/groups, so no write here
+ * can execute against an unbooted MCU. */
+static int csf_global_init(const struct sweet_csf_boot_config *c,const struct sweet_gpu_io *io,
+                           struct sweet_csf_boot_report *r,uint64_t budget)
+{
+    struct sweet_csf_global_evidence *e;
+    uint64_t end;
+    if(!c||!c->global_evidence||c->shared_va!=0x04000000u) return SWEET_CSF_BOOT_ARGUMENT;
+    e=c->global_evidence;
+    end=(uint64_t)c->shared_va+c->shared_bytes;
+    e->input_va=r->input_va;e->output_va=r->output_va;
+    /* The first page of the shared section is the global control page that
+     * carries version/features/input_va/output_va. Neither interface page may
+     * alias it, or the writes below would corrupt the firmware's own header. */
+    if((r->input_va&4095)||(r->output_va&4095)||r->input_va==r->output_va||
+       r->input_va==c->shared_va||r->output_va==c->shared_va||
+       r->input_va<c->shared_va||r->output_va<c->shared_va||
+       (uint64_t)r->input_va+4096>end||(uint64_t)r->output_va+4096>end) {
+        e->flags|=8;e->error=SWEET_CSF_BOOT_INTERFACE;return e->error;
+    }
+    uint64_t in=c->arena_pa+c->shared_offset+(r->input_va-c->shared_va);
+    uint64_t out=c->arena_pa+c->shared_offset+(r->output_va-c->shared_va);
+    if(in<c->arena_pa||out<c->arena_pa||
+       in+0x100>c->arena_pa+c->arena_bytes||out+0x100>c->arena_pa+c->arena_bytes) {
+        e->flags|=8;e->error=SWEET_CSF_BOOT_INTERFACE;return e->error;
+    }
+    e->input_pa_lo=(uint32_t)in;e->input_pa_hi=(uint32_t)(in>>32);
+    e->output_pa_lo=(uint32_t)out;e->output_pa_hi=(uint32_t)(out>>32);
+    io->barrier(io->context);
+    e->req_before=rd(io,in+SWEET_CSF_GLB_REQ);
+    e->ack_before=rd(io,out+SWEET_CSF_GLB_REQ);
+    /* Same protocol selector written to GPU+0x304: vendor system_coherency
+     * NONE(31) on this platform. Recorded, not inferred from a readback. */
+    e->protm_coherency=31;
+    e->alloc_en_lo=r->shader_present_lo;e->alloc_en_hi=r->shader_present_hi;
+    e->progress_timer=SWEET_CSF_GLB_TIMER;
+    e->pwroff_timer=SWEET_CSF_GLB_TIMER;
+    e->idle_timer=SWEET_CSF_GLB_TIMER;
+    e->ack_irq_mask=SWEET_CSF_GLB_ACK_MASK;
+    e->req_mask=SWEET_CSF_GLB_REQ_CFG;
+    wr(io,in+SWEET_CSF_GLB_PROTM,e->protm_coherency);
+    wr(io,in+SWEET_CSF_GLB_ALLOC_LO,e->alloc_en_lo);
+    wr(io,in+SWEET_CSF_GLB_ALLOC_HI,e->alloc_en_hi);
+    wr(io,in+SWEET_CSF_GLB_PWROFF,e->pwroff_timer);
+    wr(io,in+SWEET_CSF_GLB_PROGRESS,e->progress_timer);
+    wr(io,in+SWEET_CSF_GLB_IDLE,e->idle_timer);
+    wr(io,in+SWEET_CSF_GLB_ACK_IRQ,e->ack_irq_mask);
+    /* panthor_fw_toggle_reqs(): toggle the CFG bits against the firmware's own
+     * ACK, then pin IDLE_EN, then ring doorbell 0. */
+    uint32_t req=e->req_before;
+    e->req_written=(req&~SWEET_CSF_GLB_REQ_CFG)|
+        ((e->ack_before^SWEET_CSF_GLB_REQ_CFG)&SWEET_CSF_GLB_REQ_CFG)|
+        SWEET_CSF_GLB_IDLE_EN;
+    wr(io,in+SWEET_CSF_GLB_REQ,e->req_written);
+    io->barrier(io->context);
+    e->flags|=1;
+    r->stage=SWEET_CSF_BOOT_GLOBAL_ACK;
+    e->doorbell_value=1;
+    wr(io,c->gpu+SWEET_CSF_DOORBELL0,e->doorbell_value);
+    io->barrier(io->context);
+    e->flags|=2;
+    uint64_t begin=io->ticks(io->context);
+    for(uint32_t i=0;i<10000000;i++) {
+        uint32_t ack=rd(io,out+SWEET_CSF_GLB_REQ);
+        if(!e->polls)e->ack_first=ack;
+        e->ack_last=ack;e->polls++;
+        if((ack&SWEET_CSF_GLB_REQ_CFG)==(e->req_written&SWEET_CSF_GLB_REQ_CFG)) {
+            e->flags|=4;e->ack_matched=1;return 0;
+        }
+        if(io->ticks(io->context)-begin>=budget)break;
+    }
+    e->error=SWEET_CSF_BOOT_TIMEOUT;
+    return e->error;
+}
+#endif
 int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_io *io,
                    struct sweet_csf_boot_report *r)
 {
@@ -144,6 +246,8 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
        c->entry_checkpoint>1||(c->entry_checkpoint&&!c->access_snapshot)||
        (c->mcu_control_value&&c->mcu_control_value!=2&&c->mcu_control_value!=3)||
        c->pte_group_requested>15||
+       c->global_init>1||(!SWEET_CSF_GLOBAL_INIT&&c->global_init)||
+       (c->global_init&&(!c->global_evidence||c->shared_va!=0x04000000u))||
        c->pte_pages_built>c->arena_bytes/4096||c->root_pa!=c->arena_pa||
        c->arena_pa<0x40000000||(c->arena_pa&4095)||!c->arena_bytes||
        c->arena_bytes>0x1000000||c->arena_pa>UINT64_MAX-c->arena_bytes||
@@ -228,8 +332,18 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
      * at index5 for shared leaves. Our existing PTEs instead select1/0.
      * Isolate cached byte only; copying the whole vendor register would
      * select8f for cached and88 for shared. No PTE or page-walk change. */
+#if SWEET_CSF_VENDOR_MEMATTR
+    /*2380: the PTE side now selects index0/index5, so the register must carry
+     * the vendor table itself. vendor_cached_memattr is ignored here: index0
+     * is already0x88 and index5 already0x4c, which makes the diagnostic switch
+     * a no-op instead of a second variable. */
+    const uint32_t memattr_lo=SWEET_CSF_VENDOR_MEMATTR_LO;
+    const uint32_t memattr_hi=SWEET_CSF_VENDOR_MEMATTR_HI;
+#else
     uint32_t memattr_lo=c->vendor_cached_memattr?0x4c4c884c:0x4c4c9f4c;
-    wr(io,c->gpu+0x2408,memattr_lo);wr(io,c->gpu+0x240c,0x4c4c4c4c);
+    uint32_t memattr_hi=0x4c4c4c4c;
+#endif
+    wr(io,c->gpu+0x2408,memattr_lo);wr(io,c->gpu+0x240c,memattr_hi);
     /* Pinned KMD MMIO slice45e80..45fd4 writes42000006 under protocol31.
      * INA selection is independent of the cached MEMATTR diagnostic. */
     uint32_t transcfg=0x42000006|(c->vendor_ina0?0:((55-SWEET_CSF_VA_BITS)<<6));
@@ -241,7 +355,8 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     r->memattr_lo=rd(io,c->gpu+0x2408);r->memattr_hi=rd(io,c->gpu+0x240c);r->diag_flags|=2;
     if(r->transcfg_lo!=transcfg||rd(io,c->gpu+0x2434)||
        r->transtab_lo!=(uint32_t)c->root_pa||r->transtab_hi!=(uint32_t)(c->root_pa>>32)||
-       (c->vendor_cached_memattr&&(r->memattr_lo!=memattr_lo||r->memattr_hi!=0x4c4c4c4c))) {
+       ((SWEET_CSF_VENDOR_MEMATTR||c->vendor_cached_memattr)&&
+        (r->memattr_lo!=memattr_lo||r->memattr_hi!=memattr_hi))) {
         r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
     }
     wr(io,c->gpu+0x2004,0x10001);wr(io,c->gpu+0x1004,0x80000000);
@@ -338,6 +453,17 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
        0x1000+(uint64_t)r->groups*r->group_stride>c->shared_bytes) {
         r->error=SWEET_CSF_BOOT_INTERFACE;goto cleanup;
     }
+#if SWEET_CSF_GLOBAL_INIT
+    /*2381: the port's next layer. Only reachable once the interface gate above
+     * accepted version/input/output/groups, i.e. the firmware really booted.
+     * readiness is claimed only after this stage succeeds too, so a firmware
+     * that boots but refuses the global handshake is never reported ready. */
+    if(c->global_init) {
+        r->stage=SWEET_CSF_BOOT_GLOBAL;
+        rc=csf_global_init(c,io,r,budget);
+        if(rc) {r->error=rc;goto cleanup;}
+    }
+#endif
     r->firmware_ready=1;
 cleanup:
     /* GPU reset stops DMA and discards AS0/L2 state before the caller

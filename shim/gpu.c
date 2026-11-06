@@ -252,6 +252,15 @@ int shim_gpu_publish(uintptr_t adt, uint32_t bytes,
     if (!csf || sizeof(shim_csf_report)!=696) return -1;
     for (unsigned i=0;i<696;i++) csf[i]=0;
     for (unsigned i=0;i<sizeof(shim_csf_report);i++) csf[i]=((const uint8_t *)&shim_csf_report)[i];
+#if SWEET_CSF_GLOBAL_INIT
+    /*2381: fixed96-byte block in its own property. Absent means the builder
+     * disagreed with the driver, so fail closed instead of publishing a hole. */
+    uint8_t *glb=property(adt, bytes, "sweet-csf-global", 96);
+    if (!glb || sizeof(shim_csf_global_evidence)!=96) return -1;
+    for (unsigned i=0;i<96;i++) glb[i]=0;
+    for (unsigned i=0;i<sizeof(shim_csf_global_evidence);i++)
+        glb[i]=((const uint8_t *)&shim_csf_global_evidence)[i];
+#endif
 #endif
     for (unsigned i = 0; i < 128; i++) raw[i] = 0, a[i] = 0, b[i] = 0;
     for (unsigned i = 0; i < sizeof(*r); i++) raw[i] = ((const uint8_t *)r)[i];

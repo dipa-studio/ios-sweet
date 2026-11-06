@@ -121,9 +121,9 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertEqual(result['firmware_memory'],0x250000000)
 
     def marks_dvfs(self, valid=0xf, oppidx=2, power_count=1, freq=500000,
-                   commit=0, omit=None):
+                   commit=0, omit=None, build=0x2338, **changes):
         import struct
-        block = self.csf_marks(build=0x2338)
+        block = self.csf_marks(build=build, **changes)
         raw = struct.pack('<I2i6Ii', valid, oppidx, power_count, 8, freq, 750000,
                           700000, 1, 1, commit)
         count = struct.unpack_from('<I', block, 12)[0]
@@ -131,7 +131,7 @@ class ReportDecodeTests(unittest.TestCase):
             if i == omit:
                 continue
             struct.pack_into('<IIQQ', block, 16 + count*24 + i*24,
-                             309 + i, 0, struct.unpack_from('<Q', raw, i*8)[0], 0x2338)
+                             309 + i, 0, struct.unpack_from('<Q', raw, i*8)[0], build)
         struct.pack_into('<I', block, 12, count + (5 if omit is None else 4))
         return block
 
@@ -155,6 +155,40 @@ class ReportDecodeTests(unittest.TestCase):
             self.module.decode(self.marks_dvfs(), 0x2337)
         # A 2337 capture must never grow a gpufreq section.
         self.assertNotIn('gpufreq', self.module.decode(self.marks()))
+
+    def fetch_prime_report(self, **changes):
+        values = dict(stage=4, error=-53, version=0, features=0, job_raw=0,
+                      firmware_ready=0, input_va=0x01000200, groups=11,
+                      platform_reserved=0x202)
+        values.update(changes)
+        return self.module.decode(self.marks_dvfs(build=0x2379, **values), 0x2379)
+
+    def test_fetch_prime_checkpoints_are_distinct_and_never_firmware_ready(self):
+        for counter, outcome in ((9, 'fetch-call-incomplete'),
+                                 (10, 'data-read-incomplete'),
+                                 (11, 'data-read-returned')):
+            with self.subTest(counter=counter):
+                report = self.fetch_prime_report(groups=counter)
+                self.assertEqual(report['csf']['fetch_prime_outcome'], outcome)
+                self.assertFalse(report['csf_firmware_boot_verified'])
+
+    def test_fetch_prime_faults_and_unexpected_states_are_inconclusive(self):
+        for changes in (dict(error=-54), dict(mmu_raw=1), dict(as_fault=0x7cd002c2)):
+            with self.subTest(changes=changes):
+                self.assertEqual(self.fetch_prime_report(**changes)['csf']['fetch_prime_outcome'],
+                                 'fault')
+        for changes in (dict(mcu_status=0), dict(stage=7, error=0), dict(firmware_ready=1)):
+            with self.subTest(changes=changes):
+                self.assertEqual(self.fetch_prime_report(**changes)['csf']['fetch_prime_outcome'],
+                                 'unexpected-state')
+
+    def test_fetch_prime_requires_marker_and_a_defined_counter(self):
+        self.assertEqual(self.fetch_prime_report(input_va=0x04002000)['csf']['fetch_prime_outcome'],
+                         'marker-absent')
+        for counter in (8, 12, 0xffffffff):
+            with self.subTest(counter=counter):
+                self.assertEqual(self.fetch_prime_report(groups=counter)['csf']['fetch_prime_outcome'],
+                                 'unexpected-counter')
 
     def test_failure_is_not_success(self):
         self.assertFalse(self.module.decode(self.marks(error=-23))['power_reset_verified'])
@@ -238,6 +272,47 @@ class ReportDecodeTests(unittest.TestCase):
             count+=1
         struct.pack_into('<I',data,12,count)
         return data
+
+    # platform_path_released needs every MFG1 block mask clear; the shared
+    # fixture defaults leave them set, which alone would hold readiness down.
+    ZERO_PATH = {f'path_{side}_{key}': 0 for side in ('before','after')
+                 for key in ('rpc_enable','rpc_status','infra_enable','infra_status',
+                             'emi0_enable','emi0_status','emi1_enable','emi1_status')}
+
+    def test_2380_vendor_memattr_ready(self):
+        result = self.module.decode(self.marks_dvfs(build=0x2380,
+            memattr_lo=0x888d8f88, memattr_hi=0x00084c8d,
+            **self.ZERO_PATH), 0x2380)
+        csf = result['csf']
+        self.assertEqual(csf['vendor_memattr_pair'], 'vendor-memattr')
+        self.assertEqual(csf['vendor_memattr_outcome'], 'ready')
+        self.assertTrue(result['csf_firmware_boot_verified'])
+
+    def test_2380_rejects_the_legacy_pair(self):
+        result = self.module.decode(self.marks_dvfs(build=0x2380,
+            memattr_lo=0x4c4c884c, memattr_hi=0x4c4c4c4c,
+            **self.ZERO_PATH), 0x2380)
+        csf = result['csf']
+        self.assertEqual(csf['vendor_memattr_pair'], 'wrong-memattr')
+        self.assertEqual(csf['vendor_memattr_outcome'], 'not-this-image')
+        self.assertFalse(result['csf_firmware_boot_verified'])
+
+    def test_2380_unchanged_signature_is_not_a_win(self):
+        result = self.module.decode(self.marks_dvfs(build=0x2380,
+            memattr_lo=0x888d8f88, memattr_hi=0x00084c8d,
+            stage=4, error=-53, cleanup_error=-53, version=0, job_raw=0,
+            firmware_ready=0, reset_completed=0), 0x2380)
+        csf = result['csf']
+        self.assertEqual(csf['vendor_memattr_outcome'], 'unchanged')
+        self.assertFalse(result['csf_firmware_boot_verified'])
+
+    def test_2380_fault_demands_a_revert(self):
+        result = self.module.decode(self.marks_dvfs(build=0x2380,
+            memattr_lo=0x888d8f88, memattr_hi=0x00084c8d,
+            stage=4, error=-54, mmu_raw=1, firmware_ready=0), 0x2380)
+        csf = result['csf']
+        self.assertEqual(csf['vendor_memattr_outcome'], 'fault')
+        self.assertFalse(result['csf_firmware_boot_verified'])
 
     def test_csf_timeout_provenance_requires_matching_callback_evidence(self):
         platform = dict(stage=8, error=-53)

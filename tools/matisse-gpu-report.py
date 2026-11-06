@@ -47,7 +47,8 @@ CSF_PATH_KEYS = ['rpc_enable','rpc_status','infra_enable','infra_status',
     'pdc_st1','pdc_st2','pdc_st4','pdc_st5','pdc_st6','slc_group6']
 CSF_PATH_MASKS = dict(rpc=0x000f0000, infra=0xf, emi0=0xc0000, emi1=0xc0000)
 CSF_STAGES = {0:'not-run',1:'config',2:'l2',3:'address-space',4:'mcu',
-              5:'interface',6:'cleanup',7:'complete'}
+              5:'interface',6:'cleanup',7:'complete',8:'halt',
+              9:'global-input',10:'global-ack'}
 CSF_ERRORS = {0:'success',-40:'memory-argument',-41:'memory-capacity',
               -42:'memory-physical',-50:'argument',-51:'model',-52:'state',
               -53:'timeout',-54:'fault',-55:'interface'}
@@ -96,7 +97,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -301,9 +302,17 @@ def decode(data, expected_build=0x2321):
                 csf.update(irq_gate_verified=mask_gate,
                     core_state_sampled=bool(csf['sample_flags'] & 4),
                     core_state_after_start=bool(csf['sample_flags'] & 8))
+            #2380 moved MEMATTR to the exact vendor table, so the expected
+            # readback pair is a property of the build, not a constant.
+            if expected_build >= 0x2380:
+                expected_memattr = (0x888d8f88, 0x00084c8d)
+            elif expected_build >= 0x2330:
+                expected_memattr = (0x4c4c884c, 0x4c4c4c4c)
+            else:
+                expected_memattr = (0x4c4c9f4c, 0x4c4c4c4c)
             if expected_build >= 0x2326:
                 ready = (ready and csf['diag_flags'] == (127 if expected_build >= 0x2327 else 31) and
-                    csf['memattr_lo'] == (0x4c4c884c if expected_build >= 0x2330 else 0x4c4c9f4c) and csf['memattr_hi'] == 0x4c4c4c4c and
+                    (csf['memattr_lo'], csf['memattr_hi']) == expected_memattr and
                     csf['private_memory_sampled'])
             if expected_build >= 0x2327:
                 ready = ready and csf['noncoherent_protocol_verified'] and csf['coherency_after'] == 31
@@ -312,8 +321,8 @@ def decode(data, expected_build=0x2321):
             if expected_build >= 0x2329:
                 csf['vendor_ina_readback_matches'] = csf['transcfg_lo'] == 0x42000006
             if expected_build >= 0x2330:
-                csf['vendor_cached_byte_readback_matches'] = (csf['memattr_lo'] == 0x4c4c884c and
-                                                            csf['memattr_hi'] == 0x4c4c4c4c)
+                csf['vendor_cached_byte_readback_matches'] = (
+                    (csf['memattr_lo'], csf['memattr_hi']) == expected_memattr)
         csf.update(stage_name=CSF_STAGES[csf['stage']],
                    error_name=CSF_ERRORS.get(csf['error'],'firmware-format'),
                    runtime_interface_sampled=sampled,
@@ -421,6 +430,75 @@ def decode(data, expected_build=0x2321):
                 'set means the MCU executed the barrier at 0x01001914. A fault anywhere would '
                 'land in the same stub and park on its lr guard, so a clear bit 0 also proves no '
                 'exception was taken.')
+        if expected_build == 0x2379:
+            raw = csf['groups']
+            csf['fetch_prime_counter'] = raw
+            csf['fetch_prime_target'] = '0x01000200'
+            csf['fetch_prime_data_address'] = '0x01000210'
+            if csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault']:
+                outcome = 'fault'
+                verdict = 'a fault was reported; the counter does not establish fetch priming'
+            elif csf['input_va'] != 0x01000200:
+                outcome = 'marker-absent'
+                verdict = 'the target marker is absent; the probe did not establish entry'
+            elif (csf['stage'] != 4 or csf['error'] != -53 or
+                  csf['mcu_status'] != 1 or csf['firmware_ready']):
+                outcome = 'unexpected-state'
+                verdict = 'unexpected MCU/report state; no fetch-priming conclusion is justified'
+            elif raw == 9:
+                outcome = 'fetch-call-incomplete'
+                verdict = ('the fresh-block call did not return; this localises the stop to '
+                           'the fetch/return path, before the explicit data read')
+            elif raw == 10:
+                outcome = 'data-read-incomplete'
+                verdict = ('the fresh-block call returned but the read at 0x01000210 did not; '
+                           'executing at 0x01000200 is insufficient to make that word readable')
+            elif raw == 11:
+                outcome = 'data-read-returned'
+                verdict = ('the fresh-block call and subsequent data read both returned; '
+                           'this supports fetch priming at this target but does not establish '
+                           'an exact 512-byte block size or vendor firmware readiness')
+            else:
+                outcome = 'unexpected-counter'
+                verdict = 'the probe did not reach a defined 9/10/11 checkpoint'
+            csf['fetch_prime_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2380:
+            # The first build that maps every firmware section the way the
+            # pinned r32p1 convert_mem_flags() does on a non-coherent SoC:
+            # cached->AS_MEMATTR index0, everything else->index5, no SH bits.
+            # The selected attribute bytes stay 0x88/0x4c; the index number,
+            # the shared leaf's share bits and MEMATTR[0] are what changed.
+            if csf['memattr_lo'] == 0x888d8f88 and csf['memattr_hi'] == 0x00084c8d:
+                integrity = 'vendor-memattr'
+            else:
+                integrity = 'wrong-memattr'
+            csf['vendor_memattr_pair'] = integrity
+            if integrity == 'wrong-memattr':
+                outcome = 'not-this-image'
+                verdict = ('the AS_MEMATTR pair is not the 2380 vendor pair; this image or '
+                           'report does not belong to build 2380')
+            elif csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault']:
+                outcome = 'fault'
+                verdict = ('the vendor index/share pairing faulted translation; revert to the '
+                           '2379 leaf encoding before trying anything else')
+            elif (csf['stage'] == 7 and csf['error'] == 0 and csf['firmware_ready'] and
+                  csf['version'] not in (0, 0xffffffff)):
+                outcome = 'ready'
+                verdict = ('the firmware reached its runtime interface with the vendor MemAttr '
+                           'pairing; the shared-leaf share bits and the index numbering were '
+                           'the blocker, and the global interface stage (2381) is next')
+            elif (csf['stage'] == 4 and csf['error'] == -53 and csf['mcu_status'] == 1 and
+                  not csf['firmware_ready'] and csf['version'] in (0, 0xffffffff)):
+                outcome = 'unchanged'
+                verdict = ('same signature as 2376/2378: the firmware still never reaches its '
+                           'interface, so the share bits and index numbering are not the wall '
+                           'and the cold code-page access pattern remains the suspect')
+            else:
+                outcome = 'unexpected-state'
+                verdict = 'unexpected stage/error combination; no MemAttr conclusion is justified'
+            csf['vendor_memattr_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
         if expected_build == 0x2366:
             # No firmware, no ladder: the 2363 counter loop, byte for byte,
             # relocated from 0x010018ec to 0x010019ee and entered by a direct
@@ -912,7 +990,10 @@ def decode(data, expected_build=0x2321):
                 'post-PSP-switch, 0x02 first helper, 0x04 third helper, 0x08 dispatch block, '
                 '0x10 pre-NVIC, 0x20 pre-TBB, 0x40 tail of init, 0x80 wfi loop. Bit 0x01 clear '
                 'means it never got past the 0x40003034 load window at all.')
-        result['csf_firmware_boot_verified'] = (success and ready and cleanup and
+        # A2380 report that does not carry the vendor AS_MEMATTR pair did not
+        # come from the image that was measured, so it can never be verified.
+        pair_ok = csf.get('vendor_memattr_pair', 'vendor-memattr') == 'vendor-memattr'
+        result['csf_firmware_boot_verified'] = (success and ready and cleanup and pair_ok and
                                                csf['stage'] == 7 and csf['error'] == 0)
     result.update(error_details(result, result.get('csf')))
     return result
@@ -922,7 +1003,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2354)')
+                   help='expected kernel/report build (0x2321 through 0x2380)')
     a=p.parse_args()
     try:
         report=decode(a.marks.read_bytes(),a.build)

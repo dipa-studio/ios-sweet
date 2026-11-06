@@ -11,6 +11,16 @@ HARNESS=r'''
 #include <stdio.h>
 #include <string.h>
 #include "mali_csf_boot.h"
+/*2380: the AS_MEMATTR pair the driver must write in each mode. */
+#if SWEET_CSF_VENDOR_MEMATTR
+#define MEMATTR_LO 0x888d8f88u
+#define MEMATTR_CACHED_LO 0x888d8f88u
+#define MEMATTR_HI 0x00084c8du
+#else
+#define MEMATTR_LO 0x4c4c9f4c
+#define MEMATTR_CACHED_LO 0x4c4c884c
+#define MEMATTR_HI 0x4c4c4c4c
+#endif
 struct model {
  uint64_t tick;unsigned reads,writes,enabled,resets,as_updates,locked,flushed,lock_low,lock_high;
  uint32_t path[16],path_after_bits;unsigned path_on,path_reads,marker_reads;
@@ -19,6 +29,8 @@ struct model {
  int bad_coherency_readback,vendor_ina0,vendor_cached_memattr,bad_memattr;
  int unpowered,bad_id,bad_bits,as_busy,no_l2,no_fw,fw_fault,reset_fail,bad_iface,stale,stuck_timer,live_table,request_done,disable_fail,bad_readback,bad_irq_mask,clamp_masks,missing_gpu_irq,missing_mmu_irq;
  unsigned halted,started,halt_writes,expected_control,halt_fail;
+ /*2381 global interface: input page at0x90011000, output page at0x90012000. */
+ uint32_t in_page[64],in_req,out_req,in_va,out_va;unsigned doorbell_writes,ack_mode,global_writes;
 };
 static uint32_t rd(void *p,uint64_t a) {
  struct model*m=p;m->reads++;
@@ -41,12 +53,17 @@ static uint32_t rd(void *p,uint64_t a) {
  if(a==0x90006000){assert(!m->resets && m->as_updates==2);return 0x12345678;}
  if(a>=0x90010000 && a<0x90010020) {
   assert(m->as_updates==2);
-  switch(a-0x90010000) {case 0:return 0x01020003;case 4:return 0x123;case 8:return m->bad_iface==1?0:0x4001000;case 12:return 0x4002000;case 16:return 8;case 20:return m->bad_iface==2?0x4000:64;case 24:return m->enabled&&!m->no_fw?3:0;default:assert(0);}
+  switch(a-0x90010000) {case 0:return 0x01020003;case 4:return 0x123;case 8:return m->bad_iface==1?0:(m->in_va?m->in_va:0x4001000);
+  case 12:return m->out_va?m->out_va:0x4002000;case 16:return 8;case 20:return m->bad_iface==2?0x4000:64;case 24:return m->enabled&&!m->no_fw?3:0;default:assert(0);}
  }
  if(a==0x90005934||a==0x9000593c||a==0x9000522c) {
   if(!m->enabled||m->no_fw)return 0;
   return a==0x90005934?10:a==0x9000593c?0x200000:0x50c0;
  }
+ if(a==0x90011000)return m->in_req;
+ if(a==0x90012000)return m->out_req;
+ if(a>=0x90011000 && a<0x90011100)return m->in_page[(a-0x90011000)/4];
+ if(a>=0x90012000 && a<0x90012100)return 0;
  assert(a>=0x13000000 && a<0x13002500);assert(!m->unpowered);
  switch(a-0x13000000) {
  case 0:return m->bad_id?0xa0020001:0xa8620004;
@@ -82,6 +99,15 @@ static uint32_t rd(void *p,uint64_t a) {
 }
 static void wr(void*p,uint64_t a,uint32_t v) {
  struct model*m=p;m->writes++;assert(!m->unpowered);
+ if(a==0x13080000) {
+  /*2381: kernel doorbell. The firmware acks the CFG bits by mirroring REQ. */
+  assert(m->enabled && m->as_updates==2 && !m->resets);
+  m->doorbell_writes++;m->global_writes++;
+  if(!m->ack_mode)m->out_req=m->in_req;
+  return;
+ }
+ if(a==0x90011000){m->in_req=v;m->global_writes++;return;}
+ if(a>=0x90011000 && a<0x90011100){m->in_page[(a-0x90011000)/4]=v;m->global_writes++;return;}
  switch(a-0x13000000) {
  case 0x304:
   assert(v==31 && !m->l2 && !m->as_updates && !m->enabled);
@@ -104,7 +130,7 @@ static void wr(void*p,uint64_t a,uint32_t v) {
   if(v==5){assert(m->locked);m->flushed=1;return;}
   assert(v==1);m->as_updates++;return;
  case 0x2400:assert(v==0x90000000);m->table_low=v;return;case 0x2404:assert(v==0);m->table_high=v;return;
- case 0x2408:assert(v==(m->vendor_cached_memattr?0x4c4c884c:0x4c4c9f4c));m->memattr_lo=v;return;case 0x240c:assert(v==0x4c4c4c4c);m->memattr_hi=v;return;
+ case 0x2408:assert(v==(m->vendor_cached_memattr?MEMATTR_CACHED_LO:MEMATTR_LO));m->memattr_lo=v;return;case 0x240c:assert(v==MEMATTR_HI);m->memattr_hi=v;return;
  case 0x2430:assert(v==1||v==(m->vendor_ina0?0x42000006:0x420001c6));if(v!=1)assert(m->flushed);m->transcfg=v;return;
  case 0x2434:assert(v==0);return;
  case 0x2004:m->mmu&=~v;return;
@@ -143,13 +169,16 @@ int main(void) {
  struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
  assert(sizeof(r)==696);assert(!run(&m,&c,&r));assert(r.stage==7 && r.firmware_ready && r.version==0x01020003);clean(&m,&r);
  assert(!r.platform_sample_flags && !m.platform_reads);
+ /*2381 single-variable proof: the default configuration never touches the
+  * global input page and never rings a doorbell. */
+ assert(!m.doorbell_writes && !m.global_writes && !m.in_req);
  assert(r.diag_flags==31 && r.coherency_features==1 && r.coherency_before==31 && r.coherency_after==31);
  assert(!m.coherency_writes && !r.coherency_requested && !r.coherency_readback);
  assert(r.csf_config_before==0x44 && r.csf_config_after==0x44);
  assert(r.shader_config_before==0x55 && r.shader_config_after==0x55);
  assert(r.tiler_config_before==0x66 && r.tiler_config_after==0x66);
  assert(r.l2_mmu_config_before==0x77 && r.l2_mmu_config_after==0x77);
- assert(r.memattr_lo==0x4c4c9f4c && r.memattr_hi==0x4c4c4c4c);
+ assert(r.memattr_lo==MEMATTR_LO && r.memattr_hi==MEMATTR_HI);
  assert(r.private_page_lo==0x90005000 && !r.private_page_hi);
  assert(!r.private_early_before && r.private_early_after==10);
  assert(!r.private_feature_before && r.private_feature_after==0x200000);
@@ -174,7 +203,7 @@ int main(void) {
  assert(m.coherency_writes==1 && r.diag_flags==127 && !r.coherency_before);
  assert(r.coherency_requested==31 && r.coherency_readback==31 && r.coherency_after==31);
  assert(r.csf_config_after==0x44 && r.shader_config_after==0x55 && r.tiler_config_after==0x66 && r.l2_mmu_config_after==0x77);
- assert(r.memattr_lo==0x4c4c9f4c && r.memattr_hi==0x4c4c4c4c && r.transcfg_lo==0x420001c6);
+ assert(r.memattr_lo==MEMATTR_LO && r.memattr_hi==MEMATTR_HI && r.transcfg_lo==0x420001c6);
  m=model();m.coherency=0;m.no_fw=1;assert(run(&m,&c,&r)==-53 && !r.firmware_ready);clean(&m,&r);
  assert(m.coherency_writes==1 && r.diag_flags==127 && r.coherency_after==31);
  m=model();m.coherency=0;m.bad_coherency_readback=1;assert(run(&m,&c,&r)==-52);clean(&m,&r);
@@ -187,7 +216,7 @@ int main(void) {
  m=model();c=cfg();c.vendor_ina0=1;m.vendor_ina0=1;c.noncoherent=1;
  c.pte_group_requested=6;c.pte_pages_built=293;
  assert(!run(&m,&c,&r));clean(&m,&r);
- assert(r.transcfg_lo==0x42000006 && r.memattr_lo==0x4c4c9f4c && r.memattr_hi==0x4c4c4c4c);
+ assert(r.transcfg_lo==0x42000006 && r.memattr_lo==MEMATTR_LO && r.memattr_hi==MEMATTR_HI);
  assert(r.pte_group_requested==6 && r.pte_pages_built==293 && r.diag_flags==127);
  m=model();m.vendor_ina0=1;m.no_fw=1;assert(run(&m,&c,&r)==-53 && !r.firmware_ready);clean(&m,&r);
  assert(r.transcfg_lo==0x42000006 && r.sample_flags==15);
@@ -197,7 +226,7 @@ int main(void) {
  c=cfg();c.vendor_ina0=1;c.vendor_cached_memattr=1;c.noncoherent=1;
  m=model();m.vendor_ina0=1;m.vendor_cached_memattr=1;
  assert(!run(&m,&c,&r));clean(&m,&r);
- assert(r.memattr_lo==0x4c4c884c && r.memattr_hi==0x4c4c4c4c && r.transcfg_lo==0x42000006);
+ assert(r.memattr_lo==MEMATTR_CACHED_LO && r.memattr_hi==MEMATTR_HI && r.transcfg_lo==0x42000006);
  m=model();m.vendor_ina0=1;m.vendor_cached_memattr=1;m.no_fw=1;
  assert(run(&m,&c,&r)==-53 && !r.firmware_ready);clean(&m,&r);
  for(int bad=1;bad<=2;bad++) {
@@ -277,6 +306,56 @@ int main(void) {
  c=cfg();
  m=model();c.pte_group_requested=16;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
  m=model();c=cfg();c.pte_pages_built=513;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
+ /*2381: the global stage is opt-in and gated, both before any MMIO. */
+ c=cfg();c.global_init=1;m=model();assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
+ c=cfg();c.global_init=2;m=model();assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
+#if SWEET_CSF_GLOBAL_INIT
+ {
+  /* Vendor-equivalent global interface: input page0x4001000, output0x4002000,
+   * doorbell0, ACK mirrors REQ. */
+  struct sweet_csf_global_evidence ev;struct sweet_csf_boot_config g=cfg();
+  g.shared_va=0x4000000;g.global_init=1;g.global_evidence=&ev;
+  memset(&ev,0,sizeof ev);m=model();
+  assert(!run(&m,&g,&r));clean(&m,&r);
+  assert(r.stage==7 && r.firmware_ready);
+  assert(ev.flags==7 && !ev.error && ev.ack_matched==1);
+  assert(ev.input_va==0x4001000 && ev.output_va==0x4002000);
+  assert(ev.input_pa_lo==0x90011000 && ev.output_pa_lo==0x90012000);
+  assert(!ev.input_pa_hi && !ev.output_pa_hi);
+  assert(!ev.req_before && !ev.ack_before);
+  assert(ev.protm_coherency==31 && ev.alloc_en_lo==0xff && !ev.alloc_en_hi);
+  assert(ev.progress_timer==0x271000 && ev.pwroff_timer==0x271000 && ev.idle_timer==0x271000);
+  assert(ev.ack_irq_mask==0x0480071e && ev.req_mask==0x40e);
+  assert(ev.req_written==0x40e && ev.ack_first==0x40e && ev.ack_last==0x40e);
+  assert(ev.polls==1 && ev.doorbell_value==1 && m.doorbell_writes==1);
+  /* page layout: [1]=ack_irq_mask [4]=progress [5]=poweroff [6..7]=core_en
+   * [8]=protm_coherency [0x20]=idle_timer. */
+  assert(m.in_page[4]==0x271000 && m.in_page[5]==0x271000 && m.in_page[6]==0xff);
+  assert(m.in_page[7]==0 && m.in_page[8]==31 && m.in_page[0x20]==0x271000);
+  assert(m.in_req==0x40e && m.in_page[1]==ev.ack_irq_mask);
+ }
+ {
+  /* A firmware that never acks is a timeout, not readiness. */
+  struct sweet_csf_global_evidence ev;struct sweet_csf_boot_config g=cfg();
+  g.shared_va=0x4000000;g.global_init=1;g.global_evidence=&ev;
+  memset(&ev,0,sizeof ev);m=model();m.ack_mode=1;
+  assert(run(&m,&g,&r)==-53);clean(&m,&r);
+  assert(r.stage==10 && !r.firmware_ready);
+  assert(ev.flags==3 && ev.error==-53 && !ev.ack_matched);
+  assert(!ev.ack_first && !ev.ack_last && ev.polls>=1 && m.doorbell_writes==1);
+ }
+ for(unsigned i=0;i<3;i++) {
+  struct sweet_csf_global_evidence ev;struct sweet_csf_boot_config g=cfg();
+  g.shared_va=0x4000000;g.global_init=1;g.global_evidence=&ev;memset(&ev,0,sizeof ev);
+  m=model();
+  if(i==0)m.out_va=0x4000004;else if(i==1)m.out_va=0x4000000;else g.shared_va=0x4001000;
+  if(i==2)assert(run(&m,&g,&r)==-50 && !m.reads && !m.writes);
+  else {
+   assert(run(&m,&g,&r)==-55 && !m.doorbell_writes && !m.global_writes);
+   assert(ev.flags==8 && r.stage==9 && !r.firmware_ready);clean(&m,&r);
+  }
+ }
+#endif
  c=cfg();
  m=model();m.clamp_masks=1;assert(!run(&m,&c,&r));clean(&m,&r);
  assert(r.gpu_irq_mask==0x103 && r.mmu_irq_mask==0xff && r.irq_gate_passed==1);
@@ -318,11 +397,27 @@ int main(void) {
 '''
 @unittest.skipUnless(shutil.which('cc'),'requires C compiler')
 class CsfBootTests(unittest.TestCase):
-    def test_real_state_machine_with_sanitizers(self):
+    def _run(self,defines=()):
         with tempfile.TemporaryDirectory() as directory:
             p=Path(directory);(p/'h.c').write_text(HARNESS)
-            subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
-                '-I',str(ROOT/'xnu/gpu'),str(p/'h.c'),str(ROOT/'xnu/gpu/mali_csf_boot.c'),'-o',str(p/'test')],check=True,capture_output=True)
+            cmd=['cc','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined']
+            cmd+=list(defines)
+            cmd+=['-I',str(ROOT/'xnu/gpu'),str(p/'h.c'),str(ROOT/'xnu/gpu/mali_csf_boot.c'),'-o',str(p/'test')]
+            subprocess.run(cmd,check=True,capture_output=True)
             result=subprocess.run([str(p/'test')],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
+    def test_real_state_machine_with_sanitizers(self):
+        self._run()
+
+    def test_vendor_memattr_encoding(self):
+        """2380: the driver writes the proven vendor pair, ignore the old switch."""
+        self._run(['-DSWEET_CSF_VENDOR_MEMATTR=1'])
+
+    def test_global_interface_stage(self):
+        """2381: input page, doorbell and GLB_ACK, with fail-closed paths."""
+        self._run(['-DSWEET_CSF_GLOBAL_INIT=1'])
+
+    def test_vendor_memattr_with_global_interface(self):
+        self._run(['-DSWEET_CSF_VENDOR_MEMATTR=1','-DSWEET_CSF_GLOBAL_INIT=1'])
 if __name__=='__main__':unittest.main()
