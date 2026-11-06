@@ -1,0 +1,21 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -825,3 +825,3 @@
+ /* Bumped for every locally built kernel that is flashed to the phone. */
+-#define SWEET_BUILD_ID 0x2387u
++#define SWEET_BUILD_ID 0x2388u
+ 
+@@ -914,2 +914,13 @@
+ 	}
++	/* 2388: four leaf descriptors read out of the arena the MCU walks. Own
++	 * property, own mark range 420..423 - outside the 300..313 GPU and 320..406
++	 * CSF blocks, so no existing ABI moves. */
++	if (SecureDTGetProperty(chosen, "sweet-csf-leaf",
++	    (void const **)&report, &size) == kSuccess && size == 32) {
++		uint64_t leaf[4];
++		memcpy(leaf, report, sizeof(leaf));
++		for (uint32_t i = 0; i < 4; i++) {
++			sweet_mark(420 + i, leaf[i], SWEET_BUILD_ID);
++		}
++	}
+ }
