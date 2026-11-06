@@ -1094,3 +1094,70 @@ installed, and the readback matched.
 
 Next: 2389 - the same program at 0x01001000, reset word -> `0x01001001`. That
 separates "page 1 does not execute" from "the 0x1200 offset does not execute".
+
+## 35. 2389 ran: only a page-aligned start executes
+
+Trial 2026-11-06 22:19, image `607d911d...662d`, kernel `a9c0c9c7`
+(`SWEET_BUILD_ID` 0x2389), fastboot 85.51 s, `boot_a` restored to
+`2931647a...86b1`.
+
+```
+input_va (shared+8)      0x01001000   the marker, written by the program itself
+groups (shared+16)       8           the program writes only the marker
+mmu_raw, as_fault        0, 0
+mcu_status, relocation   1, true
+error                    -53
+```
+
+The twenty bytes that did nothing at 0x01001200 one build earlier ran at
+0x01001000. Five builds with one variable each now line up:
+
+| build | target | page offset | result |
+|---|---|---|---|
+| 2385 | 0x0100E000 | 0 | runs |
+| 2389 | 0x01001000 | 0 | runs |
+| 2386 | 0x01000200 | 0x200 | nothing |
+| 2387 | 0x01000600 | 0x600 | nothing |
+| 2388 | 0x01001200 | 0x200 | nothing |
+
+2388 and 2389 differ by one word - the target inside page 1 - and only one of
+them runs. Both use the same leaf, read back from the arena in 2388. So the wall
+is not translation, not the block, not the page: **the low 12 bits of the reset
+vector are ignored and the core begins at the page base.**
+
+Page 0 falls out of that for free. 0x01000200 and 0x01000600 both resolve to
+0x01000000, and 0x01000000 is the vendor's own entry veneer - `ldr r0,[pc,#0]`
+then `bx r0` into 0x010002ec. Our program never ran there; the veneer did, and it
+hangs. The veneer read as dead code because it needs the boot ROM's register
+state, which only a real reset entry carries.
+
+The vendor source confirms the frame it sits in. `MiCode/Xiaomi_Kernel_
+OpenSource`, branch `rubens-s-oss` (Redmi K50, MTK tag
+`t-alps-release-s0.mp1.tc8sp2-mt6983-V1.0.1`), `mali-r32p1`:
+
+```
+kbase_csf_firmware_enable_mcu()   MCU_CONTROL = MCU_CNTRL_AUTO (2), then wait
+                                  for the global interface interrupt
+convert_mem_flags()               cached -> index 0, everything else -> 5,
+                                  SH only for KBASE_REG_SHARE_BOTH
+load_fw_image_section()           copies each section page by page from its
+                                  data start, zero-fills when ZERO is set
+```
+
+No function in the driver writes the reset vector. The vendor firmware relies on
+the same word we do, and that word is 0x010018ed - page base 0x01001000. So the
+vendor's real entry is the page base, and `SWEET_CSF_RESET_ENTRY_VA` (0x010018ec)
+has been 0x8ec past the actual entry since 2376.
+
+That leaves one question open: if the vendor entry is 0x01001000, why has the
+unmodified vendor path never reported ready here (`version` 0,
+`firmware_ready` 0)? Either the AS still hands it something it rejects, or the
+entry expects the boot ROM's argument registers and our programming loses them.
+Instrumenting the entry's own first stores is the way to settle it - after 2390,
+which only moves the vector word from 0x01001001 to 0x01001201 with the program
+left at 0x01001000.
+
+Provenance defect in this image: the builder's leaf-property gate was written as
+`build_id == 0x2388`, so 2389 shipped without `sweet-csf-leaf` and the decoder
+refused the capture. The gate now covers both builds; `--allow-missing-leaf`
+decodes this one capture, whose marker was read out before that flag existed.

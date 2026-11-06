@@ -145,6 +145,28 @@ class FetchPrimeTests(unittest.TestCase):
                 spec['reset_vector'] = saved
 
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2389_moves_only_the_vector_to_page_one_offset_zero(self):
+        original = FIRMWARE.read_bytes()
+        embedded_2388, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2388)
+        embedded_2389, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2389)
+        config, code = 0x0380, 0x0e94
+        allowed = set(range(config + 4, config + 8))
+        allowed |= set(range(code + 0x1000, code + 0x1000 + 20))
+        allowed |= set(range(code + 0x1200, code + 0x1200 + 20))
+        changed = {i for i, (a, b) in enumerate(zip(embedded_2388, embedded_2389)) if a != b}
+        self.assertTrue(changed)
+        self.assertLessEqual(changed, allowed)
+        self.assertEqual(int.from_bytes(embedded_2389[config + 4:config + 8], 'little'),
+                         0x01001001)
+        self.assertEqual(embedded_2389[code + 0x1000:code + 0x1000 + 20],
+                         bytes.fromhex(self.builder.COLD_BOOT_2389[1]))
+        # 2388's block goes back to vendor bytes
+        self.assertEqual(embedded_2389[code + 0x1200:code + 0x1200 + 20],
+                         original[code + 0x1200:code + 0x1200 + 20])
+        self.assertEqual(patch['cold_boot']['target'], '0x1001000')
+        self.assertEqual(patch['leaf_probe']['marks'], '420..423')
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2388_moves_only_the_vector_and_page_1(self):
         original = FIRMWARE.read_bytes()
         embedded_2387, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2387)

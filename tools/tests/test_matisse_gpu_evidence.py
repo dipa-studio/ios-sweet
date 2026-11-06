@@ -513,6 +513,20 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertFalse(csf['leaf_page0_as_planned'])
         self.assertEqual(csf['leaf_pa']['leaf_0x01000000'], 0x40080000)
 
+    def test_2389_separates_page_one_from_the_offset(self):
+        # page 1 at offset zero: running means the offset was the discriminator
+        csf = self.cold_report(build=0x2389, input_va=0x01001000,
+                               leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'cold-boot-fetch-completes')
+        self.assertEqual(csf['cold_boot_target'], 0x01001000)
+        self.assertIn('not because of the page', csf['instrument_verdict'])
+        # and not running kills the alignment idea and asks for a page scan
+        csf = self.cold_report(build=0x2389, input_va=0x04000200,
+                               leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'cold-boot-fetch-stalls')
+        self.assertIn('alignment idea dies', csf['instrument_verdict'])
+        self.assertIn('0x01002000', csf['instrument_verdict'])
+
     def test_2388_requires_its_leaf_property(self):
         # No 340..343 records means the property never reached the kernel; the
         # report must refuse rather than report zeros as if the walk had run.

@@ -1,6 +1,68 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2388 RAN - THE TABLE IS RIGHT AND STILL NOTHING RUNS <<<
+## >>> ACTIVE 2026-11-06:2389 RAN - ONLY A PAGE-ALIGNED START EXECUTES <<<
+
+**RESULT: `input_va = 0x01001000` - the marker is present.** The same twenty bytes
+that did nothing at 0x01001200 in 2388 ran at 0x01001000. `mmu_raw = 0`,
+`as_fault = 0`, `mcu_status = 1`, `error = -53`.
+
+```
+image  607d911d...662d  26,714,112 B   kernel a9c0c9c7 (SWEET_BUILD_ID 0x2389)
+part.  f56ff8f6...e5c1  written and read back, fastboot 85.51 s
+boot_a restored to 2931647a...86b1 (restored_sha256 verified)
+outcome cold-boot-fetch-completes
+```
+
+Five builds, one variable each, now line up:
+
+| build | target | page offset | result |
+|---|---|---|---|
+| 2385 | 0x0100E000 | 0 | runs |
+| 2389 | 0x01001000 | 0 | runs |
+| 2386 | 0x01000200 | 0x200 | nothing |
+| 2387 | 0x01000600 | 0x600 | nothing |
+| 2388 | 0x01001200 | 0x200 | nothing |
+
+2388 and 2389 differ by **one word** - the reset target inside page 1 - and one
+of them runs. The page tables are identical in both and were read back from the
+arena in 2388, so this is not translation. The rule the data supports: **the low
+12 bits of the reset vector are ignored and the core begins at the page base.**
+
+That also explains page 0 without needing it to be cursed: 0x01000200 and
+0x01000600 both resolve to 0x01000000, where the vendor's own entry veneer sits
+(`ldr r0,[pc,#0]` / `bx r0` into 0x010002ec). Our program never ran there - the
+vendor's veneer did, and it hangs. The veneer looked like dead code because it
+needs the boot ROM's register state, which only an entry from reset carries.
+
+**Cross-checked against the real MT6983 vendor source** (`MiCode/Xiaomi_Kernel_
+OpenSource`, branch `rubens-s-oss` = Redmi K50, MTK tag t-alps-release-s0.mp1...
+mt6983, `mali-r32p1`). `kbase_csf_firmware_enable_mcu()` writes MCU_CONTROL =
+`MCU_CNTRL_AUTO` (2) and waits for the global interrupt - exactly our sequence.
+`convert_mem_flags()` reproduces the memattr pairing from 2380, and
+`load_fw_image_section()` copies each section page by page from its data start.
+**Nothing in the driver touches the reset vector**, so the vendor firmware relies
+on the same word we do - and its value is 0x010018ed, i.e. page base 0x01001000.
+The vendor's real entry is therefore the page base, not 0x010018ec, and
+`SWEET_CSF_RESET_ENTRY_VA` has been pointing 0x8ec past the entry since 2376.
+
+Open question this does not settle: if the vendor entry is 0x01001000, why has
+the unmodified vendor path never reported ready here (`version = 0`,
+`firmware_ready = 0`)? Either our AS still hands it something it rejects, or the
+entry needs the boot ROM argument registers and something about the AS
+programming loses them. That is the next thing to instrument, after 2390.
+
+**2389 shipped without the leaf property** - the builder gate was written as
+`build_id == 0x2388`, so the image had no `sweet-csf-leaf` and the decoder
+refused it. Fixed to cover both builds; `--allow-missing-leaf` decodes this one
+capture, and the marker was read out before that flag existed.
+
+**NEXT: 2390 - the same program at 0x01001000, vector 0x01001201.** Only the
+vector moves, from 0x01001001 to 0x01001201. A marker means the low bits are
+dropped and 2388 is fully explained; no marker means an unaligned vector does not
+start the core at all, which would leave the vendor's 0x010018ed unexplained and
+make the entry word itself the next instrument.
+
+## >>> PREVIOUS 2026-11-06:2388 RAN - THE TABLE IS RIGHT AND STILL NOTHING RUNS <<<
 
 **RESULT: `input_va = 0x04000200` - no marker at 0x01001200.** Page 1 does not
 execute either, from a vector at block 1. `mmu_raw = 0`, `as_fault = 0`,
