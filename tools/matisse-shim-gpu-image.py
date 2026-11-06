@@ -1071,6 +1071,25 @@ TRACE_PROBE[0x2386] = dict(
     # 2385's block stays vendor-original: this image carries no program at
     # 0x0100E000, so the only fetch target is the block under test.
     patches={0x010019b0: TRACE_PROBE[0x2383]['patches'][0x010019b0]})
+
+# 2388 moves the same question one page over.  2387 showed page 0 cannot be
+# fetched at any block while page 14 runs, so the next thing to establish is
+# whether page 1 executes at all - it holds the vendor's own reset handler at
+# 0x010018ec, and this port has never proven the MCU runs that.  0x01001200 is
+# block 1 of page 1 and no build has ever patched it.
+#
+# The build also carries the one instrument this port has never had: the shim
+# reads the four live leaf descriptors out of the arena it hands the AS and
+# publishes them through their own 32-byte ADT property ('sweet-csf-leaf'), so
+# the capture shows the table the MCU walks, not a plan that says it should be
+# the same.  That read is passive: it issues no write and changes no mapping.
+COLD_BOOT_2388 = ('38bf0027bff34f8f262818bf342810d106eb0a00',
+                  '72b60124240604f5905401239b069c6000bffee7')
+TRACE_PROBE[0x2388] = dict(
+    TRACE_PROBE[0x2387], kind='cold-boot-fetch',
+    reset_vector=(0x010018ed, 0x01001201),
+    patches={0x010019b0: TRACE_PROBE[0x2383]['patches'][0x010019b0],
+             0x01001200: COLD_BOOT_2388})
 BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the low bytes
 
 
@@ -1263,14 +1282,21 @@ def fault_vector_probe(path, expected, build_id):
                 '20': 'the 2383 fault entry fired: the instrument works',
                 '30': 'the unmapped read completed without faulting',
                 '0 or 8': 'the read neither faulted nor completed'})
-    if build_id in (0x2385, 0x2386, 0x2387):
+    if build_id in (0x2385, 0x2386, 0x2387, 0x2388):
         target = {0x2385: '0x100e000', 0x2386: '0x1000200',
-                  0x2387: '0x1000600'}[build_id]
+                  0x2387: '0x1000600', 0x2388: '0x1001200'}[build_id]
         patch['cold_boot'] = dict(
             target=target, marker_value=target, marker_field='input_va',
             counter_field='groups', counter_seed=8, counter_meanings={
                 'present': 'the core fetched this block at reset and executed it',
                 'absent': 'the first fetch stalls exactly like every other cold one'})
+    if build_id == 0x2388:
+        # Recorded so the preflight can prove the instrument travelled with the
+        # image: the shim fails closed if the property is missing.
+        patch['leaf_probe'] = dict(
+            property='sweet-csf-leaf', bytes=32, marks='420..423',
+            va=['0x1000000', '0x1001000', '0x100e000', '0x100f000'],
+            note='passive read of the arena the shim hands the AS; no mapping changes')
     return embedded, patch
 
 
@@ -1359,7 +1385,7 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
                  embedded_container_sha256=digest(embedded), diagnostic_only=True)
     return embedded, patch
 
-def diagnostic_adt(data, build_id=0x2333, global_property=False):
+def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False):
     root, end = adt.parse(data)
     if end != len(data):
         raise ValueError('trailing ADT bytes')
@@ -1367,6 +1393,8 @@ def diagnostic_adt(data, build_id=0x2333, global_property=False):
     keys = ['sweet-gpu-report', 'sweet-csf-report', 'sweet-gpu-autorecovery-seconds']
     if global_property:
         keys.append('sweet-csf-global')
+    if leaf_property:
+        keys.append('sweet-csf-leaf')
     for key in keys:
         if chosen.prop(key) is not None:
             raise ValueError('already a GPU diagnostic ADT')
@@ -1379,6 +1407,10 @@ def diagnostic_adt(data, build_id=0x2333, global_property=False):
     if global_property:
         #2381: fixed96-byte global-interface evidence, separate from the696-byte ABI.
         chosen.props.append(('sweet-csf-global', 0, bytes(96)))
+    if leaf_property:
+        #2388: four live leaf descriptors from the arena the MCU walks, in
+        # their own block so the696-byte CSF report ABI stays untouched.
+        chosen.props.append(('sweet-csf-leaf', 0, bytes(32)))
     return adt.serialize(root)
 
 def build(a):
@@ -1403,14 +1435,14 @@ def build(a):
     #2382 is the2379 container patch on a plan that puts the R-X section after
     # the whole layout. Everything else - leaf encoding, probe, RO-as-RW, start
     # word - is held at2379's values so the PA is the only moved number.
-    if a.build_id in (0x2382, 0x2383, 0x2384, 0x2385, 0x2386, 0x2387):
+    if a.build_id in (0x2382, 0x2383, 0x2384, 0x2385, 0x2386, 0x2387, 0x2388):
         if not (a.trace_probe and a.ro_as_rw and a.relocate_code):
             raise ValueError('build%x requires --trace-probe --ro-as-rw --relocate-code' % a.build_id)
         if (a.vendor_memattr or a.global_init or a.fault_probe or a.entry_probe or
                 a.reset_store_stub or a.mcu_control != '2'):
             raise ValueError('build%x may change only the entry and its fetch target' % a.build_id)
     elif a.relocate_code:
-        raise ValueError('--relocate-code is only defined for build2382-2385')
+        raise ValueError('--relocate-code is only defined for build2382-2388')
     if a.fault_probe or a.trace_probe:
         if a.redirect_mcu_stores or a.entry_probe or a.inline_entry or a.entry_pte_guard or a.reset_store_stub:
             raise ValueError('the fault vector probe replaces the handler and takes no other patch')
@@ -1434,7 +1466,7 @@ def build(a):
     label = 'gpu%x' % a.build_id
     command = command.replace('sweettrial=2317', 'sweettrial=%x' % a.build_id)
     command = command.replace('rootrw=1', 'rootrw=0').replace('ufsrw=1', 'ufsrw=0')
-    tree = diagnostic_adt(original_adt, a.build_id, a.global_init)
+    tree = diagnostic_adt(original_adt, a.build_id, a.global_init, a.build_id == 0x2388)
     out.mkdir(parents=True)
     (out / (label + '.adt')).write_bytes(tree)
     payload, _ = mkpayload.build(Path(a.kernel), out / (label + '.adt'), command,
@@ -1458,6 +1490,7 @@ def build(a):
                    '-DSWEET_CSF_VENDOR_MEMATTR=' + ('1' if a.vendor_memattr else '0'),
                    '-DSWEET_CSF_GLOBAL_INIT=' + ('1' if a.global_init else '0'),
                    '-DSWEET_CSF_RELOCATE_CODE=' + ('1' if a.relocate_code else '0'),
+                   '-DSWEET_CSF_LEAF_PROBE=' + ('1' if a.build_id == 0x2388 else '0'),
                    *dvfs,
                    '-DEMBEDDED_XNU_BYTES=' + str(len(payload))]
     if a.entry_probe:
@@ -1604,7 +1637,7 @@ def build(a):
                 for name in ('tools/matisse-csf-fault-entry.S',
                              'tools/matisse-csf-fault-control.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
-            if a.build_id in (0x2385, 0x2386, 0x2387):
+            if a.build_id in (0x2385, 0x2386, 0x2387, 0x2388):
                 for name in ('tools/matisse-csf-fault-entry.S',
                              'tools/matisse-csf-coldboot.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
@@ -1647,7 +1680,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',

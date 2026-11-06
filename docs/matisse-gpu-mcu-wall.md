@@ -1036,3 +1036,61 @@ same build read the live leaf descriptors out of the arena the MMU walks. The
 second is passive - it changes no mapping - and it is the instrument this port has
 never had: every mapping argument so far has compared plans, never the table the
 MCU actually uses.
+
+## 34. 2388 ran: the table is right, and still nothing executes
+
+Trial 2026-11-06 22:12, image `549b62a3...c429`, kernel `86d908a1` (`SWEET_BUILD_ID`
+0x2388), fastboot 89.65 s, `boot_a` restored to `2931647a...86b1`.
+
+```
+input_va (shared+8)      0x04000200   the template seed: no marker
+groups (shared+16)       8           the program never started
+mmu_raw, as_fault        0, 0        nothing was refused
+mcu_status, relocation   1, true
+error                    -53
+```
+
+The active change was one word - the reset target, `0x01000601` -> `0x01001201`,
+page 1, block 1, a block no build had patched. Page 1 is where the vendor's reset
+handler lives at 0x010018ec. It did not run.
+
+**The passive half is the more important result.** The shim now reads the four
+leaf descriptors straight out of the arena it hands the AS and publishes them in
+their own 32-byte ADT property (`sweet-csf-leaf`, marks 420..423; the 300..313 GPU
+and 320..406 CSF blocks are untouched). The capture therefore carries the table
+the MCU walks, not a re-derivation of it:
+
+```
+leaf 0x01000000  0x30000000401a4c47  PA 0x401a4000
+leaf 0x01001000  0x30000000401a5c47  PA 0x401a5000
+leaf 0x0100e000  0x30000000401b2c47  PA 0x401b2000
+leaf 0x0100f000  0x30000000401b3c47  PA 0x401b3000
+```
+
+Four adjacent entries of one L3 table, identical flags (`0xc47` = valid, page,
+AttrIndx 1, AF, RW - this build is `--ro-as-rw`), PAs exactly as the relocated
+plan says. No stale entry, no second table, no shadowing.
+
+| question | answer |
+|---|---|
+| does the MCU walk our table? | yes - read from the arena it was given |
+| is page 0's leaf wrong? | no, `0x401a4000` |
+| is page 1's leaf wrong? | no, `0x401a5000` |
+| do the failing pages differ in attributes? | no, all four are `0xc47` |
+
+Every mapping explanation in ## 22-33 is retired by that. The table is right and
+the fetch still does not happen, so the wall is not translation.
+
+What is left is a plain contradiction: same program, same leaf shape, same reset
+path - 0x0100E000 runs (2385), and 0x01000200 / 0x01000600 / 0x01001200 do not
+(2386/2387/2388). The only structural difference is alignment: 0xE000 is 4 KB
+aligned, the other three are 512-byte aligned. A masked reset vector would be
+strange - the vendor's own vector is 0x010018ed - but that path has never been
+observed to run here either, so it is not evidence against it.
+
+Operationally this run is also the first in three that completed cleanly: the raw
+USB transport did the whole restore through `tools/fbraw.py` now that `pyusb` is
+installed, and the readback matched.
+
+Next: 2389 - the same program at 0x01001000, reset word -> `0x01001001`. That
+separates "page 1 does not execute" from "the 0x1200 offset does not execute".

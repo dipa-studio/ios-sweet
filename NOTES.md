@@ -1,6 +1,54 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2387 RAN - PAGE 0 CANNOT BE FETCHED AT ALL <<<
+## >>> ACTIVE 2026-11-06:2388 RAN - THE TABLE IS RIGHT AND STILL NOTHING RUNS <<<
+
+**RESULT: `input_va = 0x04000200` - no marker at 0x01001200.** Page 1 does not
+execute either, from a vector at block 1. `mmu_raw = 0`, `as_fault = 0`,
+`mcu_status = 1`, `relocation_observed = true`, `error = -53`.
+
+```
+image  549b62a3...c429  26,714,112 B   kernel 86d908a1 (SWEET_BUILD_ID 0x2388)
+part.  3230042c...fabf  written and read back, fastboot 89.65 s
+boot_a restored to 2931647a...86b1 (restored_sha256 verified)
+outcome cold-boot-fetch-stalls
+```
+
+**The new instrument answered first, and it exonerates the page tables.** The
+shim now reads the four live leaf descriptors out of the arena it hands the AS
+and publishes them in their own 32-byte ADT property (`sweet-csf-leaf`, marks
+420..423), so the capture carries the table the MCU walks rather than a plan:
+
+```
+leaf 0x01000000  0x30000000401a4c47  PA 0x401a4000
+leaf 0x01001000  0x30000000401a5c47  PA 0x401a5000
+leaf 0x0100e000  0x30000000401b2c47  PA 0x401b2000
+leaf 0x0100f000  0x30000000401b3c47  PA 0x401b3000
+```
+
+Four adjacent entries of one L3 table, identical flags (`0xc47`: AttrIndx 1, AF,
+RW because this build is `--ro-as-rw`), PAs exactly the relocated plan. No stale
+entry, no shadowing, no second table. Every mapping hypothesis in this document
+is now retired: the MCU walks the table we build.
+
+That leaves a contradiction worth stating plainly. With the same program, the
+same leaf shape and the same reset path, 0x0100E000 runs (2385) and 0x01000200,
+0x01000600 (2386/2387) and 0x01001200 (2388) do not. The only structural
+difference is that 0x0100E000 is 4 KB aligned and the other three are 512-byte
+aligned. A reset-vector mask would be odd - the vendor's own vector is 0x010018ed,
+not page aligned - but the vendor path has never been observed to run in this
+port either, so it cannot be used to rule the idea out.
+
+**Consequence to keep in view:** the only fetch this port has ever seen complete
+is page 14. If that stays true, the vendor firmware has never started here and
+every "firmware started" reading in this document is shim-side only.
+
+**NEXT: 2389 - page 1 again, page aligned.** Same 20-byte program at 0x01001000,
+reset word -> 0x01001001. Running there means page 1 does execute and the 0x1200
+offset was the discriminator; not running means page 1 does not execute at all
+and the alignment idea dies with it, leaving "which addresses can the core start
+at" as the only open question.
+
+## >>> PREVIOUS 2026-11-06:2387 RAN - PAGE 0 CANNOT BE FETCHED AT ALL <<<
 
 **RESULT: `input_va = 0x04000200` - the marker is absent again.** The reset word
 pointed at `0x01000601`, block 3 of the same page that holds the block 2386 could

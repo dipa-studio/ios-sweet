@@ -145,6 +145,27 @@ class FetchPrimeTests(unittest.TestCase):
                 spec['reset_vector'] = saved
 
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2388_moves_only_the_vector_and_page_1(self):
+        original = FIRMWARE.read_bytes()
+        embedded_2387, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2387)
+        embedded_2388, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2388)
+        config, code = 0x0380, 0x0e94
+        allowed = set(range(config + 4, config + 8))
+        allowed |= set(range(code + 0x1200, code + 0x1200 + 20))
+        allowed |= set(range(code + 0x600, code + 0x600 + 20))
+        changed = {i for i, (a, b) in enumerate(zip(embedded_2387, embedded_2388)) if a != b}
+        self.assertTrue(changed)
+        self.assertLessEqual(changed, allowed)
+        self.assertEqual(int.from_bytes(embedded_2388[config + 4:config + 8], 'little'), 0x01001201)
+        self.assertEqual(embedded_2388[code + 0x1200:code + 0x1200 + 20],
+                         bytes.fromhex(self.builder.COLD_BOOT_2388[1]))
+        # 2387's block goes back to vendor bytes: this build fetches page 1 only
+        self.assertEqual(embedded_2388[code + 0x600:code + 0x600 + 20],
+                         original[code + 0x600:code + 0x600 + 20])
+        self.assertEqual(patch['cold_boot']['target'], '0x1001200')
+        self.assertEqual(patch['cold_boot']['marker_value'], '0x1001200')
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2387_moves_only_the_vector_and_its_block(self):
         original = FIRMWARE.read_bytes()
         embedded_2385, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2385)
@@ -193,6 +214,7 @@ class FetchPrimeTests(unittest.TestCase):
         if not bins:
             self.skipTest('requires ARM linker from Android NDK')
         cases = ((0x2385, 0x0100E000, 'COLD_BOOT_2385'),
+                 (0x2388, 0x01001200, 'COLD_BOOT_2388'),
                  (0x2386, 0x01000200, 'COLD_BOOT_2386'),
                  (0x2387, 0x01000600, 'COLD_BOOT_2387'))
         for build, target, pinned in cases:

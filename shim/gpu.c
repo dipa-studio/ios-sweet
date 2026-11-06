@@ -261,6 +261,14 @@ int shim_gpu_publish(uintptr_t adt, uint32_t bytes,
     for (unsigned i=0;i<sizeof(shim_csf_global_evidence);i++)
         glb[i]=((const uint8_t *)&shim_csf_global_evidence)[i];
 #endif
+#if SWEET_CSF_LEAF_PROBE
+    /*2388: four leaf descriptors, no zero fill - an absent property means the
+     * builder and the shim disagree, so fail closed rather than publish holes. */
+    uint8_t *leaf=property(adt, bytes, "sweet-csf-leaf", 32);
+    if (!leaf || sizeof(shim_csf_leaf_evidence)!=32) return -1;
+    for (unsigned i=0;i<sizeof(shim_csf_leaf_evidence);i++)
+        leaf[i]=((const uint8_t *)&shim_csf_leaf_evidence)[i];
+#endif
 #endif
     for (unsigned i = 0; i < 128; i++) raw[i] = 0, a[i] = 0, b[i] = 0;
     for (unsigned i = 0; i < sizeof(*r); i++) raw[i] = ((const uint8_t *)r)[i];

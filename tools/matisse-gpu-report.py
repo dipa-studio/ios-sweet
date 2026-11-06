@@ -109,7 +109,7 @@ def decode(data, expected_build=0x2321, mark=None):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -161,6 +161,14 @@ def decode(data, expected_build=0x2321, mark=None):
         count = 87 if expected_build >= 0x2333 else 70 if expected_build >= 0x2332 else (55 if expected_build >= 0x2331 else (38 if expected_build >= 0x2328 else (37 if expected_build == 0x2327 else (36 if expected_build == 0x2326 else (24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11))))))
         raw = report_bytes(records,320,count,mark,'CSF')
         csf = dict(zip(CSF_KEYS,struct.unpack('<I2i19I',raw[:88])))
+        if expected_build >= 0x2388:
+            #2388: the four leaf descriptors the shim read back out of the arena
+            # it handed the AS, in their own32-byte property and mark range
+            #420..423 so no earlier ABI moved. These are the table the MCU walks,
+            #not a re-derivation of what it should be.
+            csf.update(zip(('leaf_0x01000000','leaf_0x01001000',
+                            'leaf_0x0100e000','leaf_0x0100f000'),
+                          struct.unpack('<4Q',report_bytes(records,420,4,mark,'LEAF'))))
         if expected_build >= 0x2323:
             csf.update(zip(CSF_DIAGNOSTIC_KEYS,struct.unpack('<7Ii2I',raw[88:128])))
             allowed_flags = 15 if expected_build >= 0x2325 else 3
@@ -480,14 +488,15 @@ def decode(data, expected_build=0x2321, mark=None):
                 verdict = 'the probe did not reach a defined 9/10/11 checkpoint'
             csf['fetch_prime_outcome'] = outcome
             csf['instrument_verdict'] = verdict
-        if expected_build in (0x2385, 0x2386, 0x2387):
+        if expected_build in (0x2385, 0x2386, 0x2387, 0x2388):
             # The reset vector is the only thing between the core and a block
             # nothing has executed, so one word answers the primitive question.
             # 2385 asks it of a block nothing else uses, 2386 of the block every
-            # branch and data read has failed to reach, and 2387 of a third block
-            # on 2386's page that no build has ever patched.
+            # branch and data read has failed to reach, 2387 of a third block on
+            # 2386's page, and 2388 of page 1 - the page that holds the vendor's
+            # own reset handler, which this port has never seen execute.
             target = {0x2385: 0x0100E000, 0x2386: 0x01000200,
-                      0x2387: 0x01000600}[expected_build]
+                      0x2387: 0x01000600, 0x2388: 0x01001200}[expected_build]
             csf['cold_boot_target'] = target
             csf['cold_boot_marker_present'] = csf['input_va'] == target
             csf['cold_boot_counter'] = csf['groups']
@@ -506,7 +515,14 @@ def decode(data, expected_build=0x2321, mark=None):
                            (csf['as_fault'], csf['as_fault_hi'] << 32 | csf['as_fault_lo']))
             elif csf['cold_boot_marker_present']:
                 outcome = 'cold-boot-fetch-completes'
-                if expected_build == 0x2387:
+                if expected_build == 0x2388:
+                    verdict = ('the reset fetch reached 0x01001200, block 1 of page 1 - the page '
+                               'that holds the vendor reset handler at 0x010018ec - so the MCU '
+                               'does execute that page and page 0 is the exception. Compare '
+                               'leaf_0x01000000 with leaf_0x01001000: if both carry the planned '
+                               'PAs (0x401a4000 / 0x401a5000) the table is not what separates '
+                               'them, and the difference is in how the AS treats that one page')
+                elif expected_build == 0x2387:
                     verdict = ('the reset fetch reached 0x01000600 - block 3 of the page that '
                                'holds 0x01000200 - so page 0 is reachable and the damage is '
                                'confined to block 1. Compare that block alone: its container '
@@ -522,7 +538,16 @@ def decode(data, expected_build=0x2321, mark=None):
                                'word asks for one: the memory path is not the wall')
             else:
                 outcome = 'cold-boot-fetch-stalls'
-                if expected_build == 0x2387:
+                if expected_build == 0x2388:
+                    verdict = ('nothing ran at 0x01001200 either, so page 1 does not execute '
+                               'and the only fetch this port has ever seen complete is page 14. '
+                               'That makes every "firmware started" reading here shim-side only. '
+                               'The leaf words are the discriminator: if leaf_0x01001000 and '
+                               'leaf_0x0100e000 both carry the planned PAs and only page 0 fails '
+                               'to translate differently, the wall is the page tables after all; '
+                               'if all three look alike, it is not the table that stops the '
+                               'fetch and the MCU-side path has to be re-examined')
+                elif expected_build == 0x2387:
                     verdict = ('nothing ran at 0x01000600 and nothing faulted, so page 0 as a '
                                'whole cannot be reached by the reset fetch while page 14 can: the '
                                'damage is page-granular, not confined to block 1. The plan shows '
@@ -536,6 +561,16 @@ def decode(data, expected_build=0x2321, mark=None):
                     verdict = ('the marker is absent and nothing faulted: the very first fetch, of '
                                'a block nothing has touched, does not complete either - the block '
                                'that works was already resident, and no cold fill ever lands')
+            if 'leaf_0x01000000' in csf:
+                # The leaves are the arena's own words, read back by the shim; the
+                # PA is what the walk would use, everything below bit12 is flags.
+                csf['leaf_pa'] = {name: csf[name] & 0x0000fffffffff000 for name in
+                                  ('leaf_0x01000000', 'leaf_0x01001000',
+                                   'leaf_0x0100e000', 'leaf_0x0100f000')}
+                csf['leaf_page0_as_planned'] = csf['leaf_pa']['leaf_0x01000000'] == 0x401a4000
+                csf['leaf_note'] = ('Read from the arena the shim handed the AS, not re-derived '
+                                    'from the plan. Zero means the walk found no table. '
+                                    'AttrIndx/AF/AP are the low bits of each word.')
             csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
         if expected_build == 0x2384:

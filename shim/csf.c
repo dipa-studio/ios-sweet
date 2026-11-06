@@ -22,6 +22,28 @@ _Static_assert(sizeof(struct sweet_csf_boot_report)==696, "CSF2333 platform path
 struct sweet_csf_global_evidence shim_csf_global_evidence;
 _Static_assert(sizeof(struct sweet_csf_global_evidence)==96, "sweet-csf-global size");
 #endif
+#if SWEET_CSF_LEAF_PROBE
+/*2388: read the descriptors the MCU will actually walk. The shim runs with the
+ *CPU MMU off, so a physical address is a plain load; this issues no write and
+ *changes no mapping. The four VAs cover the page that cannot be fetched
+ *(0x01000000), the page that holds the vendor reset handler (0x01001000) and
+ *the pair that is known to work (0x0100e000/0x0100f000). */
+struct sweet_csf_leaf_evidence shim_csf_leaf_evidence;
+_Static_assert(sizeof(struct sweet_csf_leaf_evidence)==32, "sweet-csf-leaf size");
+static const uint32_t sweet_csf_leaf_va[4]={0x01000000u,0x01001000u,0x0100e000u,0x0100f000u};
+static uint64_t sweet_csf_leaf_of(const struct sweet_gpu_io *io,uint64_t root,uint32_t va)
+{
+    uint64_t table=root;
+    for(unsigned level=0;level<3;level++) {
+        uint64_t at=table+((((uint64_t)va)>>(39-9*level))&511u)*8;
+        uint64_t d=(uint64_t)io->read32(io->context,at)|((uint64_t)io->read32(io->context,at+4)<<32);
+        if((d&3)!=3)return 0;           /* no table here: report it as absent */
+        table=d&UINT64_C(0x0000fffffffff000);
+    }
+    uint64_t at=table+((((uint64_t)va)>>12)&511u)*8;
+    return (uint64_t)io->read32(io->context,at)|((uint64_t)io->read32(io->context,at+4)<<32);
+}
+#endif
 /* Value written to MCU_CONTROL to start the MCU. 2 is AUTO alone and is what
  * every build up to2371 used; 3 is the vendor driver's ENABLE|AUTO. 2372 measured
  * 3 on this SoC: the write reads back, but MCU_STATUS stays0 for the whole
@@ -66,6 +88,12 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
      * Isolate this tag: retain2327 PTE low bits, AS attributes and startup. */
     if(!rc)rc=sweet_csf_memory_build_group(sweet_csf_blob_start,fw_bytes,&memory,arena,sizeof(arena),pa,(mmu>>8)&255,6,&root);
     if(rc) {shim_csf_report.error=rc;return rc;}
+#if SWEET_CSF_LEAF_PROBE
+    /* Sample the table as handed to the AS, before the MCU is started: this is
+     * the mapping every fetch in the trial walks, not a re-derivation of it. */
+    for(unsigned i=0;i<4;i++)
+        shim_csf_leaf_evidence.leaf[i]=sweet_csf_leaf_of(io,root,sweet_csf_leaf_va[i]);
+#endif
 #ifdef SHIM_CSF_ENTRY_PROBE
     struct sweet_csf_layout layout;
     rc=sweet_csf_parse(sweet_csf_blob_start,fw_bytes,&layout,dump_section,0);

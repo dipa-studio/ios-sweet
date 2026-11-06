@@ -464,15 +464,60 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertEqual(self.control_report(firmware_probe_pa_lo=0x40080000)['csf']['positive_control_outcome'],
                          'not-relocated')
 
-    def cold_report(self, build=0x2385, **changes):
-        """2385/2386: the reset vector points at one chosen block."""
+    def cold_report(self, build=0x2385, leaf=None, **changes):
+        """2385..2388: the reset vector points at one chosen block."""
         values = dict(stage=4, error=-53, version=0, features=0, job_raw=0,
                       firmware_ready=0, input_va=0x0100E000, groups=8,
                       output_va=0x04002000, group_stride=0x000000a0,
                       platform_reserved=0x202, transtab_lo=0x40077000,
                       firmware_probe_pa_lo=0x401a4000, firmware_probe_pa_hi=0)
         values.update(changes)
-        return self.module.decode(self.marks_dvfs(build=build, **values), build)
+        block = self.marks_dvfs(build=build, **values)
+        if leaf is not None:
+            #2388: the four leaf descriptors ride in their own mark range.
+            import struct
+            count = struct.unpack_from('<I', block, 12)[0]
+            for i, value in enumerate(leaf):
+                struct.pack_into('<IIQQ', block, 16 + count * 24 + i * 24,
+                                 420 + i, 0, value, build)
+            struct.pack_into('<I', block, 12, count + len(leaf))
+        return self.module.decode(block, build)
+
+    LEAVES = (0x30000000401a4cc3, 0x30000000401a5cc3,
+              0x30000000401b2cc3, 0x30000000401b3cc3)
+
+    def test_2388_reads_the_live_leaves_out_of_the_arena(self):
+        csf = self.cold_report(build=0x2388, input_va=0x01001200,
+                               leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'cold-boot-fetch-completes')
+        self.assertEqual(csf['cold_boot_target'], 0x01001200)
+        self.assertEqual(csf['leaf_0x01000000'], self.LEAVES[0])
+        self.assertEqual(csf['leaf_pa'], {'leaf_0x01000000': 0x401a4000,
+                                          'leaf_0x01001000': 0x401a5000,
+                                          'leaf_0x0100e000': 0x401b2000,
+                                          'leaf_0x0100f000': 0x401b3000})
+        self.assertTrue(csf['leaf_page0_as_planned'])
+        self.assertIn('page 1', csf['instrument_verdict'])
+        self.assertIn('0x010018ec', csf['instrument_verdict'])
+
+    def test_2388_absent_marker_puts_the_weight_on_the_leaves(self):
+        csf = self.cold_report(build=0x2388, input_va=0x04000200,
+                               leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'cold-boot-fetch-stalls')
+        self.assertFalse(csf['cold_boot_marker_present'])
+        self.assertIn('only fetch this port has ever seen complete is page 14',
+                      csf['instrument_verdict'])
+        # a leaf that is not the planned PA must be visible as such
+        moved = (0x3000000040080cc3,) + self.LEAVES[1:]
+        csf = self.cold_report(build=0x2388, input_va=0x04000200, leaf=moved)['csf']
+        self.assertFalse(csf['leaf_page0_as_planned'])
+        self.assertEqual(csf['leaf_pa']['leaf_0x01000000'], 0x40080000)
+
+    def test_2388_requires_its_leaf_property(self):
+        # No 340..343 records means the property never reached the kernel; the
+        # report must refuse rather than report zeros as if the walk had run.
+        with self.assertRaises(ValueError):
+            self.cold_report(build=0x2388, input_va=0x01001200)
 
     def test_2385_one_word_answers_the_cold_fetch_question(self):
         csf = self.cold_report()['csf']
