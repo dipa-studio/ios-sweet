@@ -381,10 +381,10 @@ Disassembling the reset handler at 0x010018ec and following its literal loads:
 
 | instruction | literal | literal block | same block as the code? |
 |---|---|---|---|
-| 0x010018ee .. 0x01001964 | 0x0100198a .. 0x010019ac | 0x01001800 | yes |
+| 0x010018ee .. 0x01001964 | 0x01001988 .. 0x010019ac | 0x01001800 | yes |
 | **0x010019dc** | **0x01001bc4** | **0x01001a00** | **no** |
-| **0x010019ee** | **0x01001bca** | **0x01001a00** | **no** |
-| **0x010019f2** | **0x01001bce** | **0x01001a00** | **no** |
+| **0x010019ee** | **0x01001bc8** | **0x01001a00** | **no** |
+| **0x010019f2** | **0x01001bcc** | **0x01001a00** | **no** |
 
 The first ten literal loads are inside the 512-byte block the core is executing
 from, which is why execution gets that far. The three in the cache helper load from
@@ -417,3 +417,54 @@ probe, `version` / `features` / `firmware_ready` as the answer.
   the fix;
 - still stops at the same place -> `XN` or the cache mode is next, and the search is
   cheap because 0x010019dc is already the address.
+
+## 20. 2378: read-only was not it, and no leaf field is left
+
+Same container, byte for byte, no probe, no entry patch. The only change is that
+the sections the firmware declares read-only are mapped writable:
+
+```
+code leaf  before 0x0000000090009cc7   AP[2]=1
+           after  0x0000000090009c47   AP[2]=0
+stack leaf        0x0060000090019c47   (unchanged)
+```
+
+The low twelve bits are now **identical** for the code page and the stack page. The
+trial still returns `mcu_status = 1`, `mmu_raw = 0`, `as_fault = 0`, `version = 0`,
+`features = 0`, `firmware_ready = 0`, `error = -53` - the 2376 result field for
+field.
+
+So the descriptor is not the difference. AttrIndx, share bits, AP, XN, AF and nG are
+now the same on a page whose cold data read returns (the stack) and a page whose
+cold data read hangs (the code). Every attribute explanation is spent.
+
+Two smaller things from the same run:
+
+- 2373, which hung on its own data read, cleaned up with `disable_status = 1`,
+  `reset_completed = 0`, `reset_raw = 0x200`; 2376 and 2378 end with exactly those.
+  Probe builds that reach their own `b .` park end with `reset_completed = 1`. The
+  firmware boot ends in the same wedge as a hung data read.
+- 2356 had already nop'd `79 48 01 60` at 0x010019dc - the literal load and the
+  device write - and the ladder still did not advance. That was inconclusive, not
+  negative: the ladder's own return path was under suspicion, and it could not
+  distinguish a stall at that instruction from a stall in its own epilogue.
+
+## 21. 2379: does fetch prime a block
+
+No attribute can be blamed any more, so the next question is about the access
+pattern itself. The probe writes its marker, steps the counter, then branches into
+block 0x01000200 - a block none of these boots has ever fetched - executes two
+instructions there, returns, and only then data-reads 0x01000210 in that same
+block.
+
+```
+9   the branch into a fresh block hung        -> even the fetch path fails there
+10  the fetch landed, the data read still hung -> residency is not the rule
+11  the data read completed                    -> fetch primes the block
+```
+
+Answer 11 would explain the firmware's death exactly: at 0x010019dc it reads a
+literal 0x1e4 bytes ahead of the instruction pointer, which lands in the next
+512-byte block, and that block has not been fetched. Answer 10 would say the model
+built from 2371-2375 is wrong and the search has to start over from the raw
+addresses rather than from a residency theory.

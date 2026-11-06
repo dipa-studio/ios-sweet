@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2377 - THE STACK PAGE TAKES WRITES; THE FIRMWARE DIES ON A LITERAL IN THE UNREADABLE BLOCK <<<
+## >>> ACTIVE 2026-11-06:2378 - READ-ONLY WAS NOT IT; NO LEAF FIELD DISTINGUISHES THE CODE PAGE ANY MORE <<<
 
 READ THIS FIRST. Trials 2357-2370 all ran. Until this entry their results existed
 only as comments above the per-build `TRACE_PROBE` table in
@@ -237,12 +237,12 @@ So 0x010018ec **is** the reset handler - every probe from 2363 on patched the ri
 address - and 0x010019b0 is the shared fault handler, which is why writing a stub
 there was harmless.
 
-But the initial SP is **0x02040000**, the very top of the RW section, so the first
-`push {r4-r8,sb,sl,fp,lr}` in the reset prologue writes into 0x0203f000..0x0203ffff -
-**the exact page 2358 measured as not writable**. The firmware therefore dies on its
-own first instruction: a store that never completes raises no fault, which is why
-2376 saw `mcu_status=1`, `mmu_raw=0` and nothing else. The reset path never reaches
-the code at 0x01000014 that reads the input page at 0x04002000.
+The vector table's SP is 0x02040000, but the handler overrides it: at 0x01001906 it
+loads the literal at 0x01001994 (= **0x0203f000**), does `msr psp, r0`, then sets
+CONTROL=2 so SPSEL switches to PSP. So the stack really does start at 0x0203f000 -
+the address 2358 named - and its first push writes 0x0203effc. This paragraph
+originally blamed that page; 2377 retracted it, the page takes writes. The actual
+stop is the literal load named below.
 
 **Next: 2377 tests writes, not reads.** 2375 proved reads work at 0x02000000; the
 stack top is a different 4 KiB section. Write a word to 0x02000000 and to
@@ -279,10 +279,10 @@ The stack was not why 2376 failed.
 **2376 explained without another boot: the firmware reads a literal in the block
 2371 proved unreadable.** Disassemble the reset handler at 0x010018ec and its three
 cache helpers at 0x010019dc, 0x010019ee and 0x010019f2 load literals from
-**0x01001bc4..0x01001bd0**. Those three instruction addresses sit in block
+**0x01001bc4..0x01001bcc**. Those three instruction addresses sit in block
 0x01001800..0x010019ff; the literals sit in block **0x01001a00..0x01001bff** - the
 exact block 2370, 2371 and 2373 measured as stopping the core. Everything before
-0x010019dc uses literals at 0x0100198a..0x010019ac, inside the executing block, which
+0x010019dc uses literals at 0x01001988..0x010019ac, inside the executing block, which
 is why the core gets that far.
 
 So the firmware runs, reaches 0x010019dc, issues `ldr r0,[pc,#0x1e4]`, and hangs on a
@@ -300,6 +300,48 @@ sections the firmware declares read-only, one variable, and reads `version`,
 `features` and `firmware_ready`. If it reaches ready, the wall was the read-only
 attribute; if it still stops, XN or the cache mode is next and the ladder is
 unnecessary - 0x010019dc is already the known stop address.
+
+**2378 CLEARED THE READ-ONLY BIT AND NOTHING CHANGED.** Image
+`7a284abe...`, container byte identical to the vendor file, no probe, no entry
+patch; only the page table differs. Offline the code leaf goes
+`0x...9cc7 -> 0x...9c47`, so its low twelve bits become **identical to the stack
+leaf's** (`0x...9c47`) - and the trial still reports `mcu_status = 1`,
+`mmu_raw = 0`, `version = 0`, `features = 0`, `firmware_ready = 0`, `error = -53`.
+Same signature as 2376, field for field.
+
+That closes the attribute line rather than doubting it. After 2378 there is **no
+field left in the leaf** that distinguishes the code page from the stack page: same
+AttrIndx, same share bits, same AP, same XN, same AF/nG. Yet a cold data read of the
+code page hangs and a cold data read of the stack page returns (2375) and takes
+writes (2377). So the difference is not in the descriptor. Any explanation has to be
+about the access itself.
+
+**Corroboration that the firmware is wedged, not looping.** 2373 ended after its data
+read at 0x01000200 hung, and cleaned up with `disable_status = 1`,
+`reset_completed = 0`, `reset_raw = 0x200`. 2376 and 2378 end with exactly those.
+The probe builds that reach their own `b .` park (2375, 2377) end with
+`reset_completed = 1`. 2375 shows the halt request can fail on its own, so this is
+corroboration rather than proof - but the failure signature is the same.
+
+**Note on 2356.** That trial already nop'd `79 48 01 60` at 0x010019dc, i.e. both the
+literal load and the CSSELR write, and the ladder still did not advance. It was not
+evidence against this address: that ladder's own return path (pop after a PSP switch)
+was under suspicion at the time, so the result was inconclusive rather than negative.
+The difference now is that a real firmware boot with no ladder at all ends in the
+wedged state, and the offline literal map names the same instruction.
+
+**Next: 2379 asks whether fetch primes a block, because no attribute can.** The probe
+branches into block 0x01000200 - never fetched in these boots - executes two
+instructions there so the core must fetch it, returns, and only then data-reads
+0x01000210 in that same block. The counter separates the three answers:
+
+- 9  the branch into a fresh block hung: even the fetch path fails there, and the
+     wall is more basic than any read/write distinction;
+- 10 the fetch landed and the data read of the freshly fetched block still hung:
+     residency is not the rule, and the model built from 2371-2375 is wrong;
+- 11 the data read completed: fetch primes a block for data access, which is the
+     rule the driver has to live with and explains why the firmware dies at
+     0x010019dc reading a literal 0x1e4 bytes ahead of itself.
 
 **Driver, this round:** `mali_csf_boot.c` drives the MCU through an explicit state
 machine instead of the bare `wr(MCU_CONTROL, 2)`: halt (write 0, poll
