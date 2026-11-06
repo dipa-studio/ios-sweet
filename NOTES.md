@@ -57,26 +57,37 @@ written and verified per mode, global stage success/timeout/invalid-page/
 argument-rejection with zero doorbell writes when off, and four 2380 decoder
 verdicts.
 
-ATTEMPT 1 (2026-11-06 20:12) PRODUCED NO EVIDENCE, and the reason is the
-harness, not the hardware. The image was written and read back as
-`ddee4ce0...a71d`, but at t=30 s the fastboot probe imported `tools/fbraw.py`
-(pyusb), which is not installed here; it raised, and the `finally: restore()`
-then flashed the stock prefix over a boot that had not finished.
-`before_tail_sha256 == after_tail_sha256`, so *nothing* was written to userdata
-during the attempt - every mark and console line in that directory is stale 2379
-data and must not be decoded as 2380. `ro.boot.bootreason` is Watchdog, i.e. the
-attempt ended in a watchdog reset instead of reaching XNU; a shim that hangs
-inside the GPU transaction never reaches `shim_gpu_publish`, so no report exists
-and the MemAttr question is still open. Attempt 1 is archived under
-`shim2380-vendormemattr-trials/gpu-normal-attempt1/` with a NOTE.txt. The probe
-now uses `fastboot devices` and needs no pyusb.
+ATTEMPTS 1 AND 2 PRODUCED NO EVIDENCE, and the cause was mine, not the
+hardware. Attempt 1 (20:12) aborted at t=30 s because the fastboot probe
+imported `tools/fbraw.py` (pyusb), which is not installed here, and the
+`finally: restore()` then flashed the stock prefix over a boot that had not
+finished; the probe now uses `fastboot devices`. Attempt 2 (20:19) ran the fixed
+probe and behaved identically: fastboot at 87.67 s, no fresh Recovery, and
+`before_tail_sha256 == after_tail_sha256`, i.e. **nothing** was written to
+userdata and the kernel never ran.
 
-NEXT: a second attempt of the *same* image with the fixed probe, then read the
-matrix in `docs/matisse-gpu-mcu-wall.md`: ready -> run 2381; unchanged
+The real defect: the image was built from
+`xnu/out/local/kernel.development.sweet`, which is a **stale file dated Oct 25**
+(17,222,952 B), not the build output. The canonical artifact is
+`xnu/out/local/build/xnu.obj/DEVELOPMENT_ARM64_SWEET/kernel.development.sweet`
+(16,724,248 B). The embedded kernel differed from the 2379 kernel in 13,865,824
+bytes, so 2380 was never a single-variable trial and could not boot XNU. Both
+attempts are archived under `shim2380-vendormemattr-trials/` with NOTE.txt.
+
+REBUILT CORRECTLY: prep/kernel-2380.development.sweet is now the right artifact
+(sha `534a19b2...d9f9c`, 22 bytes from the 2379 kernel - the build id only), and
+the image is `shim2380-vendormemattr-ready2/matisse-shim-gpu2380.img`,
+26,714,112 B (the stale one was 61,440 B smaller, which was the first clue),
+sha `0f21ee93...e77bc`, partition prediction `78a91de6...a9511`. The runner's
+IH/PH/image path are updated. Device state: Recovery, boot_a back to
+`2931647a...86b1` after each attempt; nothing was lost.
+
+NEXT: one trial of the corrected image, then read the matrix in
+`docs/matisse-gpu-mcu-wall.md`: ready -> run 2381; unchanged
 (stage4/-53/version0) -> the share bits are not the wall and 2382 (relocate the
 code section's PA) is the next single variable; a fault -> revert the leaf
-encoding. A third watchdog with no report means the hang is before publication,
-and the next instrument has to be the shim's own console, not SWEETMRK.
+encoding. If a corrected image still reaches fastboot with no marks, the next
+instrument has to be the shim's own console, not SWEETMRK.
 
 ## >>> PREVIOUS 2026-11-06:2379 - THE FRESH-BLOCK CALL DID NOT RETURN; FETCH ITSELF HANGS <<<
 
