@@ -1,37 +1,38 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-07 00:45: 2396 RAN - BIT 9 ONLY BITES IN AN EXECUTABLE PAGE <<<
+## >>> ACTIVE 2026-11-07 00:44: 2397 RAN - XN IS OUT; THE LEVERS ARE SPENT <<<
 
-**RESULT: `input_va = 3`.** The ladder wrote marker 1, read `0x04000200` in the
-shared section, wrote marker 2, read `0x02000200` in the stack, wrote marker 3,
-read `0x01001200` in the code section and stopped. The first two reads returned.
+**RESULT: `input_va = 3` again.** 2397's container is 2396's byte for byte; the
+only change was forcing the page at `0x01001000` non-executable. The leaf read
+back `0x30600000401a54c3` (XN set, PA `0x401a5000`) and the read of `0x01001200`
+stalled anyway.
 
 ```
-image  e05405f9...c6ae  26,714,112 B  kernel 82882120 (SWEET_BUILD_ID 0x2396)
-part.  c9aa7477...3851 written and read back, fastboot 83.38 s
+image  8a651666...b308  26,714,112 B  kernel 7043c805 (SWEET_BUILD_ID 0x2397)
+leaf   0x01001000 = 0x30600000401a54c3  probe_page_xn = true
+part.  fb6cf621...299c written and read back, fastboot 85.71 s
 boot_a restored 2931647a...86b1
 ```
 
-| read | section | bit 9 | result |
-|---|---|---|---|
-| `0x04000200` | shared, RW coherent | 1 | returned |
-| `0x02000200` | stack, RW non-executable | 1 | returned |
-| `0x01001200` | code, R-X | 1 | stalled |
+**Every leaf field has now been varied and none of them moves the wall:**
+AttrIdx/MemAttr (2393), cacheability (2395), AP (2378), SH (2374), nG (2393),
+XN (2397), memory group (always 6).
 
-**This corrects section 40.** The uniform "bit 9 anywhere" law was fitted to 21
-points that all sat in the code section. It is narrower: bit 9 inside a page the
-MCU can execute. Everything section 40 says about the code section still holds -
-the entry targets, the literal read at `0x01001BC4`, the `as_fault = 0`
-signature - but the address itself was never the variable.
+**Physical address bit 9 dies with it.** The shared read at `0x04000200` sits at
+PA `0x40110200` and the stack read at `0x02000200` at PA `0x40090200`, both bit 9
+set, both returned. And any page-aligned mapping preserves `PA bit9 == VA bit9`,
+so no remap and no granule change - including a 2 MB block - can separate them.
 
-**What is left: XN.** Stack leaf and code leaf now differ only in `AP[2]` and
-`XN`, and 2378 already cleared `AP[2]` on the code pages without moving the
-firmware's stop. XN is the one leaf field this port has never varied.
+**The model now has a crack that matters.** Within one page, one leaf and one
+physical page, offset `0x000` reads and `0x200` stalls, in the MCU code window
+only. Yet the vendor prologue calls `0x01001A2A` and its helper reads
+`0x01001BC4`, both bit 9 set, and the GPU boots on Android. Either those paths
+are never taken, or our image differs in something not yet looked at.
 
-**2397:** the same ladder, the same entry, the same encoding, with the code
-section mapped non-executable and `0x01001200` as the read that answers it.
-Returns -> XN is the switch. Stalls -> XN is exonerated and the next instrument
-is a 2 MB level-2 block that bypasses the level-3 walk.
+**Next is not another build.** Stop varying our own image; read the vendor live
+mapping instead - `AS_TRANSTAB`/`AS_TRANSCFG` and the code-section leaf on a
+booted Android - or re-read `load_fw_image_section()` against
+`mali_csf_memory.c` line by line.
 
 ## >>> PREVIOUS 2026-11-06 23:59: 2393 RAN - VENDOR PAGE ATTRS, SAME 512 WALL <<<
 

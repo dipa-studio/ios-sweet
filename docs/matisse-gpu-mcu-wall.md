@@ -1572,3 +1572,60 @@ One confound is recorded, not hidden: the three probes differ in physical page
 as well as in section, because each section has its own arena offset. 2382 moved
 the code section by 1.2 MB without moving the wall, which argues the PA is not
 the variable, but it is an argument, not a measurement.
+
+## 43. 2397 ran: executability is not the lever either
+
+2397's container is 2396's, byte for byte - same `0x0100E001` vector, same
+forty-eight byte ladder, same ninety-three bytes against the vendor file. One
+thing moved, and it is not in the container: the 4 KiB page at VA `0x01001000`
+was forced non-executable (`PXN|UXN`, bits 54:53) while every other page kept its
+permissions and the entry page `0x0100E000` stayed executable.
+
+| field | value |
+|---|---|
+| image | `8a651666...b308`, 26,714,112 B |
+| kernel | `7043c805...f250`, `SWEET_BUILD_ID 0x2397` |
+| leaf, VA `0x01001000` | `0x30600000401a54c3` - XN set, AttrIndx 0, PA `0x401a5000` |
+| leaf, VA `0x01000000` / `0x0100E000` | `...4c3` unchanged, X clear |
+| `input_va` | **3** - markers 1, 2 and 3 were written, so the shared and stack reads returned and the code read did not |
+| `groups` / `cleanup_error` | 8 / -53 |
+| `as_fault` / `mmu_raw` | 0 / 0 |
+| fastboot | 85.71 s, `boot_a` restored to `2931647a...86b1` |
+
+The readback is the point again: `probe_page_xn = true` and the descriptor
+carries `0x0060000000000000`, so the permission travelled. A data read of
+`0x01001200` stalled anyway. **XN is exonerated**, and with it every leaf field
+this port can vary has now been varied:
+
+| leaf input | build | result |
+|---|---|---|
+| AttrIndx / MemAttr (vendor pairing) | 2393 | stall |
+| cacheability of the code section | 2395 | stall |
+| AP[2] (writable code) | 2378 | stall |
+| SH (shareability) | 2374 | stall |
+| nG | 2393 | stall |
+| memory group 6 | throughout | stall |
+| XN on the target page | 2397 | stall |
+
+**A second reading dies here as well.** The stall could have been a property of
+the physical address rather than the virtual one. It is not: the shared read at
+`0x04000200` becomes PA `0x40110200` and the stack read at `0x02000200` becomes
+PA `0x40090200`, both with bit 9 set, and both returned. More fundamentally, a
+page-aligned mapping always preserves `PA bit 9 == VA bit 9`, so no remap and no
+change of granule can ever separate the two - 2382's 1.2 MB relocation preserved
+it, a 2 MB block would preserve it too, because a 2 MB aligned base has bit 9
+clear.
+
+**What the data now says.** Within one 4 KiB page, one leaf and one physical
+page, offset `0x000` works and offset `0x200` stalls, in the MCU's own 64 KiB
+code window, while the identical offset pattern in the stack and shared sections
+returns. Nothing at the mapping layer can express that difference, because there
+is no mapping-layer difference: same entry, same descriptor, same page.
+
+**And that is where the current model breaks.** The vendor firmware's own
+prologue calls `0x01001A2A` (bit 9 set) and its cache helper reads
+`0x01001BC4` (bit 9 set); under the measured rule both would stall, yet the GPU
+boots on Android. So either those paths are never taken on real hardware, or our
+image still differs from the vendor's in something we have not looked at. Every
+lever we can pull inside the shim has now been pulled; the next instrument
+should stop varying our own image and read the vendor's live mapping instead.
