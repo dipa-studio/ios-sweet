@@ -491,6 +491,9 @@ class ReportDecodeTests(unittest.TestCase):
     # 2397: page 1 (the one holding the 0x01001200 read target) forced
     # non-executable, PXN|UXN at bits 54:53, every other leaf untouched.
     LEAVES_XN_PAGE = (LEAVES[0], LEAVES[1] | (3 << 53)) + LEAVES[2:]
+    # 2398: the same four leaves with bits 59..62 cleared. Every earlier build
+    # published group 6 there.
+    LEAVES_GROUP_ZERO = tuple(leaf & ~(0xf << 59) for leaf in LEAVES)
 
     def test_2388_reads_the_live_leaves_out_of_the_arena(self):
         csf = self.cold_report(build=0x2388, input_va=0x01001200,
@@ -579,6 +582,23 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertIsNone(csf['cold_boot_start'])
         self.assertEqual(len(csf['cold_boot_landings']), 3)
         self.assertIn('survives AttrIdx 0/5', csf['instrument_verdict'])
+
+    def test_2398_clears_the_group_tag(self):
+        csf = self.cold_report(build=0x2398, input_va=4,
+                               leaf=self.LEAVES_GROUP_ZERO)['csf']
+        self.assertTrue(csf['leaf_group_zero'])
+        self.assertEqual(csf['leaf_group_tags'], [0, 0, 0, 0])
+        self.assertEqual(csf['cold_boot_outcome'], 'leaf-group-was-the-wall')
+
+        csf = self.cold_report(build=0x2398, input_va=3,
+                               leaf=self.LEAVES_GROUP_ZERO)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'leaf-group-exonerated')
+        self.assertIn('tag is not the wall', csf['instrument_verdict'])
+
+        # Still carrying 6: the image did not travel with the new tag.
+        csf = self.cold_report(build=0x2398, input_va=3, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'group-not-applied')
+        self.assertEqual(csf['leaf_group_tags'], [6, 6, 6, 6])
 
     def test_2397_forces_one_page_non_executable(self):
         csf = self.cold_report(build=0x2397, input_va=4,

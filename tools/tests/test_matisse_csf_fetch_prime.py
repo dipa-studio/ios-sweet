@@ -154,6 +154,7 @@ class FetchPrimeTests(unittest.TestCase):
         self.assertIn(0x2393, self.builder.LEAF_PROBE_BUILDS)
         self.assertIn(0x2394, self.builder.LEAF_PROBE_BUILDS)
         self.assertIn(0x2397, self.builder.LEAF_PROBE_BUILDS)
+        self.assertIn(0x2398, self.builder.LEAF_PROBE_BUILDS)
         self.assertIn(0x2388, self.builder.LEAF_PROBE_BUILDS)
         source = (ROOT / 'tools/matisse-shim-gpu-image.py').read_text()
         self.assertIn('a.build_id in LEAF_PROBE_BUILDS)', source)
@@ -271,6 +272,20 @@ class FetchPrimeTests(unittest.TestCase):
                       patch_2397['cold_boot']['ladder'][2]['section'])
         self.assertNotIn('xn_page', patch_2396['cold_boot'])
         self.assertEqual(self.builder.TRACE_PROBE[0x2397]['xn_page'], 0x01001000)
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2398_keeps_the_container_and_clears_the_group_tag(self):
+        embedded_2396, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2396)
+        embedded_2398, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2398)
+        # Only a page-table bit moves: the image bytes are 2396's.
+        self.assertEqual(embedded_2396, embedded_2398)
+        self.assertEqual(patch['cold_boot']['leaf_group'], 0)
+        self.assertEqual(patch['cold_boot']['target'], '0x100e000')
+        self.assertEqual(self.builder.TRACE_PROBE[0x2398]['leaf_group'], 0)
+        source = (ROOT / 'shim/csf.c').read_text()
+        self.assertIn('SWEET_CSF_LEAF_GROUP', source)
+        self.assertIn('(mmu>>8)&255,SWEET_CSF_LEAF_GROUP,&root', source)
+        self.assertIn('.pte_group_requested=SWEET_CSF_LEAF_GROUP', source)
 
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2394_is_the_2385_control_under_vendor_attributes(self):

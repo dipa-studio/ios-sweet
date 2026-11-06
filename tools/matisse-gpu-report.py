@@ -109,7 +109,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -822,6 +822,74 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 verdict = ('the core never wrote a marker, so 0x0100E000 did not start even though '
                            'only 0x01001000 lost X. Check the entry page leaf before reading the '
                            'ladder')
+            csf['cold_boot_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2398:
+            # 2396's container and ladder with the leaf's memory group tag at 0.
+            # Every earlier build published 6, which no driver ever writes.
+            csf['cold_boot_counter'] = csf['groups']
+            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a4000
+            csf['cold_boot_target'] = 0x0100E000
+            csf['cold_boot_ladder'] = {
+                '0x1': 'stopped reading shared 0x04000200',
+                '0x2': 'stopped reading stack 0x02000200',
+                '0x3': 'stopped reading code 0x01001200',
+                '0x4': 'all three bit-9 reads returned'}
+            groups = [csf.get(name) for name in
+                      ('leaf_0x01000000', 'leaf_0x01001000',
+                       'leaf_0x0100e000', 'leaf_0x0100f000')]
+            tags = [None if leaf is None else (leaf >> 59) & 0xf for leaf in groups]
+            csf['leaf_group_tags'] = tags
+            csf['leaf_group_zero'] = bool(tags) and all(tag == 0 for tag in tags)
+            marker = csf['input_va']
+            csf['cold_boot_marker_present'] = marker in (1, 2, 3, 4)
+            if not csf['relocation_observed']:
+                outcome = 'not-relocated'
+                verdict = ('the executable probe PA is not the relocated one; this is not the '
+                           '2382 mapping the build reuses')
+            elif csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault']:
+                outcome = 'cold-boot-refused'
+                verdict = ('the MMU refused something before any marker appeared (AS_FAULT %#x at '
+                           '%#x), so the ladder never reached its first read' %
+                           (csf['as_fault'], csf['as_fault_hi'] << 32 | csf['as_fault_lo']))
+            elif not csf['leaf_group_zero']:
+                outcome = 'group-not-applied'
+                csf['cold_boot_marker_present'] = False
+                csf['cold_boot_start'] = None
+                verdict = ('the live leaves still carry tag(s) %s in bits 59..62, so the image did '
+                           'not travel with group 0 and this run says nothing about the tag'
+                           % [tag for tag in tags])
+            elif marker == 1:
+                outcome = 'shared-stalls-again'
+                csf['cold_boot_start'] = 'shared-0x04000200'
+                verdict = ('the shared read stalled, which 2396 did not do; the run is not '
+                           'comparable and says nothing about the tag')
+            elif marker == 2:
+                outcome = 'stack-stalls-again'
+                csf['cold_boot_start'] = 'stack-0x02000200'
+                verdict = ('the stack read stalled, which 2396 did not do; the run is not '
+                           'comparable and says nothing about the tag')
+            elif marker == 3:
+                outcome = 'leaf-group-exonerated'
+                csf['cold_boot_start'] = 'code-0x01001200'
+                verdict = ('the code read still stalled with group 0 in the leaf, so the tag is '
+                           'not the wall. With every leaf input now varied - AttrIndx, MemAttr, '
+                           'SH, nG, AP, XN, cache mode and the group tag - the remaining '
+                           'difference between the stalling code section and the returning '
+                           'stack and shared sections is the virtual range itself')
+            elif marker == 4:
+                outcome = 'leaf-group-was-the-wall'
+                csf['cold_boot_start'] = 'all-three-returned'
+                verdict = ('the code read returned once the leaf stopped carrying group 6. The '
+                           'tag was the whole wall: every build until now asked the AS for a '
+                           'memory group that does not back the firmware pages, and only the '
+                           'code window noticed. 2399 should boot the unpatched vendor firmware '
+                           'with group 0 and read version/firmware_ready')
+            else:
+                outcome = 'no-marker'
+                csf['cold_boot_start'] = None
+                verdict = ('the core never wrote a marker, so 0x0100E000 did not start; check the '
+                           'entry page leaf before reading the ladder')
             csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
         if expected_build == 0x2394:
@@ -1745,7 +1813,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2397)')
+                   help='expected kernel/report build (0x2321 through 0x2398)')
     p.add_argument('--allow-missing-leaf',action='store_true',
                    help='decode a build >=0x2388 whose image shipped without the '
                         'sweet-csf-leaf property (2389 did); leaf fields stay absent')

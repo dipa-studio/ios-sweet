@@ -12,6 +12,17 @@
 #error "entry PTE guard requires the inline reset-entry overlay"
 #endif
 
+/* 2398. The leaf's bits 59..62 carry a physical memory group tag. This shim has
+ * always published 6 there because the pinned mali_mgm helper names group 6 for
+ * GPU allocations, but neither the vendor driver nor the working MT6993 port
+ * ever writes those bits into a page-table entry: in kbase the group id is a
+ * context allocation hint, and mali_kbase_native_mgm_alloc() marks it unused.
+ * 2398 sets the tag to 0 so the last leaf input that has never been varied is
+ * varied, with the container unchanged. */
+#ifndef SWEET_CSF_LEAF_GROUP
+#define SWEET_CSF_LEAF_GROUP 6
+#endif
+
 static uint8_t arena[2u<<20] __attribute__((aligned(4096)));
 extern const uint8_t sweet_csf_blob_start[],sweet_csf_blob_end[];
 struct sweet_csf_boot_report shim_csf_report;
@@ -86,7 +97,7 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
     uint32_t mmu=io->read32(io->context,gpu+0x14);
     /* Pinned mali_mgm helper defaults to leaf group6 (bits59..62).
      * Isolate this tag: retain2327 PTE low bits, AS attributes and startup. */
-    if(!rc)rc=sweet_csf_memory_build_group(sweet_csf_blob_start,fw_bytes,&memory,arena,sizeof(arena),pa,(mmu>>8)&255,6,&root);
+    if(!rc)rc=sweet_csf_memory_build_group(sweet_csf_blob_start,fw_bytes,&memory,arena,sizeof(arena),pa,(mmu>>8)&255,SWEET_CSF_LEAF_GROUP,&root);
     if(rc) {shim_csf_report.error=rc;return rc;}
 #if SWEET_CSF_LEAF_PROBE
     /* Sample the table as handed to the AS, before the MCU is started: this is
@@ -121,7 +132,7 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
     struct sweet_csf_boot_config c={.gpu=gpu,.root_pa=root,.arena_pa=pa,
         .arena_bytes=memory.required_bytes,.shared_offset=memory.shared_offset,
         .shared_bytes=memory.shared_bytes,.timeout_ms=1000,.noncoherent=1,
-        .pte_group_requested=6,.vendor_ina0=1,.vendor_cached_memattr=1,
+        .pte_group_requested=SWEET_CSF_LEAF_GROUP,.vendor_ina0=1,.vendor_cached_memattr=1,
         .platform_snapshot=1,.access_snapshot=1,.platform_path=1,
         .mcu_control_value=SWEET_CSF_MCU_CONTROL
 #if SWEET_CSF_GLOBAL_INIT
