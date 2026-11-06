@@ -782,3 +782,35 @@ stub has never been seen to fire. Its correctness is argued from the vector
 table, the block being warm and the marker being present - all offline-checkable
 facts, but not a measurement. A deliberate fault (2384) is the control that turns
 "the handler did not run" into "the handler cannot run, or would have".
+
+## 29. 2384: the control that proves the fault entry works
+
+2383's "no exception was taken" is only worth the instrument behind it, and that
+instrument had never been seen to fire. 2384 is 2383 with the entry program
+replaced by a deliberate fault: write the marker, read the protected section at
+0x03000000 that the plan never maps, then write 30 and park.
+
+```
+0x010018ec  cpsid i / r4 = 0x01000200 / r3 = 0x04000000
+            str r4,[r3,#8]      ; the marker
+            r0 = 0x03000000
+            ldr r1,[r0]         ; the deliberate fault
+            r1 = 30 / str r1,[r3,#16] / b .
+```
+
+Everything else is inherited from 2383: same relocated code section, same probe
+patch at 0x01000200, same 40-byte fault entry at 0x010019b0, same writable RO
+leaves. Built from 2383's spec by replacing only the entry window, so the two
+containers differ at 0x2790..0x27a5 and nowhere else.
+
+The counter now has three meanings and no fourth:
+
+| counter | what it means for 2383 |
+|---|---|
+| 20 | the stub fired - the fault entry works, and 2383's 9 is a real measurement: the cold fetch raises nothing |
+| 30 | the read of the unmapped section completed - the reachable space is bigger than the built tables, and 2383's 9 has to be re-read |
+| 8 (the template seed) with the marker set | the read neither faulted nor completed - a stall is indistinguishable from a silent refusal, and 2383's result loses its diagnostic value |
+
+Image `be2c5cdb...393d`, 26,714,112 B, kernel `44180108` (19 bytes from 2383),
+partition prediction `786879f2...7839`, reproduced to the same sha. Built and
+preflighted offline; `boot_a` untouched at `2931647a...86b1`.

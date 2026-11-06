@@ -994,6 +994,28 @@ TRACE_PROBE[0x2383] = dict(TRACE_PROBE[0x2379])
 TRACE_PROBE[0x2383]['patches'] = dict(TRACE_PROBE[0x2379]['patches'])
 TRACE_PROBE[0x2383]['patches'][0x010019b0] = FAULT_ENTRY_2383
 TRACE_PROBE[0x2383]['fault_entry_va'] = 0x010019b0
+
+# 2384 is the positive control for that stub: 2383's mapping and fault entry,
+# but the entry window writes the marker and then reads the unmapped protected
+# section at 0x03000000. 20 means the stub fired, 30 that the read completed,
+# and a marker with counter 0 that the access stalled without faulting - which
+# would retract 2383's conclusion. Assembled from
+# tools/matisse-csf-fault-control.S, 28 of the 38 vendor bytes at 0x010018ec.
+FAULT_CONTROL_2384 = (
+    '72b626484ff00b01016025484ff00701016024484ff4e02101602348',
+    '72b60124240604f5007401239b069c600320000601681e211961fee7')
+# Built from 2383 so the two differ only in the entry window: the probe stub at
+# 0x01000200 and the fault entry at 0x010019b0 are inherited byte for byte, and
+# the 2379 entry program is replaced by the control one.
+TRACE_PROBE[0x2384] = dict(
+    TRACE_PROBE[0x2383], kind='positive-control', stub_va=0x010018ec,
+    stub_original=bytes.fromhex(FAULT_CONTROL_2384[0]),
+    stub=bytes.fromhex(FAULT_CONTROL_2384[1]),
+    # 2383 patches the fresh block through `stub`; a control build has no stub
+    # there, so carry the same two bytes as an explicit patch instead.
+    patches={0x01000200: ('01340a2c', '00bf7047'),
+             **{va: body for va, body in TRACE_PROBE[0x2383]['patches'].items()
+                if va != 0x010018ec}})
 BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the low bytes
 
 
@@ -1153,6 +1175,14 @@ def fault_vector_probe(path, expected, build_id):
             # counter of9 here against 2379's9 says the hang does not follow the
             # physical pages this build moved it to.
             patch['fetch_prime']['code_section_relocated'] = True
+    if build_id == 0x2384:
+        patch['positive_control'] = dict(
+            entry_va='0x10018ec', marker_value='0x1000200',
+            unmapped_va='0x3000000', marker_field='input_va',
+            counter_field='groups', counter_meanings={
+                '20': 'the 2383 fault entry fired: the instrument works',
+                '30': 'the unmapped read completed without faulting',
+                '0 or 8': 'the read neither faulted nor completed'})
     return embedded, patch
 
 
@@ -1285,7 +1315,7 @@ def build(a):
     #2382 is the2379 container patch on a plan that puts the R-X section after
     # the whole layout. Everything else - leaf encoding, probe, RO-as-RW, start
     # word - is held at2379's values so the PA is the only moved number.
-    if a.build_id in (0x2382, 0x2383):
+    if a.build_id in (0x2382, 0x2383, 0x2384):
         if not (a.trace_probe and a.ro_as_rw and a.relocate_code):
             raise ValueError('build%x requires --trace-probe --ro-as-rw --relocate-code' % a.build_id)
         if (a.vendor_memattr or a.global_init or a.fault_probe or a.entry_probe or
@@ -1482,6 +1512,10 @@ def build(a):
             if a.build_id in (0x2379, 0x2382, 0x2383):
                 name = 'tools/matisse-csf-fetch-prime.S'
                 info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
+            if a.build_id in (0x2383, 0x2384):
+                for name in ('tools/matisse-csf-fault-entry.S',
+                             'tools/matisse-csf-fault-control.S'):
+                    info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
     if a.relocate_code:
         moved = relocation_evidence(firmware)
         base = 0x40000000 + arena
@@ -1521,7 +1555,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',

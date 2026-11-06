@@ -1,6 +1,32 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2383 RAN - NO FAULT WAS TAKEN; THE FETCH JUST STALLS <<<
+## >>> ACTIVE 2026-11-06:2384 BUILT OFFLINE - POSITIVE CONTROL FOR THE FAULT ENTRY <<<
+
+**STATUS: IMAGE READY, NOT FLASHED. `boot_a` at baseline `2931647a...86b1`,
+read-only preflight passed.**
+
+2383 concluded "no exception was taken" from a stub that had never been seen to
+fire. 2384 makes it fire on purpose: 2383 unchanged, except the 28-byte entry
+program writes the marker and then reads the protected section at 0x03000000,
+which the plan never maps.
+
+```
+kernel  44180108...f3cb  16,724,248 B, 19 bytes from 2383
+image   be2c5cdb...393d  26,714,112 B, rebuilt to the same sha
+part.   786879f2...7839  predicted boot_a contents
+runner  research/matisse/20261031-gpu/shim2384-faultcontrol-trials-run-once.py
+```
+
+Built from 2383's spec with only the entry window replaced, so the containers
+differ at 0x2790..0x27a5 and nowhere else (test-enforced). Reading:
+
+| counter | meaning |
+|---|---|
+| 20 | the stub fired: the fault entry works and 2383's 9 is a real measurement |
+| 30 | the unmapped read completed without faulting: 2383's 9 must be re-read |
+| 8 (template seed) with the marker set | the read neither faulted nor completed: a stall and a silent refusal are indistinguishable, and 2383's result loses its value |
+
+## >>> PREVIOUS 2026-11-06:2383 RAN - NO FAULT WAS TAKEN; THE FETCH JUST STALLS <<<
 
 **RESULT: counter 9, `fault_taken = false`.** The call into 0x01000200 stops the
 MCU without raising any exception. In band: `input_va = 0x01000200` (the marker,

@@ -406,6 +406,41 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertEqual(self.fault_report(groups=7)['csf']['fetch_prime_outcome'],
                          'unexpected-counter')
 
+    def control_report(self, **changes):
+        """2384: the positive control for the 2383 fault entry."""
+        values = dict(stage=4, error=-53, version=0, features=0, job_raw=0,
+                      firmware_ready=0, input_va=0x01000200, groups=20,
+                      output_va=0x0100190a, group_stride=0x00008202,
+                      platform_reserved=0x202, transtab_lo=0x40077000,
+                      firmware_probe_pa_lo=0x401a4000, firmware_probe_pa_hi=0)
+        values.update(changes)
+        return self.module.decode(self.marks_dvfs(build=0x2384, **values), 0x2384)
+
+    def test_2384_proves_the_fault_entry_fires(self):
+        csf = self.control_report()['csf']
+        self.assertEqual(csf['positive_control_outcome'], 'instrument-proven')
+        self.assertEqual(csf['control_counter'], 20)
+        self.assertEqual(csf['fault_status_cfsr'], 0x00008202)
+        self.assertEqual(csf['fault_status_names'], ['DACCVIOL', 'PRECISERR', 'BFARVALID'])
+        self.assertEqual(csf['fault_stacked_pc'], 0x0100190a)
+        self.assertIn('fault entry works', csf['instrument_verdict'])
+
+    def test_2384_distinguishes_the_three_outcomes(self):
+        self.assertEqual(self.control_report(groups=30)['csf']['positive_control_outcome'],
+                         'unmapped-read-completed')
+        self.assertEqual(self.control_report(groups=8)['csf']['positive_control_outcome'],
+                         'unmapped-read-stalled')
+        self.assertEqual(self.control_report(groups=0)['csf']['positive_control_outcome'],
+                         'unmapped-read-stalled')
+        self.assertEqual(self.control_report(groups=7)['csf']['positive_control_outcome'],
+                         'unexpected-counter')
+
+    def test_2384_requires_the_marker_and_the_2383_mapping(self):
+        self.assertEqual(self.control_report(input_va=0)['csf']['positive_control_outcome'],
+                         'control-never-ran')
+        self.assertEqual(self.control_report(firmware_probe_pa_lo=0x40080000)['csf']['positive_control_outcome'],
+                         'not-relocated')
+
     def test_csf_timeout_provenance_requires_matching_callback_evidence(self):
         platform = dict(stage=8, error=-53)
         result = self.module.decode(self.csf_marks(build=0x2330, platform=platform,

@@ -48,7 +48,8 @@ CSF_PATH_KEYS = ['rpc_enable','rpc_status','infra_enable','infra_status',
 CSF_PATH_MASKS = dict(rpc=0x000f0000, infra=0xf, emi0=0xc0000, emi1=0xc0000)
 # Cortex-M CFSR bits the 2383 fault entry can report (SCB->CFSR, 0xE000ED28).
 CFSR_BITS = ((0, 'IACCVIOL'), (1, 'DACCVIOL'), (3, 'MUNSTKERR'), (4, 'MSTKERR'),
-             (5, 'MLSPERR'), (8, 'IBUSERR'), (9, 'PRECISERR'), (10, 'IMPRECISERR'),
+             (5, 'MLSPERR'), (7, 'MMARVALID'), (8, 'IBUSERR'), (9, 'PRECISERR'),
+             (10, 'IMPRECISERR'), (15, 'BFARVALID'),
              (11, 'UNSTKERR'), (12, 'STKERR'), (13, 'LSPERR'), (16, 'UNDEFINSTR'),
              (17, 'INVSTATE'), (18, 'INVPC'), (19, 'NOCP'), (20, 'STKOF'),
              (24, 'UNALIGNED'), (25, 'DIVBYZERO'))
@@ -103,7 +104,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -310,7 +311,7 @@ def decode(data, expected_build=0x2321):
                     core_state_after_start=bool(csf['sample_flags'] & 8))
             #2380 moved MEMATTR to the exact vendor table, so the expected
             # readback pair is a property of the build, not a constant.
-            if expected_build in (0x2382, 0x2383):
+            if expected_build in (0x2382, 0x2383, 0x2384):
                 # 2382 keeps 2379's leaf encoding and register pair on purpose:
                 # the code section's PA is the only variable in that build.
                 expected_memattr = (0x4c4c884c, 0x4c4c4c4c)
@@ -472,6 +473,50 @@ def decode(data, expected_build=0x2321):
                 outcome = 'unexpected-counter'
                 verdict = 'the probe did not reach a defined 9/10/11 checkpoint'
             csf['fetch_prime_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2384:
+            # Positive control for the 2383 fault entry: identical mapping and
+            # fault stub, but the entry window writes the marker and then reads
+            # the deliberately unmapped protected section. Only the counter can
+            # differ from 2383, and each value has one meaning.
+            raw = csf['groups']
+            csf['control_counter'] = raw
+            csf['control_marker_present'] = csf['input_va'] == 0x01000200
+            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a4000
+            if not csf['relocation_observed']:
+                outcome = 'not-relocated'
+                verdict = ('the executable probe PA is not the relocated one; this is not the '
+                           '2383 mapping the control reuses')
+            elif not csf['control_marker_present']:
+                outcome = 'control-never-ran'
+                verdict = ('the marker is absent, so the control entry window never executed; '
+                           'the image or the entry patch is wrong and no instrument claim holds')
+            elif raw == 20:
+                csf['fault_stacked_pc'] = csf['output_va']
+                csf['fault_status_cfsr'] = csf['group_stride']
+                csf['fault_status_names'] = [name for bit, name in CFSR_BITS
+                                             if csf['group_stride'] >> bit & 1]
+                outcome = 'instrument-proven'
+                verdict = ('the deliberate read faulted and the 2383 stub recorded it (PC %#x, '
+                           'CFSR %#x %s), so the fault entry works and the 2383 counter 9 really '
+                           'means no exception was taken' %
+                           (csf['fault_stacked_pc'], csf['fault_status_cfsr'],
+                            '/'.join(csf['fault_status_names']) or 'no CFSR bits'))
+            elif raw == 30:
+                outcome = 'unmapped-read-completed'
+                verdict = ('the read of the unmapped protected section completed, so the reachable '
+                           'address space is larger than the built tables and the 2383 counter 9 '
+                           'must be re-read before any conclusion')
+            elif raw in (0, 8):
+                outcome = 'unmapped-read-stalled'
+                verdict = ('the marker is set but the counter still holds its template seed: the '
+                           'unmapped read neither faulted nor completed, so an access that stalls '
+                           'is indistinguishable from one that faults silently - the 2383 result '
+                           'loses its diagnostic value')
+            else:
+                outcome = 'unexpected-counter'
+                verdict = 'the control reached no defined 20/30 checkpoint'
+            csf['positive_control_outcome'] = outcome
             csf['instrument_verdict'] = verdict
         if expected_build == 0x2383:
             # 2382 plus the vendor fault entry: the fetch-prime probe is
@@ -1127,7 +1172,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2383)')
+                   help='expected kernel/report build (0x2321 through 0x2384)')
     a=p.parse_args()
     try:
         report=decode(a.marks.read_bytes(),a.build)
