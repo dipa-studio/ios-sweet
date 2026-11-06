@@ -151,6 +151,7 @@ class FetchPrimeTests(unittest.TestCase):
         the capture had no leaves and the decoder refused it. Both now read one
         list, and this test fails if either is written out again."""
         self.assertIn(0x2390, self.builder.LEAF_PROBE_BUILDS)
+        self.assertIn(0x2393, self.builder.LEAF_PROBE_BUILDS)
         self.assertIn(0x2388, self.builder.LEAF_PROBE_BUILDS)
         source = (ROOT / 'tools/matisse-shim-gpu-image.py').read_text()
         self.assertIn('a.build_id in LEAF_PROBE_BUILDS)', source)
@@ -196,6 +197,35 @@ class FetchPrimeTests(unittest.TestCase):
         self.assertEqual([item['target'] for item in patch['cold_boot']['landings']],
                          ['0x1001a00', '0x1001000', '0x10018ec'])
         self.assertEqual(patch['cold_boot']['target'], '0x1001a00')
+        self.assertNotIn('reset_vector_unchanged', patch['cold_boot'])
+        self.assertEqual(patch['leaf_probe']['marks'], '420..423')
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2393_repeats_the_512_target_with_vendor_page_attributes(self):
+        original = FIRMWARE.read_bytes()
+        embedded_2391, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2391)
+        embedded_2393, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2393)
+        config, code = 0x0380, 0x0e94
+        allowed = set(range(config + 4, config + 8))
+        allowed |= set(range(code + 0x1A00, code + 0x1A00 + 20))
+        allowed |= set(range(code + 0xEA00, code + 0xEA00 + 20))
+        changed = {i for i, (a, b) in enumerate(zip(embedded_2391, embedded_2393)) if a != b}
+        self.assertTrue(changed)
+        self.assertLessEqual(changed, allowed)
+        self.assertEqual(int.from_bytes(embedded_2393[config + 4:config + 8], 'little'),
+                         0x0100EA01)
+        # 2391's program at 0x1A00 goes back to vendor bytes; 0xEA00 takes it
+        self.assertEqual(embedded_2393[code + 0x1A00:code + 0x1A00 + 20],
+                         original[code + 0x1A00:code + 0x1A00 + 20])
+        self.assertEqual(embedded_2393[code + 0xEA00:code + 0xEA00 + 20],
+                         bytes.fromhex(self.builder.COLD_BOOT_2393[1]))
+        for landing, program in ((0x18ec, self.builder.COLD_BOOT_2390_ENTRY),
+                                 (0x1000, self.builder.COLD_BOOT_2390_PAGE)):
+            self.assertEqual(embedded_2393[code + landing:code + landing + 20],
+                             bytes.fromhex(program[1]), hex(landing))
+        self.assertEqual([item['target'] for item in patch['cold_boot']['landings']],
+                         ['0x100ea00', '0x1001000', '0x10018ec'])
+        self.assertEqual(patch['cold_boot']['target'], '0x100ea00')
         self.assertNotIn('reset_vector_unchanged', patch['cold_boot'])
         self.assertEqual(patch['leaf_probe']['marks'], '420..423')
 
@@ -329,7 +359,10 @@ class FetchPrimeTests(unittest.TestCase):
                  # 0x010018ec is out of range of add.w's modified immediate and of
                  # addw's twelve bits, so the 2390 entry variant materialises the
                  # word with movw/movt: same twenty bytes, different encoding.
-                 (0x2390, 0x010018EC, 'COLD_BOOT_2390_ENTRY', True))
+                 (0x2390, 0x010018EC, 'COLD_BOOT_2390_ENTRY', True),
+                 # 2393 repeats 2391's class of address (512-aligned, not a
+                 # page base) with vendor page attributes; same twenty bytes.
+                 (0x2393, 0x0100EA00, 'COLD_BOOT_2393', False))
         for build, target, pinned, wide in cases:
             with self.subTest(build=hex(build)), tempfile.TemporaryDirectory() as directory:
                 p = Path(directory)

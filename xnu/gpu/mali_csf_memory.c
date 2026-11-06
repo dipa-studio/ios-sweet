@@ -155,7 +155,12 @@ int sweet_csf_memory_build_group(const uint8_t *fw, size_t bytes, const struct s
              * page-table walker was configured non-shareable at the same time,
              * so the two disagreed about who owns the transaction. */
             int cached = (p->flags & 24) == 8;
-            uint64_t desc = (pa + p->arena_offset + off) | 3 | 0x800 | 0x400 | 0x40;
+            uint64_t desc = (pa + p->arena_offset + off) | 3 | 0x400 | 0x40;
+#if !SWEET_CSF_VENDOR_LEAVES
+            /* ARMv8 nG. kbase never sets it; 2393 clears it so the leaf matches
+             * mali_kbase_mmu_mode_aarch64.c get_mmu_flags() byte for byte. */
+            desc |= 0x800;
+#endif
 #if SWEET_CSF_VENDOR_MEMATTR
             /*2380 vendor pairing. convert_mem_flags() at system_coherency NONE
              * maps a CACHED section to AS_MEMATTR_INDEX_IMPL_DEF_CACHE_POLICY(0)

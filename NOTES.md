@@ -1,6 +1,25 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06 23:27: 2391 RAN - NO LANDING; THE FALLBACK READING IS DEAD <<<
+## >>> ACTIVE 2026-11-06 23:59: 2393 RAN - VENDOR PAGE ATTRS, SAME 512 WALL <<<
+
+**RESULT: no landing at `0xEA00` / `0x1000` / `0x18EC`. The leaf readback is
+`0x4C3`, so the image really ran with vendor page attributes (AttrIdx 0/5, no
+nG, read-only code) - and the 512 wall did not move.**
+
+```
+image  b6c4efa3...e077  26,714,112 B  kernel 475a9a4c (SWEET_BUILD_ID 0x2393)
+part.  642fafcf...8b53 written and read back, fastboot 86.5 s
+boot_a restored to 2931647a...86b1 (verified)
+outcome cold-boot-fetch-stalls
+```
+
+This kills the attribute hypothesis from the vendor audit. One thing is still
+missing: a positive control at a known-good address under the same encoding.
+2394 does that at `0xE000`. If it runs, the 512 rule is below the driver; if it
+also stalls, the vendor encoding itself broke the start and 2393 says nothing.
+See `docs/matisse-gpu-mcu-wall.md` section 38.
+
+## >>> PREVIOUS 2026-11-06 23:27: 2391 RAN - NO LANDING; THE FALLBACK READING IS DEAD <<<
 
 **RESULT: none of the three landings wrote. `input_va` stayed at the seed
 `0x04002000`, `groups = 8`, `mmu_raw = 0`, `as_fault = 0`, `mcu_status = 1`,

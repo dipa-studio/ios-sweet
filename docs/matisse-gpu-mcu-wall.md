@@ -1319,3 +1319,41 @@ stopped at 0182 (0x2384), and the 2388 leaf-descriptor consumer in `sweet_ufs.c`
 was never recorded. Patches 0183-0188 now carry both - 2385 is skipped because
 its kernel is byte-identical to 2384 - and replaying 0001-0188 reproduces the
 local build tree byte for byte.
+
+## 38. 2393 ran: vendor page attributes do not move the 512 wall
+
+Trial 2026-11-06 23:59, image `b6c4efa3...e077`, kernel `475a9a4c`
+(`SWEET_BUILD_ID` 0x2393), fastboot 86.5 s, `boot_a` restored to
+`2931647a...86b1`.
+
+```
+input_va (shared+8)      0x04002000   the seed, untouched by any landing
+groups                   8            the counter seed; no program wrote
+mmu_raw, as_fault        0, 0
+mcu_status, relocation   1, true
+cleanup_error            -53
+leaf flags (code)        0x4c3        AttrIdx 0, no nG, read-only, AF
+```
+
+2393 repeats 2391's question with the page encoding the vendor driver actually
+produces: `AttrIdx 0` for cached sections and 5 for the rest, no `nG` bit,
+read-only code, and the vendor `AS_MEMATTR` table. The compiler confirms the
+change: 2391 emits `mov w15, #0xc43` and then ORs AttrIdx 1; 2393 emits
+`mov w12, #0x443`, `mov w14, #0x4c3` and selects 0x4c3 for the read-only code
+page, with no `0x800` anywhere. At runtime the leaf readback is `0x4c3`, so the
+encoding travelled with the image.
+
+The word at VA 0x4 was `0x0100EA01`; programs sat at `0x0100EA00`, `0x01001000`
+and `0x010018EC`. None wrote.
+
+**So the 512 wall is not an attribute artefact.** Changing AttrIdx, the nG bit,
+the code-page permission and the MEMATTR table did not move it by a byte.
+
+What this does not prove yet is that the rule survives the vendor encoding,
+because no positive control has run under the same encoding: if the vendor leaf
+bits themselves stopped the image from starting anywhere, 2393 would look
+exactly like this. 2394 is that control - vendor encoding, vector `0x0100E001`,
+program at `0x0100E000`, an address that ran under the shim encoding in 2385.
+If 2394 runs, 2393 closes the attribute question and the rule is below the
+driver; if 2394 also stalls, the vendor encoding broke the start and 2393 says
+nothing about 512.

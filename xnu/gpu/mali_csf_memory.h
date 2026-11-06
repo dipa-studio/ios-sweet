@@ -30,6 +30,13 @@
 #ifndef SWEET_CSF_VENDOR_MEMATTR
 #define SWEET_CSF_VENDOR_MEMATTR 0
 #endif
+/* 0 keeps the 2328..2391 leaf encoding: bit11 (nG) is set on every leaf.
+ * 1 clears it to match mali_kbase_mmu_mode_aarch64.c get_mmu_flags(), which
+ * never sets bit11. 2393 uses this together with SWEET_CSF_VENDOR_MEMATTR=1
+ * and read-only leaves to reproduce the vendor page attributes exactly. */
+#ifndef SWEET_CSF_VENDOR_LEAVES
+#define SWEET_CSF_VENDOR_LEAVES 0
+#endif
 /* 0 keeps every build up to2380 byte-identical: each section's arena offset
  * follows the page tables in container order. 1 leaves every other section at
  * exactly that offset but appends the R-X section (VA0x01000000) after the

@@ -552,6 +552,28 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertEqual(len(csf['cold_boot_landings']), 3)
         self.assertIn('none of the three landings ran', csf['instrument_verdict'])
 
+    def test_2393_vendor_attributes_decide_the_512_rule(self):
+        # Same class of address as 2391, but with AttrIdx 0/5, no nG and
+        # read-only code. A literal landing says the rule was an artefact.
+        csf = self.cold_report(build=0x2393, input_va=0x0100EA00, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'start-vector-literal')
+        self.assertEqual(csf['cold_boot_start'], 'vector-literal')
+        self.assertEqual(csf['cold_boot_target'], 0x0100EA00)
+        self.assertIn('artefact', csf['instrument_verdict'])
+
+        csf = self.cold_report(build=0x2393, input_va=0x01001000, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'start-masked-to-page-base')
+        self.assertIn('mask reading', csf['instrument_verdict'])
+
+        csf = self.cold_report(build=0x2393, input_va=0x010018EC, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'start-vendor-entry-fallback')
+
+        csf = self.cold_report(build=0x2393, input_va=0x04000200, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'cold-boot-fetch-stalls')
+        self.assertIsNone(csf['cold_boot_start'])
+        self.assertEqual(len(csf['cold_boot_landings']), 3)
+        self.assertIn('survives AttrIdx 0/5', csf['instrument_verdict'])
+
     def test_2390_names_the_landing_from_the_marker_alone(self):
         # The vendor word is untouched in this build, so the marker decides:
         # 0x010018ec means the vector is honoured exactly, 0x01001000 means the
