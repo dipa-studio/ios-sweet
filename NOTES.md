@@ -1,6 +1,769 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-04:2342 CLEARED THE PERIPHERAL; 2343 ASKS WHETHER IT FAULTS <<<
+## >>> ACTIVE 2026-11-06:2358-2370 CLOSED THE MEASUREMENT QUESTION; THE WALL IS A DATA READ OF UNFETCHED CODE <<<
+
+READ THIS FIRST. Trials 2357-2370 all ran. Until this entry their results existed
+only as comments above the per-build `TRACE_PROBE` table in
+`tools/matisse-shim-gpu-image.py`; `NOTES.md` still stopped at 2356/2357. Those
+comments are the source of everything below; the instrument specs are the truth,
+the prose here is the summary.
+
+**2357 - the bounce test failed.** Every 2356 patch kept, only the stub changed:
+after recording the site it overwrote the stacked return address with 0x0100192a
+(the rung-2 call site) and popped. The rung-2 helper still never ran. So the stub
+itself was the prime suspect, not the firmware.
+
+**2358 - the stack was the wall.** The 2351-2357 stub pushed/saved into PSP
+(0x0203f000) and popped {r0,r1,r2,pc}. If PSP is not backed by writable RAM the
+push writes into a hole and the pop loads garbage into pc, which kills the core at
+the first entry regardless of what the firmware does. 2358 removed the stack
+entirely (return address never leaves lr, only r3/r12 touched, S-less 32-bit
+forms). Result: **rung 2 (0x010019e2) recorded, count reached 2**. Every
+"MCU did not execute" verdict from 2344-2357 was an artefact of the stack.
+
+**2359-2362 - the cache helper is not the wall either.** 2359 nop'd both stores in
+the cache-enable helper (ICIALLU at 0x010019f0, CCR.IC at 0x010019fa); the core
+still died at rung 2. 2360 split the window with two more rungs (isb at
+0x010019e6, orr at 0x010019f6) and reported site 0x010019e6 with three entries,
+i.e. the kill sits between them - the CCR read. That is impossible on a working
+M-profile core (0xe000ed14 is internal), so 2361 put the vendor prologue literals
+back (0x40022000, 0x40022004, SHCSR 0xe000ed24): the ladder **lost** a rung
+(site 0x010019e2, two entries) with every hardware word identical, so those three
+real stores do not unlock the peripheral space, they make the stall come sooner.
+2362 returned to 2360's redirects and nop'd the CCR read itself; still stopped at
+the isb rung.
+
+**2363 - the core free-runs.** Probing the firmware had become useless, so the
+reset vector itself was replaced by `ldr/adds/str/b .-8` on shared+0x10 and
+nothing else ran. The counter reached **406,670,326 inside the one-second poll
+window**. Clock, fetch path, shared page and the core all work; every earlier
+stall is real control flow.
+
+**2364-2366 - the stop follows the next unfetched literal load.** 2364 turned
+every 4-byte window of the helper into a rung: the rung at 0x010019ea was entered
+and returned (counter 12) and the core died before 0x010019ee, so adding four
+bytes of rungs moved the stop forward four bytes - it is not pinned to an address.
+2365 put a counter loop at 0x010019ee with its literal at 0x010019fc:
+`group_stride` went 0xa0 -> 0xa4 and stopped after one turn. 2366 put the 2363
+loop byte-for-byte at 0x010019ee, entered by a single branch with no ladder in
+between: it turned **exactly once**, where the same bytes at 0x010018ec turned 406
+million times.
+
+**2367-2369 - it is the read, and it is distance-dependent.** 2367 ran a straight
+line of 128 `adds r2,#1 / str r2,[r3]` pairs from the reset vector with the
+literal 520 bytes away: **not one store landed**. 2368 repeated 2363 byte for byte
+and moved only the literal to 0x01001af8 (12 -> 520 bytes): count 406 million ->
+**0**. 2369 removed the last confound - the counter pointer built from
+movs/lsls/adds and the far word read once into r0 and discarded - and the count
+stayed at 8. **The far read itself stops the core; it is not a wrong pointer.**
+
+**2370 - the edge is at 0x01001a00, inside one 4 KiB page.** A sweep probing
+0x01001900, 0x01001a00, ... one 0x100 step per turn found that the probe at
+0x01001900 returned (it sits inside the loop's own already-fetched code) and the
+very next probe hung the core. Same 4 KiB page, same leaf descriptor, so this
+cannot be a mapping difference between the two addresses.
+
+**Where this leaves the port.** The blocker is no longer "the firmware does not
+run". It is: **a data read by the MCU of code-section bytes it has not yet
+fetched hangs the core.** That is a property of the stage-1 leaves that
+`xnu/gpu/mali_csf_memory.c` builds for the code section, not of the CSF firmware,
+and it explains every ladder stall from 2351 on. 2371 (built, never run, artifacts
+lost) narrows the sweep to 0x10 steps between 0x01001900 and 0x01001a00: one probe
+means the window ends right after the loop's own last byte ("only fetched bytes
+are readable"), many probes mean a region-size limit.
+
+**Next:** rebuild and run 2371 to pin the window; then fix the code-section leaf
+attributes in `mali_csf_memory.c`. In parallel, `mali_csf_boot.c` is being given an
+explicit MCU start state machine (halt -> poll MCU_STATUS 0 -> ENABLE|AUTO instead
+of the bare `wr(MCU_CONTROL,2)`), gated by its own config value so each trial still
+changes one thing.
+
+Device discipline unchanged: `boot_a` must verify back to
+`2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1` after every
+trial; every trial needs a named image SHA.
+
+## >>> HISTORICAL 2026-11-05:2356 HAD NO DEVICE ACCESS AND STILL STOPPED; 2357 TESTS THE LADDER ITSELF <<<
+
+2356 RAN. Image d7acaa1a, one authorized trial, boot_a restored to2931647a.
+progress site0x01001914, groups9 -> one entry, version=0xb, features=7,
+output_va=0x70000. With BOTH remaining device accesses removed - the MPU call by
+nops and the CSSELR store in the0x010019d8 helper by nops - the ladder still does
+not reach rung 2.
+
+That is the decisive negative. Every instruction between rung1 and rung2 is now
+either a literal load or a shared-page read:
+  0x1001918 ldr r0,=shared+0x14   (literal, patched)
+  0x100191a ldr r4,[r0]           (shared read, value0xa0)
+  0x100191c and r4,r4,#0x80
+  0x1001920 mov r0,r4
+  0x1001922 nop ;0x1001924 nop   (MPU call removed)
+  0x1001926 bl0x10019d8           (helper is now mov r1,#0 ; nop ; nop ; bx lr)
+  0x100192a bl0x10019e2           (its first instruction is rung2)
+A shared-page read and a literal load cannot stall a core that has just executed
+six stores into the same shared page. So the remaining suspect is the LADDER, not
+the firmware: either execution never returns from the stub, or the second rung's
+`bl` never fires.
+
+2357 TESTS THE INSTRUMENT. Every2356 patch is kept; only the stub changes. After
+recording the site and bumping the counter it overwrites the stacked return
+address with0x0100192a - the call site of the helper whose first instruction is
+rung2 - and then pops:
+  push {r0,r1,r2,lr} / mov r0,lr / subs r0,#5
+  ldr r3,=shared+0x08 / str r0,[r3]
+  ldr r2,=shared+0x10 / ldr r3,[r2] / adds r3,#1 / str r3,[r2]
+  ldr r2,=0x0100192a / str r2,[sp,#0xc]     ; overwrite the saved lr
+  pop {r0,r1,r2,pc}
+Every entry now bounces into the rung-2 helper and back, so the loop is infinite
+by design and the shared words get hammered for the length of the boot.
+  site0x010019e2 and/or groups far above9 -> the stub returns, the ladder is
+      sound, and the stop at0x01001914 in2351-2356 was real firmware behaviour
+  site0x01001914 with groups9            -> the stub never returns at all; the
+      ladder cannot be trusted past rung1 and the measurement must change
+
+This is a measurement-quality question, not a firmware question. Do not draw
+further conclusions about the CSF reset path until it is answered.
+
+Artifacts: kernel23922876 (patch0156, build id only), image
+shim2357-bounce-ready/matisse-shim-gpu2357.img,26714112B,
+SHA256 93e5648856e120b6e7e076c6bf20e9bff0399c4f84f8f30bc357e29b848e7d13,
+predicted partition digest
+a37f14543a5a13bf16673e752b0ae82d755af58c67193e2e2ac2e238b4515ff3,
+embedded container 67a2b77b4793d710f23b942fb98f9edf8bfb00fb81851280f8a037dcb6499fbd.
+90 container bytes change: stub36, nine calls36, four literals12, MPU nop4,
+CSSELR nop4, minus bytes that already matched.
+verify2357-bounce.py PASS (36-byte stub fully disassembled, all three literal
+slots resolved and checked, str r2,[sp,#0xc] confirmed as the saved-lr slot,
+both nop pairs and the untouched0xe000ed84 literal confirmed).210 tests pass,
+3 skipped.
+
+Runner: shim2357-bounce-trials-run-once.py, refuses to run without
+--approved-image-sha256=93e5648856e120b6e7e076c6bf20e9bff0399c4f84f8f30bc357e29b848e7d13.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+## 2026-11-05 earlier:2355 SAYS THE MPU CALL IS NOT IT; 2356 REMOVES THE LAST DEVICE ACCESS
+
+2355 RAN. Image 50ecca37, one authorized trial, boot_a restored to2931647a.
+progress site0x01001914, groups9 -> one rung entry again, version=0xb,
+features=7, output_va=0x70000. So `bl 0x01003126` - the entire MPU region
+programming call - is NOT the wall. Two nops in its place changed nothing.
+
+That leaves exactly one device access between rung1 and rung2:
+  0x1001926 bl0x10019d8
+  0x10019d8 mov.w r1,#0
+  0x10019dc ldr r0,=[0x01001bc4] ->0xe000ed84
+  0x10019de str r1,[r0]            <- the write
+  0x10019e0 bx lr
+0xe000ed84 is CSSELR on a Cortex-M7 (cache size selection); the next helper then
+writes0xe000ef50 (I-cache invalidate all) and sets CCR.IC. Everything else in the
+window is a literal load, one shared-page read of group_stride (0xa0), an AND and
+a MOV.
+
+2356 REMOVES THAT WRITE TOO: `79 48 01 60` at0x010019dc becomes two nops, on top
+of2355's MPU-call nops. The literal at0x01001bc4 keeps0xe000ed84, so this is a
+removal, not a redirect, and no literal pool entry changes. The gap now contains
+NO device access of any kind.
+  rung0x010019e2 or later -> the CSSELR write is the wall
+  still0x01001914        -> the ladder cannot carry execution across the gap, and
+                            the return path (pop {r0,r1,r2,pc} after a PSP switch)
+                            has to be questioned instead of the firmware
+
+Why this matters: if a plain CSSELR store stalls with no fault and no reset, the
+MCU's cache/PPB complex is not responding the way production hardware does, and
+the next question becomes what else must be powered or un-gated for that block -
+not which instruction to patch next.
+
+Artifacts: kernel131a0aea (patch0155, build id only), image
+shim2356-nodev-ready/matisse-shim-gpu2356.img,26714112B,
+SHA256 d7acaa1ab4d1812d65fab7a7c16412b1df8056945bc170a04725bb5066f6d6b2,
+predicted partition digest
+6d1a511146a71cdcbbf5c855ab515ef619dd5a32ce0cb5f199310a72c7dcd86c,
+embedded container 8a0d22787928bb00aa0a96b77426473cdadf9460eabea5fd98ca5867773e4475.
+83 container bytes change: stub28, nine calls36, four literals12, MPU nop4, CSSELR nop4.
+verify2356-nodev.py PASS (both nop pairs disassembled, the CSSELR literal proven
+still0xe000ed84 and byte-identical to the vendor container, MPU body and MPU_CTRL
+still vendor, five fault vectors intact).210 tests pass,3 skipped.
+
+Runner: shim2356-nodev-trials-run-once.py, refuses to run without
+--approved-image-sha256=d7acaa1ab4d1812d65fab7a7c16412b1df8056945bc170a04725bb5066f6d6b2.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+## 2026-11-05 earlier:2354 SAYS ONE PASS, NOT A RESET LOOP; 2355 DROPS THE MPU CALL
+
+2354 RAN. Image 4711cbe0, one authorized trial, boot_a restored to2931647a.
+progress site0x01001914 again, and groups reported9. The groups word is NOT
+host-written: the firmware's own shared-section template (file0x3d000) ships
+  +0x00 version0   +0x08 input_va0x04002000   +0x10 groups8
+  +0x04 features0  +0x0c output_va0x04003000  +0x14 group_stride0xa0
+so the stub started counting at8 and one entry left it at9. Rung entries =1.
+
+That kills the reset-loop hypothesis: the core runs the reset path ONCE and then
+stops inside the0x01001918..0x0100192a window. It does not restart, and the
+earlier worry that every pass rewrote the same word is gone.
+
+WHAT IS IN THAT WINDOW, after2352 (read redirected) and2353 (MPU enable nop):
+  0x1001918 ldr r0,=shared+0x14 ; ldr r4,[r0] ; and r4,#0x80 ; mov r0,r4
+  0x1001922 bl0x1003126   MPU region programming, straight line, no barriers in it
+  0x1001926 bl0x10019d8   mov.w r1,#0 ; ldr r0,=0xe000ed84 ; str r1,[r0] ; bx lr
+  0x100192a bl0x10019e2   the helper whose first instruction is rung2
+Both calls write only the PPB. The0x10019d8 literal really is0xe000ed84 (SCS),
+and the next helper writes0xe000ef50 (I-cache invalidate all) then sets CCR.IC.
+
+2355 REMOVES THE MPU CALL ONLY: `01 f0 00 fc` at0x01001922 becomes two nops.
+Stub, counter and the four literal redirects are unchanged from2354, and the MPU
+body plus its MPU_CTRL store keep the vendor bytes.
+  rung0x010019e2 or later appears -> the MPU call was the wall
+  still0x01001914                  -> the single0xe000ed84 store is the wall
+The counter also tells us how many rungs the new path reaches (groups-8).
+
+Artifacts: kernel ed50051d (patch0154, build id only), image
+shim2355-nompu-ready/matisse-shim-gpu2355.img,26714112B,
+SHA256 50ecca37f26d74cba50a81a4bf89b9723e9e3e7e1410747289dc1aa615d24b1c,
+predicted partition digest
+d3399f186ab3b502e78c0fb9b7735ac1afe23f2c59e5b33ab70f8de6c7525593,
+embedded container 8fa97b0b586b4169be707ecad29004c8e880c15456b896becec553f2072bc0f7.
+79 container bytes change: stub28, nine calls36, four literals12, nop pair4 minus
+one overlapping byte alignment. verify2355-nompu.py PASS (the nop pair is
+disassembled, the MPU body and MPU_CTRL confirmed still vendor, five fault
+vectors and the whole0x010018ec entry untouched).210 tests pass,3 skipped.
+The2354 decode branch now reports rung_hits = groups-8.
+
+RECOVERY RESOURCE. /Users/xiaohuasheng/Documents/matisse_images_OS2.0.2.0.ULKCNXM_14.0
+is a complete MT6983 fastboot package (all *_ab partitions, gpueb.img,
+preloader_matisse.bin, super.img7.4G). Do NOT run its flash_all*.sh: the first
+thing it does is `fastboot getvar anti/product/crc`, which hangs the ABL IOKit
+pipe on this device. Flash individual partitions by hand instead. The single
+boot_a fallback remains backup/recovery-20261021/boot_a-live-20261021.img.
+
+Runner: shim2355-nompu-trials-run-once.py, refuses to run without
+--approved-image-sha256=50ecca37f26d74cba50a81a4bf89b9723e9e3e7e1410747289dc1aa615d24b1c.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+## 2026-11-05 earlier:2353 CLEARED THE MPU ENABLE TOO; 2354 COUNTS THE RUNGS
+
+2353 RAN. Image 4e977884, one authorized trial, boot_a restored to2931647a.
+input_va is still0x01001914, version=0xb, features=7, output_va=0x70000.
+Nop-ing the single `str r0,[r1,#-8]` at0x01003282 - the MPU_CTRL = 3 store that
+would mark the whole0x01000000 region execute-never - changed nothing. So the
+MPU enable is not the wall either, and the region writes before it cannot be
+blamed through that path.
+
+WHAT IS LEFT. Between the barrier at0x01001914 and the first rung at0x010019e2
+there are exactly two calls after both experiments:
+  0x1001922 bl0x1003126   MPU region programming, straight-line, no barriers
+  0x1001926 bl0x10019d8   `ldr r0,=<lit> ; str r1,[r0]` with r1=0, one SCS write
+Both write only to the PPB. Neither can be removed without changing behaviour,
+and the fault recorder of2348/2349 recorded nothing even though all five fault
+vectors do point at0x010019b1 - so no exception is being taken.
+
+THE REMAINING AMBIGUITY is halt versus reset loop. A core that resets and
+re-enters the reset path rewrites the ladder word every pass with exactly the
+same value, and re-runs the redirected stores, so version=0xb / features=7 /
+output_va=0x70000 look identical in both worlds. That has to be measured
+directly before chasing more instructions.
+
+2354 ADDS ONLY A COUNTER. Firmware behaviour is identical to2352: same nine
+`bl` rungs, same four literals, and the MPU_CTRL store is restored to the vendor
+bytes because2353 already proved the nop is useless. The stub now also loads
+shared+0x10, increments it and stores it back, and saves r2 across the call:
+  push {r0,r1,r2,lr} / mov r0,lr / subs r0,#5
+  ldr r3,=shared+0x08 / str r0,[r3]          ; last site, unchanged
+  ldr r2,=shared+0x10 / ldr r3,[r2] / adds r3,#1 / str r3,[r2]
+  pop {r0,r1,r2,pc}
+shared+0x10 is the reported `groups` word, so the count comes back in the same
+report with no kernel change.
+  groups == 1  -> the core executed the ladder once and then stopped
+  groups  > 1  -> it is re-entering the reset path instead of halting
+The r2 save matters: the stub now holds r2 live across the call.
+
+Artifacts: kernel28f046e6 (patch0153, build id only), image
+shim2354-counter-ready/matisse-shim-gpu2354.img,26714112B,
+SHA256 4711cbe0863f6ba0e5e396dd292b06f71467074fcde6393ce6e7f1d96ffe2ebf,
+predicted partition digest
+00ee6179314c4a990b38c64171e11692d859f36fb9af6245243fa6ff7d45ceba,
+embedded container 570942186e3a84ccdb0b3a9860fd9983e30eafcc7b0987fbf4b7255e4d65af8e.
+76 container bytes change: stub28, nine calls36, four literals12.
+verify2354-counter.py PASS (stub disassembled, both literal slots resolved and
+checked, nine calls re-disassembled, MPU_CTRL back to vendor bytes, all five
+fault vectors and the whole0x010018ec entry untouched).
+210 tests pass,3 skipped. The 0x2354 decode branch was smoke-tested by relabelling
+a real2353 capture, which exercised the groups>1 verdict.
+
+Runner: shim2354-counter-trials-run-once.py, refuses to run without
+--approved-image-sha256=4711cbe0863f6ba0e5e396dd292b06f71467074fcde6393ce6e7f1d96ffe2ebf.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+## 2026-11-05 earlier:2352 CLEARED THE READ; THE WALL IS THE MPU ENABLE, SO 2353 NOPS IT
+
+2352 RERAN CLEANLY. Image c63fee8c, boot_a restored to2931647a.
+input_va is still0x01001914 - repointing the first peripheral load (0x40003034 ->
+shared+0x14, 0xa0) changed nothing at all. So that load is not the wall, and the
+core really does stop in the few instructions after the barrier.
+
+What is left there is `bl 0x01003126` at0x01001922. That function is pure MPU
+programming: it writes RBAR/RASR pairs at0xe000ed9c for regions4..0x1d, builds
+base addresses 0x04000000/0x08000000/0x10000000/0x20000000/0x28000000/0x30000000/
+0x38000000/0x40000000/0xe0000000, and finishes at0x01003280 with
+  movs r0,#3
+  str  r0,[r1,#-8]      ; r1 =0xe000ed9c, so MPU_CTRL(0xe000ed94)=3
+  dsb / isb / pop {r4,r5,r7,pc}
+Region6 is RBAR0x10000016 (base0x01000000) with RASR0x110c0035, which decodes to
+XN=1, AP=priv-RW, normal memory, size26 =>128MB. That marks the code base itself
+execute-never once the MPU turns on, which would fault the very next fetch. On a
+core that does not deliver the fault anywhere we can see, that is exactly the
+"no progress, no exception" picture 2349-2352 kept producing.
+
+2353 NOPS THAT ONE STORE (`41 f8 08 0c` -> two nops at0x01003282) and leaves the
+region writes, the ladder and all four literal redirects untouched. Readout:
+  input_va advances past0x10019e2 -> enabling the MPU is the wall; the map the
+                                    firmware installs does not match this core
+  input_va stays0x1001914         -> the region writes themselves, or the
+                                    0xe000ed84 store in0x10019d8, is the wall
+
+Artifacts: kernel0d038650 (patch0152, build id only), image
+shim2353-mpu-ready/matisse-shim-gpu2353.img,26714112B,
+SHA256 4e977884ce2caafe19ce75a1d93be19668b681599f355812027a5ca25f16585f,
+predicted partition digest
+6aeea616e350951abf8f7d70379dfcef3bc0e3e813a8250e898033c307b0adf0,
+embedded container a59a03fde118caa5798a21a88b52ef8310946ffd6d0b204b8deb34b854b4cc40.
+80 container bytes change: stub24, nine calls36, four literals12, stub tail4, mpu nop4.
+verify2353-mpu.py PASS.210 tests pass,3 skipped.
+
+Runner: shim2353-mpu-trials-run-once.py, refuses to run without
+--approved-image-sha256=4e977884ce2caafe19ce75a1d93be19668b681599f355812027a5ca25f16585f.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+## 2026-11-05 earlier:2352 RUN WAS ABORTED DURING RESTORE; RESULT LOST, RERUN NEEDED
+
+The 2352 trial DID run on the phone (journal: written-readback-verified,
+fastboot_observed at83.66s), but the operator stopped the runner while it was in
+the restore phase. The marks ring only exists in the running kernel and the
+capture needs Recovery's adb, so no after-marks.bin was ever written and the
+result cannot be recovered - rerun the same image.
+
+State when picked up: device in fastboot with a half-restored boot_a (stock
+prefix0x013e8000 flashed, the rest still the probe image), which is why
+`reboot-recovery` fell back to fastboot. Recovery: flashed the64MiB
+backup/recovery-20261021/boot_a-live-20261021.img straight over boot_a,
+`reboot recovery`, then re-checked on device -
+  boot_a =2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1
+  root Recovery, ro.bootmode=recovery
+The stale journal is archived as journal-aborted.json (deliberately NOT closed
+via restore-only, which would have captured marks from the wrong boot and
+published a bogus after-marks). preflight passes again.
+
+Operational lesson: never interrupt between `image_written_verified` and
+`complete_restored_recovery`; if it happens, restore boot_a by hand and archive
+the journal instead of running restore-only.
+
+## 2026-11-05 earlier:2351 STOPS ONE STEP AFTER THE BARRIER; 2352 MOVES THE FIRST READ
+
+2351 RAN. Image 518dc208, one authorized trial, boot_a restored to2931647a.
+version=0xb, features=7, output_va=0x70000 and input_va=0x01001914 - the ladder
+advanced past the barrier entry but never reached 0x010019e2, the first rung
+inside the helper called at0x0100192a.
+
+So execution leaves0x01001914 and dies in the next few instructions. With all
+three stores redirected, that window is the FIRST real peripheral access of the
+whole boot:
+  0x1001918 ldr r0,=0x40003034
+  0x100191a ldr r4,[r0]        <- the read
+  0x100191c and r4,r4,#0x80
+  0x1001920 mov r0,r4
+  0x1001922 bl 0x1003126
+  0x1001926 bl 0x10019d8       -> writes0 to0xe000ed84
+  0x100192a bl 0x10019e2       <- rung that was never reached
+The read is the prime suspect: a load from a clock-gated block never completes
+and never faults, which is exactly what "no progress, no exception" looks like.
+
+2352 REPOINTS THAT ONE LITERAL (0x282c 0x40003034 -> shared+0x14) and changes
+nothing else. shared+0x14 is group_stride=0xa0, so bit7 stays set and the later
+`cbz r4` branch keeps its original direction. Readout:
+  input_va still0x1001914 -> the read was not the wall; the SCS store at
+                            0xe000ed84 inside0x10019d8 or0x1003126 is
+  input_va0x10019e2 or later -> the 0x40003034 load is the wall
+
+Artifacts: kernel ab78ba05 (patch0151, build id only), image
+shim2352-read-ready/matisse-shim-gpu2352.img,26714112B,
+SHA256 c63fee8c30916f58d1fbcf292f1ac82491728731c07fad99606f03c4522c0d3c,
+predicted partition digest
+f0f0ef39ab1d45ed0f39a2a6540fa0272269c8e00eefd075dcf39d82bd79f84b,
+embedded container 0b29b6f99b4e3cde2ce2808792af632ad7b087f6f4c7d93f4da8c1033034058a.
+76 container bytes change: stub24, nine calls36, four literals12, stub tail4.
+verify2352-read.py PASS.210 tests pass,3 skipped.
+
+Runner: shim2352-read-trials-run-once.py, refuses to run without
+--approved-image-sha256=c63fee8c30916f58d1fbcf292f1ac82491728731c07fad99606f03c4522c0d3c.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+## 2026-11-05 earlier:2350 HIT THE BARRIER; THE udf PROBE WAS BLIND ALL ALONG
+
+2350 RAN. Image 559fabbd, one authorized trial, boot_a restored to2931647a.
+version=0xb, features=7, output_va=0x70000 and input_va=0x04002001 - bit0 was
+ORed into the host word, so the MCU really executes the barrier at0x01001914
+and `bx lr` resumes it cleanly.
+
+That is the important result of the whole session: the 32-bit `udf` placed on
+that barrier never trapped, and neither did the identically built markers in
+2344-2347 nor the fault recorder in 2348/2349. The core (or this vector path)
+does not turn udf into an exception here. Every "bitmap is0 / no marker" reading
+since 2344 was therefore blind, including my own use of it to clear store1 and
+store2. What IS proven now, by ordinary stores, is:
+  - the reset entry runs to at least0x01001914 (isb after the PSP switch)
+  - both original peripheral stores execute when they are real
+  - nothing faulted up to that point
+So the MCU is NOT stuck in the reset prologue; the old "WFI at0x0100302c"
+picture has to be re-measured rather than assumed.
+
+2351 TURNS THE TRICK INTO A LADDER. Nine barriers along the reset path become
+`bl 0x010019b0`; the stub saves r0/r1/lr, parks if lr looks like an EXC_RETURN,
+otherwise stores (site address) into shared+0x08 and returns with pop {r0,r1,pc}.
+Because each visited site overwrites the word, input_va names the LAST site
+reached:
+  0x4002000 none   0x1001914 isb    0x10019e2 cache-clean helper
+  0x10019fc        0x1001a2c        0x1002aec dispatch
+  0x1002b26        0x1002b32        0x1003018 end of init
+  0x1003036 idle-loop body
+The three store literals keep their redirects, so version/features/output_va
+still bracket the same run.
+
+Artifacts: kernel82c7c473 (patch0150, build id only), image
+shim2351-ladder-ready/matisse-shim-gpu2351.img,26714112B,
+SHA256 518dc20896e797fa6ff3a71c019f6be2d9e936eadd0ab2086a02306138c7696c,
+predicted partition digest
+3696c5f2704a9f3f0f517029657f20a806f70bae3bfc07d51934b5be7717579c,
+embedded container 457a0e9150ecb450d99a877eaf7f56f75c72bc2aecd45d71317bc6bedd0fbfb1.
+73 container bytes change: stub24, nine calls36, three literals9, plus stub tail.
+verify2351-ladder.py PASS (every call site re-disassembled with capstone, not
+re-encoded).210 tests pass,3 skipped.
+
+Runner: shim2351-ladder-trials-run-once.py, refuses to run without
+--approved-image-sha256=518dc20896e797fa6ff3a71c019f6be2d9e936eadd0ab2086a02306138c7696c.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+## 2026-11-05 earlier:2349 PROVES THE SCS STORE RAN AND NOTHING FAULTED; 2350 DROPS EXCEPTIONS
+
+2349 RAN. Image 9b7c9423, one authorized trial, boot_a restored to2931647a.
+version=0xb, features=7, and output_va=0x70000 - the third literal redirect
+worked, so the instruction at0x01001904 really executed. input_va stayed at the
+host placeholder0x04002000: the udf on the isb still did not trap.
+
+That kills the "posted SCS write" idea as well. Between0x01001904 and the isb
+there are only `ldr r0,=0x0203f000`, `msr psp`, `mov.w r0,#2`, `msr control` -
+no memory access left. So either the core does not take a 32-bit udf at all, or
+the fault vectors do not lead to0x010019b0. Every "bitmap is0" reading since
+2344 rests on that assumption, so it has to be tested directly.
+
+2350 REMOVES THE EXCEPTION MODEL FROM THE MEASUREMENT. The isb at0x01001914
+becomes `bl 0x010019b0` (00 f0 4c f8) and the stub there uses ordinary
+instructions: mov r0,lr / lsrs r0,#28 / cbnz (parks if it was really a fault,
+because EXC_RETURN has a nonzero top nibble) / ldr r3,=shared+0x08 / orrs bit0 /
+str / bx lr. Nothing depends on vectors, udf or exception entry any more.
+  input_va0x04002001 -> the barrier WAS reached (bit0 ORed into the host word)
+  input_va0x04002000 -> not reached, and no fault occurred either
+The three store literals keep 2349's redirects, so version/features/output_va
+still bracket the path in the same boot.
+
+Artifacts: kernel c0bb72e8 (patch0149, build id only), image
+shim2350-branch-ready/matisse-shim-gpu2350.img,26714112B,
+SHA256 559fabbd0c6a722f993ebbae7d8d6ce2d455035720cf4b18c966cbc48d58c39b,
+predicted partition digest
+15a79ab92bff9e23593e278359cde65e32a1a194a7e669e2d0fed0fd769129d3,
+embedded container 299162663aab43ec23be17655591ea79df2e68a267f4326dcc67f8dce8303e39.
+40 container bytes change: stub27, one bl4, three literals9.
+verify2350-branch.py PASS.210 tests pass,3 skipped.
+
+Runner: shim2350-branch-trials-run-once.py, refuses to run without
+--approved-image-sha256=559fabbd0c6a722f993ebbae7d8d6ce2d455035720cf4b18c966cbc48d58c39b.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+## 2026-11-05 earlier:2348 NO FAULT EITHER; 2349 REDIRECTS THE SCS WRITE
+
+2348 RAN. Image 7cb3892d, one authorized trial, boot_a restored to2931647a.
+version=11 (0xb), features=7 - both redirected stores executed. input_va stayed
+at the host placeholder0x04002000, i.e. the fault handler recorded NOTHING even
+though it now selects MSP or PSP from lr bit2 exactly like the vendor prologue.
+So 2343's "no fault" reading was incomplete, but the corrected probe still finds
+no exception between store2 and the barrier.
+
+That leaves one memory access in the window: `str r1,[r0]` at0x01001904 with
+r0 =0xe000ed24 (SCS SHCSR, literal0x2824) and r1 =0x70000. It neither faults
+nor lets execution continue - consistent with a posted write that is never
+acknowledged, which stalls the core at or just after the store. Both earlier
+posted-write suspects were simply device writes; this one is to the SCS.
+
+2349 SENDS THAT THIRD LITERAL TO THE SHARED PAGE TOO:
+  0x281c 0x40022000 -> shared+0x00   (version =0xb)
+  0x2820 0x40022004 -> shared+0x04   (features =7)
+  0x2824 0xe000ed24 -> shared+0x0c   (output_va =0x70000)
+The recorder from 2348 stays (stacked PC -> shared+0x08, then b .), and the udf
+on the isb at0x01001914 stays. One boot then separates four worlds:
+  output_va0 and input_va0x04002000 -> the store never even issued
+  output_va0x70000, input_va placeholder -> store ran, barrier still not reached
+  output_va0x70000, input_va0x01001914 -> barrier reached AND fault delivery live
+                                         => the SCS write was the whole wall
+  input_va0x0100xxxx (other) -> names a different faulting instruction
+
+Artifacts: kernel12dd22c2 (patch0148, build id only), image
+shim2349-shcsr-ready/matisse-shim-gpu2349.img,26714112B,
+SHA256 9b7c9423daa717f0e8f926b8e3b0dd30771f24b4978947ea538bd8216184464c,
+predicted partition digest
+2f65e64d336db9253490f841cd2245cd7ea4c1b5c96e919dd777b2d525f55020,
+embedded container e0f68faaa5a0f17db7b23fd03d28373d161f59a7967fcd392301f0886749f3c8.
+27 container bytes change: stub14, one marker4, three literals9.
+verify2349-shcsr.py PASS.210 tests pass,3 skipped.
+
+Runner: shim2349-shcsr-trials-run-once.py, refuses to run without
+--approved-image-sha256=9b7c9423daa717f0e8f926b8e3b0dd30771f24b4978947ea538bd8216184464c.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+## 2026-11-05 earlier:2347 LANDED BOTH STORES, STILL NO MARKER; 2348 RECORDS THE FAULT PC
+
+2347 RAN. Image b0455778, one authorized trial, boot_a restored to2931647a.
+version=11 (0xb) and input_va=7 - BOTH redirected stores executed, and input_va
+is 7 instead of the host placeholder0x04001000, so store2 at0x010018fc really
+completed into the shared page. features=0: the isb marker at0x01001914 still
+never fired. No device write is outstanding before the barrier, so the
+posted-write theory is dead.
+
+What is left in that window is `str r1,[r0]` at0x01001904 with
+r0 =0xe000ed24 (SCS SHCSR, the literal at0x2824). It runs BEFORE0x01001908
+sets PSP. Every probe so far (2343, 2344, 2345, 2346, 2347) read the exception
+frame with `mrs r0,psp` only, so a fault taken on MSP could never be recorded -
+the handler would read PSP=0, fault again and never write. That also voids the
+2343 "no fault" reading: it only covered faults after the PSP switch.
+
+2348 PUTS THE VENDOR'S OWN STACK SELECTION BACK. The stub keeps the vendor's
+first14 bytes byte-for-byte (tst.w lr,#4 / ite eq / mrseq r0,msp / mrsne r0,psp),
+then writes the stacked PC to shared+0x08 (input_va, proven writable by 2347)
+and parks in b . instead of resuming. Both stores stay redirected, so one boot
+answers everything:
+  input_va0x01001904 -> the SHCSR store is what faults
+  input_va0x0100xxxx -> that instruction is the wall0x1001906/1908/1910 mean
+                        the literal load / msr psp / msr control
+  input_va0x01001914 -> the UDF on the isb fired, i.e. the path reaches the
+                        barrier and fault delivery works
+  input_va0x04001000 -> nothing was recorded even with MSP handled
+
+Artifacts: kernel44acadbe (patch0147, build id only), image
+shim2348-faultpc-ready/matisse-shim-gpu2348.img,26714112B,
+SHA256 7cb3892dc3d0103ab9d52c1d294b67b7eda6f9b25015a991f9991c6d008a5506,
+predicted partition digest
+631ade459aec33c463a5984a4ddb716a9a8d0ac393dfd8c1a6aba746c1fa8a44,
+embedded container cc2e68e8077e76bb2a20db582aa1d7b87c80d764e0c92708b78d300f5e2251c4.
+24 container bytes change: stub14, one marker4, two literals6.
+verify2348-faultpc.py PASS.210 tests pass,3 skipped.
+
+Runner: shim2348-faultpc-trials-run-once.py, refuses to run without
+--approved-image-sha256=7cb3892dc3d0103ab9d52c1d294b67b7eda6f9b25015a991f9991c6d008a5506.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+## 2026-11-05 earlier:2346 MOVED ONE STORE, version=0xb, NO MARKER; 2347 MOVES BOTH
+
+2346 RAN. Image 4117bf42, one authorized trial, boot_a restored to2931647a.
+version=11 (0xb) - the redirect worked and the MCU executed the first store at
+0x010018f4 - features=0, no marker at all.
+
+So with store1 sent to shared+0 the core still dies before the isb. The only
+device write left in that window is store2, `str r1,[0x40022004]` at0x010018fc,
+which still pointed at the real peripheral. The posted-write story survives, it
+just moves one instruction later: the write retires from the core, the following
+literal loads and `msr psp` run, and the first synchronisation (msr control or
+the isb) waits for a write that never completes.
+
+2347 REMOVES THE LAST DEVICE WRITE BEFORE THE BARRIER. Both reset-store literals
+move into the shared page:
+  0x281c 0x40022000 -> shared+0x00   (version reads back0xb = store1 ran)
+  0x2820 0x40022004 -> shared+0x08   (input_va reads back7  = store2 ran)
+The 0x40003034 load keeps its real target on purpose: with no device write
+outstanding, bit0 (isb) and bit2 (entry of the helper at0x010019e2, which is
+after the load and after the cache-init call) separate three worlds:
+  bitmap0x00 -> not the posted write; something before the barrier is worse
+  0x01       -> barrier passed, so the0x40003034 load is the next wall
+  0x03+      -> both the stores and the load are fine; the stop is deeper in
+
+Artifacts: kernel0e283cba (patch0146, build id only), image
+shim2347-bothstores-ready/matisse-shim-gpu2347.img,26714112B,
+SHA256 b045577892e8fdd6ea3636c4fb9b86dc9aecbb34730e5c4dba63d35e46dbeda7,
+predicted partition digest
+b2fafdf31bf01d86d7787bff6c6e0388e908f9c666d4a094561fc3149dc47f45,
+embedded container 5b189136194b9c678ab9e4a95ee437fc3b7625f2bbda06926a1a97f8e22bba45.
+67 container bytes change: stub27, markers32, two literals8.
+verify2347-bothstores.py PASS.210 tests pass,3 skipped.
+
+Runner: shim2347-bothstores-trials-run-once.py, refuses to run without
+--approved-image-sha256=b045577892e8fdd6ea3636c4fb9b86dc9aecbb34730e5c4dba63d35e46dbeda7.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+NEXT: 2347 needs its own boot_a authorization naming that SHA.
+
+## >>> HISTORICAL 2026-11-05:2345 SAID IT DIES BEFORE THE isb; 2346 MOVED THE FIRST STORE <<<
+
+2345 RAN. Image d7efa329, one authorized trial, boot_a restored to2931647a,
+bitmap0 again - but this time on a channel 2342 proved writable (shared+4), and
+with a marker on the isb at0x01001914, i.e. after `msr control` and before the
+first peripheral load. Nothing fired.
+
+TWO THINGS FOLLOW.
+1. My mask extraction was wrong: the stub read ldrb r1,[r3] (byte0xf0), not
+   [r3,#2]. Any hit would have set0xf0, so a0 bitmap still means "no marker ran"
+   - the conclusion holds, but the per-site resolution was broken. 2346 reads
+   [r3,#2].
+2. The MCU therefore does not reach0x01001914. Between the proven store2
+   (0x010018fc, 2342) and that isb there is only a core-private SHCSR write, two
+   literal loads, `msr psp`, `movs`, `msr control`. None of those can hang. What
+   CAN hang is the earlier store to the REAL0x40022000: a posted write retires
+   from the core, lets the next instructions issue, and only stalls at the first
+   synchronisation event - which is exactly that isb. That also reconciles the
+   three builds: 2341 (both stores to the shared page) ran on to the peripheral
+   load and stalled there; 2342 and 2345 (store1 real) stalled at the barrier.
+
+2346 TESTS THAT. One literal changes:0x281c, the target of the first reset
+store,0x40022000 -> shared+0 (the same redirect 2340 used, where0xb landed).
+Instructions are untouched, the second store and the peripheral load keep their
+real targets, and the trace bitmap stays on shared+4 with the [r3,#2] fix.
+  bit0 clear            -> the stall is NOT the posted store; something between
+                           store2 and the isb is worse than it looks
+  bit0 set, bit1 clear  -> the store was blocking; the 0x40003034 load still is
+  bit0+bit1             -> both accesses are fine, the stop is further in
+
+Artifacts: kernel ceb28150 (patch0145, build id only), image
+shim2346-store1-ready/matisse-shim-gpu2346.img,26714112B,
+SHA256 4117bf420481d7827a5f27df73cf6c7dc22728e66b9ed57f57b639c6814f1442,
+predicted partition digest
+eefe5bafa97d77d02350140011a2c3c4a96160c128caf953a3f77e7c5f3efd86,
+embedded container babb08f32edfc3132ae518cbccf6651ae55597382f5549311553b1ac2c47ed0d.
+63 container bytes change: stub27 (one byte already matched), eight markers32,
+store1 literal4. verify2346-store1.py PASS.210 tests pass,3 skipped.
+
+Runner: shim2346-store1-trials-run-once.py, refuses to run without
+--approved-image-sha256=4117bf420481d7827a5f27df73cf6c7dc22728e66b9ed57f57b639c6814f1442.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+NEXT: 2346 needs its own boot_a authorization naming that SHA.
+
+## >>> HISTORICAL 2026-11-04:2344 BITMAP WAS DEAD; 2345 MOVED THE CHANNEL TO shared+4 <<<
+
+2344 RAN. Image 98e90f05, one authorized trial, boot_a restored to2931647a,
+bitmap0. That zero is not evidence about the MCU: 2344 wrote its bitmap to
+shared+0xffc, and 2341 already proved that exact word never takes a write (the
+one dead word in an otherwise writable page). Reusing it was my error; the
+2343 fault probe used shared+0x10, which is a live word, so its "no fault"
+conclusion still stands.
+
+2345 CHANGES ONLY TWO THINGS. The handler now ORs into shared+4 - the word 2342
+proved writable (features=7 landed there) - and the eight markers spend one bit
+on the barrier at0x01001914, immediately after `msr control` and before the
+peripheral load:
+  0x01 0x01001914 isb   post-PSP switch, before the loader of0x40003034
+  0x02 0x010019e2 dsb   first entry helper
+  0x04 0x01001a2c dsb   third entry helper
+  0x08 0x01002aec dsb   dispatch block
+  0x10 0x01002b26 dsb   before NVIC->ISER
+  0x20 0x01002b32 isb   before the TBB
+  0x40 0x01003018 dsb   tail of init
+  0x80 0x01003036 isb   inside the wfi idle loop
+Handler is the same 28 bytes with one literal changed (shared+0xffc ->
+shared+0x4); everything else in the container is identical to 2344, so the
+change set is 60 bytes again.
+
+WHY 0x01001914 MATTERS. 2342 proved both peripheral stores execute, and the
+next real work is `ldr r0,=0x40003034 / ldr r4,[r0]` at0x01001918 - the first
+peripheral READ in the reset path, and the one 2340 chose to repoint when it
+wanted to "skip the0x03800000 copy". A stalled read there would look exactly
+like what we see: alive, no fault, version0, no progress.
+
+READ IT: bit0x01 clear -> stopped before/at that load (the load is the prime
+suspect). bit0x01 set and0x02 clear -> stopped at the load or in the first
+helper.0x03 -> the load completed and the helpers ran.0x3f passed the TBB,
+0x7f reached the tail,0xff entered the wfi loop.
+
+Artifacts: kernel f30b35ec (patch0144, build id only), image
+shim2345-trace2-ready/matisse-shim-gpu2345.img,26714112B,
+SHA256 d7efa329856c0993e4f6317861e410856f1053b928b24d38940f970ee35d946e,
+predicted partition digest
+71c18219bc1e3a068b68a1339e19bf891b359ed16b96fae1719f86f737a210ef,
+embedded container dbd6bd5dd574f8907eea3ae5c1e15a481e697755aea61fe65257bb8a5170f56d.
+verify2345-trace2.py PASS (same invariants as 2344:60 changed bytes all inside
+stub+markers, entry literals and five fault vectors intact, anchor0x77000).
+210 tests pass,3 skipped.
+
+Runner: shim2345-trace2-trials-run-once.py, refuses to run without
+--approved-image-sha256=d7efa329856c0993e4f6317861e410856f1053b928b24d38940f970ee35d946e.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+NEXT: 2345 needs its own boot_a authorization naming that SHA.
+
+## >>> HISTORICAL 2026-11-04:2343 SAID NO FAULT; 2344 TRIED TO MAP HOW FAR IT GETS <<<
+
+2343 RAN. Image 59caac47, one authorized trial, boot_a restored to2931647a.
+groups stayed8, i.e. the word the resumable-stub would overwrite still held the
+AP-written group count: NO CORTEX-M EXCEPTION WAS TAKEN. The handler is reached
+only through vector0x18 (UsageFault) and PSP is already0x0203f000 by0x01001910,
+so a fault after the two proven stores would have been recorded. The MCU is not
+trapping; it is stalled.
+
+WHERE IT CAN STALL IS NOW NARROW. 0x0100302c is an idle loop:
+  add sp,#4 / pop{r4-r8,sb,sl,fp,lr} / 0x01003032 wfi / cpsie i / isb /
+  cpsid i / b0x01003032
+so "alive, no fault, no version" is exactly what a firmware sitting in WFI
+looks like. Whether it arrives there is the next question.
+
+2344 REPLACES THE PROBE WITH A TRACE. The same fault entry now returns: it ORs
+a per-site bit into shared+0xffc and resumes after the marker, so one boot
+reports every barrier the MCU provably passed instead of only the first trap.
+Eight 4-byte udf.w markers replace dsb/isb barriers (skipping a barrier cannot
+corrupt its neighbours), bits in execution order:
+  0x01 0x010019e2  0x02 0x010019fc  0x04 0x01001a2c  (entry helper calls)
+  0x08 0x01002aec  0x10 0x01002b26  0x20 0x01002b32  (dispatch block, pre-NVIC,
+                                                      pre-TBB)
+  0x40 0x01003018                                    (tail of init)
+  0x80 0x01003036                                    (inside the wfi loop)
+Handler (28B, replaced0x010019b0..0x010019cb, original handler is30B):
+  mrs r0,psp / ldr r3,[r0,#0x18] / ldrb r1,[r3,#3] / ldr r2,[pc,#0xc] /
+  ldr r4,[r2] / orrs r4,r1 / str r4,[r2] / adds r3,#4 / str r3,[r0,#0x18] /
+  bx lr / nop / .word0x04000ffc
+The udf immediate is the mask itself (hw2 =0xa000|mask, low byte read back with
+ldrb), so no table is needed and the handler fits the old handler's slot.
+Container changed60 bytes: stub28 + eight markers. Reset entry, both peripheral
+stores, the peripheral load and all five fault vectors are byte-identical.
+Build2344 also enables SHIM_CSF_ENTRY_CHECKPOINT, which 2343 did not - without
+it the kernel never reads shared+0xffc and the bitmap would be invisible.
+
+Artifacts: kernel 6b50a18e (patch0143, build id only), image
+shim2344-trace-ready/matisse-shim-gpu2344.img,26714112B,
+SHA256 98e90f05fd6ea41437b75fa1df27ac81b26bc506ea2d0384bc3e04adbc55c7b4,
+predicted partition digest
+0600b222716db709acd7ea2af5c19f361f7f109eb11310e549bd830f72feb337,
+embedded container ab2c6b29af3eb09c04d063e91afb5410f98b8e8da0af701612934e09d6454308.
+verify2344-trace.py PASS (stub bytes, eight barriers->udf.w masks,60 changed
+bytes all inside stub+markers, entry literals0x40022000/0x40022004/0x40003034,
+five fault vectors0x010019b1, anchor0x77000).210 tests pass,3 skipped.
+
+Runner: shim2344-trace-trials-run-once.py, refuses to run without
+--approved-image-sha256=98e90f05fd6ea41437b75fa1df27ac81b26bc506ea2d0384bc3e04adbc55c7b4.
+
+Device clean: root Recovery, boot_a2931647a, no journal.
+
+READ THE BITMAP: 0x00 never reached the first helper; <=0x20 reached the state
+dispatch; 0x3f passed the TBB;0x7f reached the tail of init;0xff entered the wfi
+loop. A missing bit is proof of non-arrival, never of failure.
+
+NEXT: 2344 needs its own boot_a authorization naming that SHA.
+
+## >>> HISTORICAL 2026-11-04:2342 CLEARED THE PERIPHERAL; 2343 ASKED IF IT FAULTS <<<
 
 2342 RAN. Image 01a3905b, one authorized trial, boot_a restored to2931647a.
 version=0, features=7. In this build store1 went to the REAL0x40022000 and
