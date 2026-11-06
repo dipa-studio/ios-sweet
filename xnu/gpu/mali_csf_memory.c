@@ -36,6 +36,16 @@ static int conflict(uintptr_t a, size_t n, uintptr_t b, size_t m)
 {
     return a < b + m && b < a + n;
 }
+#if SWEET_CSF_RELOCATE_CODE
+/* The one executable section: it holds the reset vector, the entry code and
+ * every block the MCU has to fetch. Identified by the same predicate the shim
+ * uses to pick its firmware probe, so a relocation can never target a section
+ * the probe does not observe. */
+static int relocates(const struct sweet_csf_mapping *p)
+{
+    return p->va == 0x01000000u && (p->flags & 4u) != 0;
+}
+#endif
 int sweet_csf_memory_plan(const uint8_t *fw, size_t bytes, struct sweet_csf_memory *out)
 {
     struct sweet_csf_memory m = {0};
@@ -70,6 +80,17 @@ int sweet_csf_memory_plan(const uint8_t *fw, size_t bytes, struct sweet_csf_memo
             m.shared_offset = p->arena_offset; m.shared_bytes = p->bytes; m.shared_va = p->va;
         }
     }
+#if SWEET_CSF_RELOCATE_CODE
+    /* Move the code section alone: it is appended at the offset the normal
+     * layout ends at, and its original slot is left as unused padding. Every
+     * other section therefore keeps the offset, the PA and the descriptor it
+     * has in the unrelocated plan; only this section's PA changes. */
+    for (uint32_t i = 0; i < m.mapping_count; i++) {
+        struct sweet_csf_mapping *p = &m.map[i];
+        if (!relocates(p)) continue;
+        p->arena_offset = (uint32_t)used; used += p->bytes;
+    }
+#endif
     m.required_bytes = (uint32_t)used;
     *out = m;
     return 0;

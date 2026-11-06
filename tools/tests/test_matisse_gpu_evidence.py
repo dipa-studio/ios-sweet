@@ -314,6 +314,52 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertEqual(csf['vendor_memattr_outcome'], 'fault')
         self.assertFalse(result['csf_firmware_boot_verified'])
 
+    def relocated_report(self, **changes):
+        """2382: 2379's probe on a plan that moved the code section's PA."""
+        values = dict(stage=4, error=-53, version=0, features=0, job_raw=0,
+                      firmware_ready=0, input_va=0x01000200, groups=9,
+                      platform_reserved=0x202, transtab_lo=0x40077000,
+                      firmware_probe_pa_lo=0x401a4000, firmware_probe_pa_hi=0)
+        values.update(changes)
+        return self.module.decode(self.marks_dvfs(build=0x2382, **values), 0x2382)
+
+    def test_2382_counter_reads_the_same_way_after_the_move(self):
+        result = self.relocated_report()
+        csf = result['csf']
+        self.assertTrue(csf['relocation_observed'])
+        self.assertEqual(csf['relocated_code_pa'], 0x401a4000)
+        self.assertEqual(csf['fetch_prime_counter'], 9)
+        self.assertEqual(csf['fetch_prime_outcome'], 'fetch-call-incomplete')
+        self.assertFalse(result['csf_firmware_boot_verified'])
+        self.assertEqual(self.relocated_report(groups=10)['csf']['fetch_prime_outcome'],
+                         'data-read-incomplete')
+        self.assertEqual(self.relocated_report(groups=11)['csf']['fetch_prime_outcome'],
+                         'data-read-returned')
+
+    def test_2382_rejects_a_report_from_an_unmoved_image(self):
+        csf = self.relocated_report(firmware_probe_pa_lo=0x40080000)['csf']
+        self.assertFalse(csf['relocation_observed'])
+        self.assertEqual(csf['fetch_prime_outcome'], 'not-relocated')
+
+    def test_2382_fault_and_unexpected_states_beat_the_counter(self):
+        self.assertEqual(self.relocated_report(error=-54, as_fault=1)['csf']['fetch_prime_outcome'],
+                         'fault')
+        self.assertEqual(self.relocated_report(groups=11, firmware_ready=1)['csf']['fetch_prime_outcome'],
+                         'unexpected-state')
+        self.assertEqual(self.relocated_report(input_va=0)['csf']['fetch_prime_outcome'],
+                         'marker-absent')
+        self.assertEqual(self.relocated_report(groups=7)['csf']['fetch_prime_outcome'],
+                         'unexpected-counter')
+
+    def test_2382_is_not_adjudicated_with_the_2380_rules(self):
+        # 2382 deliberately keeps 2379's leaf/register pair; the decoder must
+        # not demand the vendor table from it or the verdict becomes noise.
+        csf = self.relocated_report()['csf']
+        self.assertEqual((csf['memattr_lo'], csf['memattr_hi']), (0x4c4c884c, 0x4c4c4c4c))
+        self.assertNotIn('vendor_memattr_outcome', csf)
+        self.assertNotIn('fetch_prime_outcome', self.module.decode(self.marks_dvfs(build=0x2380,
+            memattr_lo=0x888d8f88, memattr_hi=0x00084c8d, **self.ZERO_PATH), 0x2380)['csf'])
+
     def test_csf_timeout_provenance_requires_matching_callback_evidence(self):
         platform = dict(stage=8, error=-53)
         result = self.module.decode(self.csf_marks(build=0x2330, platform=platform,

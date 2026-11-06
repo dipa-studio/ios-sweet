@@ -30,6 +30,16 @@
 #ifndef SWEET_CSF_VENDOR_MEMATTR
 #define SWEET_CSF_VENDOR_MEMATTR 0
 #endif
+/* 0 keeps every build up to2380 byte-identical: each section's arena offset
+ * follows the page tables in container order. 1 leaves every other section at
+ * exactly that offset but appends the R-X section (VA0x01000000) after the
+ * whole layout, so that one section gets a different PA while its VA, its leaf
+ * attributes, its descriptor bits and every other section's PA stay unchanged.
+ * 2382 uses this to ask whether the fetch hang follows the physical pages or
+ * the virtual range. It is not a fix and must stay off in a shipping build. */
+#ifndef SWEET_CSF_RELOCATE_CODE
+#define SWEET_CSF_RELOCATE_CODE 0
+#endif
 struct sweet_csf_mapping {
     uint32_t va, bytes, flags, arena_offset, data_start, data_bytes;
 };

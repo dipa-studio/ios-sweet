@@ -581,3 +581,52 @@ cold without trouble; nothing so far separates "this physical range" from "this
 virtual range". 2382 moves the code section's pages inside the arena - same VA,
 same attributes, same descriptors, different PA - and reads the same addresses
 through a second mapping of the same bytes.
+
+## 25. 2382: move the code section's PA and change nothing else
+
+2380 closed the attribute line: the vendor AttrIndx numbering and the shared
+leaf's SH bits were the last two facts that had never been varied, and varying
+them produced the 2376/2378 report field for field. What remains is the shape of
+the hang itself. 2373/2379 localised it to 512-byte granularity *inside the code
+section*, while the stack and the read-only section read cold without trouble.
+Nothing so far has separated "these physical pages" from "this virtual range",
+because every build moved both together or neither.
+
+2382 moves one of them:
+
+```
+VA                 0x01000000..0x01010000   unchanged
+leaf encoding      index1 cached / index0 other, SH=3 on shared   unchanged
+descriptor bits    AF, AP[2], XN, nG, memory group 6              unchanged
+container          byte-identical to 2379 (sha 367eb386)           unchanged
+RO leaves          writable (--ro-as-rw)                           unchanged
+MCU_CONTROL        2                                               unchanged
+section PA         0x40080000 -> 0x401a4000                        MOVED
+```
+
+The mechanism is a second pass in `sweet_csf_memory_plan()` behind
+`SWEET_CSF_RELOCATE_CODE` (default 0): every section gets the offset it always
+had, then the one section that is both at VA 0x01000000 and executable is
+re-appended at the offset the layout ends at, and its old slot is left as
+padding. The arena grows by exactly that section's size, 65,536 B, and stays
+inside the 2 MiB BSS (1,298,432 B used).
+
+Two build-time refusals keep the claim honest. `relocation_evidence()` in the
+builder compiles the same container twice and raises unless the section count is
+the same, every other section's `{va,bytes,flags,arena_offset,data_start,
+data_bytes}` is identical, and the code section landed at or after the old plan's
+end; that proof is stored in the manifest as `csf_relocated_code`. The unit test
+`test_relocated_code_moves_only_that_section` walks the built tables and asserts
+that the code leaf differs only in bits 12..47 and that no other leaf changed at
+all.
+
+Why it is a probe build and not a clean boot: the clean-boot signature is a
+timeout, and a timeout cannot say *where* the MCU stopped. 2382 therefore reuses
+2379's container patch byte for byte, so `groups` is comparable with 2379's 9.
+That is the whole design - one number moved, one number read.
+
+The honest limit: `groups=9` on this build means the call still does not return,
+and a lost return is still indistinguishable from an MCU fault that entered the
+vendor handler, because the vendor vectors are deliberately untouched and an
+MCU-side fault does not set `AS_FAULT`. If 2382 reads 9, the next instrument must
+be the fault vector on this path, not another mapping change.

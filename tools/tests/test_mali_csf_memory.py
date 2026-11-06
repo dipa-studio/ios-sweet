@@ -142,6 +142,56 @@ int main(void) {
  return 0;
 }
 '''
+RELOC_DUMP = r"""
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "mali_csf_memory.h"
+static void put(uint8_t *p,uint32_t v) {for(unsigned i=0;i<4;i++)p[i]=v>>(8*i);}
+static uint64_t u64(const uint8_t *p) {uint64_t v=0;for(unsigned i=0;i<8;i++)v|=(uint64_t)p[i]<<(8*i);return v;}
+static void section(uint8_t *p,uint32_t flags,uint32_t va,uint32_t end,uint32_t start,uint32_t stop) {
+ put(p,24<<8);put(p+4,flags);put(p+8,va);put(p+12,end);put(p+16,start);put(p+20,stop);
+}
+static void alt_fixture(uint8_t *b) {
+ /* executable, but not at the code VA; and the code VA is not executable. */
+ memset(b,0,256);put(b,0xc3f13a6e);b[4]=1;put(b+16,92);
+ section(b+20,0x0b,0x01000000,0x01002000,128,132);
+ section(b+44,0x0d,0x02000000,0x02002000,132,136);
+ section(b+68,0x4000001b,0x04000000,0x04002000,136,140);
+ b[128]=0x10;b[129]=0x20;b[130]=0x30;b[131]=0x40;
+ b[132]=1;b[133]=2;b[134]=3;b[135]=4;b[136]=5;b[137]=6;b[138]=7;b[139]=8;
+}
+static void fixture(uint8_t *b) {
+ memset(b,0,256);put(b,0xc3f13a6e);b[4]=1;put(b+16,92);
+ /* one executable section at the firmware's code VA, a RW data section and a
+  * shared section, so a relocation has exactly one legal target. */
+ section(b+20,0x0d,0x01000000,0x01002000,128,132);
+ section(b+44,0x0b,0x02000000,0x02002000,132,136);
+ section(b+68,0x4000001b,0x04000000,0x04002000,136,140);
+ b[128]=0x10;b[129]=0x20;b[130]=0x30;b[131]=0x40;
+ b[132]=1;b[133]=2;b[134]=3;b[135]=4;b[136]=5;b[137]=6;b[138]=7;b[139]=8;
+}
+static uint64_t walk(const uint8_t *a,uint64_t pa,uint32_t va) {
+ const uint8_t *t=a;
+ for(unsigned l=0;l<3;l++) {unsigned shift=39-9*l;uint64_t d=u64(t+(((uint64_t)va>>shift)&511)*8);if((d&3)!=3)return 0;t=a+((d&0x0000fffffffff000ULL)-pa);}
+ return u64(t+((va>>12)&511)*8);
+}
+int main(int argc,char **argv) {
+ uint8_t b[256];(void)argv;
+ if(argc==2)alt_fixture(b);else fixture(b);
+ struct sweet_csf_memory m;if(sweet_csf_memory_plan(b,sizeof b,&m))return 2;
+ uint8_t *a=aligned_alloc(4096,(m.required_bytes+4095)&~4095u);if(!a)return 4;
+ uint64_t root=0;if(sweet_csf_memory_build(b,sizeof b,&m,a,m.required_bytes,0x90000000,40,&root))return 3;
+ printf("required %u tables %u\n",m.required_bytes,m.table_pages);
+ for(unsigned i=0;i<m.mapping_count;i++)
+  printf("sec %08x %u %u %u %016llx\n",m.map[i].va,m.map[i].arena_offset,m.map[i].bytes,
+         m.map[i].flags,(unsigned long long)walk(a,root,m.map[i].va));
+ /* the abandoned slot must be padding, not a second copy of the section. */
+ printf("copy %u\n",(unsigned)memcmp(a+m.map[1].arena_offset,b+m.map[1].data_start,m.map[1].data_bytes)==0);
+ return 0;
+}
+"""
 @unittest.skipUnless(shutil.which('cc'),'requires C compiler')
 class CsfMemoryTests(unittest.TestCase):
     def test_real_memory_builder(self):
@@ -161,6 +211,61 @@ class CsfMemoryTests(unittest.TestCase):
                 str(ROOT/'xnu/gpu/mali_csf_firmware.c'),str(ROOT/'xnu/gpu/mali_csf_memory.c'),
                 '-o',str(p/'test')],check=True,capture_output=True)
             subprocess.run([str(p/'test')],check=True,capture_output=True)
+
+    def test_relocated_code_moves_only_that_section(self):
+        """2382: the plan moves the R-X section and nothing else."""
+        def dump(define):
+            with tempfile.TemporaryDirectory() as directory:
+                p=Path(directory);(p/'d.c').write_text(RELOC_DUMP)
+                cmd=['cc','-std=c11','-Wall','-Wextra','-Werror','-I',str(ROOT/'xnu/gpu')]
+                if define:cmd.append(define)
+                cmd+=[str(p/'d.c'),str(ROOT/'xnu/gpu/mali_csf_firmware.c'),
+                      str(ROOT/'xnu/gpu/mali_csf_memory.c'),'-o',str(p/'dump')]
+                subprocess.run(cmd,check=True,capture_output=True)
+                out=subprocess.run([str(p/'dump')],check=True,capture_output=True,text=True).stdout
+                required=tables=None;rows=[];copy=None
+                for line in out.splitlines():
+                    head=line.split()
+                    if head[0]=='required':required,tables=int(head[1]),int(head[3])
+                    elif head[0]=='sec':rows.append((int(head[1],16),int(head[2]),int(head[3]),
+                                                     int(head[4]),int(head[5],16)))
+                    elif head[0]=='copy':copy=int(head[1])
+                return required,tables,rows,copy
+        base_required,base_tables,base,base_copy=dump(None)
+        moved_required,moved_tables,moved,moved_copy=dump('-DSWEET_CSF_RELOCATE_CODE=1')
+        self.assertEqual(base_tables,moved_tables)
+        self.assertEqual(len(base),3);self.assertEqual(len(moved),3)
+        code=[row for row in base if row[0]==0x01000000 and row[3]&4]
+        self.assertEqual(len(code),1)
+        code_va,code_offset,code_bytes,code_flags,code_leaf=code[0]
+        # every other section keeps offset, size, flags and leaf descriptor.
+        for before,after in zip(base,moved):
+            if before[0]==code_va:continue
+            self.assertEqual(before,after,'section0x%x moved'%before[0])
+        moved_code=next(row for row in moved if row[0]==code_va)
+        self.assertEqual(moved_code[1],base_required)
+        self.assertEqual(moved_required,base_required+code_bytes)
+        self.assertEqual(moved_copy,1,'the abandoned slot must not hold a copy')
+        # the only leaf bits that may differ are the physical address field.
+        self.assertEqual(code_leaf&~0x0000fffffffff000,moved_code[4]&~0x0000fffffffff000)
+        # the shift is everything the default plan placed after the section.
+        self.assertEqual((code_leaf&0x0000fffffffff000)+(base_required-code_offset),
+                         moved_code[4]&0x0000fffffffff000)
+
+    def test_relocation_needs_both_the_va_and_the_execute_bit(self):
+        """No section matches: an executable page elsewhere, a code VA that is RW."""
+        def dump(define):
+            with tempfile.TemporaryDirectory() as directory:
+                p=Path(directory);(p/'d.c').write_text(RELOC_DUMP)
+                cmd=['cc','-std=c11','-Wall','-Wextra','-Werror','-I',str(ROOT/'xnu/gpu')]
+                if define:cmd.append(define)
+                cmd+=[str(p/'d.c'),str(ROOT/'xnu/gpu/mali_csf_firmware.c'),
+                      str(ROOT/'xnu/gpu/mali_csf_memory.c'),'-o',str(p/'dump')]
+                subprocess.run(cmd,check=True,capture_output=True)
+                return subprocess.run([str(p/'dump'),'alt'],check=True,capture_output=True,
+                                      text=True).stdout
+        base=dump(None);moved=dump('-DSWEET_CSF_RELOCATE_CODE=1')
+        self.assertEqual(base,moved,'the flag must be inert when no section qualifies')
 
     def test_vendor_pairing_changes_only_attr_index_and_share(self):
         """Diff the two encodings leaf by leaf: only bits0x31c may move."""

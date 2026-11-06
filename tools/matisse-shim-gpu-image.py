@@ -973,6 +973,11 @@ TRACE_PROBE = {
         literals={},
     ),
 }
+# 2382 reuses the2379 fetch-prime patch byte for byte. The container, the patch
+# sites and the counter semantics are therefore identical by construction, and
+# the only difference between the two images is where the memory plan puts the
+# code section. Declared after the literal so the two can never drift apart.
+TRACE_PROBE[0x2382] = TRACE_PROBE[0x2379]
 BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the low bytes
 
 
@@ -1111,7 +1116,7 @@ def fault_vector_probe(path, expected, build_id):
                  container_bytes_changed=len(changed),
                  original_container_sha256=digest(firmware),
                  embedded_container_sha256=digest(embedded))
-    if build_id == 0x2379:
+    if build_id in (0x2379, 0x2382):
         patch['fetch_prime'] = dict(
             entry_va='0x10018ec', call_va='0x1001902', return_va='0x1001906',
             fetch_va='0x1000200', read_insn_va='0x100190a', read_va='0x1000210',
@@ -1120,7 +1125,50 @@ def fault_vector_probe(path, expected, build_id):
                               '10': 'call returned; data read did not return',
                               '11': 'data read returned'},
             fault_vectors_unchanged=True, block_size_hypothesis=512)
+        if build_id == 0x2382:
+            # Same probe, same target VA; only the section's PA differs, so a
+            # counter of9 here against 2379's9 says the hang does not follow the
+            # physical pages this build moved it to.
+            patch['fetch_prime']['code_section_relocated'] = True
     return embedded, patch
+
+
+def relocation_evidence(firmware):
+    """2382: prove at build time that the plan moves exactly one section.
+
+    Builds the same container twice, once with the shipping plan and once with
+    SWEET_CSF_RELOCATE_CODE, and refuses to hand out an image unless the only
+    difference is the executable section's offset. Returns arena-relative
+    numbers; the caller adds the linked arena base.
+    """
+    spec = importlib.util.spec_from_file_location('csf_fetch', ROOT / 'tools/matisse-csf-fetch-audit.py')
+    fetch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fetch)
+    with tempfile.TemporaryDirectory(prefix='csf-relocate-') as directory:
+        path = Path(directory) / 'patched.bin'
+        path.write_bytes(firmware)
+        _, default = fetch.build_arena(path, 0x40077000, memory_group=6)
+        _, moved = fetch.build_arena(path, 0x40077000, memory_group=6, relocate_code=True)
+    if len(default['sections']) != len(moved['sections']):
+        raise ValueError('relocation changed the section count')
+    index = [i for i, section in enumerate(default['sections'])
+             if section['va'] == 0x01000000 and section['flags'] & 4]
+    if len(index) != 1:
+        raise ValueError('expected exactly one executable section')
+    index = index[0]
+    for i, (before, after) in enumerate(zip(default['sections'], moved['sections'])):
+        if i != index and before != after:
+            raise ValueError('relocation moved section %#x' % before['va'])
+    code, relocated = default['sections'][index], moved['sections'][index]
+    if relocated['arena_offset'] < default['required_bytes']:
+        raise ValueError('the code section was not appended after the whole layout')
+    return dict(code_va='%#x' % code['va'], code_bytes=code['bytes'],
+                default_offset=code['arena_offset'],
+                relocated_offset=relocated['arena_offset'],
+                pa_delta_bytes=relocated['arena_offset'] - code['arena_offset'],
+                default_required_bytes=default['required_bytes'],
+                relocated_required_bytes=moved['required_bytes'],
+                sections_unchanged=moved['required_bytes'] - default['required_bytes'] == code['bytes'])
 
 
 def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=False,
@@ -1211,6 +1259,17 @@ def build(a):
             raise ValueError('build2380 must be a clean boot: no probe, no RO-as-RW, no global init')
     if a.build_id == 0x2381 and not (a.vendor_memattr and a.global_init):
         raise ValueError('build2381 requires --vendor-memattr --global-init')
+    #2382 is the2379 container patch on a plan that puts the R-X section after
+    # the whole layout. Everything else - leaf encoding, probe, RO-as-RW, start
+    # word - is held at2379's values so the PA is the only moved number.
+    if a.build_id == 0x2382:
+        if not (a.trace_probe and a.ro_as_rw and a.relocate_code):
+            raise ValueError('build2382 requires --trace-probe --ro-as-rw --relocate-code')
+        if (a.vendor_memattr or a.global_init or a.fault_probe or a.entry_probe or
+                a.reset_store_stub or a.mcu_control != '2'):
+            raise ValueError('build2382 may change only the code section PA')
+    elif a.relocate_code:
+        raise ValueError('--relocate-code is only defined for build2382')
     if a.fault_probe or a.trace_probe:
         if a.redirect_mcu_stores or a.entry_probe or a.inline_entry or a.entry_pte_guard or a.reset_store_stub:
             raise ValueError('the fault vector probe replaces the handler and takes no other patch')
@@ -1257,6 +1316,7 @@ def build(a):
                    '-DSWEET_CSF_RO_LEAVES_WRITABLE=' + ('1' if a.ro_as_rw else '0'),
                    '-DSWEET_CSF_VENDOR_MEMATTR=' + ('1' if a.vendor_memattr else '0'),
                    '-DSWEET_CSF_GLOBAL_INIT=' + ('1' if a.global_init else '0'),
+                   '-DSWEET_CSF_RELOCATE_CODE=' + ('1' if a.relocate_code else '0'),
                    *dvfs,
                    '-DEMBEDDED_XNU_BYTES=' + str(len(payload))]
     if a.entry_probe:
@@ -1396,9 +1456,17 @@ def build(a):
             ('tools/matisse-csf-fetch-audit.py', 'tools/matisse-shim-gpu-image.py')}
         if a.build_id in TRACE_PROBE:
             info['trace_probe'] = info.pop('fault_vector_probe')
-            if a.build_id == 0x2379:
+            if a.build_id in (0x2379, 0x2382):
                 name = 'tools/matisse-csf-fetch-prime.S'
                 info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
+    if a.relocate_code:
+        moved = relocation_evidence(firmware)
+        base = 0x40000000 + arena
+        if moved['relocated_required_bytes'] > (2 << 20):
+            raise ValueError('relocated plan no longer fits the shim arena')
+        moved.update(arena_pa=base, default_pa=base + moved['default_offset'],
+                     relocated_pa=base + moved['relocated_offset'])
+        info['csf_relocated_code'] = moved
     if a.entry_probe:
         # The gpufreq layer adds one page of shim text, so from2338 the arena
         # anchor moves by exactly0x1000. Pinning it per build keeps the drift
@@ -1430,7 +1498,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
@@ -1458,6 +1526,8 @@ def main():
                         'whether the read-only bit is what refuses the fill')
     p.add_argument('--vendor-memattr', action='store_true',
                    help='2380: map firmware sections with the vendor MemAttr indexes/share bits')
+    p.add_argument('--relocate-code', action='store_true',
+                   help='2382: put the R-X section after the whole arena layout so its PA moves')
     p.add_argument('--global-init', action='store_true',
                    help='2381: program the CSF global interface after boot')
     p.add_argument('--mcu-control', default='2', choices=('2', '3'),
