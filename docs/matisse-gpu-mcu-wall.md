@@ -542,3 +542,42 @@ Readiness rules for this build, in the order the decoder applies them:
 | error -54, or `mmu_raw & 0xffff`, or `as_fault` | the vendor pairing faults translation | revert the leaf encoding first |
 | stage 8/9/10, or `cleanup_error != 0` | transaction incomplete | inconclusive, do not stack a variable |
 | `memattr` pair not `0x888d8f88`/`0x00084c8d` | not this image | discard the report |
+
+## 24. 2380 ran: the vendor MemAttr pairing maps, boots, and changes nothing
+
+Corrected image `0f21ee93...e77bc`, 26,714,112 B, partition
+`78a91de6...a9511` written and read back, kernel build mark `0x2380` decoded
+from a fresh marks block, `boot_a` restored to `2931647a...86b1`. The first two
+attempts of this build produced no evidence at all - they embedded
+`xnu/out/local/kernel.development.sweet`, a stale Oct 25 file, instead of
+`build/xnu.obj/DEVELOPMENT_ARM64_SWEET/kernel.development.sweet`; their notes
+are kept under `shim2380-vendormemattr-trials/`.
+
+The image did what it was built to do: `memattr_lo = 0x888d8f88`,
+`memattr_hi = 0x00084c8d` read back from the GPU, so the vendor table really was
+programmed and the leaf encoding really was index 0 / index 5 with no SH bits.
+
+```
+stage / error / cleanup_error   4 / -53 / -53
+mcu_status, mmu_raw, as_fault   1, 0, 0
+version, features               0, 0
+firmware_ready                  0
+groups, group_stride            8, 0xa0   (template seeds; no probe ran)
+memattr_lo / memattr_hi         0x888d8f88 / 0x00084c8d
+transcfg_lo                     0x42000006
+reset_raw                       0x200
+```
+
+That is the 2376/2378 signature field for field, with a different leaf encoding.
+So the two facts that had never been varied - the AttrIndx numbering and the
+share bits on the shared section - are **not** the wall. The cold code-page
+access pattern remains the suspect, and the attribute line is now closed from
+both ends: 2378 removed the descriptor bits, 2380 removed the index/share
+difference.
+
+Next single variable: what the hang follows. 2373/2379 measured a 512-byte
+granularity inside the code section while the stack and read-only sections read
+cold without trouble; nothing so far separates "this physical range" from "this
+virtual range". 2382 moves the code section's pages inside the arena - same VA,
+same attributes, same descriptors, different PA - and reads the same addresses
+through a second mapping of the same bytes.

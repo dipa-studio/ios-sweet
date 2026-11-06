@@ -1,93 +1,64 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2380 - VENDOR MEMATTR; IMAGE READY, NOT YET FLASHED <<<
+## >>> ACTIVE 2026-11-06:2380 RAN - THE VENDOR MEMATTR PAIRING IS NOT THE WALL <<<
 
-2379 ran and its result is below. 2380 changes exactly one thing: the firmware
-sections are mapped the way the pinned r32p1 `convert_mem_flags()` maps them on
-a non-coherent SoC. `mali_csf_memory.c` now selects **AttrIndx 0 for a cached
-section, AttrIndx 5 for everything else, and no SH bits on any leaf**, and
-`mali_csf_boot.c` writes the vendor AS_MEMATTR table itself.
+**RESULT: `unchanged`.** The corrected image booted, the marks decoded with
+build `0x2380`, and the GPU read back `memattr_lo = 0x888d8f88`,
+`memattr_hi = 0x00084c8d` - the vendor table really was programmed. The CSF
+report is the 2376/2378 signature field for field:
 
-WHY THIS IS PROVEN AND NOT GUESSED: `research/.../kbase-full-disasm.txt` builds
-`0x00084C8D888D8F88` twice with `mov/movk` chains - at 0x4708C (`mmu_update`
-storing into `mmu_hw_config.memattr`) and at 0x47998 (`kbase_mmu_get_as_setup`
-storing into `mmu_setup->memattr`). `kbase_mmu_hw_configure` then stores that
-struct field to GPU+0x2408; it is not an immediate, which is why grepping for a
-store of 0x2408 finds only the offset. Evidence archive:
-`research/matisse/20261031-gpu/memattr-disasm-2380.txt`. The 2330 guess
-`0x4c4c884c` is therefore retired for this path.
+```
+stage / error / cleanup_error   4 / -53 / -53
+mcu_status, mmu_raw, as_fault   1, 0, 0
+version, features               0, 0
+firmware_ready                  0
+groups, group_stride            8, 0xa0   (template seeds; no probe ran)
+transcfg_lo / reset_raw         0x42000006 / 0x200
+```
 
-WHAT ACTUALLY CHANGES: index0=0x88, index5=0x4c, so the *selected attribute
-byte* for cached and shared sections is the same 0x88/0x4c as before. The real
-deltas are (a) the shared leaf loses SH=3, (b) cached leaves move from index1 to
-index0, (c) MEMATTR[0] goes 0x4c -> 0x88. A NULL result therefore excludes the
-share bits and the index numbering - it does **not** exclude the cache mode.
+So the two facts that had never been varied - AttrIndx numbering and the SH bits
+on the shared leaf - are **not** the blocker. With 2378 that closes the attribute
+line from both ends. Image `0f21ee93...e77bc`, 26,714,112 B, partition
+`78a91de6...a9511`, `boot_a` restored to `2931647a...86b1`.
 
-BUILD: kernel `9540f0ae...` (identity patch 0179, build id 0x2380), image
-`f9525b2692285c90e4527954bab9ba72144196eb319bcde57567cace7dd0613f`,
-26,652,672 B, embedded container byte-identical to the vendor file
-(`de22d2fc...f7229a`), partition prediction
-`ddee4ce082d3db214a58c264a37f3d466fff6ab400b3a34276ca5a5f9811a71d`. Manifest
-says `csf_vendor_memattr=true`, `csf_readonly_leaves_writable=false`,
-`csf_global_init=false`, arena offset 0x77000. Rebuilt into a second directory
-and got the identical image sha, so the ready directory matches the sources.
-
-CLEAN BOOT ON PURPOSE: no `--trace-probe`, no `--ro-as-rw`, `--mcu-control 2`.
-The comparison base is 2376/2378, not 2379. Runner:
-`research/matisse/20261031-gpu/shim2380-vendormemattr-trials-run-once.py`; it
-accepts only `--approved-image-sha256=` plus the full image sha in its `IH`
-constant (`f9525b2692285c90e4527954bab9ba72144196eb319bcde57567cace7dd0613f`).
-
-INIT/POWER-UP SCAFFOLDING LANDED THIS ROUND (all default-off, byte-identical
-when off): `sweet_csf_boot` gained stages 9/10 plus `csf_global_init()`, which
-programs the global **input** page (protm_coherency, core_en_mask, poweroff/
-progress/idle timers, ack_irq_mask 0x0480071e), toggles `GLB_REQ` against the
-firmware's own ACK with mask 0x40e, rings CSF doorbell 0 at GPU+0x80000 and
-polls `(ACK & 0x40e) == (REQ & 0x40e)` - the step
-`global_init_on_boot()` performs after boot. Compiled only with
-`-DSWEET_CSF_GLOBAL_INIT=1` (`--global-init`). Its 96-byte evidence block goes
-out through a new `sweet-csf-global` ADT property and the 696-byte report is
-untouched. OPEN: `sweet_ufs.c` does not forward that block into SWEETMRK yet,
-so 2381 evidence would be console-only; the builder records
-`kernel_marks_wired=false`. Do not describe 2381 as runnable until that lands.
-
-TESTS: 224 pass, 3 skip (baseline was 215/3). New coverage: legacy leaf encoding
-byte-identical, vendor pairing differs only in AttrIndx/SH, AS_MEMATTR pair
-written and verified per mode, global stage success/timeout/invalid-page/
-argument-rejection with zero doorbell writes when off, and four 2380 decoder
-verdicts.
-
-ATTEMPTS 1 AND 2 PRODUCED NO EVIDENCE, and the cause was mine, not the
-hardware. Attempt 1 (20:12) aborted at t=30 s because the fastboot probe
-imported `tools/fbraw.py` (pyusb), which is not installed here, and the
-`finally: restore()` then flashed the stock prefix over a boot that had not
-finished; the probe now uses `fastboot devices`. Attempt 2 (20:19) ran the fixed
-probe and behaved identically: fastboot at 87.67 s, no fresh Recovery, and
-`before_tail_sha256 == after_tail_sha256`, i.e. **nothing** was written to
-userdata and the kernel never ran.
-
-The real defect: the image was built from
-`xnu/out/local/kernel.development.sweet`, which is a **stale file dated Oct 25**
-(17,222,952 B), not the build output. The canonical artifact is
+**TWO ATTEMPTS BEFORE THIS ONE PRODUCED NO EVIDENCE, and the cause was mine.**
+Attempt 1 aborted at t=30 s because the fastboot probe imported `tools/fbraw.py`
+(pyusb), which is not installed; the `finally: restore()` then flashed the stock
+prefix over a boot that had not finished. Attempt 2 ran the fixed probe and
+behaved the same: fastboot at 87.67 s with `before_tail_sha256 ==
+after_tail_sha256`, i.e. nothing reached userdata. The defect: both images
+embedded `xnu/out/local/kernel.development.sweet`, a **stale Oct 25 file**
+(17,222,952 B), not the build output
 `xnu/out/local/build/xnu.obj/DEVELOPMENT_ARM64_SWEET/kernel.development.sweet`
-(16,724,248 B). The embedded kernel differed from the 2379 kernel in 13,865,824
-bytes, so 2380 was never a single-variable trial and could not boot XNU. Both
-attempts are archived under `shim2380-vendormemattr-trials/` with NOTE.txt.
+(16,724,248 B). The embedded kernel differed from 2379's in 13,865,824 bytes, so
+neither attempt was a single-variable trial. Both are archived with NOTE.txt under
+`shim2380-vendormemattr-trials/`. **Always take the DEVELOPMENT_ARM64_SWEET
+artifact and check the size against the previous build** - a 61,440-byte image
+size delta was the tell.
 
-REBUILT CORRECTLY: prep/kernel-2380.development.sweet is now the right artifact
-(sha `534a19b2...d9f9c`, 22 bytes from the 2379 kernel - the build id only), and
-the image is `shim2380-vendormemattr-ready2/matisse-shim-gpu2380.img`,
-26,714,112 B (the stale one was 61,440 B smaller, which was the first clue),
-sha `0f21ee93...e77bc`, partition prediction `78a91de6...a9511`. The runner's
-IH/PH/image path are updated. Device state: Recovery, boot_a back to
-`2931647a...86b1` after each attempt; nothing was lost.
+**Driver state:** `SWEET_CSF_VENDOR_MEMATTR` defaults to 0, so every earlier
+build reproduces byte for byte; `--vendor-memattr` selects the vendor mapping and
+is what 2380 measured. The 2330 diagnostic `0x4c4c884c` is retired on that path;
+the vendor pair is `0x888d8f88` / `0x00084c8d`, proven from the blob at 0x4708C
+and 0x47998 (evidence in `research/matisse/20261031-gpu/memattr-disasm-2380.txt`).
 
-NEXT: one trial of the corrected image, then read the matrix in
-`docs/matisse-gpu-mcu-wall.md`: ready -> run 2381; unchanged
-(stage4/-53/version0) -> the share bits are not the wall and 2382 (relocate the
-code section's PA) is the next single variable; a fault -> revert the leaf
-encoding. If a corrected image still reaches fastboot with no marks, the next
-instrument has to be the shim's own console, not SWEETMRK.
+**Also landed this round, default off:** `sweet_csf_boot` stages 9/10 plus
+`csf_global_init()` - global input page, `GLB_REQ` toggled against the
+firmware's ACK with mask 0x40e, CSF doorbell 0 at GPU+0x80000, ACK poll - i.e.
+the step `global_init_on_boot()` performs after boot. Evidence goes through a new
+96-byte `sweet-csf-global` ADT property; the 696-byte report is untouched;
+`SWEET_CSF_GLOBAL_INIT` defaults to 0. OPEN: `sweet_ufs.c` does not forward that
+block into SWEETMRK yet (`kernel_marks_wired=false` in the manifest), so 2381
+would be console-only. Do not call 2381 runnable until that lands.
+
+**NEXT: 2382 - does the hang follow the physical or the virtual address?** Move
+the code section's pages inside the arena (same VA, same leaf bits, same
+descriptors, different PA) and read the same VAs through a second mapping of the
+same bytes. 2373/2379 measured 512-byte granularity inside the code section while
+the stack and read-only sections read cold without trouble; nothing has separated
+"this PA range" from "this VA range" yet. kbase and Panthor both map firmware
+with ordinary GPU pages, so a PA-dependent hang would point at the GMPU/SLC
+routing rather than at translation.
 
 ## >>> PREVIOUS 2026-11-06:2379 - THE FRESH-BLOCK CALL DID NOT RETURN; FETCH ITSELF HANGS <<<
 
