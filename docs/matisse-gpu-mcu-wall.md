@@ -128,3 +128,62 @@ writes `ENABLE|AUTO = 3`. The driver now runs an explicit state machine
 classify), with the written/read-back pair recorded in `platform_reserved` so the
 696-byte report ABI is unchanged. The value is a config knob so a trial changes
 only that one number.
+
+## 7. 2373: the region limit is dead, and the shape is a touched 512-byte block
+
+2372 built the whole-section map and started the MCU with the vendor
+`ENABLE|AUTO` (3). `MCU_STATUS` stayed 0 for the entire budget: the MCU was never
+enabled, so no probe ran and the image proved nothing. That is worth keeping as a
+hardware fact of its own - on this SoC `ENABLE|AUTO` does **not** start the core,
+while AUTO alone (2) reaches `MCU_STATUS == 1` through the same code path.
+
+2373 repeated the identical map with 2. Image SHA256
+`7ef7c11f26d10fb28dd89d95ed694968cc4d32d925e7196070f6f9b85091de8e`, 26,714,112 B,
+journal `complete-restored-Recovery`, `boot_a` verified back to `2931647a...86b1`.
+Only the start word and the kernel build id differ from 2372.
+
+- `input_va = 0x01000000`: the marker is stored into shared+0x08 before the first
+  probe, so the loop provably started even though it never finished.
+- `groups = 10`. The field is `rd(shared+0x10)`, seeded 8 by the firmware template
+  and incremented once per probe, so **two** probes returned: 0x01000000 and
+  0x01000100. The probe at **0x01000200** stopped the core.
+
+The "readable prefix ending at 0x1a00" reading predicted all 256 blocks would
+return, or at worst that everything below 0x1a00 would. 0x01000200 returned
+nothing, and it is 0x1800 below that supposed limit, so that reading is dead.
+The "only near the executing code" reading is dead too: 0x01000000 is 0x18ec away
+from the loop at 0x010018ec.
+
+What survives both runs is one rule: **an aligned 512-byte block becomes readable
+as data once the core has touched it.** Exactly two blocks qualify in these
+boots - `0x01000000..0x010001ff`, whose first word the reset sequence reads, and
+`0x01001800..0x010019ff`, the block the replacement loop executes from. All
+sixteen of 2371's returning probes (0x01001900..0x010019f0) sit inside the second
+block; 0x01001a00 is the first address of the next one, which is why it hung. The
+"256-byte window" was the tail of a 512-byte block whose head is the code the core
+was running.
+
+2366 is still the one datum this does not explain: its loop sat at 0x010019ee
+with its literal at 0x010019f8, both inside the executing block, and it turned
+once. Either the rule has a second condition, or 2366's stall was a different
+event. Do not write an attribute on the strength of the rule until 2374 has run.
+
+## 8. 2374: does fetch prime the block, or are these two blocks special
+
+Same loop, same marker, one new idea. Instead of reading a fresh block, the probe
+branches into 0x01000200, executes a few instructions there so the core has to
+fetch it, and only then data-reads that block:
+
+- `groups = 8` - even the branch/fetch into a fresh block hangs. Then the wall is
+  translation on any first touch, the reset block was primed by hardware, and no
+  driver-side attribute fixes it: the firmware has to live in a region that was
+  primed, or in one that is mapped as data from the start.
+- `groups = 9` - the fetch landed, the data read of a block the core just fetched
+  still hung. Then fetch does not prime the data path and the two readable blocks
+  are special for another reason.
+- `groups = 10` - fetch primes the block for data reads. The rule the driver has
+  to live with is then "the MCU can only data-read what it has already fetched",
+  and the fix is to stop making the EB data-read unfetched code at all.
+
+The marker is written before the branch, so all three outcomes are distinguishable
+from one boot.

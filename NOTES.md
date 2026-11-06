@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2371 PUT THE EDGE AT 0x01001a00 - A 256-BYTE WINDOW, NOT A PAGE <<<
+## >>> ACTIVE 2026-11-06:2373 KILLED THE REGION LIMIT - READS WORK IN THE 512-BYTE BLOCK THE CORE TOUCHED <<<
 
 READ THIS FIRST. Trials 2357-2370 all ran. Until this entry their results existed
 only as comments above the per-build `TRACE_PROBE` table in
@@ -91,27 +91,66 @@ which is what those trials measured. The one datum this does not explain is 2366
 window); do not treat the window size as settled until a probe starts the loop at
 a different base address.
 
-**Next:** the leaf attributes in `mali_csf_memory.c` are still the suspect, and
-the 0x01001a00 edge is the coordinate to explain. The instrument is already
-designed and recorded in `.workbuddy/memory/2026-11-06.md` but never built: 2372
-replaces the fine sweep with a whole-section map, `r4 = 0x01000000`,
-`r5 = 0x01010000`, `ldr r0,[r4] / add.w r4,#0x100 / adds r2,#2 / str r2,[r3] /
-b loop`, so one boot yields the readable/unreadable map of the entire 64 KiB
-section. A readable prefix that ends at 0x1a00 means a region limit; scattered
-readable 0x100 blocks matching the two executed lines mean a fetch-derived window.
-Do not change any attribute before that map exists. Note 2371 also ended in
-fastboot rather than Recovery (XNU reached mount-phase-1 and the boot failed);
-the restore went through the `restore-only` path and still verified.
+**2372 WAS A NULL: the start word killed it before the map ran.** The whole-section
+map booted with the vendor `ENABLE|AUTO` (3) and `MCU_STATUS` stayed 0 for the
+entire budget - the MCU was never enabled, so no probe executed and the run says
+nothing about reads. Image `03537c40...`, journal `complete-restored-Recovery`.
 
-**Driver, this round:** `mali_csf_boot.c` now drives the MCU through an explicit
-state machine instead of the bare `wr(MCU_CONTROL, 2)`: halt (write 0, poll
-`MCU_STATUS == 0`, new `SWEET_CSF_BOOT_HALT` stage), then start with the vendor
-`ENABLE|AUTO` (3), then the existing wait loop, whose fault test is now "any
-status bit other than ENABLED" instead of only `== 3`. The written/read-back pair
-lands in the report's `platform_reserved` word (`path_reserved` keeps its 2335
-checkpoint meaning), so the 696-byte CSF ABI is unchanged. `--mcu-control 2|3` on
-the image builder selects the value, defaulting to 3, so the next trial moves one
-number. 210 tests pass, 3 skipped.
+**2373 RAN THE SAME MAP WITH AUTO ALONE (2): the region limit is dead.** Image
+SHA256 `7ef7c11f26d10fb28dd89d95ed694968cc4d32d925e7196070f6f9b85091de8e`,
+26,714,112 B, journal `complete-restored-Recovery`, `restored_sha256` back to
+`2931647a...86b1`. Nothing changed except the start value, the kernel build id
+and the builder's record of it. Result:
+
+- `input_va = 0x01000000` - the loop stores that marker into shared+0x08 *before*
+  probe 0, so the map demonstrably started.
+- `groups = 10`, and `groups` is `rd(shared+0x10)`, seeded 8 by the firmware
+  template, incremented once per probe. So **two** probes completed:
+  0x01000000 and 0x01000100 returned, and **0x01000200 stopped the core**.
+
+This refutes the "readable prefix ending at 0x1a00" reading outright: it predicted
+every block below 0x1a00 would be readable, and 0x01000200 is 0x1800 below that.
+It also kills any "only near the executing code" reading, because 0x01000000 is
+0x18ec away from the loop.
+
+**The shape that fits both runs is a 512-byte block that the core has touched.**
+Two blocks are readable: `0x01000000..0x010001ff` (the reset vector read at boot)
+and `0x01001800..0x010019ff` (the block the loop executes from). Every one of
+2371's sixteen returning probes (0x01001900..0x010019f0) is inside the second
+block, and 0x01001a00 is the first address of the next one - so 2371's "256-byte
+window" was really the tail of a 512-byte window whose head is the executing code.
+2366 remains the single datum this does not explain.
+
+**Next: 2374, the one probe that separates "fetch primes the block" from "only
+these two blocks are special".** Branch into a fresh block (0x01000200), execute a
+few instructions there so the core fetches it, then data-read that same block.
+`groups = 9` means the fetch landed but a data read of a fetched block still hung;
+`groups = 10` means fetch primes the block for data reads, which is the rule the
+driver has to live with; `groups = 8` means the fetch of a fresh block hangs too
+and the wall is the translation, not the data path. The marker is stored first, so
+all three outcomes are distinguishable.
+
+**Driver, this round:** `mali_csf_boot.c` drives the MCU through an explicit state
+machine instead of the bare `wr(MCU_CONTROL, 2)`: halt (write 0, poll
+`MCU_STATUS == 0`, new `SWEET_CSF_BOOT_HALT` stage), then start, then the wait
+loop, whose fault test is now "any status bit other than ENABLED" instead of only
+`== 3`. 2372 measured that `ENABLE|AUTO` (3) leaves `MCU_STATUS` at 0 on this SoC
+while AUTO alone (2) reaches 1 through the same path, so **2 is the default**
+everywhere - shim constant, driver config fallback, `--mcu-control` - and 3 stays
+reachable for a single-variable trial. The written/read-back pair lands in the
+report's `platform_reserved` word (`path_reserved` keeps its 2335 checkpoint
+meaning), so the 696-byte CSF ABI is unchanged. 210 tests pass, 3 skipped.
+
+**Vendor reference, new:** `https://github.com/MiCode/Xiaomi_Kernel_OpenSource`
+branch `rubens-s-oss` carries the OEM kernel for this platform
+(`arch/arm64/configs/mikrn_matisse_defconfig`, `mikrn_rubens_defconfig`) with the
+full MTK GPU stack under `drivers/gpu/mediatek/`: `gpueb/` (the EB driver we have
+been reconstructing), `gpu_mali/mali_valhall/{mali-r25p0,r30p0,r32p0,r32p1}` (the
+kbase CSF DDK), `gpufreq/`, `ged/`, `gpu_bm/`, `hal/`, `mt-plat/`. Use it as the
+authority for the EB power-on sequence and for the firmware mapping instead of
+inferring both from measurements. The full OS2.0.2.0 flash package is on disk at
+`/Users/xiaohuasheng/Documents/matisse_images_OS2.0.2.0.ULKCNXM_14.0/`
+(`flash_all.sh`), so a bad trial is recoverable without the raw backup prefix.
 
 Device discipline unchanged: `boot_a` must verify back to
 `2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1` after every
