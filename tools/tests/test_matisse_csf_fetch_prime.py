@@ -152,6 +152,7 @@ class FetchPrimeTests(unittest.TestCase):
         list, and this test fails if either is written out again."""
         self.assertIn(0x2390, self.builder.LEAF_PROBE_BUILDS)
         self.assertIn(0x2393, self.builder.LEAF_PROBE_BUILDS)
+        self.assertIn(0x2394, self.builder.LEAF_PROBE_BUILDS)
         self.assertIn(0x2388, self.builder.LEAF_PROBE_BUILDS)
         source = (ROOT / 'tools/matisse-shim-gpu-image.py').read_text()
         self.assertIn('a.build_id in LEAF_PROBE_BUILDS)', source)
@@ -228,6 +229,17 @@ class FetchPrimeTests(unittest.TestCase):
         self.assertEqual(patch['cold_boot']['target'], '0x100ea00')
         self.assertNotIn('reset_vector_unchanged', patch['cold_boot'])
         self.assertEqual(patch['leaf_probe']['marks'], '420..423')
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2394_is_the_2385_control_under_vendor_attributes(self):
+        embedded_2385, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2385)
+        embedded_2394, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2394)
+        # The probe only patches the container; the attribute change is in the
+        # shim compile flags, so 2394's container must equal 2385's byte for byte.
+        self.assertEqual(embedded_2394, embedded_2385)
+        self.assertEqual(patch['cold_boot']['target'], '0x100e000')
+        self.assertEqual(patch['leaf_probe']['marks'], '420..423')
+        self.assertNotIn('landings', patch['cold_boot'])
 
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2390_leaves_the_vendor_word_alone_and_instruments_both_landings(self):
@@ -362,7 +374,10 @@ class FetchPrimeTests(unittest.TestCase):
                  (0x2390, 0x010018EC, 'COLD_BOOT_2390_ENTRY', True),
                  # 2393 repeats 2391's class of address (512-aligned, not a
                  # page base) with vendor page attributes; same twenty bytes.
-                 (0x2393, 0x0100EA00, 'COLD_BOOT_2393', False))
+                 (0x2393, 0x0100EA00, 'COLD_BOOT_2393', False),
+                 # 2394 is 2385's positive control under the vendor encoding:
+                 # same container, different shim compile flags.
+                 (0x2394, 0x0100E000, 'COLD_BOOT_2385', False))
         for build, target, pinned, wide in cases:
             with self.subTest(build=hex(build)), tempfile.TemporaryDirectory() as directory:
                 p = Path(directory)

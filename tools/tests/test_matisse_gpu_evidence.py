@@ -574,6 +574,17 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertEqual(len(csf['cold_boot_landings']), 3)
         self.assertIn('survives AttrIdx 0/5', csf['instrument_verdict'])
 
+    def test_2394_positive_control_decides_whether_2393_closes(self):
+        csf = self.cold_report(build=0x2394, input_va=0x0100E000, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'positive-control-runs')
+        self.assertEqual(csf['cold_boot_start'], 'vector-literal')
+        self.assertIn('2393 is closed', csf['instrument_verdict'])
+
+        csf = self.cold_report(build=0x2394, input_va=0x04000200, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'positive-control-stalls')
+        self.assertIsNone(csf['cold_boot_start'])
+        self.assertIn('cannot be read as a 512 rule', csf['instrument_verdict'])
+
     def test_2390_names_the_landing_from_the_marker_alone(self):
         # The vendor word is untouched in this build, so the marker decides:
         # 0x010018ec means the vector is honoured exactly, 0x01001000 means the

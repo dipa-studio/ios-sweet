@@ -1,6 +1,25 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06 23:59: 2393 RAN - VENDOR PAGE ATTRS, SAME 512 WALL <<<
+## >>> ACTIVE 2026-11-07 00:07: 2394 RAN - POSITIVE CONTROL; THE 512 RULE IS BELOW THE DRIVER <<<
+
+**RESULT: `input_va = 0x0100E000`, `cleanup_error = 0`. The same vendor page
+encoding that failed at `0xEA00` in 2393 starts at `0xE000`.**
+
+```
+image  c46bb200...bee7  26,714,112 B  kernel 6930a140 (SWEET_BUILD_ID 0x2394)
+part.  d43cdb...7274 written and read back, fastboot 83.81 s
+boot_a restored to 2931647a...86b1 (verified)
+outcome positive-control-runs
+```
+
+2394's container is byte-identical to 2385's (vector `0x0100E001`, program at
+`0xE000`); only the shim attributes differ. 2393 vs 2394 is a controlled A/B:
+same flags, same layout, only the low nine bits of the target change, and
+`cleanup_error` is -53 vs 0. The 512 rule survives the vendor page encoding;
+it is below the driver. 2392/2395 are unnecessary. Next is C: markers along the
+vendor handler at `0x010018EC`. See `docs/matisse-gpu-mcu-wall.md` section 39.
+
+## >>> PREVIOUS 2026-11-06 23:59: 2393 RAN - VENDOR PAGE ATTRS, SAME 512 WALL <<<
 
 **RESULT: no landing at `0xEA00` / `0x1000` / `0x18EC`. The leaf readback is
 `0x4C3`, so the image really ran with vendor page attributes (AttrIdx 0/5, no

@@ -1357,3 +1357,34 @@ program at `0x0100E000`, an address that ran under the shim encoding in 2385.
 If 2394 runs, 2393 closes the attribute question and the rule is below the
 driver; if 2394 also stalls, the vendor encoding broke the start and 2393 says
 nothing about 512.
+
+## 39. 2394 ran: 0xE000 starts under the vendor encoding, 0xEA00 does not
+
+Trial 2026-11-07 00:07, image `c46bb200...bee7`, kernel `6930a140`
+(`SWEET_BUILD_ID` 0x2394), fastboot 83.81 s, `boot_a` restored to
+`2931647a...86b1`.
+
+```
+input_va (shared+8)      0x0100E000   the positive control's marker
+groups                   8
+mmu_raw, as_fault        0, 0
+mcu_status, relocation   1, true
+cleanup_error            0
+leaf flags (code)        0x4c3        AttrIdx 0, no nG, read-only
+```
+
+2394 is 2385's positive control under 2393's vendor page encoding. Its container
+is byte-identical to 2385's (vector `0x0100E001`, program at `0x0100E000`); only
+the shim compile flags differ. The marker appeared, and `cleanup_error = 0` is
+the same signature as 2385/2389/2390.
+
+| build | page encoding | target | cleanup_error | result |
+|---|---|---|---|---|
+| 2393 | vendor | `0xEA00` | -53 | nothing |
+| 2394 | vendor | `0xE000` | 0 | runs |
+
+Same build flags, same container layout, same leaf bits; only the low nine bits
+of the target differ. So 2393's no-marker is not an attribute artefact: the
+512-byte rule survives the vendor page encoding and lives below the driver.
+2392 and 2395 are unnecessary. The next instrument is C - place markers along
+the vendor handler that starts at `0x010018EC` and find where it stops.

@@ -1181,6 +1181,22 @@ TRACE_PROBE[0x2393] = dict(
              0x01000200: ('01340a2c', '00bf7047'),
              0x010018ec: COLD_BOOT_2390_ENTRY,
              0x01001000: COLD_BOOT_2390_PAGE})
+
+# 2394 is 2393's positive control: 2385's known-good 4 KB page base at 0xE000,
+# with 2393's vendor page encoding. The container is byte-identical to 2385;
+# only the shim compile flags differ. If 0xE000 runs, 2393's failure at 0xEA00
+# is about the address; if it also stalls, the vendor encoding broke the start
+# and 2393 cannot be read as a 512 rule.
+TRACE_PROBE[0x2394] = dict(
+    TRACE_PROBE[0x2385], kind='cold-boot-fetch',
+    stub_va=0x0100E000,
+    stub_original=bytes.fromhex(COLD_BOOT_2385[0]),
+    stub=bytes.fromhex(COLD_BOOT_2385[1]),
+    # 2385 inherited the 2383 early-return stub at 0x200 through stub_va; keep
+    # it in patches so 2394's container stays byte-identical to 2385's.
+    patches={0x010019b0: TRACE_PROBE[0x2383]['patches'][0x010019b0],
+             0x01000200: ('01340a2c', '00bf7047'),
+             0x0100E000: COLD_BOOT_2385})
 BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the low bytes
 
 
@@ -1377,11 +1393,12 @@ def fault_vector_probe(path, expected, build_id):
                 '20': 'the 2383 fault entry fired: the instrument works',
                 '30': 'the unmapped read completed without faulting',
                 '0 or 8': 'the read neither faulted nor completed'})
-    if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393):
+    if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394):
         target = {0x2385: '0x100e000', 0x2386: '0x1000200',
                   0x2387: '0x1000600', 0x2388: '0x1001200',
                   0x2389: '0x1001000', 0x2390: '0x10018ec',
-                  0x2391: '0x1001a00', 0x2393: '0x100ea00'}[build_id]
+                  0x2391: '0x1001a00', 0x2393: '0x100ea00',
+                  0x2394: '0x100e000'}[build_id]
         patch['cold_boot'] = dict(
             target=target, marker_value=target, marker_field='input_va',
             counter_field='groups', counter_seed=8, counter_meanings={
@@ -1514,7 +1531,7 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
 # two drifted apart once already (2388 shipped with the property, 2389 with
 # neither), and a build that declares a leaf_probe without the property fails
 # closed at decode time, which is the right failure but a wasted trial.
-LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393)
+LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394)
 
 
 def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False):
@@ -1570,13 +1587,13 @@ def build(a):
     #2393 is the vendor-faithful repeat of 2391's 512-byte-aligned target:
     # leaf AttrIdx 0/5, vendor MEMATTR, no nG, read-only code. The entry and
     # its fetch target are the only other things that move.
-    if a.build_id == 0x2393:
+    if a.build_id in (0x2393, 0x2394):
         if not (a.trace_probe and a.vendor_leaves and a.relocate_code and a.mcu_control == '2'):
-            raise ValueError('build2393 requires --trace-probe --vendor-leaves --relocate-code --mcu-control 2')
+            raise ValueError('build%x requires --trace-probe --vendor-leaves --relocate-code --mcu-control 2' % a.build_id)
         if (a.ro_as_rw or a.vendor_memattr or a.global_init or a.fault_probe or
                 a.entry_probe or a.reset_store_stub or a.inline_entry or
                 a.entry_pte_guard or a.redirect_mcu_stores):
-            raise ValueError('build2393 may change only the page attributes and the entry')
+            raise ValueError('build%x may change only the page attributes and the entry' % a.build_id)
     elif a.build_id in (0x2382, 0x2383, 0x2384, 0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391):
         if not (a.trace_probe and a.ro_as_rw and a.relocate_code):
             raise ValueError('build%x requires --trace-probe --ro-as-rw --relocate-code' % a.build_id)
@@ -1782,7 +1799,7 @@ def build(a):
                 for name in ('tools/matisse-csf-fault-entry.S',
                              'tools/matisse-csf-fault-control.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
-            if a.build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393):
+            if a.build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394):
                 for name in ('tools/matisse-csf-fault-entry.S',
                              'tools/matisse-csf-coldboot.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
@@ -1825,7 +1842,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
