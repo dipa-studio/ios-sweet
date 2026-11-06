@@ -1,59 +1,46 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2382 BUILT OFFLINE - MOVE THE CODE SECTION'S PA, NOTHING ELSE <<<
+## >>> ACTIVE 2026-11-06:2382 RAN - MOVING THE CODE SECTION'S PA CHANGES NOTHING <<<
 
-**STATUS: IMAGE READY, NOT FLASHED. `boot_a` is at the baseline
-`2931647a...86b1`; the read-only preflight passed at 20:5x.**
-
-The question: 2373/2379 measured a 512-byte granularity inside the code section
-while the stack and read-only sections read cold without trouble, and 2378/2380
-removed every descriptor and attribute difference. Nothing so far separates
-"these physical pages" from "this virtual range". 2382 keeps the VA, the leaf
-encoding, the descriptor bits, the container patch and the start word exactly as
-2379 had them and moves **only the code section's PA**.
-
-How, in `xnu/gpu/mali_csf_memory.c` behind `SWEET_CSF_RELOCATE_CODE` (default 0,
-so every earlier build is byte-identical): the plan assigns every offset as
-before, then re-appends the one section that is both at VA 0x01000000 and
-executable at the offset the layout would have ended at, leaving its old slot as
-padding. Result on the pinned container:
+**RESULT: `fetch-call-incomplete`, counter 9 - the same number 2379 read.** The
+image moved the code section 1,196,032 bytes (PA `0x40080000` -> `0x401a4000`)
+and the report proves the move happened in band: `firmware_probe_pa =
+0x401a4000`, `relocation_observed = true`, `transtab_lo = 0x40077000` unchanged.
+Everything else is 2379's: same container (`367eb386`), same leaf encoding, same
+descriptor, same start word. The fresh-block call still does not return.
 
 ```
-code section      offset  36864 -> 1232896   PA 0x40080000 -> 0x401a4000
-                  delta 0x124000 (1,196,032 B), still inside the 2 MiB arena
-arena required  1232896 -> 1298432
-other six sections: offset, PA and leaf bits identical, byte for byte
+kernel_build                    0x2382
+groups / fetch_prime_counter    9            (2379: 9)
+stage / error / cleanup_error   4 / -53 / -53
+mcu_status, mmu_raw, as_fault   1, 0, 0
+version, features, ready        0, 0, 0
+memattr                         0x4c4c884c / 0x4c4c4c4c
 ```
 
-The builder refuses to produce the image unless a second, unrelocated build of
-the same container proves that: `csf_relocated_code.sections_unchanged` in the
-manifest, plus a leaf-by-leaf diff in `tools/tests/test_mali_csf_memory.py`.
-`llvm-objdump` on `csf_memory.o` shows the predicate (`mov w11,#0x1000000`).
+**Conclusion, as narrow as the build:** the hang does not follow the physical
+pages this port can move it to. 2378 removed the descriptor bits, 2380 removed
+the AttrIndx numbering and the shared SH bits, 2382 removed the physical range -
+and 2376, 2378, 2380 and 2382 are now the same report field for field. The
+memory-attribute and placement line is closed.
 
-**This is 2379 plus one number.** The container is byte-identical to 2379's
-(`367eb386...`), the trace stub and the reset-handler patch are the same bytes,
-`--ro-as-rw` and `--mcu-control 2` are unchanged, and there is no vendor
-MemAttr. So `groups` is directly comparable with 2379's 9.
+**What is still open:** a counter of 9 covers two mechanisms. Either the fetch
+never completes, or it faults and the vendor handler at `0x010019b1` parks -
+`AS_FAULT` reads 0 because an MCU-side fault does not set it. Four builds with
+three different mappings cannot separate those.
 
-```
-kernel  b4846120...8ba9  16,724,248 B, 19 bytes from 2380:
-        3 immediate sites (0x2380->0x2382) + a 16-byte build UUID
-image   2a85005b...51ad  26,714,112 B, same size as 2379, rebuilt to the same sha
-part.   47dc4e1d...8b57  predicted boot_a contents
-runner  research/matisse/20261031-gpu/shim2382-relocatecode-trials-run-once.py
-        IH/PH pinned, preflight passed, no write has happened
-```
+Trial facts: 83.56 s to fastboot, 153 marks, `boot_a` restored to
+`2931647a...86b1` (`restored_sha256` verified), partition `47dc4e1d...8b57`
+written and read back. First attempt of this image produced real evidence - the
+probe fix (CLI instead of pyusb) held.
 
-Reading the result (`matisse-gpu-report.py --build 0x2382` already implements
-this matrix):
-
-| report | meaning | next |
-|---|---|---|
-| `groups=9`, stage 4, -53 | the call still does not return with the section 0x124000 further into the arena | the PA is not the wall; instrument the fault vector on this path (9 cannot separate "hung fetch" from "faulted into the vendor handler") |
-| `groups=10` | the call returned, the data read did not | executing a cold block is not what makes the word readable |
-| `groups=11` | call and read both returned | the original physical pages were the blocker: PA routing, not translation |
-| -54 / `mmu_raw & 0xffff` / `as_fault` | the relocated mapping faults | the move itself is the suspect, revert before anything else |
-| `firmware_probe_pa != 0x401a4000` | not a relocated image | discard the report |
+**NEXT: 2383 - fault vector on the fetch-prime path.** Install a stub at the
+vendor fault entry (0x010019b0, inside the block that is mapped and has already
+executed) that records the stacked PC from the exception frame and writes a
+distinct counter value, then rerun 2382's relocation probe unchanged. Reading:
+a new counter value with a PC means the fault mechanism and its instruction; an
+unchanged 9 means no fault was taken and the fetch itself is the wall. Do not
+move memory again before that answer exists.
 
 ## >>> PREVIOUS 2026-11-06:2380 RAN - THE VENDOR MEMATTR PAIRING IS NOT THE WALL <<<
 

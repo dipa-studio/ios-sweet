@@ -630,3 +630,47 @@ and a lost return is still indistinguishable from an MCU fault that entered the
 vendor handler, because the vendor vectors are deliberately untouched and an
 MCU-side fault does not set `AS_FAULT`. If 2382 reads 9, the next instrument must
 be the fault vector on this path, not another mapping change.
+
+## 26. 2382 ran: the code section moved 1.2 MB and stopped at the same counter
+
+Trial 2026-11-06 20:57. Image `2a85005b...51ad`, partition `47dc4e1d...8b57`
+written and read back, kernel mark `0x2382` decoded from a fresh block, `boot_a`
+restored to `2931647a...86b1`. The phone went to fastboot at 83.56 s; the run
+produced 153 marks, so for the first time in three attempts the shim really
+reached `shim_gpu_publish`.
+
+The build did what it was built to do, and the report proves it in band:
+
+```
+kernel_build            0x2382
+firmware_probe_pa       0x401a4000     (was 0x40080000 in 2379)
+transtab_lo             0x40077000     (the arena did not move)
+relocation_observed     true
+groups                 9              (2379: 9)
+stage / error          4 / -53
+mcu_status, mmu_raw, as_fault   1, 0, 0
+version, features      0, 0
+memattr                0x4c4c884c / 0x4c4c4c4c   (2379's pair, on purpose)
+```
+
+So the fresh-block call still does not return when the section it calls into is
+1,196,032 bytes further into the same arena, with the same VA, the same leaf
+bits, the same descriptor, the same container bytes and the same start word. The
+conclusion is narrow and it is the one the build was designed to produce:
+
+**the hang does not follow the physical pages this port can move it to.** It is
+not "the MCU cannot reach 0x40080000..0x40090000": that range was never the
+problem, because leaving it changed nothing.
+
+What this does not say: that PA placement can never matter anywhere. The move
+stayed inside one 2 MiB carve-out of the shim's BSS. A hang caused by something
+specific to that 2 MiB region, by the GMPU window over it, or by a fetch path
+that ignores the GPU MMU entirely is still consistent with this result.
+
+The ambiguity that is left is no longer about memory attributes: a counter of 9
+means "the call did not come back", and that covers both a fetch that never
+completes and a fault that entered the vendor handler at 0x010019b1 - the handler
+parks, and an MCU-side fault does not set `AS_FAULT` (which reads 0). Four builds
+(2376, 2378, 2380, 2382) now share that signature while varying descriptors,
+attributes and PA. The next instrument has to distinguish those two mechanisms
+instead of moving memory again.
