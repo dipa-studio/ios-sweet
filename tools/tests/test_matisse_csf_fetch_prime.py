@@ -51,6 +51,60 @@ class FetchPrimeTests(unittest.TestCase):
                              self.builder.encode_bl(0x01001902, 0x01000200))
             self.assertFalse(any(s[1] in (4, 9) and s[5] for s in sections))
 
+    def test_fault_entry_assembly_matches_the_2383_patch(self):
+        """2383's stub is the linked bytes, not a remembered hex string."""
+        bins = sorted((Path.home() / 'Library/Android/sdk/ndk').glob(
+            '*/toolchains/llvm/prebuilt/darwin-x86_64/bin'))
+        if not bins:
+            self.skipTest('requires ARM linker from Android NDK')
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory)
+            (p / 'fault.ld').write_text('SECTIONS { '
+                '.text.fault 0x010019b0 : { *(.text.fault) } }')
+            subprocess.run([str(bins[-1] / 'clang'), '--target=armv7m-none-eabi',
+                '-mcpu=cortex-m7', '-mthumb', '-nostdlib', '-Wl,--build-id=none',
+                '-Wl,-e,csf_fault_entry', '-Wl,-T,' + str(p / 'fault.ld'),
+                str(ROOT / 'tools/matisse-csf-fault-entry.S'), '-o', str(p / 'fault.elf')],
+                check=True, capture_output=True)
+            elf = (p / 'fault.elf').read_bytes()
+            shoff, = struct.unpack_from('<I', elf, 32)
+            size, count, names_index = struct.unpack_from('<HHH', elf, 46)
+            sections = [struct.unpack_from('<10I', elf, shoff + i * size) for i in range(count)]
+            names_section = sections[names_index]
+            names = elf[names_section[4]:names_section[4] + names_section[5]]
+            actual = {names[s[0]:].split(b'\0', 1)[0].decode(): elf[s[4]:s[4] + s[5]]
+                      for s in sections}
+        want, stub = self.builder.FAULT_ENTRY_2383
+        self.assertEqual(actual['.text.fault'], bytes.fromhex(stub))
+        self.assertEqual(len(bytes.fromhex(want)), len(bytes.fromhex(stub)))
+        self.assertEqual(sections[1][3], 0x010019b0)
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2383_changes_only_the_fault_entry_on_top_of_2382(self):
+        """One more window than 2382, and the two probe windows unchanged."""
+        original = FIRMWARE.read_bytes()
+        embedded_2382, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2382)
+        embedded_2383, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2383)
+        base = 0x0e94
+        window = set(range(base + 0x19b0, base + 0x19b0 + 40))
+        changed = {i for i, (a, b) in enumerate(zip(embedded_2382, embedded_2383)) if a != b}
+        self.assertEqual(len(embedded_2383), len(original))
+        self.assertTrue(changed)
+        self.assertLessEqual(changed, window)
+        # everything outside the three probe windows is the vendor's own bytes
+        self.assertEqual(embedded_2383[:base + 0x200], original[:base + 0x200])
+        self.assertEqual(embedded_2383[base + 0x204:base + 0x18ec],
+                         original[base + 0x204:base + 0x18ec])
+        self.assertEqual(embedded_2383[base + 0x18ec + 38:base + 0x19b0],
+                         original[base + 0x18ec + 38:base + 0x19b0])
+        self.assertEqual(embedded_2383[base + 0x19b0 + 40:], original[base + 0x19b0 + 40:])
+        # the 2379 windows must survive untouched
+        self.assertEqual(embedded_2383[base + 0x200:base + 0x204], bytes.fromhex('00bf7047'))
+        self.assertEqual(embedded_2383[base + 0x18ec:base + 0x18ec + 38],
+                         embedded_2382[base + 0x18ec:base + 0x18ec + 38])
+        self.assertEqual(patch['kind'], 'fetch-prime')
+        self.assertEqual(patch['fetch_prime']['fault_entry']['counter_value'], 20)
+
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_only_two_windows_change_and_fault_handler_stays_original(self):
         original = FIRMWARE.read_bytes()

@@ -46,6 +46,12 @@ CSF_PATH_KEYS = ['rpc_enable','rpc_status','infra_enable','infra_status',
     'emi0_enable','emi0_status','emi1_enable','emi1_status','pdc_cg','pdc_st0',
     'pdc_st1','pdc_st2','pdc_st4','pdc_st5','pdc_st6','slc_group6']
 CSF_PATH_MASKS = dict(rpc=0x000f0000, infra=0xf, emi0=0xc0000, emi1=0xc0000)
+# Cortex-M CFSR bits the 2383 fault entry can report (SCB->CFSR, 0xE000ED28).
+CFSR_BITS = ((0, 'IACCVIOL'), (1, 'DACCVIOL'), (3, 'MUNSTKERR'), (4, 'MSTKERR'),
+             (5, 'MLSPERR'), (8, 'IBUSERR'), (9, 'PRECISERR'), (10, 'IMPRECISERR'),
+             (11, 'UNSTKERR'), (12, 'STKERR'), (13, 'LSPERR'), (16, 'UNDEFINSTR'),
+             (17, 'INVSTATE'), (18, 'INVPC'), (19, 'NOCP'), (20, 'STKOF'),
+             (24, 'UNALIGNED'), (25, 'DIVBYZERO'))
 CSF_STAGES = {0:'not-run',1:'config',2:'l2',3:'address-space',4:'mcu',
               5:'interface',6:'cleanup',7:'complete',8:'halt',
               9:'global-input',10:'global-ack'}
@@ -97,7 +103,7 @@ def report_bytes(records, first, count, expected_build, name):
 
 
 def decode(data, expected_build=0x2321):
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -304,7 +310,7 @@ def decode(data, expected_build=0x2321):
                     core_state_after_start=bool(csf['sample_flags'] & 8))
             #2380 moved MEMATTR to the exact vendor table, so the expected
             # readback pair is a property of the build, not a constant.
-            if expected_build == 0x2382:
+            if expected_build in (0x2382, 0x2383):
                 # 2382 keeps 2379's leaf encoding and register pair on purpose:
                 # the code section's PA is the only variable in that build.
                 expected_memattr = (0x4c4c884c, 0x4c4c4c4c)
@@ -465,6 +471,71 @@ def decode(data, expected_build=0x2321):
             else:
                 outcome = 'unexpected-counter'
                 verdict = 'the probe did not reach a defined 9/10/11 checkpoint'
+            csf['fetch_prime_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2383:
+            # 2382 plus the vendor fault entry: the fetch-prime probe is
+            # unchanged, so 9/10/11 still mean what they meant, and 20 can only
+            # come from the handler this build installed.
+            raw = csf['groups']
+            csf['fetch_prime_counter'] = raw
+            csf['relocated_code_pa'] = csf['firmware_probe_pa']
+            relocated = csf['firmware_probe_pa'] == 0x401a4000
+            csf['relocation_observed'] = relocated
+            csf['fault_entry_counter'] = raw
+            csf['fault_taken'] = raw == 20
+            if raw == 20:
+                # shared+12 and shared+20 are repurposed only on this path.
+                csf['fault_stacked_pc'] = csf['output_va']
+                csf['fault_status_cfsr'] = csf['group_stride']
+                csf['fault_status_names'] = [name for bit, name in CFSR_BITS
+                                             if csf['group_stride'] >> bit & 1]
+            # The state gate comes before the counter: a fault is only
+            # interpretable in the state every probe build reports.
+            if not relocated:
+                outcome = 'not-relocated'
+                verdict = ('the executable probe PA is not the relocated one; this report did '
+                           'not come from the 2382 mapping the build reuses')
+            elif csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault']:
+                outcome = 'gpu-fault'
+                verdict = ('AS_FAULT or the MMU status is set; treat this as a GPU-side fault '
+                           'and do not read the counter as the MCU answer')
+            elif csf['input_va'] != 0x01000200:
+                outcome = 'marker-absent'
+                verdict = 'the target marker is absent; the probe did not establish entry'
+            elif (csf['stage'] != 4 or csf['error'] != -53 or
+                  csf['mcu_status'] != 1 or csf['firmware_ready']):
+                outcome = 'unexpected-state'
+                verdict = 'unexpected MCU/report state; no fault-vs-hang conclusion is justified'
+            elif raw == 20:
+                outcome = 'fault-taken'
+                pc = csf['fault_stacked_pc']
+                if csf['fault_status_cfsr']:
+                    verdict = ('the MCU faulted at %#x; CFSR=%#x (%s), so the access is refused '
+                               'rather than never completing - a translation or permission '
+                               'answer, not a bus timeout' %
+                               (pc, csf['fault_status_cfsr'],
+                                '/'.join(csf['fault_status_names'])))
+                else:
+                    verdict = ('the MCU faulted at %#x with CFSR clear, i.e. an escalated hard '
+                               'fault; HFSR was not captured, so the next build must record it '
+                               'before any mechanism claim' % pc)
+            elif raw == 9:
+                outcome = 'no-fault-fetch-incomplete'
+                verdict = ('the counter is still 9 and the handler never ran, so no fault was '
+                           'taken: the fetch of the cold block never completes, which points at '
+                           'the MCU-side fetch/ready path rather than at translation')
+            elif raw == 10:
+                outcome = 'data-read-incomplete'
+                verdict = ('the call returned but the data read at 0x01000210 did not; the fetch '
+                           'completes and the read is the broken one')
+            elif raw == 11:
+                outcome = 'data-read-returned'
+                verdict = ('the call and the read both returned; both paths work at this target '
+                           'and the remaining wall is elsewhere')
+            else:
+                outcome = 'unexpected-counter'
+                verdict = 'the probe did not reach a defined 9/10/11/20 checkpoint'
             csf['fetch_prime_outcome'] = outcome
             csf['instrument_verdict'] = verdict
         if expected_build == 0x2382:
@@ -1056,7 +1127,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2382)')
+                   help='expected kernel/report build (0x2321 through 0x2383)')
     a=p.parse_args()
     try:
         report=decode(a.marks.read_bytes(),a.build)

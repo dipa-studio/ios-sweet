@@ -674,3 +674,57 @@ parks, and an MCU-side fault does not set `AS_FAULT` (which reads 0). Four build
 (2376, 2378, 2380, 2382) now share that signature while varying descriptors,
 attributes and PA. The next instrument has to distinguish those two mechanisms
 instead of moving memory again.
+
+## 27. 2383: ask the fault entry whether the fetch faulted or never finished
+
+2382 closed every memory-side explanation and left exactly one question: when
+the call into 0x01000200 does not return, did the MCU **fault** or did the fetch
+simply never complete? A counter of 9 cannot tell, because the vendor handler at
+0x010019b1 parks silently and an MCU-side fault never sets `AS_FAULT`.
+
+2383 changes one thing on top of 2382: the 40 bytes at 0x010019b0, the address
+the vendor vector table actually branches to (`0x010019b1` with the Thumb bit).
+The stub is `tools/matisse-csf-fault-entry.S`, assembled and compared against the
+pinned bytes by a unit test:
+
+```
+mov  r3, lr            ; EXC_RETURN
+tst  r3, #4            ; bit2 = which stack the frame is on
+ite  eq
+mrseq r0, msp
+mrsne r0, psp
+ldr  r1, [r0, #0x18]   ; stacked PC
+movs r2, #1
+lsls r2, r2, #26       ; 0x04000000
+str  r1, [r2, #12]     ; shared+12  -> reported as output_va
+ldr  r1, =0xE000ED28   ; SCB->CFSR
+ldr  r0, [r1]
+str  r0, [r2, #20]     ; shared+20  -> reported as group_stride
+movs r1, #20
+str  r1, [r2, #16]     ; shared+16  -> reported as groups
+1: b 1b
+```
+
+`20` is chosen so it cannot collide with the probe's 9/10/11, and the two words
+it repurposes (`output_va`, `group_stride`) are only read, never validated, on
+the timeout path - the interface gate that would care about them sits behind a
+successful IRQ that this build cannot produce.
+
+Everything else is 2382: the same relocated code section, the same 2379
+container patch at 0x01000200 and 0x010018ec, the same writable RO leaves, the
+same `MCU_CONTROL=2`. The unit test `test_2383_changes_only_the_fault_entry_on
+_top_of_2382` diffs the two embedded containers and allows changes only inside
+those 40 bytes; the built containers differ at exactly 0x2844..0x286b.
+
+Reading it:
+
+| counter | meaning | consequence |
+|---|---|---|
+| 20, CFSR != 0 | a fault was taken; `output_va` is the faulting instruction and CFSR names the class (IACCVIOL/IBUSERR/PRECISERR) | the access is *refused*, not starved: go at the permission/attribute the walker enforces for that access |
+| 20, CFSR == 0 | a fault was taken but escalated to a hard fault | HFSR was not captured; a 2384 must record 0xE000ED2C before any mechanism claim |
+| 9 | the handler never ran | no fault: the cold fetch genuinely never completes, so the wall is the MCU-side fetch/ready path, not translation |
+| 10 / 11 | the call returned | the fetch completes at this target after all, and the read is the broken half |
+
+Image `27b14944...1f7c`, 26,714,112 B, kernel `0c8d67a7` (18 bytes from 2382),
+partition prediction `e3398237...2858`. Built offline and reproduced to the same
+sha; `boot_a` untouched at `2931647a...86b1`.

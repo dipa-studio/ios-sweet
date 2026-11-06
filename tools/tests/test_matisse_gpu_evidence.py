@@ -360,6 +360,52 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertNotIn('fetch_prime_outcome', self.module.decode(self.marks_dvfs(build=0x2380,
             memattr_lo=0x888d8f88, memattr_hi=0x00084c8d, **self.ZERO_PATH), 0x2380)['csf'])
 
+    def fault_report(self, **changes):
+        """2383: 2382's mapping plus the vendor fault entry."""
+        values = dict(stage=4, error=-53, version=0, features=0, job_raw=0,
+                      firmware_ready=0, input_va=0x01000200, groups=20,
+                      output_va=0x01000200, group_stride=1, platform_reserved=0x202,
+                      transtab_lo=0x40077000, firmware_probe_pa_lo=0x401a4000,
+                      firmware_probe_pa_hi=0)
+        values.update(changes)
+        return self.module.decode(self.marks_dvfs(build=0x2383, **values), 0x2383)
+
+    def test_2383_fault_value_is_separated_from_the_probe_values(self):
+        result = self.fault_report()
+        csf = result['csf']
+        self.assertTrue(csf['fault_taken'])
+        self.assertEqual(csf['fetch_prime_outcome'], 'fault-taken')
+        self.assertEqual(csf['fault_stacked_pc'], 0x01000200)
+        self.assertEqual(csf['fault_status_cfsr'], 1)
+        self.assertEqual(csf['fault_status_names'], ['IACCVIOL'])
+        self.assertIn('IACCVIOL', csf['instrument_verdict'])
+        self.assertFalse(result['csf_firmware_boot_verified'])
+
+    def test_2383_clear_cfsr_is_reported_as_escalation(self):
+        csf = self.fault_report(group_stride=0)['csf']
+        self.assertTrue(csf['fault_taken'])
+        self.assertEqual(csf['fault_status_names'], [])
+        self.assertIn('escalated hard fault', csf['instrument_verdict'])
+
+    def test_2383_nine_now_means_no_fault_was_taken(self):
+        csf = self.fault_report(groups=9)['csf']
+        self.assertFalse(csf['fault_taken'])
+        self.assertEqual(csf['fetch_prime_outcome'], 'no-fault-fetch-incomplete')
+        self.assertNotIn('fault_stacked_pc', csf)
+        self.assertIn('never completes', csf['instrument_verdict'])
+
+    def test_2383_state_and_provenance_gate_the_counter(self):
+        self.assertEqual(self.fault_report(firmware_probe_pa_lo=0x40080000)['csf']['fetch_prime_outcome'],
+                         'not-relocated')
+        self.assertEqual(self.fault_report(as_fault=1)['csf']['fetch_prime_outcome'],
+                         'gpu-fault')
+        self.assertEqual(self.fault_report(firmware_ready=1)['csf']['fetch_prime_outcome'],
+                         'unexpected-state')
+        self.assertEqual(self.fault_report(input_va=0)['csf']['fetch_prime_outcome'],
+                         'marker-absent')
+        self.assertEqual(self.fault_report(groups=7)['csf']['fetch_prime_outcome'],
+                         'unexpected-counter')
+
     def test_csf_timeout_provenance_requires_matching_callback_evidence(self):
         platform = dict(stage=8, error=-53)
         result = self.module.decode(self.csf_marks(build=0x2330, platform=platform,

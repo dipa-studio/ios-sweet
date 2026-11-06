@@ -1,6 +1,48 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2382 RAN - MOVING THE CODE SECTION'S PA CHANGES NOTHING <<<
+## >>> ACTIVE 2026-11-06:2383 BUILT OFFLINE - ASK THE FAULT ENTRY <<<
+
+**STATUS: IMAGE READY, NOT FLASHED. `boot_a` at baseline `2931647a...86b1`,
+read-only preflight passed.**
+
+2382 left exactly one question: when the call into 0x01000200 does not return,
+did the MCU **fault** or did the fetch never complete? Counter 9 covers both,
+because the vendor handler at 0x010019b1 parks and an MCU-side fault does not
+set `AS_FAULT` (which reads 0).
+
+2383 changes one thing on top of 2382: the 40 bytes at 0x010019b0, the address
+the vector table branches to (`0x010019b1`, Thumb bit). The stub
+(`tools/matisse-csf-fault-entry.S`, assembled and byte-compared by a test) reads
+the exception frame from the stack `EXC_RETURN` bit2 selects and writes:
+
+```
+shared+12 <- stacked PC   (reported as output_va)
+shared+20 <- SCB->CFSR    (reported as group_stride)
+shared+16 <- 20           (reported as groups; never collides with 9/10/11)
+```
+
+Nothing else changes: same relocated code section (PA `0x401a4000`), same 2379
+probe patch at 0x01000200 and 0x010018ec, same `--ro-as-rw`, same
+`MCU_CONTROL=2`. The two containers differ only at 0x2844..0x286b, and a unit
+test enforces that.
+
+```
+kernel  0c8d67a7...4753  16,724,248 B, 18 bytes from 2382
+image   27b14944...1f7c  26,714,112 B, rebuilt to the same sha
+part.   e3398237...2858  predicted boot_a contents
+runner  research/matisse/20261031-gpu/shim2383-faultentry-trials-run-once.py
+```
+
+Reading it:
+
+| counter | meaning |
+|---|---|
+| 20, CFSR != 0 | fault taken; `output_va` is the faulting instruction, CFSR names the class -> the access is refused, not starved |
+| 20, CFSR == 0 | fault taken but escalated; HFSR (0xE000ED2C) was not captured, so a 2384 must record it before any mechanism claim |
+| 9 | the handler never ran -> no fault: the cold fetch really never completes, and the wall is the MCU-side fetch/ready path |
+| 10 / 11 | the call returned -> the fetch works at this target after all |
+
+## >>> PREVIOUS 2026-11-06:2382 RAN - MOVING THE CODE SECTION'S PA CHANGES NOTHING <<<
 
 **RESULT: `fetch-call-incomplete`, counter 9 - the same number 2379 read.** The
 image moved the code section 1,196,032 bytes (PA `0x40080000` -> `0x401a4000`)

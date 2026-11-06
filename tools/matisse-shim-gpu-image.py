@@ -978,6 +978,22 @@ TRACE_PROBE = {
 # the only difference between the two images is where the memory plan puts the
 # code section. Declared after the literal so the two can never drift apart.
 TRACE_PROBE[0x2382] = TRACE_PROBE[0x2379]
+
+# 2383 is 2382 plus the vendor fault entry. 2382 could not tell a fetch that
+# never completes from a fault that entered 0x010019b1 and parked there, because
+# an MCU-side fault does not set AS_FAULT. The stub reads the exception frame
+# from the stack EXC_RETURN selects, parks the stacked PC in shared+12, the CFSR
+# in shared+20 and 20 in shared+16, then parks. 20 cannot collide with the
+# probe's 9/10/11, so one counter value answers the mechanism question.
+# Hand-assembled from tools/matisse-csf-fault-entry.S and checked against the
+# pinned container by tools/tests/test_matisse_csf_fetch_prime.py.
+FAULT_ENTRY_2383 = (
+    '1ef0040f0cbfeff30880eff309802de9f04f6946eff3058200f0f0fb08b000bd4ff0ff3070470000',
+    '734613f0040f0cbfeff30880eff30980816901229206d16002490868506114211161fee728ed00e0')
+TRACE_PROBE[0x2383] = dict(TRACE_PROBE[0x2379])
+TRACE_PROBE[0x2383]['patches'] = dict(TRACE_PROBE[0x2379]['patches'])
+TRACE_PROBE[0x2383]['patches'][0x010019b0] = FAULT_ENTRY_2383
+TRACE_PROBE[0x2383]['fault_entry_va'] = 0x010019b0
 BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the low bytes
 
 
@@ -1116,7 +1132,7 @@ def fault_vector_probe(path, expected, build_id):
                  container_bytes_changed=len(changed),
                  original_container_sha256=digest(firmware),
                  embedded_container_sha256=digest(embedded))
-    if build_id in (0x2379, 0x2382):
+    if build_id in (0x2379, 0x2382, 0x2383):
         patch['fetch_prime'] = dict(
             entry_va='0x10018ec', call_va='0x1001902', return_va='0x1001906',
             fetch_va='0x1000200', read_insn_va='0x100190a', read_va='0x1000210',
@@ -1125,6 +1141,13 @@ def fault_vector_probe(path, expected, build_id):
                               '10': 'call returned; data read did not return',
                               '11': 'data read returned'},
             fault_vectors_unchanged=True, block_size_hypothesis=512)
+        if build_id == 0x2383:
+            patch['fetch_prime']['fault_entry'] = dict(
+                entry_va='0x10019b0', counter_value=20,
+                stacked_pc_field='output_va', cfsr_field='group_stride',
+                cfsr_address='0xe000ed28', stack_selected_by='EXC_RETURN bit2',
+                counter_meanings={'9': 'no fault taken: the fetch itself never completes',
+                                  '20': 'a fault was taken; read output_va and group_stride'})
         if build_id == 0x2382:
             # Same probe, same target VA; only the section's PA differs, so a
             # counter of9 here against 2379's9 says the hang does not follow the
@@ -1262,14 +1285,14 @@ def build(a):
     #2382 is the2379 container patch on a plan that puts the R-X section after
     # the whole layout. Everything else - leaf encoding, probe, RO-as-RW, start
     # word - is held at2379's values so the PA is the only moved number.
-    if a.build_id == 0x2382:
+    if a.build_id in (0x2382, 0x2383):
         if not (a.trace_probe and a.ro_as_rw and a.relocate_code):
-            raise ValueError('build2382 requires --trace-probe --ro-as-rw --relocate-code')
+            raise ValueError('build%x requires --trace-probe --ro-as-rw --relocate-code' % a.build_id)
         if (a.vendor_memattr or a.global_init or a.fault_probe or a.entry_probe or
                 a.reset_store_stub or a.mcu_control != '2'):
-            raise ValueError('build2382 may change only the code section PA')
+            raise ValueError('build%x may change only the code section PA' % a.build_id)
     elif a.relocate_code:
-        raise ValueError('--relocate-code is only defined for build2382')
+        raise ValueError('--relocate-code is only defined for build2382/2383')
     if a.fault_probe or a.trace_probe:
         if a.redirect_mcu_stores or a.entry_probe or a.inline_entry or a.entry_pte_guard or a.reset_store_stub:
             raise ValueError('the fault vector probe replaces the handler and takes no other patch')
@@ -1456,7 +1479,7 @@ def build(a):
             ('tools/matisse-csf-fetch-audit.py', 'tools/matisse-shim-gpu-image.py')}
         if a.build_id in TRACE_PROBE:
             info['trace_probe'] = info.pop('fault_vector_probe')
-            if a.build_id in (0x2379, 0x2382):
+            if a.build_id in (0x2379, 0x2382, 0x2383):
                 name = 'tools/matisse-csf-fetch-prime.S'
                 info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
     if a.relocate_code:
@@ -1498,7 +1521,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
