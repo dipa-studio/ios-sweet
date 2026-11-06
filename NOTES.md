@@ -225,7 +225,35 @@ state is now measured rather than assumed for the first time since 2358: power,
 clocks, MCU start and MMU configuration all work, and the firmware dies silently
 somewhere after its reset vector.
 
-**Next: 2377 must find where it stops without replacing the reset vector.** The
+**The vector table explains 2376.** The config section (VA 0) holds it:
+
+```
+SP        0x02040000      Reset     0x010018ed
+NMI/HardFault/MemManage/BusFault/UsageFault   0x010019b1
+```
+
+So 0x010018ec **is** the reset handler - every probe from 2363 on patched the right
+address - and 0x010019b0 is the shared fault handler, which is why writing a stub
+there was harmless.
+
+But the initial SP is **0x02040000**, the very top of the RW section, so the first
+`push {r4-r8,sb,sl,fp,lr}` in the reset prologue writes into 0x0203f000..0x0203ffff -
+**the exact page 2358 measured as not writable**. The firmware therefore dies on its
+own first instruction: a store that never completes raises no fault, which is why
+2376 saw `mcu_status=1`, `mmu_raw=0` and nothing else. The reset path never reaches
+the code at 0x01000014 that reads the input page at 0x04002000.
+
+**Next: 2377 tests writes, not reads.** 2375 proved reads work at 0x02000000; the
+stack top is a different 4 KiB section. Write a word to 0x02000000 and to
+0x0203f000, read both back into the marker, and the answer decides everything: if
+the top page does not hold a write, the wall is that page - the firmware's stack -
+and the fix is in how that section is mapped, not in the entry path at all.
+
+**Superseded:** the trap-on-the-init-path idea below. Do not build it before the
+write test; if the stack page cannot be written the firmware never gets far enough
+for a trap to mean anything.
+
+**Next (superseded): 2377 must find where it stops without replacing the reset vector.** The
 firmware runs, so the useful instrument is a trap placed on an instruction the
 firmware itself executes on its way to `main` - one patched word deep inside the
 init path that writes a marker and parks, leaving the entry vector, the section
