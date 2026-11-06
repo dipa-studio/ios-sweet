@@ -144,35 +144,63 @@ class FetchPrimeTests(unittest.TestCase):
             finally:
                 spec['reset_vector'] = saved
 
-    def test_cold_boot_assembly_matches_the_2385_patch(self):
-        """2385's boot program is the linked bytes too."""
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2386_is_2385_with_the_vector_pointed_at_the_other_block(self):
+        original = FIRMWARE.read_bytes()
+        embedded_2385, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2385)
+        embedded_2386, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2386)
+        config, code = 0x0380, 0x0e94
+        allowed = set(range(config + 4, config + 8))
+        allowed |= set(range(code + 0x200, code + 0x200 + 20))
+        allowed |= set(range(code + 0xe000, code + 0xe000 + 20))
+        changed = {i for i, (a, b) in enumerate(zip(embedded_2385, embedded_2386)) if a != b}
+        self.assertTrue(changed)
+        self.assertLessEqual(changed, allowed)
+        self.assertEqual(int.from_bytes(embedded_2386[config + 4:config + 8], 'little'), 0x01000201)
+        # 2385's block is vendor-original in this image; the program moved here
+        self.assertEqual(embedded_2386[code + 0xe000:code + 0xe000 + 20],
+                         original[code + 0xe000:code + 0xe000 + 20])
+        self.assertEqual(embedded_2386[code + 0x200:code + 0x200 + 20],
+                         bytes.fromhex(self.builder.COLD_BOOT_2386[1]))
+        self.assertEqual(patch['cold_boot']['target'], '0x1000200')
+        self.assertEqual(patch['cold_boot']['marker_value'], '0x1000200')
+
+    def test_cold_boot_assembly_matches_both_pinned_programs(self):
+        """2385 and 2386 are the same twenty bytes with one immediate changed."""
         bins = sorted((Path.home() / 'Library/Android/sdk/ndk').glob(
             '*/toolchains/llvm/prebuilt/darwin-x86_64/bin'))
         if not bins:
             self.skipTest('requires ARM linker from Android NDK')
-        with tempfile.TemporaryDirectory() as directory:
-            p = Path(directory)
-            (p / 'cold.ld').write_text('SECTIONS { '
-                '.text.cold 0x0100E000 : { *(.text.cold) } }')
-            subprocess.run([str(bins[-1] / 'clang'), '--target=armv7m-none-eabi',
-                '-mcpu=cortex-m7', '-mthumb', '-nostdlib', '-Wl,--build-id=none',
-                '-Wl,-e,csf_cold_boot', '-Wl,-T,' + str(p / 'cold.ld'),
-                str(ROOT / 'tools/matisse-csf-coldboot.S'), '-o', str(p / 'cold.elf')],
-                check=True, capture_output=True)
-            elf = (p / 'cold.elf').read_bytes()
-            shoff, = struct.unpack_from('<I', elf, 32)
-            size, count, names_index = struct.unpack_from('<HHH', elf, 46)
-            sections = [struct.unpack_from('<10I', elf, shoff + i * size) for i in range(count)]
-            names_section = sections[names_index]
-            names = elf[names_section[4]:names_section[4] + names_section[5]]
-            actual = {names[s[0]:].split(b'\0', 1)[0].decode(): elf[s[4]:s[4] + s[5]]
-                      for s in sections}
-        want, stub = self.builder.COLD_BOOT_2385
-        self.assertEqual(actual['.text.cold'], bytes.fromhex(stub))
-        self.assertEqual(len(bytes.fromhex(stub)), len(bytes.fromhex(want)))
-        self.assertEqual(sections[1][3], 0x0100E000)
-        # nothing but the marker store, so no stack and no literal pool
-        self.assertEqual(bytes.fromhex(stub)[-4:], bytes.fromhex('00bffee7'))
+        for build, target, pinned in ((0x2385, 0x0100E000, 'COLD_BOOT_2385'),
+                                      (0x2386, 0x01000200, 'COLD_BOOT_2386')):
+            with self.subTest(build=hex(build)), tempfile.TemporaryDirectory() as directory:
+                p = Path(directory)
+                (p / 'cold.ld').write_text('SECTIONS { '
+                    '.text.cold %#x : { *(.text.cold) } }' % target)
+                subprocess.run([str(bins[-1] / 'clang'), '--target=armv7m-none-eabi',
+                    '-mcpu=cortex-m7', '-mthumb', '-nostdlib', '-Wl,--build-id=none',
+                    '-Wl,-e,csf_cold_boot', '-Wl,-T,' + str(p / 'cold.ld'),
+                    '-DCOLD_TARGET=%#x' % target,
+                    str(ROOT / 'tools/matisse-csf-coldboot.S'), '-o', str(p / 'cold.elf')],
+                    check=True, capture_output=True)
+                elf = (p / 'cold.elf').read_bytes()
+                shoff, = struct.unpack_from('<I', elf, 32)
+                size, count, names_index = struct.unpack_from('<HHH', elf, 46)
+                sections = [struct.unpack_from('<10I', elf, shoff + i * size) for i in range(count)]
+                names_section = sections[names_index]
+                names = elf[names_section[4]:names_section[4] + names_section[5]]
+                actual = {names[s[0]:].split(b'\0', 1)[0].decode(): elf[s[4]:s[4] + s[5]]
+                          for s in sections}
+                want, stub = getattr(self.builder, pinned)
+                self.assertEqual(actual['.text.cold'], bytes.fromhex(stub))
+                self.assertEqual(len(bytes.fromhex(stub)), len(bytes.fromhex(want)))
+                self.assertEqual(sections[1][3], target)
+                # nothing but the marker store, so no stack and no literal pool
+                self.assertEqual(bytes.fromhex(stub)[-4:], bytes.fromhex('00bffee7'))
+        # the two differ in exactly one halfword: the block's own address
+        a = bytes.fromhex(self.builder.COLD_BOOT_2385[1])
+        b = bytes.fromhex(self.builder.COLD_BOOT_2386[1])
+        self.assertEqual([i for i in range(len(a)) if a[i] != b[i]], [8, 9])
 
     def test_control_entry_assembly_matches_the_2384_patch(self):
         """2384's positive control is the linked bytes too."""

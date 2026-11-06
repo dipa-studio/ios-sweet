@@ -924,3 +924,58 @@ the reset word asks for it. Same 20 bytes, vector word `0x0100E001` -> `0x010002
 If it runs, the discriminator is reset-versus-running and the block was never
 special; if it does not, page 0 differs from page 14 somewhere the plan does not
 show, and that is an offline question about descriptors, PA and container bytes.
+
+## 32. 2386 ran: the block is the wall, not the core's state
+
+Trial 2026-11-06 21:38, image `e0e8933c...797b`, kernel `46743d03` (`SWEET_BUILD_ID`
+0x2386, so this capture tags itself correctly), fastboot at 120.97 s, `boot_a`
+restored to `2931647a...86b1`.
+
+```
+input_va (shared+8)      0x04000200   the template seed: the marker was never written
+groups (shared+16)       8           the program never started
+mmu_raw, as_fault        0, 0        nothing was refused
+mcu_status, relocation   1, true
+error                    -53
+```
+
+One word changed against 2385: the reset vector target, `0x0100E001` ->
+`0x01000201`. Nothing else - same program, same mapping, same relocation, same
+fault entry. 2385 ran, 2386 did not.
+
+That kills 2385's reading. The wall is not reset-versus-running core state: the
+reset fetch reaches `0x0100E000` and does not reach `0x01000200`. The block is
+what matters, and every entry path into it has now failed the same way:
+
+| entry | block | result |
+|---|---|---|
+| reset fetch | 0x01000200 | stalls, no fault - 2386 |
+| `bl` from a running program | 0x01000200 | stalls, no fault - 2379/2382/2383 |
+| data read from a running program | 0x01000200 | stalls, no fault - 2373/2375 |
+| reset fetch | 0x0100E000 | runs - 2385 |
+| fetch, executed at reset | 0x01001800 | runs - every build since 2376 |
+
+The offline audit the 2385 verdict asked for was run before proposing another
+build, and it removes the remaining structural explanations:
+
+| VA | leaf | PA |
+|---|---|---|
+| 0x01000000 | `0x30000000401a4cc7` | 0x401a4000 |
+| 0x0100E000 | `0x30000000401b2cc7` | 0x401b2000 |
+
+Same attributes (AttrIndx 1, AF, read-only, XN=0), same memory group 6, same
+tables, and the only difference is the physical page. The container in the shipped
+`csf.bin` holds the program at 0x01000200, and the CPU's own read of the section
+base matches the container's first word, so the bytes are where the tables say.
+
+So the failure is a property of the block, and the plan does not show a reason. A
+page-granular story (page 0 unreachable, page 14 fine) is still possible, and it
+would explain a detail the port has never accounted for: the vendor's own entry
+veneer at 0x01000000 - `ldr r0,[pc,#0]` / `bx r0` into 0x010002ec - has never been
+observed to run.
+
+The bisect that separates the two: keep everything and move the reset word to
+`0x01000601`, block 3 of the same page, a block no build has ever patched. A
+marker there means the damage is confined to block 1; an absent marker means the
+whole of page 0 is unreachable, which is a page-granular fault in the memory path
+and a different investigation.

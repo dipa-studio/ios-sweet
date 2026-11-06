@@ -1,6 +1,55 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2385 RAN - A COLD FETCH DOES COMPLETE; THE WALL IS THE RUNNING CORE <<<
+## >>> ACTIVE 2026-11-06:2386 RAN - THE BLOCK IS THE WALL, NOT THE CORE'S STATE <<<
+
+**RESULT: `input_va = 0x04000200` - the marker is absent.** The reset word pointed
+at `0x01000201`; the block never ran. `mmu_raw = 0`, `as_fault = 0`,
+`mcu_status = 1`, `relocation_observed = true`, `error = -53`. Nothing faulted,
+nothing ran - exactly the signature of every earlier attempt on this block, now
+with the reset path as the entry.
+
+```
+image  e0e8933c...797b  26,714,112 B   kernel 46743d03 (SWEET_BUILD_ID 0x2386)
+part.  74285d78...7c58  written and read back
+boot_a restored to 2931647a...86b1 (restored_sha256 verified)
+outcome cold-boot-fetch-stalls   fastboot 120.97 s
+```
+
+2385's NEXT was answered, and the answer retires 2385's own reading. The
+discriminator is **not** reset-versus-running core state: `0x01000200` fails as a
+reset target too, and `0x0100E000` works as one. Every entry path into that block
+- reset fetch (2386), `bl` from a running program (2379/2382/2383), data read
+(2373/2375) - ends the same way.
+
+Offline check done first, as the report's own verdict demanded:
+
+```
+leaf for 0x01000000  0x30000000401a4cc7   PA 0x401a4000
+leaf for 0x0100E000  0x30000000401b2cc7   PA 0x401b2000
+```
+
+Identical in every field except PA: same attributes (AttrIndx 1, AF, read-only,
+XN=0), same memory group 6, same tables. The container really holds the program at
+0x01000200 (`72b60124240604f5007401239b069c6000bffee7`, verified in `csf.bin`),
+and the CPU reads the section at 0x401a4000 (word0 matches the container). So the
+page tables, the plan and the content are all as intended, and the fetch still
+never completes.
+
+So the question changed again: it is about **which block** can be reached, not
+about who reaches it. Two blocks are known bad (0x01000200 by every path,
+0x01001a00 by the firmware's own literal load at 0x010019dc) and two are known
+good (0x01001800 executed, 0x0100E000 fetched at reset). Page 0 and page 14 have
+identical leaves, so a page-granular story needs a mechanism the tables do not
+show.
+
+**NEXT: 2387 - bisect the block.** Same 20-byte program, reset word -> 0x01000601
+(page 0, block 3, never patched by any build). Marker present means block 1 of
+page 0 is the only broken thing and the wall is per-block; absent means page 0 as
+a whole cannot be reached, which would also explain why the vendor's own entry
+veneer at 0x01000000 (a `ldr pc` veneer into 0x010002ec) is dead code in this port.
+Do not build another mapping experiment before this bisect answers.
+
+## >>> PREVIOUS 2026-11-06:2385 RAN - A COLD FETCH DOES COMPLETE; THE WALL IS THE RUNNING CORE <<<
 
 **RESULT: `input_va = 0x0100E000` - the marker is present.** The core fetched the
 block at 0x0100E000, which nothing had ever touched, and executed it. Counter 8

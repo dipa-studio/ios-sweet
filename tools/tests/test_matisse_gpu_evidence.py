@@ -464,15 +464,15 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertEqual(self.control_report(firmware_probe_pa_lo=0x40080000)['csf']['positive_control_outcome'],
                          'not-relocated')
 
-    def cold_report(self, **changes):
-        """2385: the reset vector points at a block nothing has ever touched."""
+    def cold_report(self, build=0x2385, **changes):
+        """2385/2386: the reset vector points at one chosen block."""
         values = dict(stage=4, error=-53, version=0, features=0, job_raw=0,
                       firmware_ready=0, input_va=0x0100E000, groups=8,
                       output_va=0x04002000, group_stride=0x000000a0,
                       platform_reserved=0x202, transtab_lo=0x40077000,
                       firmware_probe_pa_lo=0x401a4000, firmware_probe_pa_hi=0)
         values.update(changes)
-        return self.module.decode(self.marks_dvfs(build=0x2385, **values), 0x2385)
+        return self.module.decode(self.marks_dvfs(build=build, **values), build)
 
     def test_2385_one_word_answers_the_cold_fetch_question(self):
         csf = self.cold_report()['csf']
@@ -489,6 +489,20 @@ class ReportDecodeTests(unittest.TestCase):
                          ['csf']['cold_boot_outcome'], 'cold-boot-refused')
         self.assertEqual(self.cold_report(firmware_probe_pa_lo=0x40080000)
                          ['csf']['cold_boot_outcome'], 'not-relocated')
+
+    def test_2386_asks_the_same_question_of_the_block_that_always_hangs(self):
+        csf = self.cold_report(build=0x2386, input_va=0x01000200)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'cold-boot-fetch-completes')
+        self.assertEqual(csf['cold_boot_target'], 0x01000200)
+        self.assertTrue(csf['cold_boot_marker_present'])
+        self.assertIn('never special', csf['instrument_verdict'])
+        # the 2385 marker in a 2386 capture is not this block's marker
+        csf = self.cold_report(build=0x2386, input_va=0x0100E000)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'cold-boot-fetch-stalls')
+        self.assertIn('differs from the one that worked', csf['instrument_verdict'])
+        self.assertEqual(self.cold_report(build=0x2386, input_va=0x01000200, mmu_raw=1,
+                                          error=-54)['csf']['cold_boot_outcome'],
+                         'cold-boot-refused')
 
     def test_csf_timeout_provenance_requires_matching_callback_evidence(self):
         platform = dict(stage=8, error=-53)
