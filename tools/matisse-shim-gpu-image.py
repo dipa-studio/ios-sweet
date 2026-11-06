@@ -847,6 +847,34 @@ TRACE_PROBE = {
                               '0124240604f5c85401239b0610331a68206804f1100401321a60f9e7')},
         literals={},
     ),
+    # 2371 answered, and not the way the build was designed to: sixteen 0x10-step
+    # probes returned (0x01001900..0x010019f0) and 0x01001a00 hung. That kills
+    # both readings it was meant to choose between - "only fetched bytes" would
+    # have stopped after one or two probes, and 0x010019f0 with 0x01001a00 share
+    # a 4 KiB page, a leaf and a backing page. What fits 2363/2365/2368/2369 is a
+    # 512-byte aligned fetch window at 0x01001800..0x010019ff, which 2366 does
+    # not fit. 2372 stops guessing at one address and maps the whole 64 KiB code
+    # section instead, in the same 0x100 steps, from 0x01000000 to 0x01010000:
+    #   a readable prefix ending at 0x1a00        -> a region limit
+    #   only the blocks that hold executed bytes  -> a fetch-derived window
+    #   all 256 blocks readable                  -> the 2371 hang was not the read
+    # The loop stores 0x01000000 into shared+0x08 before the first probe, so a
+    # core that dies on probe 0 still reports input_va=0x01000000 instead of the
+    # host placeholder 0x04002000, and is not mistaken for one that never ran.
+    0x2372: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={},
+        # 2372 replaces32 bytes, not28: the marker store and the block counter
+        # need the room. The window ends two bytes into the msr at0x0100190a,
+        # which the park never reaches.
+        patches={0x010018ec: ('72b626484ff00b01016025484ff00701016024484ff4e0210160234880f30988',
+                              '0124240601239b069c601a6901263602206804f5807401321a61013ef8d1fee7')},
+        literals={},
+    ),
 }
 BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the low bytes
 
@@ -1191,6 +1219,10 @@ def build(a):
     info['gpu_boot_report_bytes'] = 112
     info['gpufreq_dvfs'] = dict(commit=a.dvfs_commit, definitions=dvfs,
                                 report_abi='2338', hardware_verified=False)
+    #2372: the start word is a build input, so record which one this image
+    # carries. Without it a trial result cannot be tied back to its value.
+    info['csf_mcu_control'] = dict(value=a.mcu_control, vendor_form=a.mcu_control == '3',
+                                   report_field='platform_reserved')
     info['csf_mapping_metadata_hardware_readback'] = False
     info['csf_arena'] = dict(shim_offset=arena, bytes=2 << 20,
                              bss_end=symbol['_bss_end'], shim_end=end,
@@ -1260,7 +1292,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
