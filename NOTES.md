@@ -57,11 +57,26 @@ written and verified per mode, global stage success/timeout/invalid-page/
 argument-rejection with zero doorbell writes when off, and four 2380 decoder
 verdicts.
 
-NEXT: one device trial of 2380 after explicit confirmation. Then read the
+ATTEMPT 1 (2026-11-06 20:12) PRODUCED NO EVIDENCE, and the reason is the
+harness, not the hardware. The image was written and read back as
+`ddee4ce0...a71d`, but at t=30 s the fastboot probe imported `tools/fbraw.py`
+(pyusb), which is not installed here; it raised, and the `finally: restore()`
+then flashed the stock prefix over a boot that had not finished.
+`before_tail_sha256 == after_tail_sha256`, so *nothing* was written to userdata
+during the attempt - every mark and console line in that directory is stale 2379
+data and must not be decoded as 2380. `ro.boot.bootreason` is Watchdog, i.e. the
+attempt ended in a watchdog reset instead of reaching XNU; a shim that hangs
+inside the GPU transaction never reaches `shim_gpu_publish`, so no report exists
+and the MemAttr question is still open. Attempt 1 is archived under
+`shim2380-vendormemattr-trials/gpu-normal-attempt1/` with a NOTE.txt. The probe
+now uses `fastboot devices` and needs no pyusb.
+
+NEXT: a second attempt of the *same* image with the fixed probe, then read the
 matrix in `docs/matisse-gpu-mcu-wall.md`: ready -> run 2381; unchanged
 (stage4/-53/version0) -> the share bits are not the wall and 2382 (relocate the
 code section's PA) is the next single variable; a fault -> revert the leaf
-encoding before anything else. No device write has happened this session.
+encoding. A third watchdog with no report means the hang is before publication,
+and the next instrument has to be the shim's own console, not SWEETMRK.
 
 ## >>> PREVIOUS 2026-11-06:2379 - THE FRESH-BLOCK CALL DID NOT RETURN; FETCH ITSELF HANGS <<<
 
