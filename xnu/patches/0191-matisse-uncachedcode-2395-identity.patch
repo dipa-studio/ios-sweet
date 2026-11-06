@@ -1,0 +1,7 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -825,3 +825,3 @@
+ /* Bumped for every locally built kernel that is flashed to the phone. */
+-#define SWEET_BUILD_ID 0x2394u
++#define SWEET_BUILD_ID 0x2395u
+ 
