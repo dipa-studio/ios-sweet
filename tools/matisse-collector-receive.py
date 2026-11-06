@@ -4,6 +4,7 @@ import argparse
 import base64
 import binascii
 import errno
+import gzip
 import hashlib
 import io
 import json
@@ -18,6 +19,7 @@ import tty
 
 LIMIT = 16*1024*1024
 HEADER = re.compile(rb'(?:^|\n)MATISSE-COLLECTOR-V1 ([0-9]{1,9}) ([0-9a-f]{64})\r?\n')
+HANDOFF_HEADER = re.compile(rb'(?:^|\n)MATISSE-HANDOFF-V1 ([0-9]{1,9}) ([0-9a-f]{64})\r?\n')
 END = b'MATISSE-COLLECTOR-END'
 FILES = frozenset(('proc-cmdline.txt', 'proc-version.txt', 'proc-iomem.txt',
                    'proc-modules.txt', 'proc-mounts.txt', 'live.dtb', 'pl_lk.bin',
@@ -25,9 +27,11 @@ FILES = frozenset(('proc-cmdline.txt', 'proc-version.txt', 'proc-iomem.txt',
                    'udc.txt', 'usb-mode.txt', 'usb-state.txt'))
 
 
-def decode_frame(data):
+def decode_frame(data, handoff=False):
     """Return verified payload, or None for an incomplete frame."""
-    match = HEADER.search(data)
+    header = HANDOFF_HEADER if handoff else HEADER
+    marker = b'MATISSE-HANDOFF-END' if handoff else END
+    match = header.search(data)
     if match is None:
         if len(data) > LIMIT:
             raise ValueError('header absent within input bound')
@@ -35,7 +39,7 @@ def decode_frame(data):
     size = int(match[1])
     if not 0 < size <= LIMIT:
         raise ValueError('frame size exceeds limit')
-    end = data.find(END, match.end())
+    end = data.find(marker, match.end())
     if end < 0:
         if len(data)-match.end() > (size+2)//3*4 + size//40 + 1024:
             raise ValueError('encoded frame exceeds size bound')
@@ -50,6 +54,17 @@ def decode_frame(data):
     if len(payload) != size or hashlib.sha256(payload).hexdigest().encode() != match[2]:
         raise ValueError('frame length or SHA256 mismatch')
     return payload
+
+
+def handoff_dtb(payload):
+    # Bounded inflate: a truncated or bomb-like gzip cannot allocate arbitrarily.
+    with gzip.GzipFile(fileobj=io.BytesIO(payload)) as stream:
+        dtb = stream.read(2*1024*1024+1)
+    if (len(dtb) < 40 or len(dtb) > 2*1024*1024 or
+        dtb[:4] != bytes.fromhex('d00dfeed') or
+        int.from_bytes(dtb[4:8], 'big') != len(dtb)):
+        raise ValueError('invalid bounded handoff FDT')
+    return dtb
 
 
 def archive_files(payload):
@@ -79,7 +94,7 @@ def archive_files(payload):
     return files
 
 
-def receive(port, timeout):
+def receive(port, timeout, on_chunk=None):
     if not re.fullmatch(r'/dev/cu\.usbmodem[A-Za-z0-9._-]+', port):
         raise ValueError('use an explicit macOS USB ACM /dev/cu.usbmodem port')
     fd = os.open(port, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
@@ -96,6 +111,8 @@ def receive(port, timeout):
             if not chunk:
                 raise ValueError('USB serial disconnected')
             data += chunk
+            if on_chunk is not None:
+                on_chunk(chunk, data)
             if len(data) > LIMIT*2:
                 raise ValueError('serial input exceeds limit')
             payload = decode_frame(data)
@@ -126,11 +143,37 @@ def main():
     a = ap.parse_args(); out = Path(a.out)
     if out.exists():
         raise ValueError('output directory already exists')
-    payload = receive(a.port, a.timeout) if a.port else decode_frame(Path(a.input).read_bytes())
+    out.mkdir(parents=True)
+    handoff_saved = False
+    def checkpoint(chunk, accumulated):
+        nonlocal handoff_saved
+        raw.write(chunk)
+        raw.flush()
+        os.fsync(raw.fileno())
+        if not handoff_saved:
+            payload = decode_frame(accumulated, handoff=True)
+            if payload is not None:
+                dtb = handoff_dtb(payload)
+                (out/'handoff.dtb').write_bytes(dtb)
+                handoff_saved = True
+                print(json.dumps(dict(handoff_saved=True, bytes=len(dtb))), flush=True)
+    try:
+        if a.port:
+            with (out/'serial.raw').open('xb') as raw:
+                payload = receive(a.port, a.timeout, checkpoint)
+        else:
+            data = Path(a.input).read_bytes()
+            handoff = decode_frame(data, handoff=True)
+            if handoff is not None:
+                (out/'handoff.dtb').write_bytes(handoff_dtb(handoff))
+            payload = decode_frame(data)
+    except BaseException as exc:
+        (out/'receive-error.json').write_text(json.dumps(dict(
+            error=type(exc).__name__, message=str(exc), handoff_saved=handoff_saved),indent=2)+'\n')
+        raise
     if payload is None:
         raise ValueError('incomplete input frame')
     files = archive_files(payload)
-    out.mkdir(parents=True)
     (out/'collection.tar.gz').write_bytes(payload)
     for name, content in files.items():
         target = out/name; target.parent.mkdir(exist_ok=True); target.write_bytes(content)

@@ -18,6 +18,10 @@
 #include "ufs.h"
 #include "logstore.h"
 
+#ifdef KICK_ONLY
+void entryprobe_display_kick(uint64_t dtb, char *banner);
+#endif
+
 #define GICR_TYPER		0x08
 #define GICR_WAKER		0x14
 #define GICR_SGI		0x10000
@@ -541,6 +545,34 @@ static void print_board(uintptr_t dtb)
 void shim_main(uint64_t dtb)
 {
 	struct mmu_info mi;
+
+#ifdef KICK_ONLY
+	/* Isolation build: no board_probe, no logstore, no payload. Run the
+	 * exact display-kick function that was validated on hardware, with
+	 * the measured matisse framebuffer. Leave the watchdog alone so a
+	 * hang cycles through LK instead of staying dark forever. */
+	brd.name = "matisse";
+	brd.fb_base = 0xfcb3f000ULL;
+	brd.fb_size = 0x34c0000ULL;
+	brd.fb_w = 1440;
+	brd.fb_h = 3200;
+	brd.fb_stride = 5760;
+	brd.fb_bgr = 0;
+	con_fb = (volatile uint32_t *)(uintptr_t)brd.fb_base;
+	con_w = brd.fb_w;
+	con_h = brd.fb_h;
+	con_stride = brd.fb_stride;
+	con_bgr = brd.fb_bgr;
+	con_text_reset();
+	{
+		static char banner[512];
+
+		entryprobe_display_kick(dtb, banner);
+	}
+	con_str("SHIM", "KICK DONE");
+	for (;;)
+		__asm__ volatile("wfe");
+#endif
 
 #ifdef RAW_RESET
 	/* Execution proof: if LK jumps into this image, reset immediately so

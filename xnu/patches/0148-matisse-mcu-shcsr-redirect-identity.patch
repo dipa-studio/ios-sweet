@@ -1,0 +1,8 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -825,4 +825,4 @@
+ /* Bumped for every locally built kernel that is flashed to the phone. */
+-#define SWEET_BUILD_ID 0x2348u
++#define SWEET_BUILD_ID 0x2349u
+ 
+ struct sweet_mark_rec {

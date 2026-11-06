@@ -14,6 +14,7 @@ u64 a, u64 b }.
 import struct
 import subprocess
 import sys
+import time
 
 NAMES = {
     1: 'mtu3 probe entry',
@@ -157,6 +158,13 @@ NAMES = {
     206: 'touch supply field: a=address<<32|error b=read error<<32|value',
     207: 'touch powered-supply guard: a=errors b=SEL3/SEL8/EN3/EN8/ID',
     208: 'touch reset released after supply check: a=error',
+    194: 'VTP low-power off: a=VTP en<<8|vsel b="LPMO"',
+    195: 'VTP mode write 0x1d23=1: a=err<<32 b="LPDO"',
+    196: 'VTP mode after LP off: a=0x1e34<<8|0x1e35 b="MODE"',
+    197: 'VTP off before mode change: a=err<<32 b="OFFW"',
+    198: 'VTP relock: a=0x142a read<<8|0x1d23 read b="KEYL"',
+    199: 'VTP unlock 0x142a=0x5543 (real this time): a=err<<32 b="MODO"',
+    200: 'VTP update_bits clear LP: a=old<<8|new b="UPBT"',
     175: 'pad watch: a=seen<<32|samples b=STATUS1',
     176: 'rail vosel before: a=VRF18<<32|err b=VTP<<32|err',
     177: 'rail vosel after: a=VRF18<<32|err b=VTP<<32|err',
@@ -185,17 +193,31 @@ DISP_FIELDS = ('stage reached', 'width<<16|height', 'stride', 'clk gate0',
                'OVL_EN', 'OVL_L0_ADDR', 'OVL_L0_PITCH', 'fb phys')
 
 
-def pull() -> bytes:
+def pull(attempts: int = 45, pause: float = 2.0) -> bytes:
     adb = subprocess.run(['which', 'adb'], capture_output=True, text=True).stdout.strip()
     adb = adb or f'{__import__("os").path.expanduser("~")}/Library/Android/sdk/platform-tools/adb'
-    dev = subprocess.run([adb, 'shell', 'readlink -f /dev/block/by-name/userdata'],
-                         capture_output=True, text=True).stdout.strip()
-    size = int(subprocess.run([adb, 'shell', f'blockdev --getsize64 {dev}'],
-                              capture_output=True, text=True).stdout.strip())
-    skip = size // 4096 - 1
-    out = subprocess.run([adb, 'exec-out', f'dd if={dev} bs=4096 skip={skip} count=1 2>/dev/null'],
-                         capture_output=True).stdout
-    return out
+    # After a test boot the phone can take a minute to come back, and recovery
+    # briefly answers adb before blockdev works. Retry instead of raising on an
+    # empty answer: every 0110-0116 run lost its marks that way.
+    problem = 'no attempt'
+    for _ in range(attempts):
+        dev = subprocess.run([adb, 'shell', 'readlink -f /dev/block/by-name/userdata'],
+                             capture_output=True, text=True).stdout.strip()
+        probe = subprocess.run([adb, 'shell', f'blockdev --getsize64 {dev}'],
+                               capture_output=True, text=True)
+        size = probe.stdout.strip()
+        if dev.startswith('/dev/') and size.isdigit():
+            skip = int(size) // 4096 - 1
+            out = subprocess.run([adb, 'exec-out',
+                                  f'dd if={dev} bs=4096 skip={skip} count=1 2>/dev/null'],
+                                 capture_output=True).stdout
+            if len(out) == 4096:
+                return out
+            problem = f'short read: {len(out)} bytes'
+        else:
+            problem = f'blockdev returned {size!r} for {dev!r}'
+        time.sleep(pause)
+    raise RuntimeError(f'could not read the mark block: {problem}')
 
 
 def decode(data: bytes) -> str:

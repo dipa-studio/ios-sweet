@@ -19,6 +19,7 @@ TEMPLATE=""
 DTB=""
 HV=""
 RAW=""
+KICK=""
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -27,9 +28,11 @@ while [ $# -gt 0 ]; do
 	--v2) HV=2; shift ;;
 	--v4) HV=4; shift ;;
 	--raw) RAW=1; shift ;;
+	--kick) KICK=1; shift ;;
 	*) PAYLOAD=$1; shift ;;
 	esac
 done
+[ -n "${KICK:-}" ] && SRCS="$SRCS entryprobe_display.c"
 
 # On boot v4, keep boot.img's generic ramdisk byte-for-byte intact; the
 # recovery ramdisk resides separately in vendor_boot. A raw payload appended

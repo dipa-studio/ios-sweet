@@ -60,6 +60,30 @@ def frame(blob):
 
 
 class CollectorTests(unittest.TestCase):
+    def test_priority_handoff_frame_is_independent_and_bounded(self):
+        dtb=bytearray(40);dtb[:4]=bytes.fromhex('d00dfeed');dtb[4:8]=(40).to_bytes(4,'big')
+        payload=gzip.compress(bytes(dtb),mtime=0)
+        encoded=frame(payload).replace(b'MATISSE-COLLECTOR',b'MATISSE-HANDOFF')
+        self.assertEqual(receive.handoff_dtb(receive.decode_frame(encoded,handoff=True)),bytes(dtb))
+        self.assertIsNone(receive.decode_frame(encoded))
+        with self.assertRaises(ValueError):receive.handoff_dtb(gzip.compress(b'x'*(2*1024*1024+1)))
+        with self.assertRaises(ValueError):receive.handoff_dtb(gzip.compress(bytes(dtb)+b'extra'))
+
+    def test_partial_serial_bytes_are_saved_before_read_disconnect(self):
+        partial=b'MATISSE-COLLECTOR-V1 12345 '+b'a'*64+b'\nYWJj'
+        observed=[]
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(receive.os,'open',return_value=42))
+            stack.enter_context(mock.patch.object(receive.os,'close'))
+            stack.enter_context(mock.patch.object(receive.termios,'tcgetattr',return_value=[]))
+            stack.enter_context(mock.patch.object(receive.termios,'tcsetattr'))
+            stack.enter_context(mock.patch.object(receive.tty,'setraw'))
+            stack.enter_context(mock.patch.object(receive.termios,'tcflush'))
+            stack.enter_context(mock.patch.object(receive.select,'select',return_value=([42],[],[])))
+            stack.enter_context(mock.patch.object(receive.os,'read',side_effect=[partial,OSError(errno.ENXIO,'gone')]))
+            with self.assertRaises(OSError):receive.receive('/dev/cu.usbmodem-test',1,lambda c,d:observed.append(bytes(c)))
+        self.assertEqual(observed,[partial])
+
     def test_vanished_acm_preserves_read_error_and_closes_descriptor(self):
         with ExitStack() as stack:
             stack.enter_context(mock.patch.object(receive.os,'open',return_value=42))

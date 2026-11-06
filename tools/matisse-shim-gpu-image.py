@@ -179,11 +179,701 @@ FAULT_VECTOR_PROBE = {
 }
 
 
+# Build2344 keeps the same single fault entry but makes it resumable. The
+# handler ORs one bit per trap site into shared+0xffc and returns to the
+# instruction after the udf, so one boot reports how far the MCU actually got
+# instead of only the first trap. Each site is a four-byte barrier (dsb/isb):
+# skipping a barrier is the one edit that cannot corrupt the code around it, and
+# the udf immediate is the mask itself, so the handler needs no table.
+TRACE_PROBE = {
+    0x2344: dict(
+        stub_va=0x010019b0,
+        # mrs r0,psp / ldr r3,[r0,#0x18] / ldrb r1,[r3,#3] / ldr r2,[pc,#0xc]
+        # ldr r4,[r2] / orrs r4,r1 / str r4,[r2] / adds r3,#4
+        # str r3,[r0,#0x18] / bx lr / nop / .word0x04000ffc
+        stub=bytes.fromhex('eff30980' '8369' '1978' '034a' '1468' '0c43' '1460'
+                           '0433' '8361' '7047' '00bf' 'fc0f0004'),
+        marker_va=0x04000ffc,
+        # (site, bit) in execution order. The first five are the reset path up to
+        # the state dispatch, the last two the end of init and the idle loop.
+        markers=((0x010019e2, 0x01), (0x010019fc, 0x02), (0x01001a2c, 0x04),
+                 (0x01002aec, 0x08), (0x01002b26, 0x10), (0x01002b32, 0x20),
+                 (0x01003018, 0x40), (0x01003036, 0x80)),
+    ),
+    # 2344 read back 0 everywhere, but 2341 had already shown that shared+0xffc
+    # never takes a write; the word was dead, so that result says nothing about
+    # the MCU. 2345 moves the same bitmap to shared+4, which is the word 2342
+    # proved writable (features=7), and spends one bit on the barrier right after
+    # the PSP switch so "stopped before the 0x40003034 load" is distinguishable
+    # from "the channel is still wrong".
+    0x2345: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('eff30980' '8369' '1978' '034a' '1468' '0c43' '1460'
+                           '0433' '8361' '7047' '00bf' '04000004'),
+        marker_va=0x04000004,
+        markers=((0x01001914, 0x01), (0x010019e2, 0x02), (0x01001a2c, 0x04),
+                 (0x01002aec, 0x08), (0x01002b26, 0x10), (0x01002b32, 0x20),
+                 (0x01003018, 0x40), (0x01003036, 0x80)),
+    ),
+    # 2345 proved the channel works but no marker fired, including the one that
+    # sits on the isb right after the PSP switch. The reset entry's first store
+    # targets the real 0x40022000; a posted write there can let the following
+    # instructions retire and only stall at the first synchronisation event.
+    # 2346 repoints that one literal at shared+0 (the same redirect 2340 used,
+    # where 0xb landed) and fixes the mask byte, which 2345 read as [r3] instead
+    # of [r3,#2] - it would have set 0xf0 for any hit, so the zero bitmap still
+    # meant "no marker executed".
+    0x2346: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('eff30980' '8369' '9978' '034a' '1468' '0c43' '1460'
+                           '0433' '8361' '7047' '00bf' '04000004'),
+        marker_va=0x04000004,
+        markers=((0x01001914, 0x01), (0x010019e2, 0x02), (0x01001a2c, 0x04),
+                 (0x01002aec, 0x08), (0x01002b26, 0x10), (0x01002b32, 0x20),
+                 (0x01003018, 0x40), (0x01003036, 0x80)),
+        literals={0x281c: 0x04000000},
+    ),
+    # 2346 landed the redirected first store (version=0xb) and still fired no
+    # marker, so the outstanding device write that stalls the barrier must be the
+    # SECOND store, which still went to the real 0x40022004. 2347 sends both
+    # stores to the shared page, leaving no device write before the isb, and the
+    # first two bits then split "barrier passed" from "0x40003034 load passed".
+    0x2347: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('eff30980' '8369' '9978' '034a' '1468' '0c43' '1460'
+                           '0433' '8361' '7047' '00bf' '04000004'),
+        marker_va=0x04000004,
+        markers=((0x01001914, 0x01), (0x010019e2, 0x02), (0x01001a2c, 0x04),
+                 (0x01002aec, 0x08), (0x01002b26, 0x10), (0x01002b32, 0x20),
+                 (0x01003018, 0x40), (0x01003036, 0x80)),
+        literals={0x281c: 0x04000000, 0x2820: 0x04000008},
+    ),
+    # 2347 landed BOTH redirected stores (version=0xb, input_va=7) and still
+    # fired no marker, so no device write is outstanding at the isb. The only
+    # instruction left between the second store and the barrier that can fault
+    # is the SHCSR write at 0x01001904 (r0 = 0xe000ed24). Every earlier probe
+    # read the frame through PSP only, but that write happens BEFORE 0x01001908
+    # sets PSP, so a fault there is taken on MSP and none of the stubs could
+    # ever record it. 2348 restores the vendor's own MSP/PSP selection, records
+    # the stacked PC into shared+0x08 (the word 2347 proved takes a write) and
+    # stops there: one boot then separates "faulted at X" from "reached the
+    # barrier", with the two redirected stores still proving the path.
+    0x2348: dict(
+        stub_va=0x010019b0,
+        # tst.w lr,#4 / ite eq / mrseq r0,msp / mrsne r0,psp
+        # ldr r3,[r0,#0x18] / ldr r2,[pc,#4] / str r3,[r2] / b .
+        # .word 0x04000008
+        stub=bytes.fromhex('1ef0040f' '0cbf' 'eff30880' 'eff30980' '8369'
+                           '014a' '1360' 'fee7' '00bf' '08000004'),
+        marker_va=0x04000008,
+        markers=((0x01001914, 0x01),),
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004},
+    ),
+    # 2348 gave the handler the vendor's MSP/PSP selection and recorded nothing:
+    # version=0xb and features=7 still landed, so both stores ran, but no fault
+    # was taken anywhere between them and the barrier and the barrier marker
+    # never fired either. The one memory access left in that window is the SCS
+    # write at 0x01001904 (r0 = 0xe000ed24, r1 = 0x70000). Either it stalls the
+    # core or it is discarded; 2349 repoints that literal at shared+0x0c so the
+    # store cannot stall, and output_va then proves the instruction ran.
+    0x2349: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('1ef0040f' '0cbf' 'eff30880' 'eff30980' '8369'
+                           '014a' '1360' 'fee7' '00bf' '08000004'),
+        marker_va=0x04000008,
+        markers=((0x01001914, 0x01),),
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c},
+    ),
+    # 2349 proved the SCS store itself executes (output_va=0x70000) and that no
+    # fault is taken afterwards, yet the barrier at 0x01001914 is still never
+    # reached and the udf that replaced it never traps. Either the core does not
+    # take the 32-bit udf, or the vectors do not lead to 0x010019b0. 2350 stops
+    # relying on exceptions altogether: the barrier becomes `bl 0x010019b0` and
+    # the stub ORs bit 0 into shared+0x08 with ordinary instructions, then
+    # returns with bx lr. The stub starts with mov r0,lr / lsrs r0,#28 / cbnz so
+    # an exception that somehow does land here parks instead of faking a hit.
+    0x2350: dict(
+        stub_va=0x010019b0,
+        # mov r0,lr / lsrs r0,r0,#28 / cbnz r0,park
+        # ldr r3,[pc,#16] / ldr r2,[r3] / movs r1,#1 / orrs r2,r1 / str r2,[r3]
+        # bx lr / nop / park: b . / nop / .word 0x04000008
+        stub=bytes.fromhex('7046' '000f' '30b9' '044b' '1a68' '0121' '0a43'
+                           '1a60' '7047' '00bf' 'fee7' '00bf' '08000004'),
+        marker_va=0x04000008,
+        calls={0x01001914: 0x010019b0},
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c},
+    ),
+    # 2350 proved the barrier at 0x01001914 IS reached (input_va=0x04002001) and
+    # that bx lr resumes cleanly, so the 32-bit udf never trapped and every
+    # earlier "no marker" reading was blind. 2351 turns the same trick into a
+    # progress ladder: nine barriers along the reset path each become
+    # `bl 0x010019b0`, and the stub stores the *site address* in shared+0x08 and
+    # returns. The last site written is how far the MCU actually got.
+    0x2351: dict(
+        stub_va=0x010019b0,
+        # push {r0,r1,lr} / mov r1,lr / lsrs r1,#28 / cbnz r1,park
+        # mov r0,lr / subs r0,#5 (drop the Thumb bit and the four-byte call)
+        # ldr r3,=shared+0x08 / str r0,[r3] / pop {r0,r1,pc} / park: b .
+        stub=bytes.fromhex('03b5' '7146' '090f' '21b9' '7046' '0538' '024b'
+                           '1860' '03bd' 'fee7' '00bf' '00bf' '08000004'),
+        marker_va=0x04000008,
+        calls={va: 0x010019b0 for va in (
+            0x01001914, 0x010019e2, 0x010019fc, 0x01001a2c, 0x01002aec,
+            0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c},
+    ),
+    # 2351 stopped at the very first rung: the MCU reaches the barrier at
+    # 0x01001914 and never calls the helper at 0x010019e2. Between them sits the
+    # first real device access of the whole run, `ldr r4,[0x40003034]` at
+    # 0x0100191a, because 2351 already sends all three stores to the shared page.
+    # 2352 repoints that read at shared+0x14 (group_stride, 0xa0, so bit 7 stays
+    # set and the branch after the cache calls is unchanged) and leaves the
+    # ladder in place: if the rungs advance, the read is the wall.
+    0x2352: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('03b5' '7146' '090f' '21b9' '7046' '0538' '024b'
+                           '1860' '03bd' 'fee7' '00bf' '00bf' '08000004'),
+        marker_va=0x04000008,
+        calls={va: 0x010019b0 for va in (
+            0x01001914, 0x010019e2, 0x010019fc, 0x01001a2c, 0x01002aec,
+            0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c,
+                  0x282c: 0x04000014},
+    ),
+    # 2352 changed nothing: the 0x40003034 load is not the wall. The only other
+    # work between the barrier and the first rung is `bl 0x01003126`, and that
+    # function is pure MPU programming: it writes RBAR/RASR at 0xe000ed9c for a
+    # dozen regions and then, at 0x01003282, does `movs r0,#3 ; str r0,[r1,#-8]`
+    # i.e. MPU_CTRL = ENABLE|PRIVDEFENA. The very next fetch runs under the new
+    # map, so 2353 nops exactly that store (`41 f8 08 0c` -> two nops) and leaves
+    # everything else, including the region writes, alone.
+    0x2353: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('03b5' '7146' '090f' '21b9' '7046' '0538' '024b'
+                           '1860' '03bd' 'fee7' '00bf' '00bf' '08000004'),
+        marker_va=0x04000008,
+        calls={va: 0x010019b0 for va in (
+            0x01001914, 0x010019e2, 0x010019fc, 0x01001a2c, 0x01002aec,
+            0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+        patches={0x01003282: ('41f8080c', '00bf00bf')},
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c,
+                  0x282c: 0x04000014},
+    ),
+    # 2352 and 2353 both left the ladder word at 0x01001914, whether the first
+    # peripheral read or the MPU enable was neutralised. A core that resets and
+    # re-enters the reset path would rewrite that same word every pass, so 2354
+    # does not change any firmware behaviour at all: it only makes the stub count
+    # its own entries in shared+0x10 (the groups word, reported verbatim) with
+    # r2 now saved across the call. One pass means the core stopped; a large
+    # count means it is looping back to the reset vector.
+    0x2354: dict(
+        stub_va=0x010019b0,
+        # push {r0,r1,r2,lr} / mov r0,lr / subs r0,#5
+        # ldr r3,=shared+0x08 / str r0,[r3]
+        # ldr r2,=shared+0x10 / ldr r3,[r2] / adds r3,#1 / str r3,[r2]
+        # pop {r0,r1,r2,pc}
+        stub=bytes.fromhex('07b5' '7046' '0538' '034b' '1860' '034a' '1368'
+                           '0133' '1360' '07bd' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={va: 0x010019b0 for va in (
+            0x01001914, 0x010019e2, 0x010019fc, 0x01001a2c, 0x01002aec,
+            0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c,
+                  0x282c: 0x04000014},
+    ),
+    # 2354 counted exactly one rung entry, so the core really does stop inside
+    # this window and does not reset. The window holds two calls that touch the
+    # PPB and nothing else: `bl 0x01003126` (MPU region programming, no barrier
+    # inside) and `bl 0x10019d8` (one store to 0xe000ed84). 2355 removes the
+    # MPU call only, as two nops, so the next thing executed is the single SCS
+    # store and then the rung at 0x010019e2. Rung 2 appearing means the MPU call
+    # was the wall; staying at rung 1 means the 0xe000ed84 store was.
+    0x2355: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('07b5' '7046' '0538' '034b' '1860' '034a' '1368'
+                           '0133' '1360' '07bd' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={va: 0x010019b0 for va in (
+            0x01001914, 0x010019e2, 0x010019fc, 0x01001a2c, 0x01002aec,
+            0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+        patches={0x01001922: ('01f000fc', '00bf00bf')},
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c,
+                  0x282c: 0x04000014},
+    ),
+    # 2355 removed the MPU call and still stopped at rung 0x01001914, so the only
+    # device access left between rung 1 and rung 2 is the helper at 0x010019d8:
+    # `mov.w r1,#0 ; ldr r0,=0xe000ed84 ; str r1,[r0] ; bx lr`. 0xe000ed84 is
+    # CSSELR on a Cortex-M7, i.e. a cache-size selection write. 2356 nops the
+    # load and the store (`79 48 01 60` -> two nops) on top of 2355, leaving the
+    # window with NO device access at all. If rung 2 appears the CSSELR write is
+    # the wall; if it still does not, the ladder cannot span that gap and the
+    # return path itself has to be questioned.
+    0x2356: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('07b5' '7046' '0538' '034b' '1860' '034a' '1368'
+                           '0133' '1360' '07bd' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={va: 0x010019b0 for va in (
+            0x01001914, 0x010019e2, 0x010019fc, 0x01001a2c, 0x01002aec,
+            0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+        patches={0x01001922: ('01f000fc', '00bf00bf'),
+                 0x10019dc: ('79480160', '00bf00bf')},
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c,
+                  0x282c: 0x04000014},
+    ),
+    # 2356 removed every device access between rung 1 and rung 2 and the ladder
+    # STILL stopped at 0x01001914 with exactly one entry. That can only mean the
+    # ladder itself cannot carry execution past rung 1, so 2357 stops chasing the
+    # firmware and tests the instrument instead: the stub keeps recording the
+    # site and the count, but instead of returning to lr it overwrites the
+    # stacked return address with 0x0100192a - the call site of the helper whose
+    # first instruction is rung 2. Every entry now bounces back there, so a
+    # working return shows site 0x010019e2 with a huge count, while site
+    # 0x01001914 with count 9 means execution never leaves the stub at all.
+    0x2357: dict(
+        stub_va=0x010019b0,
+        # push {r0,r1,r2,lr} / mov r0,lr / subs r0,#5 / ldr r3,=shared+0x08
+        # str r0,[r3] / ldr r2,=shared+0x10 / ldr r3,[r2] / adds r3,#1
+        # str r3,[r2] / ldr r2,=0x0100192a / str r2,[sp,#0xc] / pop {r0,r1,r2,pc}
+        stub=bytes.fromhex('07b5' '7046' '0538' '044b' '1860' '044a' '1368'
+                           '0133' '1360' '034a' '0392' '07bd'
+                           '08000004' '10000004' '2a190001'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        bounce_va=0x0100192a,
+        calls={va: 0x010019b0 for va in (
+            0x01001914, 0x010019e2, 0x010019fc, 0x01001a2c, 0x01002aec,
+            0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+        patches={0x01001922: ('01f000fc', '00bf00bf'),
+                 0x10019dc: ('79480160', '00bf00bf')},
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c,
+                  0x282c: 0x04000014},
+    ),
+    # 2357 forced the return target to 0x0100192a and the rung-2 helper still
+    # never ran, so the stub itself is now the prime suspect. The 2351-2357
+    # stub pushes, stores the site, and pops {r0,r1,r2,pc}; if PSP is not
+    # backed by real writable RAM at 0x0203f000 the push "succeeds" into a
+    # write-ignore region and the pop loads garbage into pc, which kills the
+    # core at exactly the first entry no matter what the firmware does. 2358
+    # therefore removes the stack completely: the return address never leaves
+    # lr, the stub only touches r3 and r12 (both already clobbered by every
+    # earlier stub) and keeps APSR intact by using the S-less 32-bit forms.
+    # If the ladder now advances past rung 1 the earlier verdicts were an
+    # artefact of the stack; if site 0x01001914 still shows one entry with a
+    # stack-free return, the barrier itself cannot be replaced by a call.
+    0x2358: dict(
+        stub_va=0x010019b0,
+        # mov r12,lr / sub.w r12,r12,#5 / ldr r3,=shared+0x08 / str r12,[r3]
+        # ldr r3,=shared+0x10 / ldr r12,[r3] / add.w r12,r12,#1 / str r12,[r3]
+        # bx lr
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={va: 0x010019b0 for va in (
+            0x01001914, 0x010019e2, 0x010019fc, 0x01001a2c, 0x01002aec,
+            0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+        patches={0x01001922: ('01f000fc', '00bf00bf'),
+                 0x10019dc: ('79480160', '00bf00bf')},
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c,
+                  0x282c: 0x04000014},
+    ),
+    # 2358 proved the stack was the wall: the stack-free stub returns, rung 2
+    # (0x010019e2) is recorded and the count reached 2. The next stop is the
+    # cache-enable helper itself, whose body is exactly three device accesses:
+    # `str r1,[0xe000ef50]` (ICIALLU), `ldr r1,[0xe000ed14]` (CCR) then
+    # `str r1,[r0]` with bit 0x20000 set (CCR.IC = 1). On M-profile a read of
+    # CCR is always safe, so 2359 nops only the two stores and keeps the read:
+    # rung 3 appearing means one of those two writes takes the core down, and
+    # the firmware can then be brought up with caches off.
+    0x2359: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={va: 0x010019b0 for va in (
+            0x01001914, 0x010019e2, 0x010019fc, 0x01001a2c, 0x01002aec,
+            0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+        patches={0x01001922: ('01f000fc', '00bf00bf'),
+                 0x10019dc: ('79480160', '00bf00bf'),
+                 0x010019f0: ('0160', '00bf'),      # ICIALLU write
+                 0x010019fa: ('0160', '00bf')},     # CCR.IC write
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c,
+                  0x282c: 0x04000014},
+    ),
+    # 2359 nop'd both cache writes and the core still died at rung 2, so the
+    # only device access left in that helper is the CCR read at 0x010019f4.
+    # Rather than spend a boot on a yes/no, 2360 splits the window in three by
+    # turning two more four-byte instructions into call sites: the `isb` at
+    # 0x010019e6 and the `orr r1,r1,#0x20000` at 0x010019f6 (whose only
+    # consumer, the store, is already a nop). Site 0x010019e6 with three hits
+    # means the kill is between the isb and the orr, i.e. the CCR read; site
+    # 0x010019f6 with four means the read survives and rung 3 itself fails;
+    # site 0x010019fc means the helper is clear and the wall moved on.
+    0x2360: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={**{va: 0x010019b0 for va in (
+                    0x01001914, 0x010019e2, 0x010019fc, 0x01001a2c, 0x01002aec,
+                    0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+               # explicit words: neither of these is a barrier any more
+               0x010019e6: (0x010019b0, 'bff36f8f'),     # isb sy
+               0x010019f6: (0x010019b0, '41f40031')},    # orr r1,r1,#0x20000
+        patches={0x01001922: ('01f000fc', '00bf00bf'),
+                 0x10019dc: ('79480160', '00bf00bf'),
+                 0x010019f0: ('0160', '00bf'),
+                 0x010019fa: ('0160', '00bf')},
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c,
+                  0x282c: 0x04000014},
+    ),
+    # 2360 named the CCR read as the wall, which is impossible on a working
+    # M-profile core: 0xe000ed14 is internal to the core and privileged code
+    # cannot fault on it. The answer is in the reset prologue. Its first three
+    # stores were redirected to RAM since 2339 - 0x40022000 <- 0xb,
+    # 0x40022004 <- 0x7 and, crucially, 0xe000ed24 (SHCSR) <- 0x70000 - so the
+    # MCU has been running with its own vendor bring-up writes silently
+    # swallowed, and every real bus access since has killed it. 2361 puts those
+    # three literals back to the vendor values and leaves only the 0x40003034
+    # read redirected, so the ladder can say whether the prologue is what makes
+    # the peripheral/PPB space reachable.
+    0x2361: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={**{va: 0x010019b0 for va in (
+                    0x01001914, 0x010019e2, 0x010019fc, 0x01001a2c, 0x01002aec,
+                    0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+               0x010019e6: (0x010019b0, 'bff36f8f'),
+               0x010019f6: (0x010019b0, '41f40031')},
+        patches={0x01001922: ('01f000fc', '00bf00bf'),
+                 0x10019dc: ('79480160', '00bf00bf'),
+                 0x010019f0: ('0160', '00bf'),
+                 0x010019fa: ('0160', '00bf')},
+        # vendor values: the two MCU configuration stores and SHCSR
+        literals={0x281c: 0x40022000, 0x2820: 0x40022004, 0x2824: 0xE000ED24,
+                  0x282c: 0x04000014},
+    ),
+    # 2361 put the vendor prologue back and the ladder LOST one rung: site
+    # 0x010019e2 with two entries, where 2360 reached 0x010019e6 with three,
+    # while every hardware word stayed identical. So those three real stores do
+    # not unlock the peripheral space; they make the stall come sooner. 2362
+    # returns to 2360's redirects exactly and changes one instruction: the CCR
+    # read (`ldr r1,[r0]` at 0x010019f4) becomes a nop, which is the last device
+    # access left in the cache helper. If the ladder now passes the orr rung the
+    # firmware runs with no SCB reads, and the next stop is the first NVIC use.
+    0x2362: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={**{va: 0x010019b0 for va in (
+                    0x01001914, 0x010019e2, 0x010019fc, 0x01001a2c, 0x01002aec,
+                    0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+               0x010019e6: (0x010019b0, 'bff36f8f'),
+               0x010019f6: (0x010019b0, '41f40031')},
+        patches={0x01001922: ('01f000fc', '00bf00bf'),
+                 0x10019dc: ('79480160', '00bf00bf'),
+                 0x010019f0: ('0160', '00bf'),
+                 0x010019f4: ('0168', '00bf'),      # the CCR read itself
+                 0x010019fa: ('0160', '00bf')},
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c,
+                  0x282c: 0x04000014},
+    ),
+    # 2362 left no device access at all between the isb rung and the orr rung
+    # and the core still stopped there, and the shared page is only sampled
+    # after the poll loop gives up a full second later. Twenty instructions in
+    # one second is not a running core, so 2363 stops probing the firmware and
+    # tests the core itself: the reset vector is redirected at the entry, and
+    # 0x010018ec becomes `ldr r3,=shared+0x10 / ldr r2,[r3] / adds r2,#1 /
+    # str r2,[r3] / b .-8`. Nothing else runs. groups then reads 8 if the loop
+    # never executed, a small offset if the core took a few steps and stalled,
+    # and an arbitrary wrapped value if the core free-runs for the whole second.
+    0x2363: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={},
+        patches={0x010018ec: ('72b626484ff00b01016025484ff00701',
+                              '024b1a6801321a60fce700bf10000004')},
+        literals={},
+    ),
+    # 2362 nop'd every device access in the cache helper and the core still
+    # stopped at the isb rung, which forced 2363. 2363 ran no firmware at all
+    # and the same stub counter climbed to 406,670,326 inside the one-second
+    # poll window: the core free-runs, so its clock, its fetch path and the
+    # shared page all work, and every earlier stall is real control flow.
+    #
+    # The stop is between 0x010019e6 (isb rung) and 0x010019f6 (orr rung), and
+    # that window holds only `mov.w r1,#0`, two 16-bit literal loads and two
+    # nops - every one of them dead here, because the stores they feed are
+    # already nop'd. 2364 turns all three 4-byte windows into rungs as well, so
+    # one boot reports the exact 4 bytes where the core dies:
+    #   site 0x010019e6 -> never re-entered after the isb rung
+    #   site 0x010019ea -> died inside the first new rung
+    #   site 0x010019ee -> died inside the second
+    #   site 0x010019f2 -> died inside the third
+    #   site 0x010019f6 -> the window is clear and the orr rung is the wall
+    0x2364: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={**{va: 0x010019b0 for va in (
+                    0x01001914, 0x010019e2, 0x010019fc, 0x01001a2c, 0x01002aec,
+                    0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+               # the whole cache helper, in execution order
+               0x010019e6: (0x010019b0, 'bff36f8f'),     # isb sy
+               0x010019ea: (0x010019b0, '4ff00001'),     # mov.w r1,#0
+               0x010019ee: (0x010019b0, '76480160'),     # ldr r0,[pc] / str r1,[r0]
+               0x010019f2: (0x010019b0, '76480168'),     # ldr r0,[pc] / ldr r1,[r0]
+               0x010019f6: (0x010019b0, '41f40031')},    # orr r1,r1,#0x20000
+        # 0x010019f0 and 0x010019f4 are gone: both now sit inside rungs.
+        patches={0x01001922: ('01f000fc', '00bf00bf'),
+                 0x10019dc: ('79480160', '00bf00bf'),
+                 0x010019fa: ('0160', '00bf')},
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c,
+                  0x282c: 0x04000014},
+    ),
+    # 2364 answered, and not the way the address theory predicted: the rung at
+    # 0x010019ea was entered AND returned (counter 12 = 8 + four entries), and
+    # the core then died before the next rung at 0x010019ee. Adding four bytes
+    # of rungs moved the stop forward by four bytes, so the stop is not pinned
+    # to an address in that window. 2365 asks the narrower question: is the
+    # instruction at 0x010019ee itself unsurvivable, or is it the `bl` we put
+    # there? The ladder still runs to rung 4, then 0x010019ee becomes a plain
+    # counter loop on shared+0x14 (group_stride, seeded 0xa0, +4 per turn) with
+    # its literal at 0x010019fc. If group_stride climbs, the core executes
+    # happily at that exact address and the wall is the call/return, not the
+    # place; if it stays 0xa0, the address really is unreachable after the
+    # ladder and the next question is what the ladder left behind.
+    0x2365: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={**{va: 0x010019b0 for va in (
+                    0x01001914, 0x010019e2, 0x01001a2c, 0x01002aec,
+                    0x01002b26, 0x01002b32, 0x01003018, 0x01003036)},
+               0x010019e6: (0x010019b0, 'bff36f8f'),     # isb sy
+               0x010019ea: (0x010019b0, '4ff00001')},    # mov.w r1,#0
+        # 0x010019ee .. 0x010019ff: ldr.w r3,=shared+0x14 / ldr r2,[r3] /
+        # adds r2,#4 / str r2,[r3] / b .-8 / nop / .word 0x04000014
+        patches={0x01001922: ('01f000fc', '00bf00bf'),
+                 0x10019dc: ('79480160', '00bf00bf'),
+                 0x010019ee: ('764801607648016841f400310160bff34f8f',
+                              'dff80c301a6804321a60fce700bf14000004')},
+        literals={0x281c: 0x04000000, 0x2820: 0x04000004, 0x2824: 0x0400000c,
+                  0x282c: 0x04000014},
+    ),
+    # 2365 answered with one turn of the loop and nothing more: group_stride
+    # went 0xa0 -> 0xa4 and stopped. That is not a free-run and not a dead
+    # address, so the next step is the controlled A/B against 2363: the very
+    # same counter loop byte for byte (ldr / ldr / adds / str / b, counter in
+    # register r2, one store per turn) but placed at 0x010019ee instead of
+    # 0x010018ec, reached by a direct branch from the reset vector with no
+    # ladder and no prologue in between. If groups climbs here, the address is
+    # fine on its own and the ladder is what leaves the core unable to
+    # continue; if groups stays 8, that address cannot host a loop at all.
+    0x2366: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={},
+        patches={0x010018ec: ('72b626484ff00b01016025484ff00701',
+                              '7fe000bf00bf00bf00bf00bf00bf00bf'),
+                 # 0x010019ee: ldr r3,=shared+0x10 / ldr r2,[r3] / adds r2,#1 /
+                 # str r2,[r3] / b .-8 / .word 0x04000010, literal at 0x010019f8
+                 0x010019ee: ('764801607648016841f400310160',
+                              '024b1a6801321a60fce710000004')},
+        literals={},
+    ),
+    # 2366 put the 2363 loop at 0x010019ee, entered by a single branch from
+    # the reset vector, and it turned exactly ONCE - while the same bytes at
+    # 0x010018ec turned 406 million times in 2363. 2367 therefore drops
+    # branching entirely and asks a simpler question: how far can the core
+    # execute at all? The reset entry becomes a straight line of 128
+    # `adds r2,#1 / str r2,[r3]` pairs, one store every four bytes, from
+    # 0x010018ec to 0x01001af0, then `b .`. groups-8 is the number of stores
+    # that landed, so the frontier is 0x010018ec + 4*(groups-8) with 4-byte
+    # resolution, and no branch is involved anywhere before the park.
+    0x2367: dict(
+        stub_va=0x01001d00,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={},
+        patches={
+            0x010018ec: (
+            '72b626484ff00b01016025484ff0070101602448',
+            '824b1a6801321a6001321a6001321a6001321a60'),
+            0x01001900: (
+            '4ff4e0210160234880f309884ff0020080f31488bff36f8f1f48046804f08004'
+            '204601f000fc00f057f800f05af800f07cf834b31948017819b3194819491a4a'
+            'f0e80234e1e80234f0e80234e1e80234f0e80234e1e80234f0e80234e1e80234'
+            '9142edd9114a4ff000004ff00003e1e80203e1e80203e1e80203e1e802039142'
+            'f5d901f0b3b800bf002002400420024024ed00e000f003023430004078bc0203'
+            '000080030000000210c2020244c902021ef0040f0cbfeff30880eff309802de9'
+            'f04f6946eff3058200f0f0fb08b000bd4ff0ff30704700004ff0000179480160'
+            '7047bff34f8fbff36f8f4ff00001764801607648016841f400310160bff34f8f'
+            'bff36f8f7047bff34f8fbff36f8f6f48016821f4003101604ff000016a480160'
+            'bff34f8fbff36f8f704710b4bff34f8f674868490968c1f34e32c1f3c9034fea'
+            '421463f39f740460013bfad5013af4d5bff34f8f5d48016841f480310160bff3'
+            '4f8fbff36f8f10bc704710b4bff34f8f5648016821f480310160574855490968'
+            'c1f34e32c1f3c9034fea421463f39f740460013bfad5013af4d5bff34f8fbff3'
+            '6f8f10bc704710b4bff34f8f4b4849490968c1f34e32c1f3c9034fea421463f3'
+            '9f740460013bfad5013af4d5bff34f8fbff36f8f10bc704710b4bff34f8f3c48'
+            '3c490968c1f34e32c1f3c9034fea421463f39f740460013bfad5013a',
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a6001321a6001321a6001321a6001321a60'
+            '01321a6001321a6001321a6001321a60fee700bf00bf00bf10000004')},
+        literals={},
+    ),
+    # 2367 showed that a 128-store straight line starting at the reset vector
+    # never landed a single store, while 2363's fourteen-byte loop at the very
+    # same address turned 406 million times. The only difference in the first
+    # four instructions is the literal: 2363 loads it from 0x010018f8, twelve
+    # bytes past the load, and 2367 from 0x01001af8, 520 bytes away. The vendor
+    # code at 0x010019ee does exactly the same thing with `ldr r0,[pc,#0x1d8]`,
+    # and every ladder build died in that window, so 2368 repeats 2363 byte for
+    # byte and moves ONLY the literal to the far slot at 0x01001af8.
+    #   groups-8 == 0        -> a distant data read from the code region hangs
+    #                           the core, which would explain the whole ladder
+    #   groups-8 large       -> distance is harmless and 2367 failed for
+    #                           another reason (the 528-byte overwrite)
+    0x2368: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={},
+        patches={0x010018ec: ('72b626484ff00b010160',
+                              '824b1a6801321a60fce7'),
+                 # ldr r3,=0x04000010 placed 520 bytes away from the loader
+                 0x01001af8: ('fad5013a', '10000004')},
+        literals={},
+    ),
+    # 2368 turned that hypothesis into a single-variable result: same loop, same
+    # address, literal 520 bytes away instead of 12, and the count went from
+    # 406 million to zero with no fault recorded. What is still open is whether
+    # the far read hangs the core or merely returns a wrong value. 2369 answers
+    # it by removing the far read from the data path that matters: the counter
+    # pointer is built with movs/lsls/adds instead of a literal, and the far
+    # slot is read once, before the loop, into r0 and thrown away.
+    #   groups-8 == 0     -> the far read itself stops the core
+    #   groups-8 large    -> the far read returns garbage but does not stall,
+    #                        so 2368's zero was a wrong pointer, not a hang
+    0x2369: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={},
+        patches={0x010018ec: ('72b626484ff00b01016025484ff00701',
+                              '01239b0610331a68804801321a60fce7'),
+                 # the far slot, read once into r0 and discarded
+                 0x01001af8: ('fad5013a', '10000004')},
+        literals={},
+    ),
+    # 2369 removed every other explanation: the counter pointer came from
+    # immediates and the far read's result went into r0, which nothing reads
+    # again, yet the count stayed at 8. So the read itself stops the core -
+    # but 0x01001af8 and 0x010018ec are in the SAME 4 KiB page with the same
+    # descriptor, so this cannot be a mapping difference. 2370 therefore sweeps
+    # the address space instead of guessing: the loop probes 0x01001900,
+    # 0x01001a00, 0x01001b00, ... one 0x100 step per turn, incrementing the
+    # counter after each successful read. groups-8 is how many probes completed,
+    # so the first address that hangs the core is 0x01001900 + 0x100*(groups-8)
+    # and a change in the site word means the probe faulted instead of hanging.
+    0x2370: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={},
+        patches={0x010018ec: ('72b626484ff00b01016025484ff00701016024484ff4e02101602348',
+                              '0124240604f5c85401239b0610331a68206804f5807401321a60f9e7')},
+        literals={},
+    ),
+    # 2370 found the edge at 0x01001a00: the probe at 0x01001900 returned (it
+    # sits inside this loop's own code, i.e. bytes the core had already fetched)
+    # and the very next probe hung the core. Same 4 KiB page, same descriptor, so
+    # the difference has to be whether the core has fetched those bytes. 2371
+    # narrows the same sweep to 0x10 steps from 0x01001900 to 0x01001a00:
+    #   one probe  -> the window ends right after the loop's own last byte,
+    #                 which is what "only fetched bytes are readable" predicts
+    #   many probes-> 0x01001900..0x010019ff is readable without being fetched,
+    #                 so the limit is a region size, not the fetch stream
+    0x2371: dict(
+        stub_va=0x010019b0,
+        stub=bytes.fromhex('f446' 'acf1050c' '054b' 'c3f800c0' '044b' 'd3f800c0'
+                           '0cf1010c' 'c3f800c0' '7047' '08000004' '10000004'),
+        marker_va=0x04000008,
+        counter_va=0x04000010,
+        calls={},
+        patches={0x010018ec: ('72b626484ff00b01016025484ff00701016024484ff4e02101602348',
+                              '0124240604f5c85401239b0610331a68206804f1100401321a60f9e7')},
+        literals={},
+    ),
+}
+BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the low bytes
+
+
+def encode_bl(src, dst):
+    """Thumb-2 BL from src to dst, as the four bytes the core will fetch."""
+    off = dst - (src + 4)
+    if off & 1:
+        raise ValueError('bl target %#x is not halfword aligned' % dst)
+    if not -(1 << 24) <= off < (1 << 24):
+        raise ValueError('bl target %#x is out of range of %#x' % (dst, src))
+    sign = 1 if off < 0 else 0
+    off &= 0x1FFFFFF
+    i1 = (off >> 23) & 1
+    i2 = (off >> 22) & 1
+    j1 = (1 ^ i1) ^ sign
+    j2 = (1 ^ i2) ^ sign
+    hw1 = 0xF000 | (sign << 10) | ((off >> 12) & 0x3FF)
+    hw2 = 0xD000 | (j1 << 13) | (j2 << 11) | ((off >> 1) & 0x7FF)
+    return hw1.to_bytes(2, 'little') + hw2.to_bytes(2, 'little')
+
+
 def fault_vector_probe(path, expected, build_id):
     firmware = pinned(path, expected)
     if expected != 'de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f7229a':
         raise ValueError('fault vector probe requires the measured device firmware')
-    spec = FAULT_VECTOR_PROBE.get(build_id)
+    spec = TRACE_PROBE.get(build_id) or FAULT_VECTOR_PROBE.get(build_id)
     if not spec:
         raise ValueError('build %#x has no fault vector probe' % build_id)
     fetch = importlib.util.module_from_spec(
@@ -210,24 +900,86 @@ def fault_vector_probe(path, expected, build_id):
     stub = spec['stub']
     if len(stub) % 4:
         raise ValueError('stub must keep four-byte alignment')
+    sites = list(spec.get('markers', ()))
+    masks = [mask for _, mask in sites]
+    if len(set(masks)) != len(masks) or any(not 0 < mask < 0x100 for mask in masks):
+        raise ValueError('trace masks must be distinct nonzero bytes')
+    site_at = {}
+    for va, mask in sites:
+        at = offset(va)
+        word = int.from_bytes(firmware[at:at + 4], 'little')
+        if word not in BARRIERS:
+            raise ValueError('trace site %#x is %#x, expected dsb/isb' % (va, word))
+        site_at[at] = (va, mask)
+    call_at = {}
+    for src, dst in spec.get('calls', {}).items():
+        at = offset(src)
+        word = int.from_bytes(firmware[at:at + 4], 'little')
+        if isinstance(dst, tuple):
+            # A site whose original instruction is not a barrier: the caller
+            # must state the exact four bytes it expects, so the probe can
+            # split a straight-line window between two rungs.
+            target, want_hex = dst
+            if firmware[at:at + 4] != bytes.fromhex(want_hex):
+                raise ValueError('call site %#x is %s, expected %s'
+                                 % (src, firmware[at:at + 4].hex(), want_hex))
+        else:
+            target = dst
+            if word not in BARRIERS:
+                raise ValueError('call site %#x is %#x, expected dsb/isb' % (src, word))
+        call_at[at] = (src, target)
+    literal_at = {}
+    for off, value in spec.get('literals', {}).items():
+        literal_at[off] = value
+    patch_at = {}
+    for va, (want_hex, new_hex) in spec.get('patches', {}).items():
+        at = offset(va)
+        want, new = bytes.fromhex(want_hex), bytes.fromhex(new_hex)
+        if not want or len(want) != len(new):
+            raise ValueError('patch %#x must keep its length' % va)
+        if firmware[at:at + len(want)] != want:
+            raise ValueError('patch site %#x is %s, expected %s'
+                             % (va, firmware[at:at + len(want)].hex(), want_hex))
+        patch_at[at] = new
     embedded = bytearray(firmware)
     replaced = bytes(embedded[stub_at:stub_at + len(stub)])
     embedded[stub_at:stub_at + len(stub)] = stub
+    for at, (va, mask) in site_at.items():
+        embedded[at:at + 4] = b'\xf0\xf7' + (0xA000 | mask).to_bytes(2, 'little')
+    for at, (src, dst) in call_at.items():
+        embedded[at:at + 4] = encode_bl(src, dst)
+    for off, value in literal_at.items():
+        embedded[off:off + 4] = value.to_bytes(4, 'little')
+    for at, new in patch_at.items():
+        embedded[at:at + len(new)] = new
     embedded = bytes(embedded)
     if len(embedded) != len(firmware):
         raise ValueError('fault probe changed the container size')
     changed = sorted(i for i in range(len(firmware)) if firmware[i] != embedded[i])
-    if any(not (stub_at <= i < stub_at + len(stub)) for i in changed):
-        raise ValueError('fault probe touched bytes outside the stub')
+    if any(not (stub_at <= i < stub_at + len(stub)) and
+           not any(at <= i < at + 4 for at in site_at) and
+           not any(at <= i < at + 4 for at in call_at) and
+           not any(at <= i < at + len(new) for at, new in patch_at.items()) and
+           not any(off <= i < off + 4 for off in literal_at) for i in changed):
+        raise ValueError('fault probe touched bytes outside the stub, markers, calls, patches and literals')
     with tempfile.TemporaryDirectory(prefix='csf-fault-probe-') as directory:
         candidate = Path(directory) / 'diagnostic.bin'
         candidate.write_bytes(embedded)
         _, rebuilt = fetch.build_arena(candidate, 0x40077000, memory_group=6)
     if rebuilt != plan:
         raise ValueError('fault probe changed firmware mappings')
-    patch = dict(diagnostic_only=True, kind='fault-vector',
+    patch = dict(diagnostic_only=True,
+                 kind=('branch-probe' if call_at else
+                       'trace-resume' if sites else 'fault-vector'),
                  stub_va='%#x' % spec['stub_va'], stub_bytes=stub.hex(),
                  replaced_bytes=replaced.hex(), marker_va='%#x' % spec['marker_va'],
+                 markers=[dict(va='%#x' % va, mask=mask, bit='%#x' % mask)
+                          for va, mask in sites],
+                 calls=[dict(va='%#x' % src, target='%#x' % dst, bytes=encode_bl(src, dst).hex())
+                        for src, dst in call_at.values()],
+                 patches=[dict(va='%#x' % (at - section['data_start'] + section['va']),
+                               bytes=new.hex()) for at, new in patch_at.items()],
+                 literals={('%#x' % off): ('%#x' % value) for off, value in literal_at.items()},
                  container_bytes_changed=len(changed),
                  original_container_sha256=digest(firmware),
                  embedded_container_sha256=digest(embedded))
@@ -305,7 +1057,7 @@ def build(a):
     kernel = pinned(a.kernel, a.kernel_sha256)
     if a.build_id == 0x2338 and not (a.entry_probe and a.inline_entry and a.entry_pte_guard):
         raise ValueError('build2338 must preserve the2337 CSF probe configuration')
-    if a.fault_probe:
+    if a.fault_probe or a.trace_probe:
         if a.redirect_mcu_stores or a.entry_probe or a.inline_entry or a.entry_pte_guard or a.reset_store_stub:
             raise ValueError('the fault vector probe replaces the handler and takes no other patch')
         firmware, reset_patch = fault_vector_probe(a.firmware, a.firmware_sha256, a.build_id)
@@ -355,7 +1107,7 @@ def build(a):
         definitions.append('-DSHIM_CSF_INLINE_ENTRY_PROBE')
     if a.entry_pte_guard:
         definitions.append('-DSHIM_CSF_ENTRY_PTE_GUARD')
-    if a.build_id in MCU_ACCESS_REDIRECTS:
+    if a.build_id in MCU_ACCESS_REDIRECTS or a.build_id in TRACE_PROBE:
         # Sample shared+0xffc without installing any entry overlay: the marker
         # is now written by the original reset handler itself.
         definitions.append('-DSHIM_CSF_ENTRY_CHECKPOINT')
@@ -464,7 +1216,7 @@ def build(a):
             name: digest((ROOT / name).read_bytes()) for name in
             ('xnu/gpu/mali_csf_boot.c', 'tools/matisse-csf-fetch-audit.py',
              'tools/matisse-shim-gpu-image.py')}
-    if a.build_id in FAULT_VECTOR_PROBE:
+    if a.build_id in FAULT_VECTOR_PROBE or a.build_id in TRACE_PROBE:
         if reset_patch is None:
             raise ValueError('build%x requires the fault vector probe' % a.build_id)
         if arena != 0x77000:
@@ -474,6 +1226,8 @@ def build(a):
         info['fault_vector_probe']['source_sha256'] = {
             name: digest((ROOT / name).read_bytes()) for name in
             ('tools/matisse-csf-fetch-audit.py', 'tools/matisse-shim-gpu-image.py')}
+        if a.build_id in TRACE_PROBE:
+            info['trace_probe'] = info.pop('fault_vector_probe')
     if a.entry_probe:
         # The gpufreq layer adds one page of shim text, so from2338 the arena
         # anchor moves by exactly0x1000. Pinning it per build keeps the drift
@@ -505,7 +1259,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
@@ -517,6 +1271,9 @@ def main():
     p.add_argument('--fault-probe', action='store_true',
                    help='build2343 only: replace the shared fault vector entry with a stub that '
                         'records the stacked PC in shared+0x10, leaving the entry untouched')
+    p.add_argument('--trace-probe', action='store_true',
+                   help='build2344/2345 only: resumable fault handler plus udf markers at bars; '
+                        'each hit ORs its bit into a shared word and execution continues')
     p.add_argument('--redirect-mcu-stores', action='store_true',
                    help='build2339/2340 only: repoint the reset handler\'s MCU peripheral access '
                         'literals at shared words, leaving the original code intact')

@@ -18,14 +18,15 @@ import mkbootimg
 
 ROOT = Path(__file__).resolve().parent
 BASE = 'matisse-collector'
-SEEDS = ('mtk_wdt.ko', 'log_store.ko', 'nvmem_mtk-devinfo.ko',
+SEEDS = ('mtk_wdt.ko', 'syscon-reboot-mode.ko', 'log_store.ko', 'nvmem_mtk-devinfo.ko',
          'pinctrl-mtk-v2.ko', 'pinctrl-mt6983.ko',
          'clk-mt6983.ko', 'regmap-spmi.ko', 'mtk-pmic-wrap.ko',
          'mtk-spmi-pmic.ko', 'spmi-mtk-pmif.ko', 'mt6363-regulator.ko',
          'mt6373-regulator.ko', 'phy-mtk-xsphy.ko', 'mtu3.ko')
-ALLOWED = frozenset(SEEDS + ('clk-common.ko', 'aee_aed.ko', 'mrdump.ko'))
+ALLOWED = frozenset(SEEDS + ('reboot-mode.ko', 'clk-common.ko', 'aee_aed.ko', 'mrdump.ko'))
 APPLETS = ('sh', 'cat', 'mkdir', 'mount', 'mknod', 'cp', 'dmesg', 'ls',
-           'insmod', 'ln', 'sleep', 'tar', 'wc', 'sha256sum', 'base64', 'stty')
+           'insmod', 'ln', 'sleep', 'tar', 'wc', 'sha256sum', 'base64', 'stty',
+           'gzip', 'tail', 'tee', 'kill', 'od', 'umount')
 PARAMS = ('rdinit=/matisse-collector/init', 'init=/matisse-collector/init',
           'clk_ignore_unused', 'pd_ignore_unused', 'panic=15')
 LZ4_MAGIC = bytes.fromhex('02214c18')
@@ -146,7 +147,7 @@ def module_order(dep_text):
     return result
 
 
-def collector_entries(source, script):
+def collector_entries(source, script, reboot_helper=None):
     def regular(name):
         mode, payload = source[name]
         if not stat.S_ISREG(mode):
@@ -163,6 +164,9 @@ def collector_entries(source, script):
         entries[name] = (mode, data)
     put(BASE + '/busybox', stat.S_IFREG | 0o755, busybox)
     put(BASE + '/init', stat.S_IFREG | 0o755, script)
+    if reboot_helper is not None:
+        static_arm64(reboot_helper)
+        put(BASE + '/reboot', stat.S_IFREG | 0o755, reboot_helper)
     put(BASE + '/modules.list', stat.S_IFREG | 0o644, ('\n'.join(order)+'\n').encode())
     hashes = {}
     vermagics = set()
@@ -180,9 +184,11 @@ def collector_entries(source, script):
         raise ValueError('module vermagic mismatch')
     for name in APPLETS:
         put(BASE + '/bin/' + name, stat.S_IFLNK | 0o777, b'../busybox')
-    metadata = dict(format=1, modules=hashes, module_order=order,
+    metadata = dict(format=2, modules=hashes, module_order=order,
                     vermagic=next(iter(vermagics)), busybox_sha256=sha(busybox),
-                    init_sha256=sha(script), block_mounts=False, command_receiver=False)
+                    init_sha256=sha(script), block_mounts=False, command_receiver=False,
+                    reboot_helper_sha256=sha(reboot_helper) if reboot_helper else None,
+                    automatic_recovery_seconds=70, transport='persistent-acm-fd')
     put(BASE + '/build.json', stat.S_IFREG | 0o644,
         (json.dumps(metadata, sort_keys=True, indent=2)+'\n').encode())
     return entries, metadata
@@ -222,13 +228,15 @@ def main():
     ap.add_argument('--template', required=True, help='already validated GPUEB entryprobe boot-v4 image')
     ap.add_argument('--out', required=True)
     ap.add_argument('--lz4', default='lz4')
+    ap.add_argument('--reboot-helper', required=True, help='static ARM64 ramcollector/reboot.c build')
     a = ap.parse_args()
     out = Path(a.out); source = Path(a.recovery_cpio)
-    inputs = {source.resolve(), Path(a.template).resolve()}
+    inputs = {source.resolve(), Path(a.template).resolve(), Path(a.reboot_helper).resolve()}
     if out.resolve() in inputs or out.with_suffix('.cpio.lz4').resolve() in inputs:
         raise ValueError('output must not overwrite input')
     entries, metadata = collector_entries(read_newc(source.read_bytes()),
-                                         (ROOT/'ramcollector/init').read_bytes())
+                                         (ROOT/'ramcollector/init').read_bytes(),
+                                         Path(a.reboot_helper).read_bytes())
     archive = pack_newc(entries)
     if read_newc(archive) != entries:
         raise ValueError('cpio self-verification failed')

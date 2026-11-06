@@ -1,14 +1,16 @@
 #!/matisse-collector/busybox sh
-# Standalone initramfs PID 1. Never starts Android init or mounts block media.
+# PID1: pseudo filesystems only, bounded diagnostics, automatic Recovery return.
 C=/matisse-collector
 if [ "$1" = --snapshot-only ]; then
     case "$0" in */*) C=${0%/*};; *) C=.;; esac
 fi
 B=$C/busybox
-export PATH=/matisse-collector/bin
-export HOME=/
-export LC_ALL=C
+export PATH=/matisse-collector/bin HOME=/ LC_ALL=C
 umask 077
+trace() {
+    echo "COLLECTOR2: $*"
+    [ ! -c /dev/kmsg ] || echo "<6>COLLECTOR2: $*" > /dev/kmsg
+}
 snapshot() {
     out=$1
     $B mkdir -p "$out"
@@ -17,7 +19,7 @@ snapshot() {
     done
     $B cat /sys/firmware/fdt > "$out/live.dtb" 2>/dev/null
     $B cat /proc/pl_lk > "$out/pl_lk.bin" 2>/dev/null
-    $B dmesg > "$out/dmesg.txt" 2>/dev/null
+    $B dmesg | $B tail -c 65536 > "$out/dmesg.txt"
     $B cat "$C/modules.list" > "$out/modules-requested.txt"
     $B cat "$C/build.json" > "$out/build.json"
     [ ! -f /run/collector-init.log ] || $B cp /run/collector-init.log "$out/init.log"
@@ -26,7 +28,6 @@ snapshot() {
     $B cat /sys/class/udc/11201000.usb0/state > "$out/usb-state.txt" 2>/dev/null
     return 0
 }
-# Safe diagnostic mode in an already running Recovery: no mounts/modules/USB changes.
 if [ "$1" = --snapshot-only ]; then
     case "$2" in /tmp/matisse-collector-*) snapshot "$2"; exit 0;; *) exit 64;; esac
 fi
@@ -34,19 +35,38 @@ fi
 $B mkdir -p /proc /sys /dev /run
 $B mount -t proc -o nosuid,nodev,noexec proc /proc
 $B mount -t sysfs -o nosuid,nodev,noexec sysfs /sys
+# The same boot_a also supplies Recovery's kernel. Let Recovery's own /init
+# run in mode2; otherwise an automatic Recovery return would loop this collector.
+bootmode=$($B od -An -tu4 -j 8 -N 4 /sys/firmware/devicetree/base/chosen/atag,boot)
+if [ "$bootmode" -eq 2 ] && [ -x /init ]; then
+    $B umount /sys
+    $B umount /proc
+    exec /init
+fi
 $B mount -t tmpfs -o nosuid,mode=0755,size=8m tmpfs /dev
 $B mount -t tmpfs -o nosuid,nodev,size=64m tmpfs /run
 $B mknod -m 600 /dev/console c 5 1
+$B mknod -m 600 /dev/kmsg c 1 11
 $B mknod -m 666 /dev/null c 1 3
 exec > /run/collector-init.log 2>&1
 echo /matisse-collector/no-modprobe > /proc/sys/kernel/modprobe
-echo MATISSE_RAM_COLLECTOR_V1
+trace START
+# Independent timer survives blocked serial I/O. Kernel notifiers select mode2.
+( $B sleep 70; trace AUTO_RECOVERY; "$C/reboot" --recovery ) &
 snapshot /run/before-modules
-# Only explicit USB/clock/PMIC prerequisites; no modprobe/autoload.
+$B gzip -c /run/before-modules/live.dtb > /run/handoff.dtb.gz
+trace SNAPSHOT_BEFORE
+for node in /sys/firmware/devicetree/base/soc/gpueb*; do
+    for prop in gpueb_mem_addr gpueb_mem_size; do
+        [ ! -r "$node/$prop" ] || trace "$prop BE_BYTES $($B od -An -tx1 -v "$node/$prop")"
+    done
+done
 while IFS= read -r module; do
-    echo "insmod $module"
+    trace "INSMOD $module"
     $B insmod /matisse-collector/modules/"$module"
+    trace "INSMOD_RESULT $module $?"
 done < /matisse-collector/modules.list
+trace MODULES_DONE
 $B mkdir -p /sys/kernel/config
 $B mount -t configfs -o nosuid,nodev,noexec configfs /sys/kernel/config
 g=/sys/kernel/config/usb_gadget/matisse_collector
@@ -56,16 +76,16 @@ echo 0x4ee7 > "$g/idProduct"
 echo 0x0200 > "$g/bcdUSB"
 echo 0x0200 > "$g/bcdDevice"
 $B mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409"
-echo ram-collector > "$g/strings/0x409/serialnumber"
+echo ram-collector-v2 > "$g/strings/0x409/serialnumber"
 echo ios-sweet > "$g/strings/0x409/manufacturer"
-echo 'matisse RAM collector' > "$g/strings/0x409/product"
+echo 'matisse RAM collector v2' > "$g/strings/0x409/product"
 echo 'read-only log transport' > "$g/configs/c.1/strings/0x409/configuration"
 echo 100 > "$g/configs/c.1/MaxPower"
 $B mkdir -p "$g/functions/acm.usb0"
 $B ln -s "$g/functions/acm.usb0" "$g/configs/c.1/acm.usb0"
-# MTU3 operation enum 3 = peripheral. No Type-C/charger module dependency.
 echo 3 > /sys/bus/platform/devices/11201000.usb0/mode
 echo 11201000.usb0 > "$g/UDC"
+trace USB_BOUND
 for attempt in 1 2 3 4 5; do
     [ -r /sys/class/tty/ttyGS0/dev ] && break
     $B sleep 1
@@ -76,18 +96,23 @@ if [ -r /sys/class/tty/ttyGS0/dev ]; then
 fi
 snapshot /run/after-modules
 $B tar -czf /run/collection.tar.gz -C /run before-modules after-modules
-size=$($B wc -c < /run/collection.tar.gz)
-sum=$($B sha256sum /run/collection.tar.gz)
-sum=${sum%% *}
-# No command receiver or shell on USB. Repeat the immutable RAM snapshot.
-while :; do
-    if [ -c /dev/ttyGS0 ]; then
-        (
-            $B stty raw -echo < /dev/ttyGS0
-            printf '\nMATISSE-COLLECTOR-V1 %s %s\n' "$size" "$sum"
-            $B base64 /run/collection.tar.gz
-            printf 'MATISSE-COLLECTOR-END\n'
-        ) > /dev/ttyGS0
-    fi
-    $B sleep 3
-done
+frame() {
+    kind=$1; file=$2
+    size=$($B wc -c < "$file"); sum=$($B sha256sum "$file"); sum=${sum%% *}
+    printf '\nMATISSE-%s-V1 %s %s\n' "$kind" "$size" "$sum"
+    $B base64 "$file"
+    printf 'MATISSE-%s-END\n' "$kind"
+}
+if [ -c /dev/ttyGS0 ]; then
+    # Keep one descriptor open; do not drop gadget tty between frames.
+    exec 3<> /dev/ttyGS0
+    $B stty raw -echo -hupcl <&3
+    trace SERIAL_READY
+    while :; do
+        frame HANDOFF /run/handoff.dtb.gz >&3
+        frame COLLECTOR /run/collection.tar.gz >&3
+        $B sleep 1
+    done
+fi
+trace NO_SERIAL_DEVICE
+while :; do $B sleep 5; done
