@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2373 KILLED THE REGION LIMIT - READS WORK IN THE 512-BYTE BLOCK THE CORE TOUCHED <<<
+## >>> ACTIVE 2026-11-06:2374 KILLED SHAREABILITY - EVERY DATA ACCESS THAT LEAVES THE GPU HANGS <<<
 
 READ THIS FIRST. Trials 2357-2370 all ran. Until this entry their results existed
 only as comments above the per-build `TRACE_PROBE` table in
@@ -129,6 +129,37 @@ few instructions there so the core fetches it, then data-read that same block.
 driver has to live with; `groups = 8` means the fetch of a fresh block hangs too
 and the wall is the translation, not the data path. The marker is stored first, so
 all three outcomes are distinguishable.
+
+**2374 KILLED THE SHARE-BIT HYPOTHESIS.** The vendor kernel says a CSF section gets
+share bits only when it declares `CSF_FIRMWARE_ENTRY_SHARED`
+(`convert_mem_flags()` sets `KBASE_REG_SHARE_BOTH`, `get_mmu_flags()` emits
+`ENTRY_SHARE_BITS` only for that flag), and the pinned container's code section at
+0x01000000 is `R-X cached shared=0`. This port had been mapping every cached
+section `SH=11`. Fixed, rebuilt, same map, one variable: image
+`e4fab071...`, 26,714,112 B, `boot_a` back to `2931647a...86b1`, and the result is
+**`groups = 10` again - exactly 2373**. Two probes, same two, same hang at
+0x01000200. So shareability is not the wall.
+
+**What that leaves.** Put 2374 next to 2358 and the shape changes: 2358 found the
+PSP at 0x0203f000 cannot be written, and 2374 shows a data read at 0x01000200
+cannot be completed, while instruction fetch to the same DRAM at 0x010018ec works
+millions of times per second. Every data access that has to leave the GPU hangs;
+every instruction fetch does not. The addresses that read are exactly the ones
+whose lines the core has already pulled in (the reset vector at 0x01000000, the
+code it executes at 0x01001800). That is not a property of the code section - it
+would be a property of the **data path**, which the 2371-2374 probes have been
+describing all along without naming.
+
+**Next: 2375 must test the data path, not the code section.** Same loop, but the
+probe list is one address per section - 0x01001900 (known good, control),
+0x02000000 (stack), 0x02800000 (read-only data), 0x03000000 (heap), 0x04000000
+(shared) - each incrementing the counter, so the first hang localises itself. If
+0x02000000 hangs, the wall has nothing to do with code mapping and every earlier
+attribute experiment was measuring the wrong thing; the next suspect becomes the
+GPU data path itself (the GMPU the MT6983 device tree describes with
+`gmpu_table_size = 0x400000`, or the memory attributes the data path uses).
+If 0x02000000 reads, the wall really is specific to the code region and the
+remaining attribute difference is the memattr index.
 
 **Driver, this round:** `mali_csf_boot.c` drives the MCU through an explicit state
 machine instead of the bare `wr(MCU_CONTROL, 2)`: halt (write 0, poll

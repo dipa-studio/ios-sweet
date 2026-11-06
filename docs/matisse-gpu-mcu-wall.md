@@ -187,3 +187,74 @@ fetch it, and only then data-reads that block:
 
 The marker is written before the branch, so all three outcomes are distinguishable
 from one boot.
+
+## 9. 2374: shareability is not the wall
+
+The vendor loader derives page-table attributes from the section flags in the
+firmware image, not from a single guess for the whole image. `convert_mem_flags()`
+in `mali_kbase_csf_firmware.c` turns `CSF_FIRMWARE_ENTRY_READ/WRITE/EXECUTE` into
+`KBASE_REG_GPU_RD/WR/NX` and the cache-mode field into a `MEMATTR` index;
+`get_mmu_flags()` in `mali_kbase_mmu_mode_aarch64.c` emits `ENTRY_SHARE_BITS` only
+when `KBASE_REG_SHARE_BOTH` is set, and only a section carrying
+`CSF_FIRMWARE_ENTRY_SHARED` sets it.
+
+Parsing the pinned container gives ten sections, of which exactly one is shared:
+
+```
+R-- cached shared=0   0x00000000..0x00001000
+R-X cached shared=0   0x01000000..0x01010000   <- the code section
+RW- cached shared=0   0x02000000..0x02040000   <- stack and heap
+R-- cached shared=0   0x02800000..0x02840000
+RW- cached shared=0   0x03000000..0x03040000
+RW- cached-coherent shared=1  0x04000000..0x04094000
+```
+
+This port mapped every cached section `SH=11` (inner and outer shareable) while
+configuring the page-table walker non-shareable - the two disagreed about which
+domain owns the transaction. Fixing it to the vendor rule is a one-line change,
+and 2374 ran the 2373 map with only that change:
+
+- image `e4fab071...`, 26,714,112 B, `boot_a` verified back to `2931647a...86b1`
+- `input_va = 0x01000000` (the loop started), `groups = 10` - **identical to 2373**
+
+Same two probes, same hang at 0x01000200. Shareability is not the cause, and the
+PTE attribute line of investigation is now closed rather than merely doubted.
+
+## 10. What the negative result reframes
+
+Line 2374 up with 2358 and the pattern is no longer about code:
+
+- instruction fetch to 0x010018ec reaches DRAM and runs 406 million times a second
+  (2363), so the DRAM path and the MMU walk work;
+- a data read at 0x01000200 never returns (2373, 2374);
+- a data write into the stack at 0x0203f000 never lands (2358).
+
+Every data access that has to leave the GPU hangs; fetch does not. The addresses
+that do read are exactly the lines the core has already pulled in - the reset
+vector at 0x01000000 and the block it executes at 0x01001800. That is the shape of
+a broken **data path**, not of a wrong code mapping, and it explains why four
+attribute experiments in a row changed nothing.
+
+Two candidates, both visible in the OEM tree: the GMPU that
+`gpu_protected_memory_allocator` in `mt6983.dts` describes (`gmpu_table_size =
+0x400000`, `protected_reserve_size = 0x1000000`, table address handed to the EB
+through GPR 6 at `0x13c5fd1c`), which by design filters data accesses and not
+instruction fetches; and the `MEMATTR` index the data path uses.
+
+## 11. 2375: probe one address per section
+
+Same loop, five probes, one per section, each incrementing the counter:
+
+```
+0x01001900  code, known good (control)
+0x02000000  stack
+0x02800000  read-only data
+0x03000000  heap
+0x04000000  shared
+```
+
+`groups - 8` says how many returned, so the first hang localises itself. If
+0x02000000 already hangs, the wall is the data path and the code-section mapping
+was never the subject; if all five return, the wall is specific to the code region
+and `MEMATTR` is the remaining difference. Either answer removes a whole line of
+work, which is what 2371-2374 could not do.
