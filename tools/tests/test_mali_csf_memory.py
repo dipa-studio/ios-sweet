@@ -69,7 +69,8 @@ static void checks(const uint8_t *fw,size_t size) {
    uint64_t d=walk(a,root,p->va+off);assert((d&3)==3);
    assert((d&0x0000fffffffff000ULL)==root+p->arena_offset+off);
    assert(!!(d&0x80)==!(p->flags&2));assert(!!(d&(3ULL<<53))==!(p->flags&4));
-   assert((d&0x31c)==((p->flags&24)==8?0x304:0x200));
+   unsigned want=(p->flags&24)==8?4:0;if(p->flags&(1u<<30))want|=0x300;
+   assert((d&0x31c)==want);
   }
  }
  assert(!walk(a,root,0x3000000));

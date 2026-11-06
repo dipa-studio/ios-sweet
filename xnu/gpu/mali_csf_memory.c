@@ -113,12 +113,20 @@ int sweet_csf_memory_build_group(const uint8_t *fw, size_t bytes, const struct s
                 }
                 table = arena + ((desc & UINT64_C(0x0000fffffffff000)) - pa);
             }
-            /* Cache-mode1 in the section ABI is cached. Match stage1
-             * SH_IS/WB for that mode and SH_OS/NC for all other modes.
-             * CPU caches remain off; this does not enable CPU coherency. */
+            /* Cache-mode1 in the section ABI is cached. Shareability is NOT a
+             * property of the cache mode: mali_kbase_mmu_mode_aarch64.c
+             * get_mmu_flags() sets ENTRY_SHARE_BITS only for KBASE_REG_SHARE_BOTH,
+             * and mali_kbase_csf_firmware.c convert_mem_flags() sets that bit only
+             * for a section whose CSF_FIRMWARE_ENTRY_SHARED flag is set. Every
+             * other section carries no share bits at all. Until2374 this code
+             * set SH=11 (inner and outer shareable) on every cached section,
+             * including the R-X code section that declares shared=0; the
+             * page-table walker was configured non-shareable at the same time,
+             * so the two disagreed about who owns the transaction. */
             int cached = (p->flags & 24) == 8;
             uint64_t desc = (pa + p->arena_offset + off) | 3 | 0x800 | 0x400 | 0x40;
-            desc |= cached ? 0x304 : 0x200;
+            desc |= cached ? 0x004 : 0x000;
+            if (p->flags & (1u << 30)) desc |= 0x300;
             if (!(p->flags & 2)) desc |= 0x80;
             if (!(p->flags & 4)) desc |= UINT64_C(3) << 53;
             desc |= (uint64_t)memory_group << 59;

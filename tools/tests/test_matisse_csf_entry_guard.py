@@ -94,7 +94,7 @@ int main(int argc,char **argv) {
     assert(root==BASE && !sweet_csf_inline_probe_install(arena,sizeof(arena),&plan));
     struct sweet_csf_entry_guard_result e={0};
     assert(check(&e)==0);
-    assert(e.leaf_pte==UINT64_C(0x3000000040081fc7));
+    assert(e.leaf_pte==UINT64_C(0x3000000040081cc7));
     assert(e.entry_pa==UINT64_C(0x400818ec));
     assert(e.entry_word==0x4803b672 && e.code_start_word==0xd00cf8df);
     uint32_t good=read32(0,e.entry_pa);

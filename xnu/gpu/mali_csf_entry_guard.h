@@ -67,7 +67,11 @@ static inline int sweet_csf_entry_guard(const struct sweet_csf_memory *m,
     uint64_t leaf=(uint64_t)read32(context,slot)|
                   (uint64_t)read32(context,slot+4)<<32;
     uint64_t page_pa=arena_pa+code->arena_offset+0x1000;
-    uint64_t expected_leaf=page_pa|UINT64_C(0xfc7)|(UINT64_C(6)<<59);
+    /* nG|AF|RO|AP[1]|AttrIndx1|page. Share bits belong to the section, not to
+     * the cache mode: only a CSF_FIRMWARE_ENTRY_SHARED section is shareable. */
+    uint64_t leaf_attrs=UINT64_C(0xcc7);
+    if(code->flags&(1u<<30)) leaf_attrs|=0x300;
+    uint64_t expected_leaf=page_pa|leaf_attrs|(UINT64_C(6)<<59);
     result->leaf_pte=leaf;
     if((leaf&3)!=3) return SWEET_CSF_ENTRY_LEAF;
     uint64_t entry_pa=(leaf&SWEET_CSF_ENTRY_PA_MASK)+
