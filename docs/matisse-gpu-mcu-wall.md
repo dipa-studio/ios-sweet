@@ -1161,3 +1161,73 @@ Provenance defect in this image: the builder's leaf-property gate was written as
 `build_id == 0x2388`, so 2389 shipped without `sweet-csf-leaf` and the decoder
 refused the capture. The gate now covers both builds; `--allow-missing-leaf`
 decodes this one capture, whose marker was read out before that flag existed.
+
+## 36. 2390 ran: the vendor entry executes, and the mask reading is dead
+
+Trial 2026-11-06 22:41, image `9051fedf...5fff3e`, kernel `1760629a`
+(`SWEET_BUILD_ID` 0x2390), fastboot 111.67 s, `boot_a` restored to
+`2931647a...86b1`.
+
+```
+input_va (shared+8)      0x010018ec   the marker at the vendor's own entry
+groups (shared+16)       8           the program writes only the marker
+mmu_raw, as_fault        0, 0
+mcu_status, relocation   1, true
+cleanup_error            0
+leaves                   401a4000 / 401a5000 / 401b2000 / 401b3000
+```
+
+One word was deliberately not touched: VA 0x4 still reads `0x010018ed`. Two marker
+programs sat in the code section, at the address that word names (0x010018ec) and
+at the page base below it (0x01001000). The core wrote 0x010018ec.
+
+**So the vendor entry is reachable here.** `SWEET_CSF_RESET_ENTRY_VA` was right,
+and the firmware does start; `version = 0` / `firmware_ready = 0` mean it starts
+and then hangs, not that it never starts.
+
+It also retracts ## 35. "Only a page-aligned start executes" cannot hold: 0x18ec is
+neither 4 KB nor 512-byte aligned. 2385 and 2389 both pointed at addresses that
+happen to be page bases, which is why a two-point sample could not separate
+"honoured as written" from "masked to the page". 2390 separated them, and the
+masked reading lost.
+
+| build | vector | target | aligned | result |
+|---|---|---|---|---|
+| 2385 | 0x0100E001 | 0x0100E000 | 4 KB | runs |
+| 2389 | 0x01001001 | 0x01001000 | 4 KB | runs |
+| 2390 | 0x010018ed (vendor) | 0x010018EC | none | runs |
+| 2386 | 0x01000201 | 0x01000200 | 512 B | nothing |
+| 2387 | 0x01000601 | 0x01000600 | 512 B | nothing |
+| 2388 | 0x01001201 | 0x01001200 | 512 B | nothing |
+
+The three failures are real non-starts rather than stale evidence: their
+`cleanup_error` is -53, meaning the MCU never reached a state the halt handshake
+could stop, while all three successes report 0. And a container-level audit of all
+six images against `vendor_a-mali_csffw.bin` puts every changed byte inside the
+intended ranges - vector low halfword, one program, the fault entry - so no image
+was contaminated by the build.
+
+What 2390 cannot do is separate two readings that both fit all six rows:
+
+- **exact** - the vector is used as written, and 0x200 / 0x600 / 0x1200 fail for a
+  reason of their own
+- **fallback** - a vector that is not page aligned is ignored and the core starts
+  at the vendor entry regardless, which is exactly what 2390 would look like
+
+Only a non-aligned vector pointing somewhere *else* separates them. 2391 does that:
+vector to 0x01001A01, the same program at 0x01001A00, and 2390's program left at
+0x010018EC as the control. 0x1A00 is inside the code section, 512-byte aligned, not
+page aligned, and nothing has ever executed there.
+
+Offline, and worth recording because it removes an alternative: the extracted
+`mali_csffw.bin` and `mali_csffw_reload.bin` are the same 258,048 bytes with sha
+`de22d2fc...`, so the device cannot be booting a different CSF blob than the one
+this port patches.
+
+One build defect was caught before the flash and is worth keeping in the record.
+The ADT property gate still read `build_id in (0x2388, 0x2389)` while the spec
+declared `leaf_probe` for 2390, and the shim macro gate still read
+`build_id == 0x2388`. The first image of this build therefore carried no
+`sweet-csf-leaf` and no leaf reader - the same drift that cost 2389 its leaves.
+Both gates now read one list (`LEAF_PROBE_BUILDS`) and a test asserts the two
+cannot separate again.

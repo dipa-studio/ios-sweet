@@ -1104,6 +1104,40 @@ TRACE_PROBE[0x2389] = dict(
     reset_vector=(0x010018ed, 0x01001001),
     patches={0x010019b0: TRACE_PROBE[0x2383]['patches'][0x010019b0],
              0x01001000: COLD_BOOT_2389})
+
+# 2390 asks the question 2389 raised and could not answer.  If the low 12 bits of
+# the reset vector are dropped, the vendor's own word 0x010018ed starts the core
+# at 0x01001000 - the middle of a function - which cannot be how the firmware
+# boots on a working device.  So this build leaves that word exactly as it ships
+# and puts a marker program at both candidate landings:
+#
+#   0x010018ec  where an exactly-honoured vector lands (the vendor reset handler)
+#   0x01001000  where a page-masked vector lands
+#
+# Both programs write their own address to shared+8, so the marker says which one
+# the core reached.  Three outcomes, one build, and the vector is not a variable:
+#
+#   marker 0x010018ec  the vector is honoured exactly; the mask reading dies and
+#                      2388's failure needs another cause
+#   marker 0x01001000  the mask holds, and the vendor's own entry is unreachable
+#                      at the address the vendor names
+#   no marker          neither landing ran: the word the vendor relies on starts
+#                      nothing here
+COLD_BOOT_2390_ENTRY = ('72b626484ff00b01016025484ff0070101602448',
+                        '72b641f6ec04c0f2001401239b069c6000bffee7')
+COLD_BOOT_2390_PAGE = ('8c02166803eb8c0255684cf64012c0f202221278',
+                       '72b60124240604f5805401239b069c6000bffee7')
+TRACE_PROBE[0x2390] = dict(
+    TRACE_PROBE[0x2389], kind='cold-boot-fetch',
+    # Deliberately unchanged: the vendor word stays, and the two programs report
+    # which landing the core actually reached.
+    reset_vector=(0x010018ed, 0x010018ed),
+    stub_va=0x010018ec,
+    stub_original=bytes.fromhex(COLD_BOOT_2390_ENTRY[0]),
+    stub=bytes.fromhex(COLD_BOOT_2390_ENTRY[1]),
+    patches={0x010019b0: TRACE_PROBE[0x2383]['patches'][0x010019b0],
+             0x01000200: ('01340a2c', '00bf7047'),
+             0x01001000: COLD_BOOT_2390_PAGE})
 BARRIERS = (0x8F4FF3BF, 0x8F6FF3BF)   # dsb sy / isb sy, first halfword in the low bytes
 
 
@@ -1283,10 +1317,14 @@ def fault_vector_probe(path, expected, build_id):
             # physical pages this build moved it to.
             patch['fetch_prime']['code_section_relocated'] = True
     if vector_new is not None:
+        unchanged = vector_new == spec['reset_vector'][0]
         patch['reset_vector'] = dict(
             va='0x4', was='%#x' % spec['reset_vector'][0], now='%#x' % vector_new,
-            target='%#x' % (vector_new & ~1),
-            note=('the core starts at this word; no stack, literal pool or branch '
+            target='%#x' % (vector_new & ~1), unchanged=unchanged,
+            note=('the vendor word is left exactly as it ships; the two marker programs '
+                  'at 0x010018ec and 0x01001000 report which landing the core reached'
+                  if unchanged else
+                  'the core starts at this word; no stack, literal pool or branch '
                   'stands between reset and the marker write'))
     if build_id == 0x2384:
         patch['positive_control'] = dict(
@@ -1296,16 +1334,29 @@ def fault_vector_probe(path, expected, build_id):
                 '20': 'the 2383 fault entry fired: the instrument works',
                 '30': 'the unmapped read completed without faulting',
                 '0 or 8': 'the read neither faulted nor completed'})
-    if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389):
+    if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390):
         target = {0x2385: '0x100e000', 0x2386: '0x1000200',
                   0x2387: '0x1000600', 0x2388: '0x1001200',
-                  0x2389: '0x1001000'}[build_id]
+                  0x2389: '0x1001000', 0x2390: '0x10018ec'}[build_id]
         patch['cold_boot'] = dict(
             target=target, marker_value=target, marker_field='input_va',
             counter_field='groups', counter_seed=8, counter_meanings={
                 'present': 'the core fetched this block at reset and executed it',
                 'absent': 'the first fetch stalls exactly like every other cold one'})
-    if build_id in (0x2388, 0x2389):
+        if build_id == 0x2390:
+            # Two programs and no vector change: the marker itself names the
+            # landing, so a single capture separates exact from masked.
+            patch['cold_boot'].update(
+                control_target='0x1001000',
+                reset_vector_unchanged=True,
+                landings=[dict(target='0x10018ec',
+                               meaning='the vendor word is honoured exactly'),
+                          dict(target='0x1001000',
+                               meaning='the low 12 bits are dropped and the core starts at the page base')],
+                counter_meanings={
+                    'present': 'the core reached one of the two landings; input_va names which',
+                    'absent': 'neither landing ran, so the vendor word starts nothing here'})
+    if build_id in (0x2388, 0x2389, 0x2390):
         # Recorded so the preflight can prove the instrument travelled with the
         # image: the shim fails closed if the property is missing.
         patch['leaf_probe'] = dict(
@@ -1400,6 +1451,14 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
                  embedded_container_sha256=digest(embedded), diagnostic_only=True)
     return embedded, patch
 
+# Builds whose shim publishes the four live leaf descriptors of the page table it
+# handed the AS. One list feeds both the ADT property gate and the shim macro: the
+# two drifted apart once already (2388 shipped with the property, 2389 with
+# neither), and a build that declares a leaf_probe without the property fails
+# closed at decode time, which is the right failure but a wasted trial.
+LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390)
+
+
 def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False):
     root, end = adt.parse(data)
     if end != len(data):
@@ -1450,14 +1509,14 @@ def build(a):
     #2382 is the2379 container patch on a plan that puts the R-X section after
     # the whole layout. Everything else - leaf encoding, probe, RO-as-RW, start
     # word - is held at2379's values so the PA is the only moved number.
-    if a.build_id in (0x2382, 0x2383, 0x2384, 0x2385, 0x2386, 0x2387, 0x2388, 0x2389):
+    if a.build_id in (0x2382, 0x2383, 0x2384, 0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390):
         if not (a.trace_probe and a.ro_as_rw and a.relocate_code):
             raise ValueError('build%x requires --trace-probe --ro-as-rw --relocate-code' % a.build_id)
         if (a.vendor_memattr or a.global_init or a.fault_probe or a.entry_probe or
                 a.reset_store_stub or a.mcu_control != '2'):
             raise ValueError('build%x may change only the entry and its fetch target' % a.build_id)
     elif a.relocate_code:
-        raise ValueError('--relocate-code is only defined for build2382-2389')
+        raise ValueError('--relocate-code is only defined for build2382-2390')
     if a.fault_probe or a.trace_probe:
         if a.redirect_mcu_stores or a.entry_probe or a.inline_entry or a.entry_pte_guard or a.reset_store_stub:
             raise ValueError('the fault vector probe replaces the handler and takes no other patch')
@@ -1481,7 +1540,8 @@ def build(a):
     label = 'gpu%x' % a.build_id
     command = command.replace('sweettrial=2317', 'sweettrial=%x' % a.build_id)
     command = command.replace('rootrw=1', 'rootrw=0').replace('ufsrw=1', 'ufsrw=0')
-    tree = diagnostic_adt(original_adt, a.build_id, a.global_init, a.build_id in (0x2388, 0x2389))
+    tree = diagnostic_adt(original_adt, a.build_id, a.global_init,
+                          a.build_id in LEAF_PROBE_BUILDS)
     out.mkdir(parents=True)
     (out / (label + '.adt')).write_bytes(tree)
     payload, _ = mkpayload.build(Path(a.kernel), out / (label + '.adt'), command,
@@ -1505,7 +1565,7 @@ def build(a):
                    '-DSWEET_CSF_VENDOR_MEMATTR=' + ('1' if a.vendor_memattr else '0'),
                    '-DSWEET_CSF_GLOBAL_INIT=' + ('1' if a.global_init else '0'),
                    '-DSWEET_CSF_RELOCATE_CODE=' + ('1' if a.relocate_code else '0'),
-                   '-DSWEET_CSF_LEAF_PROBE=' + ('1' if a.build_id == 0x2388 else '0'),
+                   '-DSWEET_CSF_LEAF_PROBE=' + ('1' if a.build_id in LEAF_PROBE_BUILDS else '0'),
                    *dvfs,
                    '-DEMBEDDED_XNU_BYTES=' + str(len(payload))]
     if a.entry_probe:
@@ -1652,7 +1712,7 @@ def build(a):
                 for name in ('tools/matisse-csf-fault-entry.S',
                              'tools/matisse-csf-fault-control.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
-            if a.build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389):
+            if a.build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390):
                 for name in ('tools/matisse-csf-fault-entry.S',
                              'tools/matisse-csf-coldboot.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
@@ -1695,7 +1755,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',

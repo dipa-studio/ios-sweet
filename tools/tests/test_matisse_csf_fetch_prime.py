@@ -10,6 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 FIRMWARE = ROOT / 'research/matisse/20261031-gpu/extracted/vendor_a-mali_csffw.bin'
 SHA = 'de22d2fc06bc8a859968499a6e609c27fe838be062bf5c97d92ea9f904f7229a'
+ADT = ROOT / 'research/matisse/20261031-hs/matisse-userland-native-keys-2317.adt'
 
 
 class FetchPrimeTests(unittest.TestCase):
@@ -144,6 +145,61 @@ class FetchPrimeTests(unittest.TestCase):
             finally:
                 spec['reset_vector'] = saved
 
+    def test_leaf_property_and_shim_macro_read_the_same_list(self):
+        """The gate that emits the ADT property and the one that compiles the
+        reader drifted apart between 2388 and 2389: 2389 shipped with neither, so
+        the capture had no leaves and the decoder refused it. Both now read one
+        list, and this test fails if either is written out again."""
+        self.assertIn(0x2390, self.builder.LEAF_PROBE_BUILDS)
+        self.assertIn(0x2388, self.builder.LEAF_PROBE_BUILDS)
+        source = (ROOT / 'tools/matisse-shim-gpu-image.py').read_text()
+        self.assertIn('a.build_id in LEAF_PROBE_BUILDS)', source)
+        self.assertIn("('1' if a.build_id in LEAF_PROBE_BUILDS else '0')", source)
+        self.assertNotIn('a.build_id == 0x2388', source)
+
+    @unittest.skipUnless(ADT.exists(), 'requires the pinned ADT')
+    def test_leaf_property_is_32_bytes_and_only_when_asked(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('adt', ROOT / 'tools/adt.py')
+        adt = importlib.util.module_from_spec(spec); spec.loader.exec_module(adt)
+        for flag, size in ((True, 32), (False, None)):
+            tree = self.builder.diagnostic_adt(ADT.read_bytes(), 0x2390, False, flag)
+            root, _ = adt.parse(tree)
+            chosen = next(c for c in root.children if c.name == 'chosen')
+            prop = chosen.prop('sweet-csf-leaf')
+            self.assertEqual(len(prop) if prop is not None else None, size)
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2390_leaves_the_vendor_word_alone_and_instruments_both_landings(self):
+        original = FIRMWARE.read_bytes()
+        embedded_2389, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2389)
+        embedded_2390, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2390)
+        config, code = 0x0380, 0x0e94
+        # two differences against 2389, both intended: the vendor reset handler at
+        # 0x010018ec becomes our program, and the vector 2389 moved is restored to
+        # the value the device ships.
+        allowed = set(range(code + 0x18ec, code + 0x18ec + 20))
+        allowed |= set(range(config + 4, config + 8))
+        changed = {i for i, (a, b) in enumerate(zip(embedded_2389, embedded_2390)) if a != b}
+        self.assertTrue(changed)
+        self.assertLessEqual(changed, allowed)
+        # the word the device ships is untouched, which is the whole point
+        self.assertEqual(embedded_2390[config + 4:config + 8],
+                         original[config + 4:config + 8])
+        self.assertEqual(int.from_bytes(embedded_2390[config + 4:config + 8], 'little'),
+                         0x010018ed)
+        self.assertTrue(patch['reset_vector']['unchanged'])
+        self.assertEqual(patch['reset_vector']['now'], '0x10018ed')
+        self.assertEqual(embedded_2390[code + 0x18ec:code + 0x18ec + 20],
+                         bytes.fromhex(self.builder.COLD_BOOT_2390_ENTRY[1]))
+        # both landings carry a marker program, so the capture names the landing
+        self.assertEqual(embedded_2390[code + 0x1000:code + 0x1000 + 20],
+                         bytes.fromhex(self.builder.COLD_BOOT_2390_PAGE[1]))
+        self.assertEqual([landing['target'] for landing in patch['cold_boot']['landings']],
+                         ['0x10018ec', '0x1001000'])
+        self.assertTrue(patch['cold_boot']['reset_vector_unchanged'])
+        self.assertEqual(patch['leaf_probe']['marks'], '420..423')
+
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2389_moves_only_the_vector_to_page_one_offset_zero(self):
         original = FIRMWARE.read_bytes()
@@ -235,21 +291,28 @@ class FetchPrimeTests(unittest.TestCase):
             '*/toolchains/llvm/prebuilt/darwin-x86_64/bin'))
         if not bins:
             self.skipTest('requires ARM linker from Android NDK')
-        cases = ((0x2385, 0x0100E000, 'COLD_BOOT_2385'),
-                 (0x2388, 0x01001200, 'COLD_BOOT_2388'),
-                 (0x2386, 0x01000200, 'COLD_BOOT_2386'),
-                 (0x2387, 0x01000600, 'COLD_BOOT_2387'))
-        for build, target, pinned in cases:
+        cases = ((0x2385, 0x0100E000, 'COLD_BOOT_2385', False),
+                 (0x2388, 0x01001200, 'COLD_BOOT_2388', False),
+                 (0x2386, 0x01000200, 'COLD_BOOT_2386', False),
+                 (0x2387, 0x01000600, 'COLD_BOOT_2387', False),
+                 (0x2389, 0x01001000, 'COLD_BOOT_2389', False),
+                 # 0x010018ec is out of range of add.w's modified immediate and of
+                 # addw's twelve bits, so the 2390 entry variant materialises the
+                 # word with movw/movt: same twenty bytes, different encoding.
+                 (0x2390, 0x010018EC, 'COLD_BOOT_2390_ENTRY', True))
+        for build, target, pinned, wide in cases:
             with self.subTest(build=hex(build)), tempfile.TemporaryDirectory() as directory:
                 p = Path(directory)
                 (p / 'cold.ld').write_text('SECTIONS { '
                     '.text.cold %#x : { *(.text.cold) } }' % target)
-                subprocess.run([str(bins[-1] / 'clang'), '--target=armv7m-none-eabi',
+                command = [str(bins[-1] / 'clang'), '--target=armv7m-none-eabi',
                     '-mcpu=cortex-m7', '-mthumb', '-nostdlib', '-Wl,--build-id=none',
                     '-Wl,-e,csf_cold_boot', '-Wl,-T,' + str(p / 'cold.ld'),
-                    '-DCOLD_TARGET=%#x' % target,
-                    str(ROOT / 'tools/matisse-csf-coldboot.S'), '-o', str(p / 'cold.elf')],
-                    check=True, capture_output=True)
+                    '-DCOLD_TARGET=%#x' % target]
+                if wide:
+                    command.append('-DCOLD_TARGET_WIDE')
+                command += [str(ROOT / 'tools/matisse-csf-coldboot.S'), '-o', str(p / 'cold.elf')]
+                subprocess.run(command, check=True, capture_output=True)
                 elf = (p / 'cold.elf').read_bytes()
                 shoff, = struct.unpack_from('<I', elf, 32)
                 size, count, names_index = struct.unpack_from('<HHH', elf, 46)
@@ -264,8 +327,9 @@ class FetchPrimeTests(unittest.TestCase):
                 self.assertEqual(sections[1][3], target)
                 # nothing but the marker store, so no stack and no literal pool
                 self.assertEqual(bytes.fromhex(stub)[-4:], bytes.fromhex('00bffee7'))
-        # the three differ only in the block's own address: at most one halfword
-        programs = {b: bytes.fromhex(getattr(self.builder, pin)[1]) for b, _, pin in cases}
+        # the add.w family differs only in the block's own address: one halfword
+        programs = {b: bytes.fromhex(getattr(self.builder, pin)[1])
+                    for b, _, pin, wide in cases if not wide}
         self.assertEqual({len(v) for v in programs.values()}, {20})
         for first in programs:
             for second in programs:
@@ -273,6 +337,14 @@ class FetchPrimeTests(unittest.TestCase):
                     continue
                 diff = [i for i in range(20) if programs[first][i] != programs[second][i]]
                 self.assertLessEqual(len(diff), 2, (hex(first), hex(second)))
+        # the wide variant is the same shape, not the same encoding: cpsid, the
+        # absolute target, the store, the park, and nothing else
+        wide_bytes = bytes.fromhex(self.builder.COLD_BOOT_2390_ENTRY[1])
+        self.assertEqual(len(wide_bytes), 20)
+        self.assertEqual(wide_bytes[:2], bytes.fromhex('72b6'))
+        self.assertEqual(wide_bytes[-4:], bytes.fromhex('00bffee7'))
+        movable = bytes.fromhex(self.builder.COLD_BOOT_2389[1])
+        self.assertEqual(wide_bytes[-10:], movable[-10:])
 
     def test_control_entry_assembly_matches_the_2384_patch(self):
         """2384's positive control is the linked bytes too."""

@@ -527,6 +527,30 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertIn('alignment idea dies', csf['instrument_verdict'])
         self.assertIn('0x01002000', csf['instrument_verdict'])
 
+    def test_2390_names_the_landing_from_the_marker_alone(self):
+        # The vendor word is untouched in this build, so the marker decides:
+        # 0x010018ec means the vector is honoured exactly, 0x01001000 means the
+        # low twelve bits are dropped, anything else means nothing started.
+        csf = self.cold_report(build=0x2390, input_va=0x010018EC, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'vendor-entry-executed')
+        self.assertEqual(csf['cold_boot_start'], 'vendor-entry')
+        self.assertTrue(csf['cold_boot_marker_present'])
+        self.assertIn('honoured exactly', csf['instrument_verdict'])
+        self.assertIn('0x10018ec', csf['cold_boot_landings'])
+
+        csf = self.cold_report(build=0x2390, input_va=0x01001000, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'start-masked-to-page-base')
+        self.assertEqual(csf['cold_boot_start'], 'page-base')
+        self.assertEqual(csf['cold_boot_target'], 0x01001000)
+        self.assertIn('low 12 bits are dropped', csf['instrument_verdict'])
+        self.assertIn('0x8ec past the entry', csf['instrument_verdict'])
+
+        csf = self.cold_report(build=0x2390, input_va=0x04000200, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'cold-boot-fetch-stalls')
+        self.assertIsNone(csf['cold_boot_start'])
+        self.assertFalse(csf['cold_boot_marker_present'])
+        self.assertIn('starts nothing here', csf['instrument_verdict'])
+
     def test_2388_requires_its_leaf_property(self):
         # No 340..343 records means the property never reached the kernel; the
         # report must refuse rather than report zeros as if the walk had run.

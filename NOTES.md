@@ -1,6 +1,63 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2389 RAN - ONLY A PAGE-ALIGNED START EXECUTES <<<
+## >>> ACTIVE 2026-11-06:2390 RAN - THE VENDOR ENTRY RUNS; THE MASK READING IS DEAD <<<
+
+**RESULT: `input_va = 0x010018ec` - the marker is present at the vendor's own entry,
+with the reset vector word left exactly as it ships (`0x010018ed`).**
+`mmu_raw = 0`, `as_fault = 0`, `mcu_status = 1`, `relocation_observed = true`,
+`error = -53`, and the leaves read back as planned.
+
+```
+image  9051fedf...5fff3e  26,714,112 B   kernel 1760629a (SWEET_BUILD_ID 0x2390)
+part.  2123d7d2...4d8a232  written and read back, fastboot 111.67 s
+boot_a restored to 2931647a...86b1 (restored_sha256 verified)
+outcome vendor-entry-executed
+```
+
+Two marker programs, one word untouched. 0x010018ec is the address the vendor word
+names; 0x01001000 is the page base below it. The core wrote 0x010018ec, so it went
+where the word says - the vendor entry is reachable in this port.
+
+**This retracts #35.** "Only a page-aligned start executes" cannot be true: 0x18ec
+is neither 4 KB nor 512-byte aligned. 2385 and 2389 both pointed at addresses that
+happen to be page bases, so both readings fitted the same two successes and only
+2390 could tell them apart. It did.
+
+What survives is the part #35 got right by accident and now has a direct proof for:
+`SWEET_CSF_RESET_ENTRY_VA` (0x010018ec) is the vendor entry, and the firmware does
+start here. `version = 0` / `firmware_ready = 0` therefore do not mean "never
+started"; they mean it starts and then hangs.
+
+**What is not settled.** 2386, 2387 and 2388 put the same twenty bytes at
+0x01000200, 0x01000600 and 0x01001200 with the vector pointing at them, and none of
+them ran. Those three are real non-starts, not stale evidence: their
+`cleanup_error` is -53 (the MCU never reached a state the halt handshake could
+stop) while 2385/2389/2390 all report 0. A container-level audit of all six images
+against the vendor blob shows every difference inside the intended ranges, so this
+is not build contamination.
+
+That leaves 2390 ambiguous between two readings, and the next build separates them:
+
+- **exact** - the vector is honoured as written, and the three failures are about
+  those addresses specifically (0x200, 0x600, 0x1200 - all 512-byte aligned)
+- **fallback** - a non-page-aligned vector is ignored and the core starts at the
+  vendor entry anyway, which is why 2390 marked 0x010018ec
+
+Both explain all six trials; only a non-aligned vector pointing somewhere *else*
+can tell them apart.
+
+**Also established offline:** `vendor_a-mali_csffw.bin` and
+`vendor_a-mali_csffw_reload.bin` are the same 258,048 bytes (sha `de22d2fc...`), so
+"the device boots a different blob" is out.
+
+**NEXT: 2391 - vector to 0x01001A01, programs at 0x01001A00 and 0x010018EC.**
+0x1A00 is inside the code section, 512-byte aligned and not page aligned, and
+nothing has ever executed there. 2390's program stays at 0x18ec as the control:
+marker 0x01001A00 means the vector is honoured as written and 2386-2388 need
+another cause; marker 0x010018EC means a non-aligned vector is ignored and the
+vendor entry started instead; no marker means neither reading holds.
+
+## >>> PREVIOUS 2026-11-06:2389 RAN - ONLY A PAGE-ALIGNED START EXECUTES <<<
 
 **RESULT: `input_va = 0x01001000` - the marker is present.** The same twenty bytes
 that did nothing at 0x01001200 in 2388 ran at 0x01001000. `mmu_raw = 0`,

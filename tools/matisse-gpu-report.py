@@ -109,7 +109,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -489,6 +489,64 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 outcome = 'unexpected-counter'
                 verdict = 'the probe did not reach a defined 9/10/11 checkpoint'
             csf['fetch_prime_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2390:
+            # The vendor's word is left exactly as it ships, so this capture is
+            # not a moved vector at all: a marker program sits at both candidate
+            # landings and writes its own address, so input_va names where the
+            # core started. One build, three outcomes, no new mapping.
+            csf['cold_boot_counter'] = csf['groups']
+            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a4000
+            csf['cold_boot_landings'] = {'0x10018ec': 'the address the vendor word names',
+                                         '0x1001000': 'the page base below it'}
+            if not csf['relocation_observed']:
+                outcome = 'not-relocated'
+                verdict = ('the executable probe PA is not the relocated one; this is not the '
+                           '2383 mapping the build reuses')
+            elif csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault']:
+                outcome = 'cold-boot-refused'
+                verdict = ('the MMU refused something before either marker appeared (AS_FAULT %#x '
+                           'at %#x), so this run cannot answer where the core started' %
+                           (csf['as_fault'], csf['as_fault_hi'] << 32 | csf['as_fault_lo']))
+            elif csf['input_va'] == 0x010018EC:
+                outcome = 'vendor-entry-executed'
+                csf['cold_boot_target'] = 0x010018EC
+                csf['cold_boot_marker_present'] = True
+                csf['cold_boot_start'] = 'vendor-entry'
+                verdict = ('the core started at 0x010018ec - the address the vendor word names - '
+                           'and that word was never touched in this build. So the reset vector is '
+                           'honoured exactly and the page-base reading of 2388/2389 is wrong: 2388 '
+                           'failed for some other reason, and the vendor entry is reachable here. '
+                           'The next question is why the untouched firmware still never reports '
+                           'ready (version 0, firmware_ready 0) when its own entry does run')
+            elif csf['input_va'] == 0x01001000:
+                outcome = 'start-masked-to-page-base'
+                csf['cold_boot_target'] = 0x01001000
+                csf['cold_boot_marker_present'] = True
+                csf['cold_boot_start'] = 'page-base'
+                verdict = ('the core reached 0x01001000, not the 0x010018ec the vendor word names, '
+                           'so the low 12 bits are dropped. The vendor firmware starts at a page '
+                           'base too: 0x010018ec was never an entry, SWEET_CSF_RESET_ENTRY_VA and '
+                           'every probe built on it (2369-2384) were aimed 0x8ec past the entry, '
+                           'and the vendor handler at 0x010018ec has never run in this port. What '
+                           'actually boots the vendor firmware is whatever sits at 0x01001000, '
+                           'which this port has been overwriting since 2389')
+            else:
+                outcome = 'cold-boot-fetch-stalls'
+                csf['cold_boot_target'] = 0x010018EC
+                csf['cold_boot_marker_present'] = False
+                csf['cold_boot_start'] = None
+                verdict = ('neither landing ran and nothing faulted: the word the vendor relies on '
+                           'starts nothing here at all. Either the image the device boots is not '
+                           'this container - check mali_csffw_reload.bin - or the AS rejects the '
+                           'entry before the first fetch. Both are offline questions, and this '
+                           'retires the assumption that the vendor path ever started in this port')
+            if 'leaf_0x01000000' in csf:
+                csf['leaf_pa'] = {name: csf[name] & 0x0000fffffffff000 for name in
+                                  ('leaf_0x01000000', 'leaf_0x01001000',
+                                   'leaf_0x0100e000', 'leaf_0x0100f000')}
+                csf['leaf_page0_as_planned'] = csf['leaf_pa']['leaf_0x01000000'] == 0x401a4000
+            csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
         if expected_build in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389):
             # The reset vector is the only thing between the core and a block

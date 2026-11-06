@@ -47,9 +47,18 @@
 .thumb_func
 csf_cold_boot:
     cpsid i
+#ifdef COLD_TARGET_WIDE
+    /* 0x010018ec is out of range of both add.w's modified immediate and addw's
+     * 12-bit field, so this variant materialises the whole word instead: 24
+     * bytes rather than 20, still no stack, no literal pool, no branch.
+     * 2385..2389 keep their pinned add.w bytes untouched. */
+    movw r4, #(COLD_TARGET & 0xFFFF)
+    movt r4, #((COLD_TARGET >> 16) & 0xFFFF)
+#else
     movs r4, #1
     lsls r4, r4, #24              /* r4 = 0x01000000 */
     add.w r4, r4, #(COLD_TARGET & 0xFFFF)   /* r4 = COLD_TARGET, this very block */
+#endif
     movs r3, #1
     lsls r3, r3, #26              /* r3 = 0x04000000, the shared page */
     str  r4, [r3, #8]             /* shared+8: the marker */
