@@ -31,6 +31,11 @@ struct sweet_csf_boot_config {
     /*2335:0/1 read a distinct checkpoint word at shared+0xffc before AUTO
      * and after the wait,before cleanup. Never changes interface version. */
     uint32_t entry_checkpoint;
+    /*2372: value written to MCU_CONTROL to start the MCU.0 selects the
+     * vendor form ENABLE|AUTO(3);2 reproduces the2333-2371 sequence that
+     * set AUTO alone. Only0,2,3 are accepted so a trial moves one number.
+     * The written/readback pair is recorded in platform_reserved. */
+    uint32_t mcu_control_value;
 };
 struct sweet_csf_platform_snapshot {
     uint32_t gpu_status, mcu_control, gpu_fault_status, gpu_fault_lo, gpu_fault_hi;
@@ -97,6 +102,9 @@ struct sweet_csf_boot_report {
     uint32_t pte_group_requested, pte_pages_built;
     /*2331 appends136 bytes (440 total). Flags bit0 before AUTO,bit1
      * after wait/before cleanup. Values are observations,not readiness. */
+    /*2331 header word. 2372 repurposes the reserved word: bits15..8 hold the
+     * value written to MCU_CONTROL, bits7..0 the byte read back immediately
+     * afterwards. Zero on every build before2372. */
     uint32_t platform_sample_flags, platform_reserved;
     struct sweet_csf_platform_snapshot platform_before, platform_after;
     /*2332 appends120 bytes (560 total), preserving the440-byte prefix.
@@ -113,7 +121,11 @@ struct sweet_csf_boot_report {
 enum sweet_csf_boot_stage {
     SWEET_CSF_BOOT_CONFIG=1, SWEET_CSF_BOOT_L2=2, SWEET_CSF_BOOT_AS=3,
     SWEET_CSF_BOOT_MCU=4, SWEET_CSF_BOOT_IFACE=5, SWEET_CSF_BOOT_CLEANUP=6,
-    SWEET_CSF_BOOT_COMPLETE=7
+    SWEET_CSF_BOOT_COMPLETE=7,
+    /*2372: stop between the platform assertions and the start write, i.e. the
+     * MCU did not return to a halt state we could measure. Earlier builds
+     * never reported this stage. */
+    SWEET_CSF_BOOT_HALT=8
 };
 enum sweet_csf_boot_error {
     SWEET_CSF_BOOT_ARGUMENT=-50, SWEET_CSF_BOOT_MODEL=-51,

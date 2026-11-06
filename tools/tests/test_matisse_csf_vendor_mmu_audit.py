@@ -254,8 +254,10 @@ class RegisterTraceTests(unittest.TestCase):
         self.assertEqual(registers['0x1008'], '0xffffffff')
         self.assertEqual(registers['0x2008'], '0xffff')
         self.assertEqual(registers['0x28'], '0x80503')
+        #2372: explicit halt(0), the vendor ENABLE|AUTO start(3), then cleanup.
         self.assertEqual([item['value'] for item in trace['writes'] if item['offset'] == '0x700'],
-                         ['0x2', '0x0'])
+                         ['0x0', '0x3', '0x0'])
+        self.assertEqual(trace['mcu_control_value'], 3)
         self.assertEqual([trace['return_code'], trace['stage'], trace['reset_completed']], [-53, 4, 1])
 
     @unittest.skipUnless(shutil.which('cc'), 'requires C compiler')

@@ -57,11 +57,15 @@ class PersistentReportPatchTests(unittest.TestCase):
         # locally edited build tree must not conceal a broken source patch.
         names = subprocess.check_output(['git','ls-files','--','xnu/patches/*.patch'],
                                         cwd=ROOT,text=True).splitlines()
-        latest='xnu/patches/0142-matisse-mcu-fault-probe-identity.patch'
+        identity = sorted(n for n in names if n.endswith('-identity.patch'))
+        self.assertTrue(identity, 'no identity patch carries the build id')
+        last = Path(ROOT / identity[-1]).read_text()
+        # The patch removes the old id and adds the new one; the added line is
+        # the last occurrence in the file.
+        expected = int(last.split('#define SWEET_BUILD_ID 0x')[-1].split('u')[0], 16)
         evidence='xnu/patches/0136-matisse-gpu-dvfs-evidence.patch'
-        for name in (evidence, latest):
-            if name not in names:
-                names = sorted(names + [name])
+        if evidence not in names:
+            names = sorted(names + [evidence])
         self.assertTrue(names)
         with tempfile.TemporaryDirectory(prefix='csf-evidence-patches-') as directory:
             for name in names:
@@ -70,7 +74,9 @@ class PersistentReportPatchTests(unittest.TestCase):
                     cwd=directory,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,name+': '+result.stderr)
             source = (Path(directory)/'bsd/dev/sweet_ufs.c').read_text()
-        self.assertIn('#define SWEET_BUILD_ID 0x2343u',source)
+        # The last identity patch in the sequence decides the id the tree ends on.
+        self.assertEqual(int(source.split('#define SWEET_BUILD_ID 0x')[1].split('u')[0],16),
+                         expected)
         begin = source.index('static void\nsweet_gpu_report_marks(void)\n{')
         end = source.index('\n}\n',begin)
         report = source[begin:end]

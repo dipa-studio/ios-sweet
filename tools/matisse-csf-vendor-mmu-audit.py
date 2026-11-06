@@ -125,14 +125,23 @@ def probe_boot_trace(vendor_ina0=0, vendor_cached_memattr=0, platform_snapshot=0
         result = subprocess.run([str(binary)], check=True, capture_output=True, text=True)
         trace = json.loads(result.stdout)
     registers, before_auto = {}, []
+    start_value = None
     for write in trace['writes']:
-        if int(write['offset'], 16) == 0x700 and int(write['value'], 16) == 2:
+        offset, value = int(write['offset'], 16), int(write['value'], 16)
+        #2372: the start word is ENABLE|AUTO(3);2 is the pre-2372 baseline.
+        # A zero write to the same register immediately before it is the
+        # explicit halt and is not part of the state the start depends on.
+        if offset == 0x700 and value in (2, 3):
+            start_value = value
             break
+        if offset == 0x700 and not value:
+            continue
         registers[write['offset']] = write['value']
         before_auto.append(write)
     else:
         raise ValueError('actual C probe did not reach MCU AUTO')
     trace.update(before_auto=before_auto, registers_before_auto=registers, vendor_ina0=vendor_ina0,
+                 mcu_control_value=start_value,
                  vendor_cached_memattr=vendor_cached_memattr,
                  scope='Actual C boot code, synthetic powered device and AS completion; '
                        'no firmware IRQ, hardware execution or cache/MMU model.')

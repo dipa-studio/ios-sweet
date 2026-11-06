@@ -18,6 +18,7 @@ struct model {
  uint32_t memattr_lo,memattr_hi,coherency,coherency_writes,control,platform_reads;
  int bad_coherency_readback,vendor_ina0,vendor_cached_memattr,bad_memattr;
  int unpowered,bad_id,bad_bits,as_busy,no_l2,no_fw,fw_fault,reset_fail,bad_iface,stale,stuck_timer,live_table,request_done,disable_fail,bad_readback,bad_irq_mask,clamp_masks,missing_gpu_irq,missing_mmu_irq;
+ unsigned halted,started,halt_writes,expected_control,halt_fail;
 };
 static uint32_t rd(void *p,uint64_t a) {
  struct model*m=p;m->reads++;
@@ -36,7 +37,7 @@ static uint32_t rd(void *p,uint64_t a) {
   m->platform_reads++;return (uint32_t)a+(m->enabled?1:0);
  }
  if(a==0x1c001f3c||a==0x1c001f40)return m->unpowered?2:6;
- if(a==0x90010ffc){assert(!m->resets && m->as_updates==2 && m->control==(m->enabled?2:0));m->marker_reads++;return m->enabled?0x53545542:0;}
+ if(a==0x90010ffc){assert(!m->resets && m->as_updates==2 && m->control==(m->enabled?(m->expected_control?m->expected_control:3):0));m->marker_reads++;return m->enabled?0x53545542:0;}
  if(a==0x90006000){assert(!m->resets && m->as_updates==2);return 0x12345678;}
  if(a>=0x90010000 && a<0x90010020) {
   assert(m->as_updates==2);
@@ -110,10 +111,19 @@ static void wr(void*p,uint64_t a,uint32_t v) {
  case 0x1004:m->job&=~v;return;
  case 0x700:
   m->control=v;
-  if(v==0){if(!m->disable_fail)m->mcu=0;return;}
-  assert(v==2 && m->l2 && m->as_updates==2 && m->transcfg==(m->vendor_ina0?0x42000006:0x420001c6));
+  /* A zero write before the start is the explicit halt; after it, the same
+   * write is the cleanup disable. halt_fail keeps the MCU awake across the
+   * halt so the halt poll has something to time out on. */
+  if(v==0){
+   if(!m->started && !m->halt_writes){m->halt_writes=1;m->halted=1;
+    m->mcu=m->halt_fail?1:0;return;}
+   if(!m->disable_fail)m->mcu=0;return;
+  }
+  assert(m->halted && !m->started);
+  assert(v==(m->expected_control?m->expected_control:3));
+  assert(m->l2 && m->as_updates==2 && m->transcfg==(m->vendor_ina0?0x42000006:0x420001c6));
   assert((m->gpu_mask&0x103)==0x103 && m->job_mask==UINT32_MAX && (m->mmu_mask&0xff)==0xff);
-  m->enabled++;m->mcu=1;
+  m->started=1;m->enabled++;m->mcu=1;
   if(m->request_done)m->mmu=0x10000;
   if(m->fw_fault)m->mmu=1;
   else if(!m->no_fw)m->job|=0x80000000;
@@ -151,6 +161,15 @@ int main(void) {
  assert(r.tiler_present_lo==1 && r.tiler_transition_lo==1 && r.tiler_ready_lo==1);
  assert(r.sample_flags==15 && r.version_before==r.version && !r.disable_error && !r.disable_status);
  assert(r.transcfg_lo==0x420001c6 && r.transtab_lo==0x90000000 && !r.transtab_hi);
+ /*2372: one measured halt before the start, and the start word recorded. */
+ assert(r.platform_reserved==0x303 && m.halt_writes==1 && m.started==1);
+ c=cfg();c.mcu_control_value=2;m=model();m.expected_control=2;
+ assert(!run(&m,&c,&r));clean(&m,&r);
+ assert(r.platform_reserved==0x202 && m.halt_writes==1);
+ c=cfg();c.mcu_control_value=1;m=model();assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
+ c=cfg();m=model();m.halt_fail=1;
+ assert(run(&m,&c,&r)==-52 && r.stage==8 && !m.started && m.halt_writes==1);
+ assert(r.platform_reserved==0 && r.mcu_status==1);
  m=model();m.coherency=0;c=cfg();c.noncoherent=1;assert(!run(&m,&c,&r));clean(&m,&r);
  assert(m.coherency_writes==1 && r.diag_flags==127 && !r.coherency_before);
  assert(r.coherency_requested==31 && r.coherency_readback==31 && r.coherency_after==31);
@@ -187,8 +206,8 @@ int main(void) {
  }
  m=model();c.vendor_cached_memattr=2;assert(run(&m,&c,&r)==-50 && !m.reads && !m.writes);
  c=cfg();c.platform_snapshot=1;m=model();assert(!run(&m,&c,&r));clean(&m,&r);
- assert(r.platform_sample_flags==3 && !r.platform_reserved && m.platform_reads==16);
- assert(r.platform_before.mcu_control==0 && r.platform_after.mcu_control==2);
+ assert(r.platform_sample_flags==3 && r.platform_reserved==0x303 && m.platform_reads==16);
+ assert(r.platform_before.mcu_control==0 && r.platform_after.mcu_control==3);
  assert(!r.platform_before.job_stat && r.platform_after.job_stat==0x80000000);
  assert(r.platform_before.mfg_pll_con1==0x13fa000c && r.platform_after.mfg_pll_con1==0x13fa000d);
  assert(r.platform_before.mfg_power3==0x1c001ec4 && r.platform_after.mfg_power3==0x1c001ec5);

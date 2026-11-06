@@ -142,6 +142,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
        !c->timeout_ms||c->timeout_ms>1000||c->noncoherent>1||c->vendor_ina0>1||
        c->vendor_cached_memattr>1||c->platform_snapshot>1||c->access_snapshot>1||c->platform_path>1||
        c->entry_checkpoint>1||(c->entry_checkpoint&&!c->access_snapshot)||
+       (c->mcu_control_value&&c->mcu_control_value!=2&&c->mcu_control_value!=3)||
        c->pte_group_requested>15||
        c->pte_pages_built>c->arena_bytes/4096||c->root_pa!=c->arena_pa||
        c->arena_pa<0x40000000||(c->arena_pa&4095)||!c->arena_bytes||
@@ -268,20 +269,44 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
         r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
     }
     r->irq_gate_passed=1;
-    r->stage=SWEET_CSF_BOOT_MCU;
+    r->stage=SWEET_CSF_BOOT_HALT;
     platform_state(c,io,r,0);
     access_state(c,io,r,0);
     if(platform_path(c,io,r,0)) {
         r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
     }
-    wr(io,c->gpu+0x700,2); /* AUTO is2; ENABLE is1. */
+    /* Drive the MCU to a halt we measured ourselves before starting it. The
+     * entry check above already required MCU_STATUS==0, but that is a state
+     * this transaction inherited; the vendor driver halts the MCU explicitly
+     * before it loads and starts firmware, and a stale AUTO bit from an
+     * earlier aborted boot would survive a bare STATUS read. Polling after
+     * the write is what turns the assumption into evidence. */
+    wr(io,c->gpu+0x700,0);
+    r->mcu_status=rd(io,c->gpu+0x704);
+    if(r->mcu_status) {
+        rc=poll(io,c->gpu+0x704,UINT32_MAX,0,budget);
+        r->mcu_status=rd(io,c->gpu+0x704);
+        if(rc) {r->error=SWEET_CSF_BOOT_STATE;goto cleanup;}
+    }
+    r->stage=SWEET_CSF_BOOT_MCU;
+    /* Vendor kbase_csf_firmware_enable_mcu writes ENABLE|AUTO(3). Every build
+     * up to2371 wrote AUTO alone(2); keeping that value available behind a
+     * config word means a trial moves exactly one number. The written and
+     * immediately read-back bytes go to platform_reserved so the696-byte
+     * report ABI stays unchanged. path_reserved keeps its2335 checkpoint
+     * meaning; do not reuse it here. */
+    uint32_t control=c->mcu_control_value?c->mcu_control_value:3;
+    wr(io,c->gpu+0x700,control);
+    r->platform_reserved=(control<<8)|(rd(io,c->gpu+0x700)&0xff);
     uint64_t begin=io->ticks(io->context);
     rc=SWEET_CSF_BOOT_TIMEOUT;
     for(uint32_t i=0;i<10000000;i++) {
         r->mcu_status=rd(io,c->gpu+0x704);r->mmu_raw=rd(io,c->gpu+0x2000);
         r->job_raw=rd(io,c->gpu+0x1000);
-        /* CSF MMU upper16 bits are request completion, not page faults. */
-        if((r->mmu_raw&0xffff) || r->mcu_status==3 || (rd(io,c->gpu+0x20)&3)) {rc=SWEET_CSF_BOOT_FAULT;break;}
+        /* Any status bit other than ENABLED(1) means the MCU did not take the
+         * start value: the old code faulted on3 only, and3 is ENABLED|HALTED.
+         * CSF MMU upper16 bits are request completion, not page faults. */
+        if((r->mmu_raw&0xffff) || (r->mcu_status&~1u) || (rd(io,c->gpu+0x20)&3)) {rc=SWEET_CSF_BOOT_FAULT;break;}
         if(r->job_raw&0x80000000) {rc=0;break;}
         if(io->ticks(io->context)-begin>=budget)break;
     }

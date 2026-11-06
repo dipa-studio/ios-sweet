@@ -16,6 +16,15 @@ static uint8_t arena[2u<<20] __attribute__((aligned(4096)));
 extern const uint8_t sweet_csf_blob_start[],sweet_csf_blob_end[];
 struct sweet_csf_boot_report shim_csf_report;
 _Static_assert(sizeof(struct sweet_csf_boot_report)==696, "CSF2333 platform path ABI");
+/* Value written to MCU_CONTROL to start the MCU. 3 is ENABLE|AUTO, the form
+ * the vendor driver uses; 2 reproduces every build up to2371, which set AUTO
+ * alone. The image builder sets this from --mcu-control so a trial changes one
+ * number. */
+#ifndef SWEET_CSF_MCU_CONTROL
+#define SWEET_CSF_MCU_CONTROL 3
+#endif
+_Static_assert(SWEET_CSF_MCU_CONTROL==2 || SWEET_CSF_MCU_CONTROL==3,
+               "MCU_CONTROL must be AUTO alone or ENABLE|AUTO");
 static int overlap(uint64_t a,uint64_t n,uint64_t b,uint64_t m)
 {
     if(!n||!m||a>UINT64_MAX-n||b>UINT64_MAX-m)return 1;
@@ -78,7 +87,8 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
         .arena_bytes=memory.required_bytes,.shared_offset=memory.shared_offset,
         .shared_bytes=memory.shared_bytes,.timeout_ms=1000,.noncoherent=1,
         .pte_group_requested=6,.vendor_ina0=1,.vendor_cached_memattr=1,
-        .platform_snapshot=1,.access_snapshot=1,.platform_path=1};
+        .platform_snapshot=1,.access_snapshot=1,.platform_path=1,
+        .mcu_control_value=SWEET_CSF_MCU_CONTROL};
 #if defined(SHIM_CSF_ENTRY_PROBE) || defined(SHIM_CSF_ENTRY_CHECKPOINT)
     c.entry_checkpoint=1;
 #endif
@@ -100,6 +110,8 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
     rc=sweet_csf_boot(&c,io,&shim_csf_report);
     con_hex2("CSF","stage=",shim_csf_report.stage,"error=",(uint32_t)shim_csf_report.error);
     con_hex2("CSF","version=",shim_csf_report.version,"mcu=",shim_csf_report.mcu_status);
+    con_hex2("CSF start","ctl=",shim_csf_report.platform_reserved>>8,
+             "back=",shim_csf_report.platform_reserved&0xff);
     con_hex2("CSF","mmu=",shim_csf_report.mmu_raw,"reset=",shim_csf_report.reset_raw);
     return rc;
 }

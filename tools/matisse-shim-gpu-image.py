@@ -1099,6 +1099,7 @@ def build(a):
     definitions = ['-DSHIM_GPU_PROBE', '-DSHIM_CSF_PROBE', '-DSHIM_RECOVERY_FALLBACK',
                    '-DSHIM_RECOVERY_OFFSET=' + str(FALLBACK_OFFSET),
                    '-DSWEET_SHIM_BUILD_LABEL="%x"' % a.build_id,
+                   '-DSWEET_CSF_MCU_CONTROL=' + str(a.mcu_control),
                    *dvfs,
                    '-DEMBEDDED_XNU_BYTES=' + str(len(payload))]
     if a.entry_probe:
@@ -1280,6 +1281,10 @@ def main():
     p.add_argument('--dvfs-commit', default='off', metavar='{off,current,<oppidx>}',
                    help='send CMD_COMMIT after POWER_ON: off (default), current (the '
                         'index GPUEB already reports, no frequency change), or an index')
+    p.add_argument('--mcu-control', default='3', choices=('2', '3'),
+                   help='value written to MCU_CONTROL to start the MCU: 3 is the vendor '
+                        'ENABLE|AUTO form (default), 2 reproduces every build up to2371 '
+                        'that set AUTO alone')
     for key in ('firmware','firmware-sha256','kernel','kernel-sha256','template','template-sha256','adt','adt-sha256',
                 'stock','stock-sha256','frozen','cmdline','ndk','out'):
         p.add_argument('--' + key, required=True)
