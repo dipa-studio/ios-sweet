@@ -499,10 +499,20 @@ class ReportDecodeTests(unittest.TestCase):
         # the 2385 marker in a 2386 capture is not this block's marker
         csf = self.cold_report(build=0x2386, input_va=0x0100E000)['csf']
         self.assertEqual(csf['cold_boot_outcome'], 'cold-boot-fetch-stalls')
-        self.assertIn('differs from the one that worked', csf['instrument_verdict'])
+        self.assertIn('cannot be reached by any entry path', csf['instrument_verdict'])
         self.assertEqual(self.cold_report(build=0x2386, input_va=0x01000200, mmu_raw=1,
                                           error=-54)['csf']['cold_boot_outcome'],
                          'cold-boot-refused')
+
+    def test_2387_bisects_page_0(self):
+        csf = self.cold_report(build=0x2387, input_va=0x01000600)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'cold-boot-fetch-completes')
+        self.assertEqual(csf['cold_boot_target'], 0x01000600)
+        self.assertIn('confined to block 1', csf['instrument_verdict'])
+        csf = self.cold_report(build=0x2387, input_va=0x04000200)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'cold-boot-fetch-stalls')
+        self.assertIn('page-granular', csf['instrument_verdict'])
+        self.assertIn('veneer', csf['instrument_verdict'])
 
     def test_csf_timeout_provenance_requires_matching_callback_evidence(self):
         platform = dict(stage=8, error=-53)

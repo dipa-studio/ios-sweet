@@ -979,3 +979,60 @@ The bisect that separates the two: keep everything and move the reset word to
 marker there means the damage is confined to block 1; an absent marker means the
 whole of page 0 is unreachable, which is a page-granular fault in the memory path
 and a different investigation.
+
+## 33. 2387 ran: page 0 cannot be fetched at all
+
+Trial 2026-11-06 21:51, image `9cca6494...95dd`, kernel `5172beb0` (`SWEET_BUILD_ID`
+0x2387), fastboot at 83.48 s, `boot_a` restored to `2931647a...86b1`.
+
+```
+input_va (shared+8)      0x04000200   the template seed: no marker
+groups (shared+16)       8           the program never started
+mmu_raw, as_fault        0, 0        nothing was refused
+mcu_status, relocation   1, true
+error                    -53
+```
+
+Same 20-byte program as 2385, reset word moved to `0x01000601` - block 3 of the
+page that holds 0x01000200, and a block no build has ever patched. It did not run.
+
+So the damage is page-granular. 2386's "the block is the wall" was one level too
+small; 2385's "the running core is the wall" was one level too big. The reachable
+set is now:
+
+| page | VA | entry | result |
+|---|---|---|---|
+| 0 | 0x01000200, 0x01000600 | reset fetch | stalls, no fault - 2386, 2387 |
+| 0 | 0x01000200 | `bl` from a running program | stalls - 2379/2382/2383 |
+| 0 | 0x01000200 | data read from a running program | stalls - 2373/2375 |
+| 1 | 0x010018ec | reset fetch (vendor's own reset) | assumed, never proven |
+| 14 | 0x0100E000 | reset fetch | runs - 2385 |
+
+The page tables were re-checked from the real C this time. A host harness built
+from `mali_csf_memory.c` with the production flags, walking the arena it produces:
+
+```
+0x01000000  ...401a4cc3  PA 0x401a4000    0x0100e000  ...401b2cc3  PA 0x401b2000
+0x01001000  ...401a5cc3  PA 0x401a5000    0x0100f000  ...401b3cc3  PA 0x401b3000
+```
+
+Sixteen leaves, identical in AF, AP, SH, AttrIndx and memory group, one L3 table,
+no duplicate mappings, differing only in PA. The Python replica quoted in ## 32
+says `...4cc7` and is wrong about AttrIndx; it is a mirror, not the implementation,
+and should not be cited as evidence again.
+
+One operational defect is worth recording because it cost a restore. `pyusb` was
+missing on the python in `PATH`, so the runner's raw restore fell back to the
+`fastboot` CLI - the transport this LK breaks with `could not clear input pipe;
+e0005000`, which is why `tools/fbraw.py` exists. The stock prefix was written,
+then the run was interrupted with the device sitting in fastboot and `boot_a`
+half-restored. It was recovered with `pyusb 1.3.1` installed, the raw channel
+rebooting into recovery, and the runner's `restore-only` phase, which captured
+`after` before rewriting the partition - so the marks survived and the baseline
+finished verified.
+
+Next: prove whether page 1 executes at all (reset word -> `0x01001201`), and in the
+same build read the live leaf descriptors out of the arena the MMU walks. The
+second is passive - it changes no mapping - and it is the instrument this port has
+never had: every mapping argument so far has compared plans, never the table the
+MCU actually uses.

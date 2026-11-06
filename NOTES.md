@@ -1,6 +1,64 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-06:2386 RAN - THE BLOCK IS THE WALL, NOT THE CORE'S STATE <<<
+## >>> ACTIVE 2026-11-06:2387 RAN - PAGE 0 CANNOT BE FETCHED AT ALL <<<
+
+**RESULT: `input_va = 0x04000200` - the marker is absent again.** The reset word
+pointed at `0x01000601`, block 3 of the same page that holds the block 2386 could
+not reach, and a block no build had ever patched. `groups = 8`, `mmu_raw = 0`,
+`as_fault = 0`, `mcu_status = 1`, `relocation_observed = true`, `error = -53`.
+
+```
+image  9cca6494...95dd  26,714,112 B   kernel 5172beb0 (SWEET_BUILD_ID 0x2387)
+part.  8d48f6d1...db88  written and read back
+boot_a restored to 2931647a...86b1 (restored_sha256 verified)
+outcome cold-boot-fetch-stalls   fastboot 83.48 s
+```
+
+So the bisect answered: the damage is **page-granular, not block-granular**. Two
+blocks of page 0 fail (0x01000200, 0x01000600) and page 14 runs (0x0100E000), so
+"the block is the wall" (2386's reading) was still one level too small.
+
+**The page tables were re-audited from the real C, not the mirror.** The 2386 note
+quoted the Python replica's leaves (`...4cc7`, AttrIndx 1). Compiling
+`mali_csf_memory.c` with the production flags into a host harness and walking the
+arena it builds gives `...4cc3` (AttrIndx 0) instead - so the replica is not
+authoritative and should not be quoted again. It does not change the conclusion:
+all sixteen leaves of the code section are identical except PA.
+
+```
+0x01000000  ...401a4cc3  PA 0x401a4000     0x0100e000  ...401b2cc3  PA 0x401b2000
+0x01001000  ...401a5cc3  PA 0x401a5000     0x0100f000  ...401b3cc3  PA 0x401b3000
+   ... same AF/AP/SH/AttrIndx, same group 6, one L3 table, no duplicate leaves
+```
+
+Page 0 is the section's base page; page 14 is 56 KB further on. Nothing in the
+plan separates them, and the CPU-side probe still reads the container's word at
+0x401a4000, so the content is where the tables say it is.
+
+**This run also exposed an operational defect that cost the restore.** `pyusb` was
+missing from the python on PATH, so `raw_restore_if_present()` fell back to the
+`fastboot` CLI, and that CLI is exactly the transport this LK breaks with
+`could not clear input pipe; e0005000` - the reason `tools/fbraw.py` exists. The
+stock prefix was written, then the run was interrupted with the device in
+fastboot and `boot_a` half-restored. Recovery: installed `pyusb 1.3.1`
+(libusb 1.0.30 already present), used the raw channel to `reboot-recovery`, then
+ran the runner's `restore-only` phase. It captured `after` **before** writing the
+full baseline, so the marks survived, and finished with the baseline verified.
+Do not let the CLI fallback stand in for the raw transport again; if `usb` is
+missing, that is the first thing to fix.
+
+**NEXT: 2388 - two things, one of them passive.** Active variable stays single:
+the reset word -> `0x01001201`, page 1, block 1, a block nothing has patched. Page
+1 is where the vendor reset handler at 0x010018ec lives and the port has never
+proven the MCU executes it - if page 1 fails too, then the only execution ever
+observed is page 14 and every "firmware started" reading in this port is shim-side
+only. Passive addition in the same build: record the **live** leaf descriptors for
+0x01000000, 0x01001000, 0x0100E000 and 0x0100F000 from the arena the kernel hands
+the MCU (it is CPU memory; reading it changes no mapping). That settles whether the
+table we compute is the table the MCU walks - the one instrument this port has
+never had - and would show a stale page-0 leaf directly if there is one.
+
+## >>> PREVIOUS 2026-11-06:2386 RAN - THE BLOCK IS THE WALL, NOT THE CORE'S STATE <<<
 
 **RESULT: `input_va = 0x04000200` - the marker is absent.** The reset word pointed
 at `0x01000201`; the block never ran. `mmu_raw = 0`, `as_fault = 0`,
