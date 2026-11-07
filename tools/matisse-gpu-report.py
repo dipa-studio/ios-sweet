@@ -1005,9 +1005,14 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             elif marker == 1:
                 outcome = 'shared-stalls'
                 csf['cold_boot_start'] = 'shared-0x04000200'
-                verdict = ('the first read, in the shared section, stalled. A stall here means the '
-                           'ladder could not even reach a page known to work; the run says nothing '
-                           'about the mirror')
+                verdict = ('the first read, at 0x04000200, stalled. That address has bit 9 set - the '
+                           'same bit every stall in this series carries - and this is the first time '
+                           'a non-code bit-9 read was ever issued: 2375\'s three returning probes '
+                           '(0x01001900, 0x02000000, 0x02800000) were all bit-9 = 0, and every hang '
+                           '(0x01000200, 0x01001200, 0x01001BC4, 0x0100EA00, 0x04000200) is bit-9 = 1. '
+                           'So the wall is not the 0x0100xxxx window. Both control reads in this '
+                           'ladder are bit-9 = 1 addresses, so the run stops before the mirror is '
+                           'touched; a bit-9 = 0 control per section is the next build')
             elif marker == 2:
                 outcome = 'stack-stalls'
                 csf['cold_boot_start'] = 'stack-0x02000200'

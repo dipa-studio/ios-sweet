@@ -1,56 +1,91 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-07 23:40: 2401 REBUILT - OWN-PAGE READ + 0xE3 FAULT ENTRY, WAITING FOR APPROVAL <<<
+## >>> ACTIVE 2026-11-07 23:45: 2401 RAN - THE FIRST NON-CODE BIT-9 READ STALLS; THE WALL IS NOT THE CODE WINDOW <<<
 
-**What changed against the 13:30 build.** Same manipulation (mirror at `0x03000000`
-through a fresh L3 page, `L2[40]` reusing `L2[8]`'s L3 page, reset word
-`0x4 = 0x0300e001`), two observation changes and two metadata fixes:
+**RESULT: `input_va = 1`.** The ladder ran from the mirror at `0x0300E000`
+(its marker 1 is in shared, and nothing else writes that word), then the *first*
+read - shared `0x04000200` - never completed. `groups = 8` (no counter), no
+`0xE3`, so the fault entry was never entered: `as_fault = 0`, `mcu_status = 1`,
+`error = -53`, one-second budget. Reads 2..6 were never issued.
 
-1. **Read 3 is now `0x0300E200`** - a word in the very page the ladder is being
-   fetched from, so its translation cannot be cold. It separates "the data path
-   into an executable section refuses" from "the cold walk refuses" in one boot.
-   Markers shift: 4 `0x03001200`, 5 `0x05001200`, 6 `0x01001200`, 7 all returned.
-   The ladder is 84 bytes (`84 % 4 == 0`); the vendor region it replaces grew by
-   the same eight bytes (`...4ff00101 1cbf01231365012d`).
-2. **The fault entry writes `input_va = 0xE3`** instead of `groups = 20`. It is a
-   new source file `tools/matisse-csf-fault-entry-e3.S` and a new pinned constant
-   `FAULT_ENTRY_2401`, so 2383..2400 keep their bytes. It still writes the stacked
-   PC to `output_va` and CFSR to `group_stride`; the four bytes came from dropping
-   the `shared+16` store. A fault and an AXI stall are now one field apart, and
-   the vector table at `0x0C..0x18` is untouched.
-3. **The manifest's mirror PAs were wrong by `0x1000`** - `mirror_check()` added
-   its own stand-in base `0x40077000` to arena offsets. It now returns offsets and
-   `build()` resolves them against the arena symbol it pinned (`0x78000`).
-4. **The pinned leaf values were from the wrong encoding** - `mirror_check()`
-   rebuilt the arena without `SWEET_CSF_VENDOR_LEAVES/VENDOR_MEMATTR`, so `0x…cc7`
-   (AttrIdx 1, nG, SH) was recorded instead of the `0x…4c3` the image ships.
+**The mirror plumbing is proven, exactly as designed.** The four live leaves the
+shim published are the predicted values to the bit:
 
 ```
-image     6f0e1fc1...5aa0  26,714,112 B  arena 0x78000, 8 mappings, 9 table pages
-kernel    83ec99c4...05d6  SWEET_BUILD_ID 0x2401 (unchanged, no new patch)
-container 121 B vs vendor de22d2fc...229a; only 0x19b0..0x19d8 and 0xE000..0xE054 moved
-mirror    0x03000000 -> PA 0x401a6000, 0x03001000 -> 0x401a7000, entry 0x0300E000 -> 0x401b4000
-code      0x01000000 -> PA 0x401b6000, 0x01001000 -> 0x401b7000, entry 0x0100E000 -> 0x401c4000
-leaves    0x30000000401a64c3 0x30000000401a74c3 0x30000000401b74c3 0x30000000401b74c3
-          (mirror, mirror page, share window, code page)
-tests     283 ran, 3 skipped
+leaf_0x03000000 = 0x30000000401a64c3   (mirror section, PA 0x401a6000)
+leaf_0x03001000 = 0x30000000401a74c3   (mirror read page, PA 0x401a7000)
+leaf_0x05001000 = 0x30000000401b74c3   (= 0x01001000 leaf, same L3 page + leaf)
+leaf_0x01001000 = 0x30000000401b74c3   (code read page, PA 0x401b7000)
 ```
 
-**Reading the capture.** `input_va` names the read that did *not* return:
+`mirror_applied` and `alias_applied` both true, `relocation_observed` true. The
+new L3 page, the copied L2 entry and the corrected manifest are all real.
 
-| `input_va` | what it means | next |
+**What the run actually says - and it is not about the code window.** `0x04000200`
+has **bit 9 set**. Every address that ever returned has bit 9 clear, and every
+address that ever hung has it set:
+
+| address | bit 9 | outcome |
 |---|---|---|
-| `0xE3` | a Cortex-M7 fault entry ran, not an AXI stall; `output_va` is the stacked PC, `group_stride` is CFSR | decode the CFSR class; a never-completing bus read cannot raise one |
-| 3 | even a read of the page we are executing from stalls | the wall is the data path into the section, no walk involved |
-| 4 | own page readable, cold mirror page not | the walk or leaf index 1, not the data path |
-| 5 | mirror readable, the reused `L2[8]` L3 page not | the original L3 page frame; swapping that page would rescue stock firmware |
-| 6 | `0x05001200` readable, `0x01001200` not | the wall is the `0x0100xxxx` VA itself: same table, same leaf, same PA |
-| 7 | all six reads returned | the wall needs the core executing from `0x0100xxxx` at the same time |
+| `0x01001900` (2375 code) | 0 | returned |
+| `0x02000000` (2375 stack) | 0 | returned |
+| `0x02800000` (2375 RO) | 0 | returned |
+| `0x0100E000` (2385..2395 fetch) | 0 | ran the program |
+| `0x010018ec` (2390 entry) | 0 | ran the program |
+| `0x01000200` | 1 | stalled (2386 fetch, 2374 read) |
+| `0x01001BC4` (vendor `ldr` target) | 1 | stalled (2376) |
+| `0x0100EA00` | 1 | never executed (2393) |
+| `0x01001200` | 1 | stalled (2393..2400) |
+| `0x04000200` | 1 | **stalled (2401, first non-code bit-9 read ever issued)** |
 
-**Status: rebuilt, unit-tested, static-checked, preflight passed; not flown.**
-The device is in Recovery (`matisse`, `bootmode=recovery`, `id -u = 0`) and
-`boot_a` is the baseline `2931647a...86b1`. Flashing needs explicit approval of
-image SHA `6f0e1fc1...5aa0`; the runner restores and verifies `boot_a` afterwards.
+So the "wall" is one address bit, not a VA window and not the code section: any
+access whose address has bit 9 set never completes, whether it is a fetch or a
+data read, in any section, under any leaf encoding tried. Bit 9 is below the
+4 KiB page offset, so VA and PA bit 9 are always the same bit - which is why
+2399's page move and 2382's PA move could never separate them.
+
+**Correction to 2401's own design.** Both "control" reads (`0x04000200`,
+`0x02000200`) are bit-9 = 1 addresses, inherited from the 2396 ladder and never
+questioned because that ladder never executed them. So this run could not get
+past read 1 and says nothing about the mirror, the L3 page, or `0x0300E200`.
+
+```
+image  6f0e1fc1...5aa0  partition 6471eb5b...2f7d written and read back
+fastboot observed at 82.53 s (same window as 2385..2400); capture 23:28
+boot_a restored and verified 2931647a...86b1
+```
+
+**Next: 2402 is a bit-9 matrix, one read per cell**, in three sections and with
+a pair that differs only in bit 9 inside one page:
+
+```
+1 0x04000000  shared  bit9 0   control (never read before)
+2 0x04000200  shared  bit9 1   reproduce today
+3 0x02000000  stack   bit9 0   control (2375 returned here)
+4 0x02000200  stack   bit9 1
+5 0x0100E000  code    bit9 0   the page the ladder runs from, offset 0
+6 0x0100E200  code    bit9 1   same page, 512 bytes in - the original ask
+```
+
+All six returning would kill "bit 9" and leave the section; 1/3/5 returning with
+2/4/6 stalling makes bit 9 the rule and moves the question to the address decode
+(GMPU / AS_TRANSCFG), not the page table.
+
+## >>> PREVIOUS 2026-11-07 23:40: 2401 REBUILT - OWN-PAGE READ + 0xE3 FAULT ENTRY <<<
+
+The rebuild that flew. Same manipulation (mirror at `0x03000000` through a fresh
+L3 page, `L2[40]` reusing `L2[8]`'s L3 page, reset `0x0300e001`), plus: read 3
+became `0x0300E200` (the page the ladder is fetched from), markers shifted to
+4 `0x03001200` / 5 `0x05001200` / 6 `0x01001200` / 7 all returned, the ladder grew
+to 84 bytes, and the fault entry at `0x010019b0` now writes `input_va = 0xE3`
+(stacked PC to `output_va`, CFSR to `group_stride`) from its own source file and
+constant, so 2383..2400 keep their bytes.
+
+Two build-metadata bugs were fixed on the way, and the flight proved the fix:
+`mirror_check()` had added its stand-in base `0x40077000` to arena offsets (every
+mirror PA in 2399/2401's manifest was `0x1000` low) and had rebuilt the arena
+without the vendor leaf macros (recording `0x…cc7` where the image ships
+`0x…4c3`). The four live leaves now match the manifest exactly.
 
 ## >>> PREVIOUS 2026-11-07 13:30: 2401 BUILT - 2396..2400 NEVER RAN THEIR FIRST TWO READS <<<
 

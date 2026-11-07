@@ -1804,3 +1804,48 @@ leaf macros, so it recorded `0x...cc7` (AttrIdx 1, nG, SH) where the image ships
 
 The image is built, unit-tested, static-checked and preflighted but **not flown**.
 `boot_a` remains `2931647a...86b1`.
+
+## 48. 2401 ran: the first non-code bit-9 read stalls, and the window was never the wall
+
+`input_va = 1`, `groups = 8`, `as_fault = 0`, `mcu_status = 1`, `error = -53`.
+The ladder started at the mirror's `0x0300E000` - marker 1 is in shared and
+nothing else writes that word - and the first read, shared `0x04000200`, never
+completed. No `0xE3`, so the fault entry was never entered. Reads 2..6 were never
+issued. Fastboot appeared at 82.53 s; `boot_a` was restored and verified to
+`2931647a...86b1`.
+
+**The mirror is real.** The four published leaves are the predicted words:
+
+```
+0x30000000401a64c3  0x30000000401a74c3  0x30000000401b74c3  0x30000000401b74c3
+```
+
+`mirror_applied`, `alias_applied` and `relocation_observed` are all true: the
+fresh L3 page for `L2[24]`, the copied `L2[8]` entry at `L2[40]`, and the
+corrected manifest PAs all describe the image that ran.
+
+**What it means.** `0x04000200` has bit 9 set. Every access in this series that
+returned has bit 9 clear, and every one that hung has it set:
+
+| bit 9 = 0 (returned / ran) | bit 9 = 1 (stalled) |
+|---|---|
+| `0x01001900`, `0x02000000`, `0x02800000` (2375) | `0x01000200` (2374 read, 2386 fetch) |
+| `0x0100E000` (2385..2395 fetch) | `0x01001BC4` (2376 vendor `ldr`) |
+| `0x010018ec` (2390 entry) | `0x0100EA00` (2393 fetch) |
+| | `0x01001200` (2393..2400) |
+| | `0x04000200` (2401, first non-code bit-9 read) |
+
+One address bit, not a VA window and not a section. Bit 9 sits below the 4 KiB
+page offset, so VA and PA bit 9 are the same bit and no page move can separate
+them - which is why 2382 (PA move) and 2399 (leaf repoint) kept the stall.
+
+**2401's own design error.** Both control reads are bit-9 = 1 addresses
+(`0x04000200`, `0x02000200`), inherited from the 2396 ladder that never executed
+them. The run therefore stopped at read 1 and says nothing about the mirror
+window, the L3 page frame, or `0x0300E200`.
+
+**2402** is the bit-9 matrix, one read per cell, in three sections plus a pair
+inside one page: `0x04000000` / `0x04000200`, `0x02000000` / `0x02000200`,
+`0x0100E000` / `0x0100E200`. If 1/3/5 return and 2/4/6 stall, bit 9 is the rule
+and the question moves from the page table to the address decode (GMPU,
+`AS_TRANSCFG`).
