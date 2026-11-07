@@ -126,7 +126,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -1065,6 +1065,129 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                            'the mirror entry leaf before reading the ladder. groups = %#x, '
                            'which is not the fault entry either (it would leave 0xE3 in '
                            'input_va)' % csf['groups'])
+            csf['cold_boot_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2402:
+            # The bit-9 matrix. Six reads, no mirror, the core executing from the
+            # code section again, so every address below is a word inside a page
+            # the image already maps and no walk takes part. Marker N is written
+            # before read N, so the highest marker names the read that stopped
+            # the core; 7 means all six returned. Each pair is one 4 KiB page
+            # read at two offsets that differ only in bit 9, which lies inside
+            # the page offset: the L2 entry, L3 entry, leaf and physical page are
+            # word for word equal within a pair.
+            csf['cold_boot_counter'] = csf['groups']
+            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401b6000
+            csf['cold_boot_target'] = 0x0100E000
+            reads = (('0x04000000', 0, 'shared'), ('0x02000000', 0, 'stack'),
+                     ('0x0100E400', 0, 'code'), ('0x0100E200', 1, 'code'),
+                     ('0x02000200', 1, 'stack'), ('0x04000200', 1, 'shared'))
+            csf['cold_boot_ladder'] = {
+                '0x1': 'stopped reading shared 0x04000000 (bit 9 = 0)',
+                '0x2': 'stopped reading stack 0x02000000 (bit 9 = 0)',
+                '0x3': 'stopped reading code 0x0100E400 (bit 9 = 0, the page we run from)',
+                '0x4': 'stopped reading code 0x0100E200 (bit 9 = 1, same page)',
+                '0x5': 'stopped reading stack 0x02000200 (bit 9 = 1)',
+                '0x6': 'stopped reading shared 0x04000200 (bit 9 = 1)',
+                '0x7': 'all six reads returned',
+                '0xe3': 'a Cortex-M7 fault entry ran; input_va carries 0xE3'}
+            marker = csf['input_va']
+            fault = marker == 0xE3
+            csf['m7_fault_taken'] = fault
+            if fault:
+                csf['m7_stacked_pc'] = csf['output_va']
+                csf['m7_cfsr'] = csf['group_stride']
+                csf['m7_cfsr_flags'] = cfsr_flags(csf['group_stride'])
+            csf['cold_boot_marker_present'] = (not fault) and marker in (1, 2, 3, 4, 5, 6, 7)
+            done = reads[:marker - 1] if not fault and 1 <= marker <= 6 else (
+                reads if marker == 7 else ())
+            stalled = reads[marker - 1] if not fault and 1 <= marker <= 6 else None
+            csf['bit9_returned'] = ['%s (%s)' % (va, sec) for va, _, sec in done]
+            csf['bit9_stalled'] = None if stalled is None else (
+                '%s (%s, bit 9 = %d)' % (stalled[0], stalled[2], stalled[1]))
+            # True: read 4 stalled right after read 3 returned, so one bit inside
+            # one page decided. False: it returned and a later bit-9 read stalled
+            # (or nothing stalled). None: the run stopped before read 4.
+            csf['bit9_confirmed'] = (True if marker == 4 else
+                                     False if marker in (5, 6, 7) else None)
+            if not csf['relocation_observed']:
+                outcome = 'not-relocated'
+                verdict = ('the executable probe PA is not the relocated one; this is not the '
+                           '2382 mapping the build reuses')
+            elif csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault']:
+                outcome = 'cold-boot-refused'
+                verdict = ('the MMU refused something before any marker appeared (AS_FAULT %#x at '
+                           '%#x), so the ladder never reached its first read' %
+                           (csf['as_fault'], csf['as_fault_hi'] << 32 | csf['as_fault_lo']))
+            elif fault:
+                outcome = 'm7-fault-taken'
+                csf['cold_boot_start'] = 'fault-0xe3'
+                verdict = ('the core took a synchronous fault, not an AXI stall: input_va is 0xE3, '
+                           'the stacked PC is %#x and CFSR is %#x (%s). A bus read that never '
+                           'completes cannot raise one, so the fault fired on the instruction the '
+                           'stacked PC names, before any read could hang' %
+                           (csf['output_va'], csf['group_stride'],
+                            ', '.join(csf['m7_cfsr_flags']) or 'no named bit'))
+            elif marker == 1:
+                outcome = 'shared-bit9-0-stalls'
+                csf['cold_boot_start'] = 'shared-0x04000000'
+                verdict = ('0x04000000 stalled with bit 9 clear, so "bit 9 decides" is dead on the '
+                           'first control read and the shared section is the wall. That address '
+                           'had never been read: 2375 probed 0x04000000 too, but its heap probe at '
+                           '0x03000000 is unmapped and stopped the core before the shared one, so '
+                           'this is the first data access to the shared section on record')
+            elif marker == 2:
+                outcome = 'stack-bit9-0-stalls'
+                csf['cold_boot_start'] = 'stack-0x02000000'
+                verdict = ('0x02000000 stalled, and 2375 read that exact address successfully after '
+                           'the stack page had never been touched. The address did not change, so '
+                           'the wall is not a property of it alone: something this image does - the '
+                           'relocated code, the ladder itself - now makes a read that used to '
+                           'return hang')
+            elif marker == 3:
+                outcome = 'own-page-bit9-0-stalls'
+                csf['cold_boot_start'] = 'code-0x0100E400'
+                verdict = ('both controls returned and 0x0100E400 stalled: a data read of the very '
+                           'page this program is fetched from, at a page offset with bit 9 clear. '
+                           'That translation is resident and the fetch through it completes, so '
+                           'this is the code page refusing data reads at all - not bit 9, not the '
+                           '0x0100xxxx window and not a cold walk')
+            elif marker == 4:
+                outcome = 'bit-9-decides'
+                csf['cold_boot_start'] = 'code-0x0100E200'
+                verdict = ('three bit-9 = 0 reads returned - shared, stack and the code page we '
+                           'execute from - and 0x0100E200 stalled in that same code page, 0x200 '
+                           'away from a word that just returned. Same L2 entry, same L3 entry, same '
+                           'leaf descriptor, same physical page: only address bit 9 differs, and it '
+                           'sits inside the page offset. The page table cannot be involved, so the '
+                           'refusal is above the MMU - the AS address decode, AS_TRANSCFG, or a '
+                           'bit-9 rule on the bus')
+            elif marker == 5:
+                outcome = 'bit9-is-not-the-rule'
+                csf['cold_boot_start'] = 'stack-0x02000200'
+                verdict = ('the code page returned a bit-9 = 1 word, so bit 9 alone does not decide; '
+                           'the stack page then stalled at 0x02000200 while its own 0x02000000 '
+                           'returned. The rule is per section, and the stack is one of the '
+                           'sections it applies to')
+            elif marker == 6:
+                outcome = 'only-shared-stalls-at-bit9'
+                csf['cold_boot_start'] = 'shared-0x04000200'
+                verdict = ('the code and stack pages both returned their bit-9 = 1 reads and only '
+                           '0x04000200 stalled. The shared section is the odd one out, which is '
+                           'where 2401 stalled too - one section, not one bit')
+            elif marker == 7:
+                outcome = 'all-reads-returned'
+                csf['cold_boot_start'] = 'all-six-returned'
+                verdict = ('every read returned, 0x04000200 included - the address 2401 stalled on. '
+                           'The mirror was the only other change between the two builds, so the '
+                           'stall is not a property of the address at all: it needs the core to be '
+                           'executing elsewhere (0x0300E000) while the read is issued')
+            else:
+                outcome = 'no-marker'
+                csf['cold_boot_start'] = None
+                verdict = ('the core never wrote a marker, so 0x0100E000 did not start; check the '
+                           'entry leaf before reading the ladder. groups = %#x, which is not the '
+                           'fault entry either (it would leave 0xE3 in input_va)' % csf['groups'])
             csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
         if expected_build == 0x2398:
@@ -2136,7 +2259,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2401)')
+                   help='expected kernel/report build (0x2321 through 0x2402)')
     p.add_argument('--allow-missing-leaf',action='store_true',
                    help='decode a build >=0x2388 whose image shipped without the '
                         'sweet-csf-leaf property (2389 did); leaf fields stay absent')

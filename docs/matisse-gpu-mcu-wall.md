@@ -1849,3 +1849,52 @@ inside one page: `0x04000000` / `0x04000200`, `0x02000000` / `0x02000200`,
 `0x0100E000` / `0x0100E200`. If 1/3/5 return and 2/4/6 stall, bit 9 is the rule
 and the question moves from the page table to the address decode (GMPU,
 `AS_TRANSCFG`).
+
+## 49. 2402 built: the bit-9 matrix, controls first, no mirror
+
+2401's result (section 48) says the wall is address bit 9. 2402 tests that with
+six reads and nothing else moved: the mirror is gone, the image is 2400's layout,
+reset word `0x4 = 0x0100e001`, and the ladder is back at `0x0100E000`. Every read
+below is a word inside a page the image already maps, so no walk takes part.
+
+| marker | read | section | bit 9 | why this address |
+|---|---|---|---|---|
+| 1 | `0x04000000` | shared | 0 | never read before; 2375's shared probe never ran |
+| 2 | `0x02000000` | stack | 0 | returned in 2375, cold |
+| 3 | `0x0100E400` | code | 0 | the page the ladder is fetched from, cold line |
+| 4 | `0x0100E200` | code | 1 | same page, 0x200 away: the decisive read |
+| 5 | `0x02000200` | stack | 1 | same page as 2 |
+| 6 | `0x04000200` | shared | 1 | 2401 stalled here |
+| 7 | - | - | - | all six returned |
+
+**Order is part of the design.** The first stall ends the run, so all three
+bit-9 = 0 reads go first; an earlier sketch put `0x04000200` second, which would
+have stopped at the address 2401 had already answered. The code pair is
+`0x0100E400` vs `0x0100E200` rather than `0x0100E000` vs `0x0100E200` so that
+neither probe is the entry instruction and both sit the same distance from the
+page base.
+
+**Read 3 is a control for a competing theory.** 2373/2374 measured that a data
+read of an unfetched RX line does not complete. Read 3 is exactly that - a cold
+line in the page the core is executing from, at bit 9 = 0. If it stalls, the wall
+is the RX cold line and bit 9 is irrelevant; if it returns, that theory dies in
+the same boot that tests bit 9.
+
+| item | value |
+|---|---|
+| image | `e7f00f28...e329`, 26,714,112 B, arena `0x77000` |
+| kernel | `ff842023...27ba`, `SWEET_BUILD_ID 0x2402`, patch 0198 |
+| container | 115 B changed: vector word, 72 B at `0x0100E000`, 40 B at `0x010019b0` |
+| ladder | 72 B, `tools/matisse-csf-ladder2402.S`, pinned as `COLD_BOOT_2402` |
+| leaves | `0x01000000` -> `0x401b6000`, `0x01001000` -> `0x401b7000`, vendor encoding |
+| tests | 286 ran, 3 skipped |
+
+Readings: `4` proves bit 9 above the MMU (same entry, leaf, PA - only the address
+bit differs). `3` makes the RX cold line the wall. `1`/`2` put it in the shared or
+stack section itself. `5`/`6` say bit 9 is not the rule and the wall is per
+section. `7` says 2401's stall needed the mirror, i.e. the core executing at
+`0x0300E000`. `input_va = 0xE3` is a synchronous M7 fault, stacked PC in
+`output_va`, CFSR in `group_stride`.
+
+Built, unit-tested, statically verified and preflighted, **not flown**. `boot_a`
+is `2931647a...86b1`.

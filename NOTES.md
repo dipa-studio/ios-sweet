@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-07 23:45: 2401 RAN - THE FIRST NON-CODE BIT-9 READ STALLS; THE WALL IS NOT THE CODE WINDOW <<<
+## >>> ACTIVE 2026-11-08 00:05: 2402 BUILT (BIT-9 MATRIX) - 2401 RAN AND THE FIRST NON-CODE BIT-9 READ STALLS <<<
 
 **RESULT: `input_va = 1`.** The ladder ran from the mirror at `0x0300E000`
 (its marker 1 is in shared, and nothing else writes that word), then the *first*
@@ -55,21 +55,54 @@ fastboot observed at 82.53 s (same window as 2385..2400); capture 23:28
 boot_a restored and verified 2931647a...86b1
 ```
 
-**Next: 2402 is a bit-9 matrix, one read per cell**, in three sections and with
-a pair that differs only in bit 9 inside one page:
+**2402 is built, preflighted and waiting for approval.** It is the bit-9 matrix,
+and it drops the mirror so nothing but the read sequence moves: 2400's layout,
+reset word `0x4 = 0x0100e001`, the ladder back at `0x0100E000`. Marker N is
+written before read N:
 
 ```
-1 0x04000000  shared  bit9 0   control (never read before)
-2 0x04000200  shared  bit9 1   reproduce today
-3 0x02000000  stack   bit9 0   control (2375 returned here)
-4 0x02000200  stack   bit9 1
-5 0x0100E000  code    bit9 0   the page the ladder runs from, offset 0
-6 0x0100E200  code    bit9 1   same page, 512 bytes in - the original ask
+1 0x04000000  shared  bit9 0   never read before (2375's shared probe never ran)
+2 0x02000000  stack   bit9 0   returned in 2375, cold
+3 0x0100E400  code    bit9 0   the page the ladder is fetched from, cold line
+4 0x0100E200  code    bit9 1   same page, 0x200 away - the decisive read
+5 0x02000200  stack   bit9 1
+6 0x04000200  shared  bit9 1   2401 stalled here
+7 all six returned
 ```
 
-All six returning would kill "bit 9" and leave the section; 1/3/5 returning with
-2/4/6 stalling makes bit 9 the rule and moves the question to the address decode
-(GMPU / AS_TRANSCFG), not the page table.
+Two design changes against the sketch recorded above, both forced by the fact
+that the first stall ends the run:
+
+- **All bit-9 = 0 reads go first.** The earlier order put `0x04000200` second and
+  would have stopped at the address 2401 already answered, learning nothing. Now
+  the three controls must return before any bit-9 = 1 read is issued, and they
+  are measured in the same boot.
+- **The code pair is `0x0100E400` vs `0x0100E200`, not `0x0100E000` vs
+  `0x0100E200`.** Both probes then sit at the same kind of offset from the page
+  base (0x400 and 0x200, neither of them the entry instruction), 0x200 apart, in
+  one 4 KiB page, on one leaf. Read 3 is also the RX cold-line control the
+  2373/2374 hypothesis needs: if it stalls, the wall is a cold data read of an
+  RX page and bit 9 is irrelevant; if it returns, that theory dies with it.
+
+```
+image      e7f00f28...e329  26,714,112 B  arena 0x77000 (2400's layout)
+kernel     ff842023...27ba  SWEET_BUILD_ID 0x2402, patch 0198, no new source patch
+container  115 B changed: vector word, 72 B at 0x0100E000, 40 B at 0x010019b0
+leaves     0x01000000 -> 0x401b6000, 0x01001000 -> 0x401b7000, unchanged encoding
+tests      286 ran, 3 skipped
+```
+
+Reading it: `4` → bit 9 decides above the MMU (same table, leaf, PA; only the
+address bit differs). `3` → the code page refuses any cold data read, bit 9 or
+not. `1`/`2` → the shared or stack section itself is the wall. `5`/`6` → bit 9 is
+not the rule and the wall is per section. `7` → 2401's stall needed the mirror,
+i.e. the core executing at `0x0300E000`. `0xE3` → a synchronous M7 fault, with
+the stacked PC in `output_va` and CFSR in `group_stride`.
+
+**Status: built, unit-tested, statically verified, preflight passed; not flown.**
+`boot_a` is the baseline `2931647a...86b1`; flashing needs explicit approval of
+image SHA `e7f00f28...e329`.
+
 
 ## >>> PREVIOUS 2026-11-07 23:40: 2401 REBUILT - OWN-PAGE READ + 0xE3 FAULT ENTRY <<<
 

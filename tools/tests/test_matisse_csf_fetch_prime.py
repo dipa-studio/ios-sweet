@@ -119,6 +119,85 @@ class FetchPrimeTests(unittest.TestCase):
         # 2383's stub must stay untouched: 2383..2400 keep their pinned bytes.
         self.assertNotEqual(self.builder.FAULT_ENTRY_2383[1], stub)
 
+    def test_ladder_2402_assembly_matches_the_pinned_bytes(self):
+        """2402's six-read matrix is the linked bytes, and 72 of them."""
+        bins = sorted((Path.home() / 'Library/Android/sdk/ndk').glob(
+            '*/toolchains/llvm/prebuilt/darwin-x86_64/bin'))
+        if not bins:
+            self.skipTest('requires ARM linker from Android NDK')
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory)
+            (p / 'ladder.ld').write_text('SECTIONS { '
+                '.text.ladder 0x0100E000 : { *(.text.ladder) } }')
+            subprocess.run([str(bins[-1] / 'clang'), '--target=armv7m-none-eabi',
+                '-mcpu=cortex-m7', '-mthumb', '-nostdlib', '-Wl,--build-id=none',
+                '-Wl,-e,csf_ladder_2402', '-Wl,-T,' + str(p / 'ladder.ld'),
+                str(ROOT / 'tools/matisse-csf-ladder2402.S'), '-o', str(p / 'ladder.elf')],
+                check=True, capture_output=True)
+            elf = (p / 'ladder.elf').read_bytes()
+            shoff, = struct.unpack_from('<I', elf, 32)
+            size, count, names_index = struct.unpack_from('<HHH', elf, 46)
+            sections = [struct.unpack_from('<10I', elf, shoff + i * size) for i in range(count)]
+            names_section = sections[names_index]
+            names = elf[names_section[4]:names_section[4] + names_section[5]]
+            actual = {names[s[0]:].split(b'\0', 1)[0].decode(): elf[s[4]:s[4] + s[5]]
+                      for s in sections}
+        want = bytes.fromhex(self.builder.COLD_BOOT_2402[1])
+        self.assertEqual(actual['.text.ladder'], want)
+        self.assertEqual(len(want), 72)
+        self.assertEqual(len(want), len(bytes.fromhex(self.builder.COLD_BOOT_2402[0])))
+        self.assertEqual(sections[1][3], 0x0100E000)
+        # The three bit-9 = 0 reads come first and must be ordinary loads; the
+        # first two use offset 0 (16-bit form), the third r9 = 0xE400.
+        self.assertEqual(want[0x0e:0x12], bytes.fromhex('4ef20028'))
+        self.assertEqual(want[0x12:0x16], bytes.fromhex('4ef20049'))
+        self.assertEqual(want[0x1a:0x1c], bytes.fromhex('2068'))
+        self.assertEqual(want[0x20:0x22], bytes.fromhex('2868'))
+        self.assertEqual(want[0x26:0x2a], bytes.fromhex('56f80900'))
+        # Then the decisive pair: 0x0100E200 stalls or returns against a word in
+        # its own page, and 0x0100E200 must come after 0x0100E400.
+        self.assertEqual(want[0x2e:0x32], bytes.fromhex('56f80800'))
+        self.assertLess(want.index(bytes.fromhex('56f80900')),
+                        want.index(bytes.fromhex('56f80800')))
+        self.assertEqual(want[0x36:0x3a], bytes.fromhex('d5f80002'))
+        self.assertEqual(want[0x3e:0x42], bytes.fromhex('d4f80002'))
+        # No branch before the terminal loop: every access is a plain read.
+        self.assertEqual(want[-2:], bytes.fromhex('fee7'))
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2402_moves_only_the_vector_and_the_ladder(self):
+        embedded_2400, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2400)
+        embedded_2402, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2402)
+        config, code = 0x0380, 0x0e94
+        stub = bytes.fromhex(self.builder.COLD_BOOT_2402[1])
+        allowed = set(range(config + 4, config + 8))
+        allowed |= set(range(code + 0xE000, code + 0xE000 + len(stub)))
+        allowed |= set(range(code + 0x19b0, code + 0x19b0 + 40))
+        changed = {i for i, (a, b) in enumerate(zip(embedded_2400, embedded_2402))
+                   if a != b}
+        self.assertTrue(changed)
+        self.assertLessEqual(changed, allowed)
+        self.assertEqual(embedded_2402[code + 0xE000:code + 0xE000 + len(stub)], stub)
+        self.assertEqual(int.from_bytes(embedded_2402[config + 4:config + 8], 'little'),
+                         0x0100E001)
+        cold = patch['cold_boot']
+        self.assertEqual(cold['target'], '0x100e000')
+        self.assertEqual(cold['marker_value'], '0x1..0x7')
+        self.assertEqual(cold['fault_marker'], 0xE3)
+        self.assertEqual([(step['read_va'], step.get('bit9')) for step in cold['ladder']],
+                         [('0x04000000', 0), ('0x02000000', 0), ('0x0100E400', 0),
+                          ('0x0100E200', 1), ('0x02000200', 1), ('0x04000200', 1),
+                          (None, None)])
+        # Every bit-9 = 1 read must come after every bit-9 = 0 read: the first
+        # stall ends the run, so an early bit-9 = 1 read would hide the controls.
+        bits = [step['bit9'] for step in cold['ladder'] if step['read_va']]
+        self.assertEqual(bits, [0, 0, 0, 1, 1, 1])
+        # No mirror and no shared-L3 window: this build is 2400's layout.
+        self.assertNotIn('mirror_va', cold)
+        self.assertNotIn('share_code_l3', cold)
+        self.assertEqual(patch['leaf_probe']['va'],
+                         ['0x1000000', '0x1001000', '0x100e000', '0x100f000'])
+
     def test_ladder_2401_assembly_matches_the_pinned_bytes(self):
         """2401's seven-step ladder is the linked bytes, not objdump's display."""
         bins = sorted((Path.home() / 'Library/Android/sdk/ndk').glob(

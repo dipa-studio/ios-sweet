@@ -1318,6 +1318,43 @@ TRACE_PROBE[0x2401] = dict(
              0x01000200: ('01340a2c', '00bf7047'),
              0x0100E000: COLD_BOOT_2401})
 
+# 2402 is the bit-9 matrix, and it drops the mirror entirely: the core starts at
+# 0x0100E000 again (2400's arrangement) and every read is a word inside a page
+# that is already mapped, so no walk takes part anywhere in the run. Within each
+# pair the two addresses are the same 4 KiB page and differ only in bit 9, which
+# lies inside the page offset: the VA and the PA bit are the same bit, and the
+# L2 entry, L3 entry, leaf descriptor and physical page are word for word equal.
+#
+#   marker 1  shared 0x04000000   bit 9 = 0
+#   marker 2  stack  0x02000000   bit 9 = 0
+#   marker 3  code   0x0100E400   bit 9 = 0, the page this program runs from
+#   marker 4  code   0x0100E200   bit 9 = 1, same page, 0x200 away
+#   marker 5  stack  0x02000200   bit 9 = 1
+#   marker 6  shared 0x04000200   bit 9 = 1 (2401 stalled here)
+#   marker 7  all six returned
+# The three bit-9=0 reads come first because a stall ends the run: they have to
+# return for the matrix to mean anything, and then marker 4 is the decisive one
+# (2401's own stall was in shared, so repeating that first would teach nothing).
+# Markers 5 and 6 only execute if marker 4 returns, i.e. if bit 9 is not the
+# rule, and then they say whether the rule is per section.
+# The ladder is tools/matisse-csf-ladder2402.S; its 72 bytes replace the vendor's
+# 72 bytes at 0x0100E000.
+COLD_BOOT_2402 = ('41114ff0000999652b46c0f200070021002527e040f294370021c0f200071de0'
+                  '44f220010622c4f20301725044f22003c4f20303191d7258062afcd1f218916f'
+                  '11f4006f01f4a069',
+                  '72b60124a40602252d06012636064ef200284ef200490120a06020680220a06028'
+                  '680320a06056f809000420a06056f808000520a060d5f800020620a060d4f80002'
+                  '0720a060fee7')
+TRACE_PROBE[0x2402] = dict(
+    TRACE_PROBE[0x2396], kind='cold-boot-fetch',
+    reset_vector=(0x010018ed, 0x0100E001),
+    stub_original=bytes.fromhex(COLD_BOOT_2402[0]),
+    stub=bytes.fromhex(COLD_BOOT_2402[1]),
+    patches={0x010019b0: FAULT_ENTRY_2401,
+             0x01000200: ('01340a2c', '00bf7047'),
+             0x0100E000: COLD_BOOT_2402})
+
+
 
 def encode_bl(src, dst):
     """Thumb-2 BL from src to dst, as the four bytes the core will fetch."""
@@ -1588,7 +1625,7 @@ def fault_vector_probe(path, expected, build_id):
                 '30': 'the unmapped read completed without faulting',
                 '0 or 8': 'the read neither faulted nor completed'})
     if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
-                    0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401):
+                    0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402):
         target = {0x2385: '0x100e000', 0x2386: '0x1000200',
                   0x2387: '0x1000600', 0x2388: '0x1001200',
                   0x2389: '0x1001000', 0x2390: '0x10018ec',
@@ -1596,7 +1633,8 @@ def fault_vector_probe(path, expected, build_id):
                   0x2394: '0x100e000', 0x2395: '0x100ea00',
                   0x2396: '0x100e000', 0x2397: '0x100e000',
                   0x2398: '0x100e000', 0x2399: '0x100e000',
-                  0x2400: '0x100e000', 0x2401: '0x300e000'}[build_id]
+                  0x2400: '0x100e000', 0x2401: '0x300e000',
+                  0x2402: '0x100e000'}[build_id]
         patch['cold_boot'] = dict(
             target=target, marker_value=target, marker_field='input_va',
             counter_field='groups', counter_seed=8, counter_meanings={
@@ -1679,6 +1717,51 @@ def fault_vector_probe(path, expected, build_id):
                     '0x5': '0x05001200 stalled: the original L3 page frame or its leaf',
                     '0x6': '0x01001200 stalled: the original VA window itself',
                     '0x7': 'every read returned: the wall moved with the mirror',
+                    '0xe3': 'the core took a synchronous fault; input_va carries 0xE3'})
+        if build_id == 0x2402:
+            # Six reads and no mirror. Marker N is written before read N, so the
+            # highest marker names the read that stopped the core; 7 means all
+            # six returned. Each pair below is one 4 KiB page read at two
+            # offsets that differ only in bit 9.
+            patch['cold_boot'] = dict(
+                target='0x100e000', marker_field='input_va', marker_value='0x1..0x7',
+                fault_marker=0xE3, fault_field='input_va',
+                counter_field='groups', counter_seed=8,
+                entry_program='tools/matisse-csf-ladder2402.S',
+                bit9_matrix=[dict(pair='shared', page='0x04000000',
+                                  bit9_0='0x04000000', bit9_1='0x04000200'),
+                             dict(pair='stack', page='0x02000000',
+                                  bit9_0='0x02000000', bit9_1='0x02000200'),
+                             dict(pair='code', page='0x0100e000',
+                                  bit9_0='0x0100e400', bit9_1='0x0100e200')],
+                ladder=[dict(marker='0x1', read_va='0x04000000', bit9=0,
+                             section='shared, RW coherent, page offset 0x000',
+                             meaning='reached this read; it is the one that stalled'),
+                        dict(marker='0x2', read_va='0x02000000', bit9=0,
+                             section='stack, RW non-executable, page offset 0x000',
+                             meaning='the shared bit-9=0 read returned; this one stalled'),
+                        dict(marker='0x3', read_va='0x0100E400', bit9=0,
+                             section='code, R-X, the page this program is fetched from',
+                             meaning='both bit-9=0 controls returned; the code page stalled'),
+                        dict(marker='0x4', read_va='0x0100E200', bit9=1,
+                             section='code, R-X, same page as marker 3, 0x200 away',
+                             meaning='three bit-9=0 reads returned; this one stalled'),
+                        dict(marker='0x5', read_va='0x02000200', bit9=1,
+                             section='stack, RW non-executable, same page as marker 2',
+                             meaning='the code bit-9=1 read returned; the stack one stalled'),
+                        dict(marker='0x6', read_va='0x04000200', bit9=1,
+                             section='shared, RW coherent, same page as marker 1',
+                             meaning='only the shared bit-9=1 read stalled'),
+                        dict(marker='0x7', read_va=None, section='none',
+                             meaning='every read returned, bit 9 included')],
+                counter_meanings={
+                    '0x1': '0x04000000 stalled: the shared section cannot be read at all',
+                    '0x2': '0x02000000 stalled: the stack section cannot be read at all',
+                    '0x3': '0x0100E400 stalled: the executing page refuses a data read even at bit 9 = 0',
+                    '0x4': '0x0100E200 stalled with 0x0100E400 returned: bit 9 decides, in one page',
+                    '0x5': 'bit 9 is not the rule: the code page returned and the stack page stalled',
+                    '0x6': 'only the shared section stalls at bit 9 = 1',
+                    '0x7': 'no read stalled: 2401\'s stall does not reproduce',
                     '0xe3': 'the core took a synchronous fault; input_va carries 0xE3'})
         if build_id in (0x2391, 0x2393, 0x2395):
             # Three landings instrumented at once, so the marker names not just
@@ -1815,7 +1898,7 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
 # neither), and a build that declares a leaf_probe without the property fails
 # closed at decode time, which is the right failure but a wasted trial.
 LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
-                    0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401)
+                    0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402)
 
 
 def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False):
@@ -1872,7 +1955,7 @@ def build(a):
     # leaf AttrIdx 0/5, vendor MEMATTR, no nG, read-only code. The entry and
     # its fetch target are the only other things that move.
     if a.build_id in (0x2393, 0x2394, 0x2395, 0x2396, 0x2397, 0x2398, 0x2399,
-                      0x2400, 0x2401):
+                      0x2400, 0x2401, 0x2402):
         if not (a.trace_probe and a.vendor_leaves and a.relocate_code and a.mcu_control == '2'):
             raise ValueError('build%x requires --trace-probe --vendor-leaves --relocate-code --mcu-control 2' % a.build_id)
         if a.uncached_code != (a.build_id == 0x2395):
@@ -2145,6 +2228,10 @@ def build(a):
                 for name in ('tools/matisse-csf-fault-entry.S',
                              'tools/matisse-csf-coldboot.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
+            if a.build_id == 0x2402:
+                for name in ('tools/matisse-csf-fault-entry-e3.S',
+                             'tools/matisse-csf-ladder2402.S'):
+                    info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
             if a.build_id == 0x2401:
                 for name in ('tools/matisse-csf-fault-entry-e3.S',
                              'tools/matisse-csf-ladder2401.S'):
@@ -2208,7 +2295,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
