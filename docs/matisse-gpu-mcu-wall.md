@@ -1670,3 +1670,47 @@ offset `0x200` = PA `0x40091200`, bit 9 still set). If that read returns, the
 wall follows the code section's physical pages and the firmware allocation can be
 moved; if it still stalls, the wall follows the virtual range and no mapping
 change can ever fix it.
+
+**Answered in section 45: it still stalled.** The wall follows the virtual range,
+not the physical page.
+
+## 45. 2399 ran: the wall is the virtual range, not the physical page
+
+2399 repoints exactly one leaf. VA `0x01001000` - the page that holds the read
+target `0x01001200` - is given the physical page that backs VA `0x02000000`, the
+stack page the ladder's second read already read through offset `0x200`. After
+the alias, read 3 and read 2 name the same physical word `0x40091200`, with the
+same PA bit 9 = 1; only the VA and the leaf attributes differ. Container, entry,
+encoding and every other leaf stay at 2396's values.
+
+| field | value |
+|---|---|
+| image | `284b95b2...f453`, 26,714,112 B |
+| kernel | `13743a97...d87a`, `SWEET_BUILD_ID 0x2399` |
+| container | `d59eb487...0ba8` - byte-identical to 2396/2397/2398, 93 bytes changed against the vendor file |
+| leaves | `0x30000000401a54c3`, `0x30000000400914c3`, `0x30000000401b34c3`, `0x30000000401b44c3` |
+| `alias_applied` | **true** - the leaf at `0x01001000` is PA `0x40091000` with the code section's own attribute bits |
+| `input_va` | **3** - shared and stack reads returned, the code read did not |
+| `groups` / `cleanup_error` | 8 / -53 |
+| `as_fault` / `mmu_raw` | 0 / 0 |
+| fastboot | 87.84 s, `boot_a` restored to `2931647a...86b1` (verified) |
+
+**The two reads of one boot.** Read 2 (`0x02000200`) returned. Read 3
+(`0x01001200`) then stalled on the same PA, `0x40091200`, which read 2 had just
+brought into the cache. The only differences left are the virtual address and the
+leaf's attribute bits. 2397 forced this page non-executable and it still stalled;
+2393 and 2395 varied AttrIdx and cacheability. So the physical page is not the
+wall, and no page-table field that has been varied moves it.
+
+**What this closes.** The firmware allocation does not need to move: the same
+physical memory serves the MCU when it is named through the stack VA. Every
+remaining explanation has to sit above the page table - what the AS, the MCU's
+own address window, or the platform adds for the `0x01000000`-`0x0100FFFF` range
+- or in the leaf attribute class as a whole, which 2400 separates by giving the
+code VA the stack leaf's exact low bits and nothing else.
+
+**A note on the build.** The alias helper costs 0x2cc bytes of shim text, which
+moved the 0x4000-aligned BSS array ahead of the arena by one page: this build's
+arena is `0x40078000`, not `0x40077000`, so every PA in the run is 2396's plus
+`0x1000`. The builder pins the per-build arena value instead of relaxing the
+check, and the manifest records it (`csf_arena.shim_offset = 0x78000`).

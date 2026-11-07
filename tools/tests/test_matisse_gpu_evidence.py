@@ -494,6 +494,11 @@ class ReportDecodeTests(unittest.TestCase):
     # 2398: the same four leaves with bits 59..62 cleared. Every earlier build
     # published group 6 there.
     LEAVES_GROUP_ZERO = tuple(leaf & ~(0xf << 59) for leaf in LEAVES)
+    # 2399: the arena sits one page higher, the code section is relocated to
+    # 0x401a5000 and the leaf at 0x01001000 names the stack page 0x40091000
+    # (the page behind 0x02000000) with the code section's own attribute bits.
+    LEAVES_ALIAS = (0x30000000401a54c3, 0x30000000400914c3,
+                    0x30000000401b34c3, 0x30000000401b44c3)
 
     def test_2388_reads_the_live_leaves_out_of_the_arena(self):
         csf = self.cold_report(build=0x2388, input_va=0x01001200,
@@ -582,6 +587,27 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertIsNone(csf['cold_boot_start'])
         self.assertEqual(len(csf['cold_boot_landings']), 3)
         self.assertIn('survives AttrIdx 0/5', csf['instrument_verdict'])
+
+    def test_2399_aliases_one_page_onto_the_stack(self):
+        csf = self.cold_report(build=0x2399, input_va=4, firmware_probe_pa_lo=0x401a5000,
+                               leaf=self.LEAVES_ALIAS)['csf']
+        self.assertTrue(csf['alias_applied'])
+        self.assertEqual(csf['alias_pa'], 0x40091000)
+        self.assertEqual(csf['cold_boot_outcome'], 'wall-follows-the-physical-pages')
+        self.assertIn('physical pages', csf['instrument_verdict'])
+
+        # The same page that returned one read earlier through the stack VA.
+        csf = self.cold_report(build=0x2399, input_va=3, firmware_probe_pa_lo=0x401a5000,
+                               leaf=self.LEAVES_ALIAS)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'wall-follows-the-virtual-range')
+        self.assertIn('no mapping change', csf['instrument_verdict'])
+
+        # A leaf that still names the code page cannot answer the question.
+        csf = self.cold_report(build=0x2399, input_va=3, firmware_probe_pa_lo=0x401a5000,
+                               leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'alias-not-applied')
+        self.assertFalse(csf['alias_applied'])
+        self.assertFalse(csf['cold_boot_marker_present'])
 
     def test_2398_clears_the_group_tag(self):
         csf = self.cold_report(build=0x2398, input_va=4,

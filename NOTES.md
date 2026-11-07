@@ -1,6 +1,47 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-07 01:05: 2398 RAN - GROUP TAG OUT; THE LEAF IS EXHAUSTED <<<
+## >>> ACTIVE 2026-11-07 12:15: 2399 RAN - THE WALL IS THE VIRTUAL RANGE, NOT THE PHYSICAL PAGE <<<
+
+**RESULT: `input_va = 3`.** 2399 repointed exactly one leaf: VA `0x01001000`
+(the page holding the read target `0x01001200`) now names the physical page behind
+VA `0x02000000`, the stack page the ladder's second read already returned from.
+Both reads therefore hit the same physical word `0x40091200`, with PA bit 9 = 1
+and the leaf attributes unchanged. Read 2 returned, read 3 stalled.
+
+```
+image  284b95b2...f453  26,714,112 B  kernel 13743a97 (SWEET_BUILD_ID 0x2399)
+container d59eb487...0ba8 - byte-identical to 2396/2397/2398 (93 B vs vendor)
+leaves 0x30000000401a54c3 0x30000000400914c3 0x30000000401b34c3 0x30000000401b44c3
+part.  17f12bce...ffe0 written and read back, fastboot 87.84 s
+boot_a restored 2931647a...86b1 (verified)
+alias_applied true - the leaf at 0x01001000 is PA 0x40091000 with the code
+section's own attribute bits
+```
+
+**What it closes.** The firmware allocation does not need to move: the same
+physical memory serves the MCU when it is named through the stack VA. Every
+remaining explanation sits above the page table (AS / MCU address window /
+platform) or in the leaf attribute class as a whole.
+
+**Build note.** The alias helper costs 0x2cc bytes of shim text and pushed the
+0x4000-aligned BSS array ahead of the arena by one page: this build's arena is
+`0x40078000`, so every PA is 2396's +0x1000. The builder now pins the expected
+arena per build (`0x78000` for 2399) instead of relaxing the check, and the
+manifest records it.
+
+**Next: 2400 separates "attributes" from "the VA itself".** 2399 moved only the
+PA and kept the code section's attribute bits, so the attribute class is still
+open. 2400 copies the stack page's whole descriptor (RW, NX, AttrIdx, SH, group)
+onto VA `0x01001000`, same PA, and reads `0x01001200`. Returns -> the wall is the
+attribute class and 2400 bisects it; stalls -> the wall is the virtual range
+itself and only AS/platform config is left.
+
+Tests: 274 ran, 3 skipped (one new alias test in `test_mali_csf_memory`, one new
+2399 decode test in `test_matisse_gpu_evidence`). Patch series now 0001-0195:
+0194 is 2398's missing identity, 0195 is 2399. Replay is byte-identical to the
+local tree.
+
+## >>> PREVIOUS 2026-11-07 01:05: 2398 RAN - GROUP TAG OUT; THE LEAF IS EXHAUSTED <<<
 
 **RESULT: `input_va = 3`.** 2398's container is 2396's byte for byte; the only
 change was clearing the physical memory group tag (leaf bits 59..62) from 6 to 0.

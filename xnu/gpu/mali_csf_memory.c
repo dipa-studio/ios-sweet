@@ -36,6 +36,24 @@ static int conflict(uintptr_t a, size_t n, uintptr_t b, size_t m)
 {
     return a < b + m && b < a + n;
 }
+#if SWEET_CSF_ALIAS_VA && SWEET_CSF_ALIAS_TO_VA
+/* The leaf that maps one VA in a table this call just built, or null when the
+ * walk leaves the arena. Every level is bounds-checked against capacity so a
+ * malformed table cannot send the returned pointer outside the buffer. */
+static uint8_t *leaf_entry(uint8_t *arena, size_t capacity, uint64_t pa, uint64_t va)
+{
+    uint8_t *table = arena;
+    for (unsigned level = 0; level < 3; level++) {
+        unsigned shift = 39 - 9 * level;
+        uint64_t desc = get64(table + ((va >> shift) & 511) * 8);
+        if ((desc & 3) != 3) return 0;
+        uint64_t next = desc & UINT64_C(0x0000fffffffff000);
+        if (next < pa || next - pa >= capacity) return 0;
+        table = arena + (next - pa);
+    }
+    return table + ((va >> 12) & 511) * 8;
+}
+#endif
 #if SWEET_CSF_RELOCATE_CODE
 /* The one executable section: it holds the reset vector, the entry code and
  * every block the MCU has to fetch. Identified by the same predicate the shim
@@ -198,6 +216,24 @@ int sweet_csf_memory_build_group(const uint8_t *fw, size_t bytes, const struct s
             put64(table + ((va >> 12) & 511) * 8, desc);
         }
     }
+#if SWEET_CSF_ALIAS_VA && SWEET_CSF_ALIAS_TO_VA
+    /* 2399: repoint one page at the physical page another VA already mapped.
+     * The descriptor is read back from the table this call just wrote instead
+     * of being rebuilt, so the page keeps its own AttrIdx, AP, SH, AF, nG and
+     * XN bits and only bits47:12 move. Both VAs must already be mapped and page
+     * aligned; anything else fails closed rather than shipping a half-alias. */
+    {
+        uint64_t from = (uint64_t)SWEET_CSF_ALIAS_VA, to = (uint64_t)SWEET_CSF_ALIAS_TO_VA;
+        if ((from & (SWEET_CSF_PAGE - 1)) || (to & (SWEET_CSF_PAGE - 1)) || from == to)
+            return SWEET_CSF_MEMORY_ARGUMENT;
+        uint8_t *at = leaf_entry(arena, capacity, pa, from);
+        uint8_t *target = leaf_entry(arena, capacity, pa, to);
+        if (!at || !target) return SWEET_CSF_MEMORY_ARGUMENT;
+        uint64_t desc = get64(at), source = get64(target);
+        put64(at, (desc & ~UINT64_C(0x0000fffffffff000)) |
+                  (source & UINT64_C(0x0000fffffffff000)));
+    }
+#endif
     *root_pa = pa;
     return 0;
 }

@@ -62,6 +62,28 @@
 #ifndef SWEET_CSF_XN_VA
 #define SWEET_CSF_XN_VA 0
 #endif
+/* 0 leaves every leaf pointing at the page its own section placed there. Set
+ * both to page-aligned virtual addresses inside the plan and the leaf at
+ * SWEET_CSF_ALIAS_VA is repointed at the physical page that backs
+ * SWEET_CSF_ALIAS_TO_VA, keeping every one of its own attribute bits: same VA,
+ * same permissions, same cache mode, same section, different physical page.
+ * 2399 uses 0x01001000 -> 0x02000000. 2396 read bit9 = 1 in the shared and
+ * stack sections and stalled on it in the code section, 2397 exonerated XN and
+ * 2398 exonerated the memory group, so the last structural split is which side
+ * of the translation owns the stall. The target is the page the ladder's second
+ * read already reads: offset 0x200 through either VA lands on the same physical
+ * word, at PA bit 9 = 1, so the alias moves the virtual side and nothing else.
+ * A read that returns says the wall follows the code section's physical pages
+ * (move the firmware allocation); a read that still stalls, on a word the
+ * previous read of the same boot just returned, says it follows the virtual
+ * range and no mapping change can fix it. Diagnostic only, never a shipping
+ * encoding. */
+#ifndef SWEET_CSF_ALIAS_VA
+#define SWEET_CSF_ALIAS_VA 0
+#endif
+#ifndef SWEET_CSF_ALIAS_TO_VA
+#define SWEET_CSF_ALIAS_TO_VA 0
+#endif
 /* 0 keeps every build up to2380 byte-identical: each section's arena offset
  * follows the page tables in container order. 1 leaves every other section at
  * exactly that offset but appends the R-X section (VA0x01000000) after the

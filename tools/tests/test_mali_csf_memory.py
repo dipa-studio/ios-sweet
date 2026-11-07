@@ -192,6 +192,48 @@ int main(int argc,char **argv) {
  return 0;
 }
 """
+ALIAS_DUMP = r"""
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "mali_csf_memory.h"
+static void put(uint8_t *p,uint32_t v) {for(unsigned i=0;i<4;i++)p[i]=v>>(8*i);}
+static uint64_t u64(const uint8_t *p) {uint64_t v=0;for(unsigned i=0;i<8;i++)v|=(uint64_t)p[i]<<(8*i);return v;}
+static void section(uint8_t *p,uint32_t flags,uint32_t va,uint32_t end,uint32_t start,uint32_t stop) {
+ put(p,24<<8);put(p+4,flags);put(p+8,va);put(p+12,end);put(p+16,start);put(p+20,stop);
+}
+/* code at 0x01000000, RW stack at 0x02000000, shared at 0x04000000: the alias
+ * target is a different section, so a correct alias changes the PA only. */
+static void fixture(uint8_t *b) {
+ memset(b,0,256);put(b,0xc3f13a6e);b[4]=1;put(b+16,92);
+ section(b+20,0x0d,0x01000000,0x01002000,128,132);
+ section(b+44,0x0b,0x02000000,0x02002000,132,136);
+ section(b+68,0x4000001b,0x04000000,0x04002000,136,140);
+ b[128]=0x10;b[129]=0x20;b[130]=0x30;b[131]=0x40;
+ b[132]=1;b[133]=2;b[134]=3;b[135]=4;b[136]=5;b[137]=6;b[138]=7;b[139]=8;
+}
+static uint64_t walk(const uint8_t *a,uint64_t pa,uint32_t va) {
+ const uint8_t *t=a;
+ for(unsigned l=0;l<3;l++) {unsigned shift=39-9*l;uint64_t d=u64(t+(((uint64_t)va>>shift)&511)*8);if((d&3)!=3)return 0;t=a+((d&0x0000fffffffff000ULL)-pa);}
+ return u64(t+((va>>12)&511)*8);
+}
+int main(void) {
+ uint8_t b[256];fixture(b);
+ struct sweet_csf_memory m;if(sweet_csf_memory_plan(b,sizeof b,&m))return 2;
+ uint8_t *a=aligned_alloc(4096,(m.required_bytes+4095)&~4095u);if(!a)return 4;
+ memset(a,0xa5,m.required_bytes);
+ uint64_t root=0;
+ int rc=sweet_csf_memory_build_group(b,sizeof b,&m,a,m.required_bytes,0x90000000,40,6,&root);
+ printf("rc %d\n",rc);
+ if(rc)return 0;
+ printf("required %u\n",m.required_bytes);
+ for(unsigned i=0;i<m.mapping_count;i++)
+  for(unsigned off=0;off<m.map[i].bytes;off+=4096)
+   printf("%08x %016llx\n",m.map[i].va+off,(unsigned long long)walk(a,root,m.map[i].va+off));
+ return 0;
+}
+"""
 @unittest.skipUnless(shutil.which('cc'),'requires C compiler')
 class CsfMemoryTests(unittest.TestCase):
     def test_real_memory_builder(self):
@@ -211,6 +253,43 @@ class CsfMemoryTests(unittest.TestCase):
                 str(ROOT/'xnu/gpu/mali_csf_firmware.c'),str(ROOT/'xnu/gpu/mali_csf_memory.c'),
                 '-o',str(p/'test')],check=True,capture_output=True)
             subprocess.run([str(p/'test')],check=True,capture_output=True)
+
+    def test_alias_repoints_one_leaf_and_keeps_its_bits(self):
+        """2399: one page takes another section's PA, its attributes stay."""
+        def dump(from_va,to_va):
+            with tempfile.TemporaryDirectory() as directory:
+                p=Path(directory);(p/'d.c').write_text(ALIAS_DUMP)
+                cmd=['cc','-std=c11','-Wall','-Wextra','-Werror','-I',str(ROOT/'xnu/gpu'),
+                     '-DSWEET_CSF_ALIAS_VA=%s'%from_va,'-DSWEET_CSF_ALIAS_TO_VA=%s'%to_va,
+                     str(p/'d.c'),str(ROOT/'xnu/gpu/mali_csf_firmware.c'),
+                     str(ROOT/'xnu/gpu/mali_csf_memory.c'),'-o',str(p/'dump')]
+                subprocess.run(cmd,check=True,capture_output=True)
+                out=subprocess.run([str(p/'dump')],check=True,capture_output=True,text=True).stdout
+                rc=None;rows={}
+                for line in out.splitlines():
+                    head=line.split()
+                    if head[0]=='rc':rc=int(head[1])
+                    elif head[0]!='required':rows[int(head[0],16)]=int(head[1],16)
+                return rc,rows
+        rc,base=dump('0','0')
+        self.assertEqual(rc,0)
+        self.assertIn(0x01000000,base);self.assertIn(0x02000000,base)
+        rc,aliased=dump('0x01000000u','0x02000000u')
+        self.assertEqual(rc,0)
+        self.assertEqual(set(base),set(aliased))
+        code,stack=base[0x01000000],base[0x02000000]
+        page=0x0000fffffffff000
+        self.assertEqual(aliased[0x01000000]&page,stack&page,'the page must take the stack PA')
+        self.assertEqual(aliased[0x01000000]&~page,code&~page,
+                         'the aliased leaf must keep every non-address bit')
+        self.assertEqual(aliased[0x02000000],stack,'the source leaf must not move')
+        moved=[va for va in base if base[va]!=aliased[va]]
+        self.assertEqual(moved,[0x01000000],'the alias must touch exactly one leaf')
+        # A target that the plan never mapped, and a misaligned address, fail
+        # closed: no leaf may be written and the build must report -40.
+        for from_va,to_va in (('0x01000000u','0x03000000u'),('0x01000100u','0x02000000u')):
+            rc,rows=dump(from_va,to_va)
+            self.assertEqual(rc,-40,'%s -> %s must be refused'%(from_va,to_va))
 
     def test_relocated_code_moves_only_that_section(self):
         """2382: the plan moves the R-X section and nothing else."""
