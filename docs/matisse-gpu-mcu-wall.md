@@ -1729,23 +1729,66 @@ only asked a fetch to land there, never this read.
 | container | `d59eb487...0ba8` - byte-identical to 2396..2399 |
 | leaves | `0x30000000401a44c3`, **`0x30000000401a54d7`**, `0x30000000401b24c3`, `0x30000000401b34c3` |
 | `probe_page_uncached` | **true** - AttrIdx 5, SH 0, the other three leaves untouched |
-| `input_va` | **3** - shared and stack reads returned, the code read did not |
+| `input_va` | **3** - the marker written before the one read that actually ran (`0x01001200`); see the correction below |
 | `groups` / `cleanup_error` | 8 / -53 |
 | `as_fault` / `mmu_raw` | 0 / 0 |
 | fastboot | 121.28 s, `boot_a` restored to `2931647a...86b1` (verified) |
 
+**Correction (2026-11-07 13:30).** The 2396..2400 ladder encoded its first two
+reads as `f8d4 0200` / `f8d6 0200`, which little-endian Thumb decodes as
+`bmi`+`movs` / `bvs`+`movs`; `ldr.w` needs `d4 f8 00 02`. Markers 1 and 2 were
+written anyway, so `input_va = 3` names a pending third read, not a shared or
+stack stall. The shared read at `0x04000200` and the stack read at `0x02000200`
+never executed. 2400's single-read result (a non-cacheable `0x01001200` page
+still stalls) stands; the claim that the shared and stack controls returned does
+not. The same correction voids 2396's "bit 9 only in R-X pages", 2398's "the
+returning stack and shared sections", and 2399's "same physical word readable
+through the stack VA".
+
 **The page table has nothing left to vary.** AttrIndx/MemAttr (2393), cacheability
 in the fetch direction (2395) and now in the data direction (2400), AP (2378),
 SH (2374), nG (2393), XN (2397), memory group/PBHA (2398), physical page (2399) -
-every one null, each on a container that differs from 2396's by nothing else.
-A data read of `0x01001200` stalls whether the page is cached or not, while a
-fetch from the same window at `0x0100E000` completes and runs the ladder.
+every one null *for the one read that ran*, each on a container that differs
+from 2396's by nothing else. A data read of `0x01001200` stalls whether the page
+is cached or not, while a fetch from the same window at `0x0100E000` completes
+and runs the ladder.
 
 **What is left.** The wall is a property of the `0x01000000`-`0x0100FFFF`
 virtual window, not of any field the shim writes: same table, same PA bit 9,
-same attributes, different VA range, different outcome. 2399 already showed the
-same physical page reads fine through the stack VA, so the data path to that
-memory exists. The open question for 2401 is whether the window or the VA value
-is the property: map the very same code section at a second window
-(`0x03000000`), reset-vector a ladder there, and ask whether a bit-9 read inside
-`0x0300xxxx` returns.
+same attributes, different VA range, different outcome. The open question for
+2401 is whether the window or the VA value is the property: map the very same
+code section at a second window (`0x03000000`), reset-vector a ladder there, and
+ask whether a `0x03001200` read returns - with a fresh L3 page and with a reuse
+of L2[8]'s L3 page, so the original frame is separated from the window too.
+
+## 47. 2401 built: second window plus a fresh-L3/share split, and the ladder bug
+
+2401 is the corrected six-step ladder. It maps the executable section a second
+time at `0x03000000` with its own L3 and data pages, aliases `0x05000000` onto
+`L2[8]`'s L3 page, and starts at the mirror's `0x0300E000`. The first two reads
+are the shared and stack controls the earlier ladders never issued; reads 3/4/5
+ask the same `0x...1200` question through the fresh mirror, the shared L3 page,
+and the original window.
+
+| item | value |
+|---|---|
+| image | `286035d9...870f`, 26,714,112 B, arena `0x78000` |
+| kernel | `83ec99c4...05d6`, `SWEET_BUILD_ID 0x2401` |
+| container | `d0ab5ccb...0a16`, 121 B vs vendor `de22d2fc...229a` |
+| plan | 8 mappings, 9 table pages, required `0x14E000` |
+| mirror | `0x03000000` copy, entry `0x0300E000`; section PA `0x401a6000`, page `0x401a7000` |
+| share | `L2[40] = L2[8]`; `0x05001000` leaf identical to `0x01001000` |
+| code | relocated to PA `0x401b6000`; original entry `0x0100E000` -> `0x401c4000` |
+| reset | word `0x4 = 0x0300e001` |
+| ladder | marker 1 `0x04000200`, 2 `0x02000200`, 3 `0x03001200`, 4 `0x05001200`, 5 `0x01001200`, 6 all returned |
+| tests | 281 ran, 3 skipped; patch series 0001-0197 |
+
+`input_va` 1..5 names the read that stalled; 6 means all five returned. Branch A
+(marker 3 returns): the `0x01000000` window is the property; marker 4 then says
+whether a reused L3 page works, and marker 5 isolates the original VA. Branch B
+(marker 3 stalls): the wall follows the cross-page data-read shape; next read
+`0x0100E200` in the executing page and add the `0x0000000C..0x00000018` stub that
+writes `0xE3` to `input_va` to separate an AXI hang from an M7 fault vector.
+
+The image is built and preflighted but **not flown**: the device was in Recovery
+with no fastboot. `boot_a` remains `2931647a...86b1`.

@@ -234,6 +234,80 @@ int main(void) {
  return 0;
 }
 """
+MIRROR_HARNESS = r'''
+#include <assert.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include "mali_csf_memory.h"
+static void put(uint8_t *p,uint32_t v) {for(unsigned i=0;i<4;i++)p[i]=v>>(8*i);}
+static uint64_t u64(const uint8_t *p) {uint64_t v=0;for(unsigned i=0;i<8;i++)v|=(uint64_t)p[i]<<(8*i);return v;}
+static void section(uint8_t *p,uint32_t flags,uint32_t va,uint32_t end,uint32_t start,uint32_t stop) {
+ put(p,24<<8);put(p+4,flags);put(p+8,va);put(p+12,end);put(p+16,start);put(p+20,stop);
+}
+/* code at 0x01000000, shared at 0x04000000, and a protected section sitting on
+ * 0x03000000: the plan never maps it, so the mirror may take that slot. */
+static void fixture(uint8_t *b) {
+ memset(b,0,256);put(b,0xc3f13a6e);b[4]=1;put(b+16,92);
+ section(b+20,0x0d,0x01000000,0x01002000,128,132);
+ section(b+44,0x4000001b,0x04000000,0x04002000,132,136);
+ section(b+68,0x2b,0x03000000,0x03001000,0,0);
+ b[128]=0x10;b[129]=0x20;b[130]=0x30;b[131]=0x40;
+ b[132]=1;b[133]=2;b[134]=3;b[135]=4;
+}
+static uint8_t *slot(uint8_t *a,uint64_t pa,uint32_t va,unsigned levels) {
+ uint8_t *t=a;
+ for(unsigned l=0;l<levels;l++) {unsigned shift=39-9*l;uint64_t d=u64(t+(((uint64_t)va>>shift)&511)*8);
+  assert((d&3)==3);t=a+((d&0x0000fffffffff000ULL)-pa);}
+ return t+((va>>(39-9*levels))&511)*8;
+}
+static uint64_t walk(const uint8_t *a,uint64_t pa,uint32_t va) {
+ const uint8_t *t=a;
+ for(unsigned l=0;l<3;l++) {unsigned shift=39-9*l;uint64_t d=u64(t+(((uint64_t)va>>shift)&511)*8);
+  if((d&3)!=3)return 0;t=a+((d&0x0000fffffffff000ULL)-pa);}
+ return u64(t+((va>>12)&511)*8);
+}
+int main(void) {
+ uint8_t b[256];fixture(b);
+ struct sweet_csf_memory m;assert(!sweet_csf_memory_plan(b,sizeof b,&m));
+ /* The protected 0x03000000 section is skipped, then the mirror is appended. */
+ assert(m.mapping_count==3 && m.protected_skipped==1);
+ assert(m.table_pages==6 && m.required_bytes==0xc000);
+ const struct sweet_csf_mapping *code=0,*mirror=0;
+ for(unsigned i=0;i<m.mapping_count;i++) {
+  if(m.map[i].va==0x01000000)code=&m.map[i];
+  if(m.map[i].va==0x03000000)mirror=&m.map[i];
+ }
+ assert(code&&mirror);
+ assert(mirror->bytes==code->bytes && mirror->flags==code->flags);
+ assert(mirror->data_start==code->data_start && mirror->data_bytes==code->data_bytes);
+ assert(mirror->arena_offset!=code->arena_offset);
+ uint8_t *a=aligned_alloc(4096,(m.required_bytes+4095)&~4095u);assert(a);
+ memset(a,0xa5,m.required_bytes);uint64_t root=0;
+ assert(!sweet_csf_memory_build_group(b,sizeof b,&m,a,m.required_bytes,0x90000000,40,6,&root));
+ /* The mirror carries a real copy of the section data, not a shared slot. */
+ assert(!memcmp(a+code->arena_offset,a+mirror->arena_offset,code->data_bytes));
+ /* L2[24] names a different L3 page from L2[8]; L2[40] is L2[8] verbatim. */
+ uint64_t m2=u64(slot(a,root,0x03000000,2)),c2=u64(slot(a,root,0x01000000,2));
+ assert((m2&3)==3 && (c2&3)==3 && (m2&~0xfff)!=(c2&~0xfff));
+ assert(u64(slot(a,root,0x05000000,2))==c2);
+ /* The shared-L3 window reaches the identical leaf. */
+ uint64_t alias=walk(a,root,0x05001000),orig=walk(a,root,0x01001000);
+ assert(alias==orig && (orig&3)==3);
+ /* The mirror leaf moves only bits47:12. */
+ uint64_t ml=walk(a,root,0x03001000),cl=walk(a,root,0x01001000);
+ assert((ml&0x0000fffffffff000ULL)!=(cl&0x0000fffffffff000ULL));
+ assert((ml&~0x0000fffffffff000ULL)==(cl&~0x0000fffffffff000ULL));
+ /* Every read target still has PA bit 9 set. */
+ assert(((0x03001200u>>9)&1)&&((0x05001200u>>9)&1)&&((0x01001200u>>9)&1));
+ printf("mappings=%u tables=%u required=%u mirror_page=%llx alias_page=%llx\n",
+  m.mapping_count,m.table_pages,m.required_bytes,
+  (unsigned long long)(ml&0x0000fffffffff000ULL),
+  (unsigned long long)(alias&0x0000fffffffff000ULL));
+ return 0;
+}
+'''
 @unittest.skipUnless(shutil.which('cc'),'requires C compiler')
 class CsfMemoryTests(unittest.TestCase):
     def test_real_memory_builder(self):
@@ -379,6 +453,23 @@ class CsfMemoryTests(unittest.TestCase):
                                       text=True).stdout
         base=dump(None);moved=dump('-DSWEET_CSF_RELOCATE_CODE=1')
         self.assertEqual(base,moved,'the flag must be inert when no section qualifies')
+
+    def test_mirror_gets_a_fresh_l3_and_the_share_reuses_the_code_l3(self):
+        """2401: the two windows have exactly the properties the trial needs."""
+        with tempfile.TemporaryDirectory() as directory:
+            p=Path(directory);(p/'m.c').write_text(MIRROR_HARNESS)
+            subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror',
+                '-fsanitize=address,undefined',
+                '-DSWEET_CSF_MIRROR_CODE_VA=0x03000000u',
+                '-DSWEET_CSF_SHARE_CODE_L3_VA=0x05000000u',
+                '-I',str(ROOT/'xnu/gpu'),str(p/'m.c'),
+                str(ROOT/'xnu/gpu/mali_csf_firmware.c'),
+                str(ROOT/'xnu/gpu/mali_csf_memory.c'),'-o',str(p/'test')],
+                check=True,capture_output=True)
+            out=subprocess.run([str(p/'test')],check=True,capture_output=True,text=True).stdout
+        self.assertIn('mappings=3',out)
+        self.assertIn('tables=6',out)
+        self.assertIn('required=49152',out)
 
     def test_vendor_pairing_changes_only_attr_index_and_share(self):
         """Diff the two encodings leaf by leaf: only bits0x31c may move."""

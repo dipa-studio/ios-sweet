@@ -109,7 +109,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -168,9 +168,14 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             #420..423 so no earlier ABI moved. These are the table the MCU walks,
             #not a re-derivation of what it should be. A capture that predates
             #the property (2389 shipped without it) is still decodable on request.
-            csf.update(zip(('leaf_0x01000000','leaf_0x01001000',
-                            'leaf_0x0100e000','leaf_0x0100f000'),
-                          struct.unpack('<4Q',report_bytes(records,420,4,mark,'LEAF'))))
+            # 2401 publishes the four descriptors that distinguish its three
+            # windows: the mirror's own section and page, the shared-L3 alias,
+            # and the original code page.
+            names = (('leaf_0x03000000','leaf_0x03001000',
+                      'leaf_0x05001000','leaf_0x01001000') if expected_build == 0x2401 else
+                     ('leaf_0x01000000','leaf_0x01001000',
+                      'leaf_0x0100e000','leaf_0x0100f000'))
+            csf.update(zip(names, struct.unpack('<4Q',report_bytes(records,420,4,mark,'LEAF'))))
         if expected_build >= 0x2323:
             csf.update(zip(CSF_DIAGNOSTIC_KEYS,struct.unpack('<7Ii2I',raw[88:128])))
             allowed_flags = 15 if expected_build >= 0x2325 else 3
@@ -705,10 +710,10 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a4000
             csf['cold_boot_target'] = 0x0100E000
             csf['cold_boot_ladder'] = {
-                '0x1': 'stopped reading shared 0x04000200',
-                '0x2': 'stopped reading stack 0x02000200',
-                '0x3': 'stopped reading code 0x01001200',
-                '0x4': 'all three bit-9 reads returned'}
+                '0x1': 'marker 1 written; the read at 0x04000200 never executed (b<c>+movs bytes)',
+                '0x2': 'marker 2 written; the read at 0x02000200 never executed',
+                '0x3': 'marker 3 written; 0x01001200 was issued and stalled',
+                '0x4': '0x01001200 returned; the two controls never ran'}
             marker = csf['input_va']
             csf['cold_boot_marker_present'] = marker in (1, 2, 3, 4)
             if not csf['relocation_observed']:
@@ -728,32 +733,28 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             elif marker == 1:
                 outcome = 'bit9-hangs-in-shared'
                 csf['cold_boot_start'] = 'shared-0x04000200'
-                verdict = ('the first bit-9 read, in the shared section, never returned. The rule '
-                           'is not a property of executable pages: a bit-9 address stalls in any '
-                           'section, so the wall is the address itself and no leaf field can move '
-                           'it. Next: 2397, one 2 MB level-2 block for the code section, to '
-                           'bypass the level-3 walk')
+                verdict = ('marker 1 is written before the first read, but that read never issued: '
+                           'the 2396 stub stored f8d4 0200, which decodes as bmi+movs, not ldr.w. '
+                           'This marker cannot be a shared-section stall observation')
             elif marker == 2:
                 outcome = 'bit9-hangs-in-stack'
                 csf['cold_boot_start'] = 'stack-0x02000200'
-                verdict = ('shared returned at bit 9 = 1 and the stack did not. The two differ in '
-                           'cache mode: shared is uncached coherent, the stack is cached RW. So '
-                           'bit 9 bites on cacheable data as well as on code, and the next '
-                           'variable is the cache mode of the data sections, not XN')
+                verdict = ('marker 2 is written before the second read, and that read also never '
+                           'issued (f8d6 0200 = bvs+movs). This marker cannot be a stack-section '
+                           'stall observation; both control reads in 2396..2400 were dead code')
             elif marker == 3:
                 outcome = 'bit9-hangs-in-code-only'
                 csf['cold_boot_start'] = 'code-0x01001200'
-                verdict = ('shared and stack both returned at bit 9 = 1 and only the executable '
-                           'section stalled. The rule is then bit 9 inside an R-X page, and XN is '
-                           'the only leaf field never varied: the next build maps the code section '
-                           'non-executable and reads the same address')
+                verdict = ('the only read that actually ran, 0x01001200, stalled. The intended '
+                           'shared and stack controls never executed, so this run does NOT say the '
+                           'rule is specific to R-X pages; it only says the code read stalls. XN '
+                           'remains untested')
             else:
                 outcome = 'bit9-not-reproduced'
                 csf['cold_boot_start'] = 'all-three-returned'
-                verdict = ('all three bit-9 reads returned, including the one in the code section. '
-                           'Nothing in the current mapping reproduces the stall, so the earlier '
-                           'no-landing results have to be re-read before another attribute is '
-                           'tried')
+                verdict = ('the one read that ran returned. The shared and stack controls never '
+                           'executed, so "all three bit-9 reads returned" is not what this run '
+                           'shows; nothing here reproduces the stall')
             csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
         if expected_build == 0x2397:
@@ -766,8 +767,8 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['cold_boot_ladder'] = {
                 '0x1': 'stopped reading shared 0x04000200',
                 '0x2': 'stopped reading stack 0x02000200',
-                '0x3': 'stopped reading code 0x01001200, now on an XN page',
-                '0x4': 'all three reads returned, the code one included'}
+                '0x3': 'marker 3 written; 0x01001200 was issued and stalled',
+                '0x4': '0x01001200 returned; the two controls never ran'}
             page = csf.get('leaf_0x01001000')
             csf['probe_page_leaf'] = page
             csf['probe_page_xn'] = None if page is None else bool(page & (3 << 53))
@@ -792,30 +793,28 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             elif marker == 1:
                 outcome = 'shared-stalls-again'
                 csf['cold_boot_start'] = 'shared-0x04000200'
-                verdict = ('the shared read stalled, which 2396 did not do. Something other than '
-                           'the intended page permission moved, so this run cannot be read as an '
-                           'XN result')
+                verdict = ('marker 1 is written before a read that never issued: the ladder stored '
+                           'b<c>+movs, not ldr.w. This is not a shared-section stall and cannot '
+                           'be read as an XN result')
             elif marker == 2:
                 outcome = 'stack-stalls-again'
                 csf['cold_boot_start'] = 'stack-0x02000200'
-                verdict = ('the stack read stalled, which 2396 did not do. The run is not '
-                           'comparable to 2396 and says nothing about XN')
+                verdict = ('marker 2 is written before a read that never issued (same broken '
+                           'encoding). This is not a stack-section stall and says nothing about XN')
             elif marker == 3:
                 outcome = 'xn-exonerated'
                 csf['cold_boot_start'] = 'code-0x01001200'
-                verdict = ('the read of 0x01001200 still stalled with its page non-executable, so '
-                           'executability is not the lever either. Every leaf field has now been '
-                           'varied: the remaining structural variable is the level-3 walk, and '
-                           'the next build maps the code section with a 2 MB level-2 block')
+                verdict = ('the only read that ran, 0x01001200, still stalled with its page '
+                           'non-executable, so executable permission is not the lever for that read. '
+                           'The intended shared/stack controls never executed; every leaf field '
+                           'varied so far is null for this one read')
             elif marker == 4:
                 outcome = 'xn-is-the-switch'
                 csf['cold_boot_start'] = 'all-three-returned'
-                verdict = ('the code read returned once its page was forced non-executable, while '
-                           'the same read stalled in 2396 on the same container. The stall is '
-                           'keyed on the target page being executable, so the hardware is '
-                           'treating an MCU data access to an executable page differently from '
-                           'one to a non-executable page; the fix is then a page permission, not '
-                           'a different boot path')
+                verdict = ('the 0x01001200 read returned once its page was forced non-executable, '
+                           'while the same read stalled in 2396 on the same container. The stall is '
+                           'keyed on the target page being executable; the controls never ran, so '
+                           'this is one read, not a three-way result')
             else:
                 outcome = 'no-marker'
                 csf['cold_boot_start'] = None
@@ -834,10 +833,10 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a4000
             csf['cold_boot_target'] = 0x0100E000
             csf['cold_boot_ladder'] = {
-                '0x1': 'stopped reading shared 0x04000200',
-                '0x2': 'stopped reading stack 0x02000200',
-                '0x3': 'stopped reading code 0x01001200, now non-cacheable',
-                '0x4': 'all three reads returned, the non-cacheable code one included'}
+                '0x1': 'marker 1 written; the read at 0x04000200 never executed (b<c>+movs bytes)',
+                '0x2': 'marker 2 written; the read at 0x02000200 never executed',
+                '0x3': 'marker 3 written; 0x01001200 was issued and stalled, now non-cacheable',
+                '0x4': '0x01001200 returned; the two controls never ran'}
             page = csf.get('leaf_0x01001000')
             entry = csf.get('leaf_0x0100e000')
             csf['probe_page_leaf'] = page
@@ -869,37 +868,155 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             elif marker == 1:
                 outcome = 'shared-stalls-again'
                 csf['cold_boot_start'] = 'shared-0x04000200'
-                verdict = ('the shared read stalled, which 2396 did not do; the run is not '
-                           'comparable and says nothing about the cache mode')
+                verdict = ('marker 1 is written before a read that never issued; the ladder stored '
+                           'b<c>+movs, not ldr.w. Not a shared-section stall; says nothing about '
+                           'the cache mode')
             elif marker == 2:
                 outcome = 'stack-stalls-again'
                 csf['cold_boot_start'] = 'stack-0x02000200'
-                verdict = ('the stack read stalled, which 2396 did not do; the run is not '
-                           'comparable and says nothing about the cache mode')
+                verdict = ('marker 2 is written before a read that never issued; not a '
+                           'stack-section stall; says nothing about the cache mode')
             elif marker == 3:
                 outcome = 'data-access-to-the-code-window-never-completes'
                 csf['cold_boot_start'] = 'code-0x01001200'
-                verdict = ('the read of 0x01001200 stalled even with its page non-cacheable, so '
-                           'the fill path is not the wall: no MCU data access to the '
-                           '0x01000000-0x0100FFFF window completes, cached or not. Every leaf '
-                           'field is now null, cached fill included, and the remaining '
-                           'explanations are above the page table - the window itself, or what '
-                           'the AS applies to that range')
+                verdict = ('the only read that ran, 0x01001200, stalled even with its page '
+                           'non-cacheable, so the fill path is not the lever for this read. The '
+                           'intended shared and stack controls never executed; the remaining '
+                           'questions are above the page table - the window itself, or what the AS '
+                           'applies to that range')
             elif marker == 4:
                 outcome = 'cacheable-fill-is-the-wall'
                 csf['cold_boot_start'] = 'all-three-returned'
-                verdict = ('the code read returned as soon as its page stopped being cacheable, '
-                           'while the same read stalled in 2396 with a cached leaf and the entry '
-                           'page stayed cached here. The wall is the cacheable fill of the code '
-                           'window, not the address: the MCU can serve a hit but cannot complete '
-                           'a linefill from that range, which is a cache or coherency '
-                           'configuration, not a page-table one')
+                verdict = ('the 0x01001200 read returned once its page stopped being cacheable, '
+                           'while it stalled in 2396 with a cached leaf. One read, no controls: '
+                           'repeat it in 2401 before calling the cacheable fill the wall')
             else:
                 outcome = 'no-marker'
                 csf['cold_boot_start'] = None
                 verdict = ('the core never wrote a marker, so 0x0100E000 did not start even though '
                            'its page kept 2394\'s cached leaf. Check the entry leaf before reading '
                            'the ladder')
+            csf['cold_boot_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2401:
+            # 2400's container, with the executable section mapped a second time
+            # at 0x03000000. The ladder starts at the mirror's 0x0300E000 and
+            # writes marker N before read N, so the highest marker names the read
+            # that stopped the core. Reads 3/4/5 are the same section offset
+            # through a fresh L3 page, through L2[8]'s own L3 page at a different
+            # VA, and through the original VA. The old ladder never executed its
+            # first two reads (bad Thumb-2 byte order), so their return is new
+            # evidence, not a repeat.
+            csf['cold_boot_counter'] = csf['groups']
+            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401b6000
+            csf['cold_boot_target'] = 0x0300E000
+            csf['cold_boot_ladder'] = {
+                '0x1': 'stopped reading shared 0x04000200',
+                '0x2': 'stopped reading stack 0x02000200',
+                '0x3': 'stopped reading mirrored code 0x03001200',
+                '0x4': 'stopped reading 0x05001200, the original L3 page at a new VA',
+                '0x5': 'stopped reading original code 0x01001200',
+                '0x6': 'all five reads returned'}
+            mirror_leaf = csf.get('leaf_0x03000000')
+            mirror_page = csf.get('leaf_0x03001000')
+            alias_leaf = csf.get('leaf_0x05001000')
+            code_page = csf.get('leaf_0x01001000')
+            page = 0x0000fffffffff000
+            csf['mirror_leaf'] = mirror_leaf
+            csf['mirror_page_leaf'] = mirror_page
+            csf['alias_leaf'] = alias_leaf
+            csf['code_page_leaf'] = code_page
+            csf['mirror_applied'] = bool(
+                mirror_leaf is not None and mirror_page is not None and code_page is not None and
+                (mirror_leaf & page) == 0x401a6000 and
+                (mirror_page & page) == 0x401a7000 and
+                (mirror_page & ~page) == (code_page & ~page))
+            # The shared-L3 window must reach the very same L3 page and leaf, so
+            # its descriptor has to match the code page word for word.
+            csf['alias_applied'] = bool(code_page is not None and alias_leaf == code_page)
+            marker = csf['input_va']
+            csf['cold_boot_marker_present'] = marker in (1, 2, 3, 4, 5, 6)
+            if not csf['relocation_observed']:
+                outcome = 'not-relocated'
+                verdict = ('the executable probe PA is not the relocated one; this is not the '
+                           '2382 mapping the build reuses')
+            elif csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault']:
+                outcome = 'cold-boot-refused'
+                verdict = ('the MMU refused something before any marker appeared (AS_FAULT %#x at '
+                           '%#x), so the ladder never reached its first read' %
+                           (csf['as_fault'], csf['as_fault_hi'] << 32 | csf['as_fault_lo']))
+            elif not csf['mirror_applied']:
+                outcome = 'mirror-not-applied'
+                csf['cold_boot_marker_present'] = False
+                csf['cold_boot_start'] = None
+                verdict = ('the live leaves do not describe a mirrored copy with its own L3 and '
+                           'data page (section %s, page %s, code page %s), so this run says '
+                           'nothing about the second window' %
+                           (None if mirror_leaf is None else hex(mirror_leaf),
+                            None if mirror_page is None else hex(mirror_page),
+                            None if code_page is None else hex(code_page)))
+            elif not csf['alias_applied']:
+                outcome = 'alias-not-applied'
+                csf['cold_boot_marker_present'] = False
+                csf['cold_boot_start'] = None
+                verdict = ('0x05001000 does not carry the code page descriptor %s but %s, so the '
+                           'shared-L3 control did not travel with the image' %
+                           (None if code_page is None else hex(code_page),
+                            None if alias_leaf is None else hex(alias_leaf)))
+            elif marker == 1:
+                outcome = 'shared-stalls'
+                csf['cold_boot_start'] = 'shared-0x04000200'
+                verdict = ('the first bit-9 read, in the shared section, stalled. This is the '
+                           'first time that read has actually executed: the 2396..2400 ladders '
+                           'encoded both control reads as b<c> plus movs, so only 0x01001200 ever '
+                           'ran. A stall here means bit 9 is not specific to the code section; '
+                           'the ladder has to start with a read that does return before it can '
+                           'separate the windows')
+            elif marker == 2:
+                outcome = 'stack-stalls'
+                csf['cold_boot_start'] = 'stack-0x02000200'
+                verdict = ('the shared read returned and the stack read stalled. That is the '
+                           'control 2396..2400 never actually ran, so 2399\'s alias conclusion '
+                           '(same physical word readable through the stack VA) was never '
+                           'tested. The mirror comparison is still unread; lower the stack read '
+                           'to a non-bit-9 offset first')
+            elif marker == 3:
+                outcome = 'wall-follows-the-code-bytes'
+                csf['cold_boot_start'] = 'mirror-0x03001200'
+                verdict = ('the mirror stalled even though its VA, L2 slot, L3 page and data page '
+                           'are all different from the original section. Neither the 0x0100xxxx '
+                           'window nor L2[8]\'s L3 page nor the original physical pages can be '
+                           'the wall by themselves; it follows the code bytes or the shape of a '
+                           'data read into this section (branch B)')
+            elif marker == 4:
+                outcome = 'wall-follows-the-original-l3-or-data-page'
+                csf['cold_boot_start'] = 'alias-0x05001200'
+                verdict = ('the mirror returned and the shared-L3 window stalled. 0x05001200 '
+                           'walks the identical L3 page and leaf descriptor as 0x01001200, so '
+                           'the wall is on the page-table path those two share. 2382 already '
+                           'moved the code data page without moving the wall, which leaves the '
+                           'L2[8] L3 page frame as the prime suspect; the next build should '
+                           'point L2[8] at a fresh L3 page')
+            elif marker == 5:
+                outcome = 'wall-is-the-original-va'
+                csf['cold_boot_start'] = 'original-0x01001200'
+                verdict = ('0x05001200 returned and 0x01001200 stalled with an identical L3 '
+                           'page, leaf descriptor and physical address. Only the virtual address '
+                           'differs, so the wall is the 0x0100xxxx VA itself, above the page '
+                           'table in the AS or the platform address window')
+            elif marker == 6:
+                outcome = 'all-reads-returned'
+                csf['cold_boot_start'] = 'all-five-returned'
+                verdict = ('every read returned, the original 0x01001200 included. The corrected '
+                           'ladder now executes the two control reads the 2396..2400 ladders '
+                           'skipped, so this result cannot be compared to those trials; the '
+                           'earlier stalls must be re-derived from the fixed ladder before '
+                           'another attribute is called null')
+            else:
+                outcome = 'no-marker'
+                csf['cold_boot_start'] = None
+                verdict = ('the core never wrote a marker, so 0x0300E000 did not start; check '
+                           'the mirror entry leaf before reading the ladder')
             csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
         if expected_build == 0x2398:
@@ -909,10 +1026,10 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a4000
             csf['cold_boot_target'] = 0x0100E000
             csf['cold_boot_ladder'] = {
-                '0x1': 'stopped reading shared 0x04000200',
-                '0x2': 'stopped reading stack 0x02000200',
-                '0x3': 'stopped reading code 0x01001200',
-                '0x4': 'all three bit-9 reads returned'}
+                '0x1': 'marker 1 written; the read at 0x04000200 never executed (b<c>+movs bytes)',
+                '0x2': 'marker 2 written; the read at 0x02000200 never executed',
+                '0x3': 'marker 3 written; 0x01001200 was issued and stalled',
+                '0x4': '0x01001200 returned; the two controls never ran'}
             groups = [csf.get(name) for name in
                       ('leaf_0x01000000', 'leaf_0x01001000',
                        'leaf_0x0100e000', 'leaf_0x0100f000')]
@@ -940,29 +1057,27 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             elif marker == 1:
                 outcome = 'shared-stalls-again'
                 csf['cold_boot_start'] = 'shared-0x04000200'
-                verdict = ('the shared read stalled, which 2396 did not do; the run is not '
-                           'comparable and says nothing about the tag')
+                verdict = ('marker 1 is written before a read that never issued; the ladder stored '
+                           'b<c>+movs, not ldr.w. Not a shared-section stall; says nothing about '
+                           'the tag')
             elif marker == 2:
                 outcome = 'stack-stalls-again'
                 csf['cold_boot_start'] = 'stack-0x02000200'
-                verdict = ('the stack read stalled, which 2396 did not do; the run is not '
-                           'comparable and says nothing about the tag')
+                verdict = ('marker 2 is written before a read that never issued; not a '
+                           'stack-section stall; says nothing about the tag')
             elif marker == 3:
                 outcome = 'leaf-group-exonerated'
                 csf['cold_boot_start'] = 'code-0x01001200'
-                verdict = ('the code read still stalled with group 0 in the leaf, so the tag is '
-                           'not the wall. With every leaf input now varied - AttrIndx, MemAttr, '
-                           'SH, nG, AP, XN, cache mode and the group tag - the remaining '
-                           'difference between the stalling code section and the returning '
-                           'stack and shared sections is the virtual range itself')
+                verdict = ('the only read that ran, 0x01001200, still stalled with group 0 in the '
+                           'leaf, so the tag is not the lever for that read. The intended shared '
+                           'and stack controls never executed; they cannot support a claim about '
+                           'what separates the sections')
             elif marker == 4:
                 outcome = 'leaf-group-was-the-wall'
                 csf['cold_boot_start'] = 'all-three-returned'
-                verdict = ('the code read returned once the leaf stopped carrying group 6. The '
-                           'tag was the whole wall: every build until now asked the AS for a '
-                           'memory group that does not back the firmware pages, and only the '
-                           'code window noticed. 2399 should boot the unpatched vendor firmware '
-                           'with group 0 and read version/firmware_ready')
+                verdict = ('the 0x01001200 read returned once the leaf stopped carrying group 6. '
+                           'One read, with no controls; repeat it before treating the tag as the '
+                           'wall')
             else:
                 outcome = 'no-marker'
                 csf['cold_boot_start'] = None
@@ -973,7 +1088,8 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
         if expected_build == 0x2399:
             # 2396's container, ladder, entry and encoding, with exactly one leaf
             # repointed: VA 0x01001000 now names the physical page that backs
-            # 0x02000000, the stack page whose offset 0x200 returned in read 2.
+            # 0x02000000. Read 2 was meant to show that page returning first, but
+            # the 2396..2400 ladder never issued its control reads.
             # The shim's alias helper moved the arena one page, so every PA in
             # this build is 2396's plus 0x1000: the relocated code section is at
             # 0x401a5000 and the stack page is 0x40091000.
@@ -981,10 +1097,10 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a5000
             csf['cold_boot_target'] = 0x0100E000
             csf['cold_boot_ladder'] = {
-                '0x1': 'stopped reading shared 0x04000200',
-                '0x2': 'stopped reading stack 0x02000200',
-                '0x3': 'stopped reading code 0x01001200, now on the stack page',
-                '0x4': 'all three bit-9 reads returned'}
+                '0x1': 'marker 1 written; the read at 0x04000200 never executed (b<c>+movs bytes)',
+                '0x2': 'marker 2 written; the read at 0x02000200 never executed',
+                '0x3': 'marker 3 written; 0x01001200 was issued and stalled on the alias leaf',
+                '0x4': '0x01001200 returned; the two controls never ran'}
             alias_leaf = csf.get('leaf_0x01001000')
             code_leaf = csf.get('leaf_0x01000000')
             page = 0x0000fffffffff000
@@ -1012,36 +1128,38 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 outcome = 'alias-not-applied'
                 csf['cold_boot_marker_present'] = False
                 csf['cold_boot_start'] = None
-                verdict = ('the live leaf at 0x01001000 is %s, not the stack page 0x401b4000 with '
+                verdict = ('the live leaf at 0x01001000 is %s, not the stack page 0x40091000 with '
                            'this section\'s attribute bits, so the image did not travel with the '
                            'alias and the run says nothing about the two sides of the '
                            'translation' % (None if alias_leaf is None else hex(alias_leaf)))
             elif marker == 1:
                 outcome = 'shared-stalls-again'
                 csf['cold_boot_start'] = 'shared-0x04000200'
-                verdict = ('the shared read stalled, which 2396 did not do; the run is not '
-                           'comparable and says nothing about the alias')
+                verdict = ('marker 1 is written before a read that never issued; the ladder stored '
+                           'b<c>+movs, not ldr.w. Not a shared-section stall; says nothing about '
+                           'the alias')
             elif marker == 2:
                 outcome = 'stack-stalls-again'
                 csf['cold_boot_start'] = 'stack-0x02000200'
-                verdict = ('the stack read stalled, which 2396 did not do; the alias target page '
-                           'is the one that read would have touched, so the run is not comparable')
+                verdict = ('marker 2 is written before a read that never issued; the alias target '
+                           'page is the one that read was meant to touch, but it never ran. Says '
+                           'nothing about the alias')
             elif marker == 3:
                 outcome = 'wall-follows-the-virtual-range'
                 csf['cold_boot_start'] = 'code-0x01001200'
-                verdict = ('the code read stalled on the very physical word read 2 had just '
-                           'returned through the stack VA. Same page, same offset, same PA bit 9, '
-                           'only the VA and the leaf attributes differ, so the wall is on the '
-                           'virtual side of the translation and no mapping change inside the code '
-                           'section can remove it. The next place to look is what the AS or the '
-                           'platform adds for that VA range, not the leaf')
+                verdict = ('the leaf at 0x01001000 names the stack page PA 0x40091000 and the read '
+                           'at 0x01001200 still stalled. The wall is therefore not the code '
+                           'section\'s own physical page. Whether that PA is readable through the '
+                           'stack VA was never measured - read 2 never executed - and the alias '
+                           'keeps the code leaf\'s attribute bits, so this run does not separate '
+                           'the VA from the attribute class')
             elif marker == 4:
                 outcome = 'wall-follows-the-physical-pages'
                 csf['cold_boot_start'] = 'all-three-returned'
-                verdict = ('the code read returned as soon as its VA named a stack page, so the '
-                           'stall follows the code section\'s physical pages and not the virtual '
-                           'range. The firmware allocation is the thing to move: the pages the MCU '
-                           'fetches are the ones this part refuses to serve')
+                verdict = ('the 0x01001200 read returned once its VA named a stack page, so the '
+                           'stall followed the code section\'s physical pages in this run. The '
+                           'controls never executed; repeat before treating the allocation as the '
+                           'cause')
             else:
                 outcome = 'no-marker'
                 csf['cold_boot_start'] = None
@@ -1970,7 +2088,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2400)')
+                   help='expected kernel/report build (0x2321 through 0x2401)')
     p.add_argument('--allow-missing-leaf',action='store_true',
                    help='decode a build >=0x2388 whose image shipped without the '
                         'sweet-csf-leaf property (2389 did); leaf fields stay absent')

@@ -36,12 +36,17 @@ _Static_assert(sizeof(struct sweet_csf_global_evidence)==96, "sweet-csf-global s
 #if SWEET_CSF_LEAF_PROBE
 /*2388: read the descriptors the MCU will actually walk. The shim runs with the
  *CPU MMU off, so a physical address is a plain load; this issues no write and
- *changes no mapping. The four VAs cover the page that cannot be fetched
+ *changes no mapping. The default four VAs cover the page that cannot be fetched
  *(0x01000000), the page that holds the vendor reset handler (0x01001000) and
- *the pair that is known to work (0x0100e000/0x0100f000). */
+ *the pair that is known to work (0x0100e000/0x0100f000). 2401 overrides the
+ *list to sample the mirrored code page, the mirror's read target and the same
+ *leaf reached through the shared-L3 alias, next to the original leaf. */
+#ifndef SWEET_CSF_LEAF_VA_LIST
+#define SWEET_CSF_LEAF_VA_LIST {0x01000000u,0x01001000u,0x0100e000u,0x0100f000u}
+#endif
 struct sweet_csf_leaf_evidence shim_csf_leaf_evidence;
 _Static_assert(sizeof(struct sweet_csf_leaf_evidence)==32, "sweet-csf-leaf size");
-static const uint32_t sweet_csf_leaf_va[4]={0x01000000u,0x01001000u,0x0100e000u,0x0100f000u};
+static const uint32_t sweet_csf_leaf_va[4]=SWEET_CSF_LEAF_VA_LIST;
 static uint64_t sweet_csf_leaf_of(const struct sweet_gpu_io *io,uint64_t root,uint32_t va)
 {
     uint64_t table=root;

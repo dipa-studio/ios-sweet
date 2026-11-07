@@ -604,12 +604,52 @@ class ReportDecodeTests(unittest.TestCase):
                                leaf=self.LEAVES_UNCACHED_PAGE)['csf']
         self.assertEqual(csf['cold_boot_outcome'],
                          'data-access-to-the-code-window-never-completes')
-        self.assertIn('cached or not', csf['instrument_verdict'])
+        self.assertIn('fill path is not the lever', csf['instrument_verdict'])
 
         # A live leaf that kept index 0 cannot answer the cache question.
         csf = self.cold_report(build=0x2400, input_va=3, leaf=self.LEAVES)['csf']
         self.assertEqual(csf['cold_boot_outcome'], 'cache-mode-not-applied')
         self.assertFalse(csf['probe_page_uncached'])
+
+    def test_2401_separates_the_window_from_the_l3_page(self):
+        page = 0x0000fffffffff000
+        # The four published leaves: the mirror's section and page get their
+        # own PAs with the code section's attribute bits, and 0x05001000 must be
+        # word-for-word the code page descriptor.
+        leaves = ((self.LEAVES[0] & ~page) | 0x401a6000,
+                  (self.LEAVES[1] & ~page) | 0x401a7000,
+                  self.LEAVES[1], self.LEAVES[1])
+        csf = self.cold_report(build=0x2401, input_va=6,
+                               firmware_probe_pa_lo=0x401b6000, leaf=leaves)['csf']
+        self.assertTrue(csf['mirror_applied'])
+        self.assertTrue(csf['alias_applied'])
+        self.assertEqual(csf['cold_boot_target'], 0x0300E000)
+        self.assertEqual(csf['cold_boot_outcome'], 'all-reads-returned')
+        self.assertIn('skipped', csf['instrument_verdict'])
+
+        for input_va, outcome in ((1, 'shared-stalls'), (2, 'stack-stalls'),
+                                  (3, 'wall-follows-the-code-bytes'),
+                                  (4, 'wall-follows-the-original-l3-or-data-page'),
+                                  (5, 'wall-is-the-original-va')):
+            csf = self.cold_report(build=0x2401, input_va=input_va,
+                                   firmware_probe_pa_lo=0x401b6000, leaf=leaves)['csf']
+            self.assertEqual(csf['cold_boot_outcome'], outcome, input_va)
+
+        # A leaf set from an earlier build has no mirror page: the run cannot
+        # answer the mirror question and must say so, not read the ladder.
+        csf = self.cold_report(build=0x2401, input_va=6,
+                               firmware_probe_pa_lo=0x401b6000, leaf=self.LEAVES)['csf']
+        self.assertFalse(csf['mirror_applied'])
+        self.assertEqual(csf['cold_boot_outcome'], 'mirror-not-applied')
+        self.assertFalse(csf['cold_boot_marker_present'])
+
+        # Mirror applied but the shared-L3 window naming a different leaf.
+        split = (leaves[0], leaves[1], self.LEAVES[0], self.LEAVES[1])
+        csf = self.cold_report(build=0x2401, input_va=6,
+                               firmware_probe_pa_lo=0x401b6000, leaf=split)['csf']
+        self.assertTrue(csf['mirror_applied'])
+        self.assertFalse(csf['alias_applied'])
+        self.assertEqual(csf['cold_boot_outcome'], 'alias-not-applied')
 
     def test_2399_aliases_one_page_onto_the_stack(self):
         csf = self.cold_report(build=0x2399, input_va=4, firmware_probe_pa_lo=0x401a5000,
@@ -623,7 +663,7 @@ class ReportDecodeTests(unittest.TestCase):
         csf = self.cold_report(build=0x2399, input_va=3, firmware_probe_pa_lo=0x401a5000,
                                leaf=self.LEAVES_ALIAS)['csf']
         self.assertEqual(csf['cold_boot_outcome'], 'wall-follows-the-virtual-range')
-        self.assertIn('no mapping change', csf['instrument_verdict'])
+        self.assertIn('never measured', csf['instrument_verdict'])
 
         # A leaf that still names the code page cannot answer the question.
         csf = self.cold_report(build=0x2399, input_va=3, firmware_probe_pa_lo=0x401a5000,
@@ -642,7 +682,7 @@ class ReportDecodeTests(unittest.TestCase):
         csf = self.cold_report(build=0x2398, input_va=3,
                                leaf=self.LEAVES_GROUP_ZERO)['csf']
         self.assertEqual(csf['cold_boot_outcome'], 'leaf-group-exonerated')
-        self.assertIn('tag is not the wall', csf['instrument_verdict'])
+        self.assertIn('tag is not the lever', csf['instrument_verdict'])
 
         # Still carrying 6: the image did not travel with the new tag.
         csf = self.cold_report(build=0x2398, input_va=3, leaf=self.LEAVES)['csf']
@@ -660,7 +700,7 @@ class ReportDecodeTests(unittest.TestCase):
         csf = self.cold_report(build=0x2397, input_va=3,
                                leaf=self.LEAVES_XN_PAGE)['csf']
         self.assertEqual(csf['cold_boot_outcome'], 'xn-exonerated')
-        self.assertIn('level-3 walk', csf['instrument_verdict'])
+        self.assertIn('not the lever for that read', csf['instrument_verdict'])
 
         # Without the XN bits the run answers nothing about executability.
         csf = self.cold_report(build=0x2397, input_va=4, leaf=self.LEAVES)['csf']
@@ -708,7 +748,7 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertFalse(csf['cold_boot_marker_present'])
 
         csf = self.cold_report(build=0x2396, input_va=3, leaf=self.LEAVES)['csf']
-        self.assertIn('XN is the only leaf field never varied', csf['instrument_verdict'])
+        self.assertIn('XN remains untested', csf['instrument_verdict'])
 
     def test_2394_positive_control_decides_whether_2393_closes(self):
         csf = self.cold_report(build=0x2394, input_va=0x0100E000, leaf=self.LEAVES)['csf']

@@ -122,16 +122,20 @@ def check_access(arena, root_pa, va, size, operation, unprivileged=False):
 
 
 def build_arena(firmware, arena_pa, compiler='cc', memory_group=0, entry_probe=False,
-                inline_entry=False, relocate_code=False):
+                inline_entry=False, relocate_code=False, mirror_code=False, share_code_l3=False):
     if not isinstance(memory_group, int) or not 0 <= memory_group <= 15:
         raise ValueError('memory group must fit four bits')
     with tempfile.TemporaryDirectory(prefix='csf-fetch-') as tmp:
         tmp = Path(tmp)
         source, binary, arena_path = tmp / 'loader.c', tmp / 'loader', tmp / 'arena.bin'
         source.write_text(HOST_BUILDER)
-        relocate = ['-DSWEET_CSF_RELOCATE_CODE=1'] if relocate_code else []
+        defines = ['-DSWEET_CSF_RELOCATE_CODE=1'] if relocate_code else []
+        if mirror_code:
+            defines.append('-DSWEET_CSF_MIRROR_CODE_VA=0x03000000u')
+        if share_code_l3:
+            defines.append('-DSWEET_CSF_SHARE_CODE_L3_VA=0x05000000u')
         subprocess.run([compiler, '-std=c11', '-Wall', '-Wextra', '-Werror',
-                        '-fsanitize=address,undefined', *relocate, '-I', str(ROOT / 'xnu/gpu'),
+                        '-fsanitize=address,undefined', *defines, '-I', str(ROOT / 'xnu/gpu'),
                         str(source), str(ROOT / 'xnu/gpu/mali_csf_firmware.c'),
                         str(ROOT / 'xnu/gpu/mali_csf_memory.c'), '-o', str(binary)],
                        check=True, capture_output=True, text=True)

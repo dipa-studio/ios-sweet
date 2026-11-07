@@ -36,14 +36,16 @@ static int conflict(uintptr_t a, size_t n, uintptr_t b, size_t m)
 {
     return a < b + m && b < a + n;
 }
-#if SWEET_CSF_ALIAS_VA && SWEET_CSF_ALIAS_TO_VA
-/* The leaf that maps one VA in a table this call just built, or null when the
- * walk leaves the arena. Every level is bounds-checked against capacity so a
- * malformed table cannot send the returned pointer outside the buffer. */
-static uint8_t *leaf_entry(uint8_t *arena, size_t capacity, uint64_t pa, uint64_t va)
+#if (SWEET_CSF_ALIAS_VA && SWEET_CSF_ALIAS_TO_VA) || SWEET_CSF_SHARE_CODE_L3_VA
+/* The table entry at `va` after walking `levels` tables from the root: level 0
+ * is the L0 entry, level 2 is the L2 entry that names an L3 page, level 3 is
+ * the leaf. Every level is bounds-checked against capacity so a malformed
+ * table cannot send the returned pointer outside the buffer. */
+static uint8_t *table_slot(uint8_t *arena, size_t capacity, uint64_t pa, uint64_t va,
+                           unsigned levels)
 {
     uint8_t *table = arena;
-    for (unsigned level = 0; level < 3; level++) {
+    for (unsigned level = 0; level < levels; level++) {
         unsigned shift = 39 - 9 * level;
         uint64_t desc = get64(table + ((va >> shift) & 511) * 8);
         if ((desc & 3) != 3) return 0;
@@ -51,7 +53,13 @@ static uint8_t *leaf_entry(uint8_t *arena, size_t capacity, uint64_t pa, uint64_
         if (next < pa || next - pa >= capacity) return 0;
         table = arena + (next - pa);
     }
-    return table + ((va >> 12) & 511) * 8;
+    return table + ((va >> (39 - 9 * levels)) & 511) * 8;
+}
+#endif
+#if SWEET_CSF_ALIAS_VA && SWEET_CSF_ALIAS_TO_VA
+static uint8_t *leaf_entry(uint8_t *arena, size_t capacity, uint64_t pa, uint64_t va)
+{
+    return table_slot(arena, capacity, pa, va, 3);
 }
 #endif
 #if SWEET_CSF_RELOCATE_CODE
@@ -60,6 +68,13 @@ static uint8_t *leaf_entry(uint8_t *arena, size_t capacity, uint64_t pa, uint64_
  * uses to pick its firmware probe, so a relocation can never target a section
  * the probe does not observe. */
 static int relocates(const struct sweet_csf_mapping *p)
+{
+    return p->va == 0x01000000u && (p->flags & 4u) != 0;
+}
+#endif
+#if SWEET_CSF_MIRROR_CODE_VA || SWEET_CSF_SHARE_CODE_L3_VA
+/* The one section 2401 mirrors and shares: the R-X body at the code VA. */
+static int code_section(const struct sweet_csf_mapping *p)
 {
     return p->va == 0x01000000u && (p->flags & 4u) != 0;
 }
@@ -75,6 +90,33 @@ int sweet_csf_memory_plan(const uint8_t *fw, size_t bytes, struct sweet_csf_memo
     int rc = sweet_csf_parse(fw, bytes, &layout, collect, &m);
     if (rc) return rc;
     m.firmware_bytes = (uint32_t)bytes;
+#if SWEET_CSF_MIRROR_CODE_VA
+    /* 2401: append a second mapping of the executable section. It carries the
+     * same bytes and attributes, so the only differences from the code VA are
+     * the VA itself, the L2 slot (and therefore the L3 page), and the arena
+     * copy it points at. The container is not modified. */
+    {
+        uint64_t mirror = (uint64_t)SWEET_CSF_MIRROR_CODE_VA;
+        const struct sweet_csf_mapping *source = 0;
+        for (uint32_t i = 0; i < m.mapping_count; i++)
+            if (code_section(&m.map[i])) {
+                if (source) return SWEET_CSF_MEMORY_ARGUMENT;
+                source = &m.map[i];
+            }
+        if (!source || (mirror & (SWEET_CSF_PAGE - 1)) || mirror >= (UINT64_C(1) << 32) ||
+            mirror + source->bytes > (UINT64_C(1) << 32))
+            return SWEET_CSF_MEMORY_ARGUMENT;
+        for (uint32_t i = 0; i < m.mapping_count; i++) {
+            uint64_t va = m.map[i].va, end = va + m.map[i].bytes;
+            if (mirror < end && va < mirror + source->bytes)
+                return SWEET_CSF_MEMORY_ARGUMENT;
+        }
+        if (m.mapping_count == SWEET_CSF_MAX_SECTIONS) return SWEET_CSF_MEMORY_CAPACITY;
+        struct sweet_csf_mapping *p = &m.map[m.mapping_count++];
+        *p = *source;
+        p->va = (uint32_t)mirror;
+    }
+#endif
     /* All firmware addresses are below4GiB: one L0 and one L1 table. */
     m.table_pages = 2;
     for (uint32_t i = 0; i < m.mapping_count; i++) {
@@ -241,6 +283,27 @@ int sweet_csf_memory_build_group(const uint8_t *fw, size_t bytes, const struct s
         uint64_t desc = get64(at), source = get64(target);
         put64(at, (desc & ~UINT64_C(0x0000fffffffff000)) |
                   (source & UINT64_C(0x0000fffffffff000)));
+    }
+#endif
+#if SWEET_CSF_SHARE_CODE_L3_VA
+    /* 2401: point one unused L2 slot at the L3 page the code section already
+     * uses. The slot receives the code L2 entry verbatim, so the aliased VA
+     * walks the identical table page and leaf descriptor; only the VA differs.
+     * Both the slot and the code L2 entry must already exist, and the slot must
+     * be empty, so this can never overwrite another mapping. */
+    {
+        uint64_t share = (uint64_t)SWEET_CSF_SHARE_CODE_L3_VA;
+        const struct sweet_csf_mapping *code = 0;
+        for (uint32_t i = 0; i < m->mapping_count; i++)
+            if (code_section(&m->map[i])) { code = &m->map[i]; break; }
+        if (!code || (share & (SWEET_CSF_PAGE - 1)) || share >= (UINT64_C(1) << 32) ||
+            (share >> 21) == ((uint64_t)code->va >> 21))
+            return SWEET_CSF_MEMORY_ARGUMENT;
+        uint8_t *source = table_slot(arena, capacity, pa, code->va, 2);
+        uint8_t *slot = table_slot(arena, capacity, pa, share, 2);
+        if (!source || !slot || (get64(source) & 3) != 3 || get64(slot))
+            return SWEET_CSF_MEMORY_ARGUMENT;
+        put64(slot, get64(source));
     }
 #endif
     *root_pa = pa;

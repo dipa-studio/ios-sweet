@@ -80,6 +80,69 @@ class FetchPrimeTests(unittest.TestCase):
         self.assertEqual(len(bytes.fromhex(want)), len(bytes.fromhex(stub)))
         self.assertEqual(sections[1][3], 0x010019b0)
 
+    def test_ladder_2401_assembly_matches_the_pinned_bytes(self):
+        """2401's six-step ladder is the linked bytes, not objdump's display."""
+        bins = sorted((Path.home() / 'Library/Android/sdk/ndk').glob(
+            '*/toolchains/llvm/prebuilt/darwin-x86_64/bin'))
+        if not bins:
+            self.skipTest('requires ARM linker from Android NDK')
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory)
+            (p / 'ladder.ld').write_text('SECTIONS { '
+                '.text.ladder 0x0300E000 : { *(.text.ladder) } }')
+            subprocess.run([str(bins[-1] / 'clang'), '--target=armv7m-none-eabi',
+                '-mcpu=cortex-m7', '-mthumb', '-nostdlib', '-Wl,--build-id=none',
+                '-Wl,-e,csf_ladder_2401', '-Wl,-T,' + str(p / 'ladder.ld'),
+                str(ROOT / 'tools/matisse-csf-ladder2401.S'), '-o', str(p / 'ladder.elf')],
+                check=True, capture_output=True)
+            elf = (p / 'ladder.elf').read_bytes()
+            shoff, = struct.unpack_from('<I', elf, 32)
+            size, count, names_index = struct.unpack_from('<HHH', elf, 46)
+            sections = [struct.unpack_from('<10I', elf, shoff + i * size) for i in range(count)]
+            names_section = sections[names_index]
+            names = elf[names_section[4]:names_section[4] + names_section[5]]
+            actual = {names[s[0]:].split(b'\0', 1)[0].decode(): elf[s[4]:s[4] + s[5]]
+                      for s in sections}
+        want = bytes.fromhex(self.builder.COLD_BOOT_2401[1])
+        self.assertEqual(actual['.text.ladder'], want)
+        self.assertEqual(len(want), 76)
+        self.assertEqual(sections[1][3], 0x0300E000)
+        # The two control reads must be the real ldr.w bytes (d4 f8 ...), not
+        # the halfword-swapped form that made 2396..2400 execute a branch.
+        self.assertEqual(want[0x1e:0x22], bytes.fromhex('d4f80002'))
+        self.assertEqual(want[0x26:0x2a], bytes.fromhex('d5f80002'))
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2401_moves_only_the_vector_and_the_mirror_program(self):
+        embedded_2400, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2400)
+        embedded_2401, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2401)
+        config, code = 0x0380, 0x0e94
+        stub = bytes.fromhex(self.builder.COLD_BOOT_2401[1])
+        allowed = set(range(config + 4, config + 8))
+        allowed |= set(range(code + 0xE000, code + 0xE000 + len(stub)))
+        changed = {i for i, (a, b) in enumerate(zip(embedded_2400, embedded_2401))
+                   if a != b}
+        self.assertTrue(changed)
+        self.assertLessEqual(changed, allowed)
+        self.assertEqual(int.from_bytes(embedded_2401[config + 4:config + 8], 'little'),
+                         0x0300E001)
+        self.assertEqual(embedded_2401[code + 0xE000:code + 0xE000 + len(stub)], stub)
+        cold = patch['cold_boot']
+        self.assertEqual(cold['target'], '0x300e000')
+        self.assertEqual(cold['mirror_va'], '0x3000000')
+        self.assertEqual(cold['share_code_l3'], '0x5000000')
+        self.assertTrue(cold['fresh_l3_page'])
+        self.assertEqual([step['read_va'] for step in cold['ladder']],
+                         ['0x04000200', '0x02000200', '0x03001200',
+                          '0x05001200', '0x01001200', None])
+        mirror = patch['mirror_code']
+        self.assertTrue(mirror['fresh_l3_page'])
+        self.assertEqual(mirror['va'], '0x3000000')
+        self.assertEqual(mirror['share_va'], '0x5000000')
+        self.assertEqual(mirror['shared_leaf'], '0x30000000401b6cc7')
+        self.assertEqual(patch['leaf_probe']['va'],
+                         ['0x3000000', '0x3001000', '0x5001000', '0x1001000'])
+
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2383_changes_only_the_fault_entry_on_top_of_2382(self):
         """One more window than 2382, and the two probe windows unchanged."""

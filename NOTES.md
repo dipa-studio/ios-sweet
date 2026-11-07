@@ -1,6 +1,65 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-07 12:40: 2400 RAN - NON-CACHEABLE STILL STALLS; THE PAGE TABLE IS OUT OF LEVERS <<<
+## >>> ACTIVE 2026-11-07 13:30: 2401 BUILT - 2396..2400 NEVER RAN THEIR FIRST TWO READS <<<
+
+**The 2396..2400 ladder was broken, not the controls.** Those builds pinned
+`f8d40200` / `f8d60200` where `ldr.w` needs `d4f80002` / `d5f80002`. Capstone on
+the exact manifest bytes decodes the first pair as `bmi` + `movs r2,r0` and the
+second as `bvs` + `movs r2,r0` (`lsls` left N=V=0, so neither branch is taken).
+Markers 1 and 2 were still written, so `input_va = 3` named a *pending* third
+read: the shared read at `0x04000200` and the stack read at `0x02000200` never
+executed. Every "shared returned / stack returned" sentence in 2396..2400, and
+2399's "the same physical word is readable through the stack VA", is therefore
+unsupported.
+
+**What survives.** Each of 2393, 2395, 2397, 2398, 2400 changed only the code
+leaf or its physical page, and the one read that did run (`0x01001200`) stalled.
+So AttrIdx/MemAttr, cacheability in both directions, AP, SH, nG, XN, group/PBHA
+and physical page are still null *for that read*, and a fetch at `0x0100E000`
+still runs. 2400's "a non-cacheable page still stalls" is valid; its controls
+were not.
+
+**2401 fixes the encoding and adds the two missing controls.** The ladder pins
+`d4f80002` / `d5f80002` and an assembly test now compares linked bytes with the
+manifest, so this cannot regress silently. The image carries 8 mappings, 9 table
+pages, required `0x14E000`, arena `0x78000`:
+
+```
+mirror    0x03000000  own L3 page + own data page, copy of the code section
+share     0x05000000  L2[40] = L2[8], the very same L3 page and leaf
+code      0x01000000  relocated to PA 0x401b6000 (entry 0x0100E000 -> 0x401c4000)
+mirror VA 0x03000000 -> PA 0x401a6000, page 0x03001000 -> 0x401a7000
+leaves    0x30000000401a6cc7 0x30000000401a7cc7 0x30000000401b7cc7 0x30000000401b7cc7
+          (mirror, mirror page, share window, code page)
+reset     word 0x4 = 0x0300e001; ladder at 0x0300E000, marker N before read N:
+          1 0x04000200 -> 2 0x02000200 -> 3 0x03001200 -> 4 0x05001200 -> 5 0x01001200 -> 6
+```
+
+```
+image  286035d9...870f  26,714,112 B  kernel 83ec99c4 (SWEET_BUILD_ID 0x2401)
+container d0ab5ccb...0a16 (121 B vs vendor de22d2fc...229a)
+manifest / ADT / payload / stock / signature intact; cmdline sweettrial=2401
+tests 281 ran, 3 skipped; patch series 0001-0197
+```
+
+**Branch criteria.** A marker 3 return (`0x03001200`) says the wall is the
+`0x01000000` window: marker 4 (same L3 page, new VA) separates "the window is
+hardware-special" from "the original L3 page/first cacheline is faulty", and a
+new L3 page that works would let the stock `0x01000000` firmware be rescued by
+replacing that page. A marker 3 stall says the wall follows the code section's
+cold data-read shape; then read `0x0100E200` in the executing ladder's own page,
+and put a two-instruction stub at `0x0000000C..0x00000018` writing `0xE3` to
+`input_va` to separate an AXI read-channel hang from a Cortex-M7 HardFault /
+MemManage / BusFault (`as_fault` stays 0 either way).
+
+**Status: image built, not flown.** The device is in Recovery with no fastboot.
+Flashing needs explicit approval and image SHA `286035d9...870f`; `boot_a` is
+`2931647a...86b1` and must be restored and verified after the run.
+
+## >>> PREVIOUS 2026-11-07 12:40: 2400 RAN - NON-CACHEABLE STILL STALLS; THE PAGE TABLE IS OUT OF LEVERS <<<
+
+**Correction 2026-11-07 13:30: the "shared and stack reads returned" claims below
+are void (see the active section). Only the `0x01001200` read ever executed.**
 
 **RESULT: `input_va = 3`.** 2400 kept 2396's container and ladder and changed
 only the cache mode of one leaf: VA `0x01001000` takes AS_MEMATTR index 5 with no
@@ -44,9 +103,13 @@ Tests: 277 ran, 3 skipped (one memory-builder test and one decode test added for
 
 **RESULT: `input_va = 3`.** 2399 repointed exactly one leaf: VA `0x01001000`
 (the page holding the read target `0x01001200`) now names the physical page behind
-VA `0x02000000`, the stack page the ladder's second read already returned from.
-Both reads therefore hit the same physical word `0x40091200`, with PA bit 9 = 1
-and the leaf attributes unchanged. Read 2 returned, read 3 stalled.
+VA `0x02000000`, the stack page read 2 was meant to touch. Read 3 stalled on that
+leaf anyway.
+
+**Correction 2026-11-07 13:30:** read 2 never executed (the ladder's `f8d6 0200`
+is `bvs`+`movs`, not `ldr.w`), so "both reads hit the same physical word
+`0x40091200` and read 2 returned" is false. The only measured fact is that the
+same read at `0x01001200` stalls when its leaf names the stack page.
 
 ```
 image  284b95b2...f453  26,714,112 B  kernel 13743a97 (SWEET_BUILD_ID 0x2399)
@@ -58,10 +121,11 @@ alias_applied true - the leaf at 0x01001000 is PA 0x40091000 with the code
 section's own attribute bits
 ```
 
-**What it closes.** The firmware allocation does not need to move: the same
-physical memory serves the MCU when it is named through the stack VA. Every
-remaining explanation sits above the page table (AS / MCU address window /
-platform) or in the leaf attribute class as a whole.
+**What it closes (corrected).** The wall does not follow the code section's own
+physical pages: pointing the leaf at the stack page did not let the read
+complete. It does **not** show that the PA is readable through the stack VA,
+because that read never ran, and the alias kept the code attributes, so the
+attribute class is still open.
 
 **Build note.** The alias helper costs 0x2cc bytes of shim text and pushed the
 0x4000-aligned BSS array ahead of the arena by one page: this build's arena is

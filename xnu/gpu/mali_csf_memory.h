@@ -107,6 +107,24 @@
 #ifndef SWEET_CSF_RELOCATE_CODE
 #define SWEET_CSF_RELOCATE_CODE 0
 #endif
+/* 0 keeps every build through2400 byte-identical. Set to one page-aligned VA
+ * and the plan appends a second mapping of the R-X section at that VA: same
+ * size, flags and container bytes, its own copy of the data and its own L3
+ * page. 2401 uses 0x03000000 (L2[24], a fresh L3 table page under the existing
+ * scheme) while L2[8] stays the only table that backs 0x01000000. Diagnostic
+ * only: the firmware runs from whichever VA the reset vector names. */
+#ifndef SWEET_CSF_MIRROR_CODE_VA
+#define SWEET_CSF_MIRROR_CODE_VA 0
+#endif
+/* 0 keeps every build through2400 byte-identical. Set to one page-aligned VA
+ * in an unused L2 slot and the leaf builder copies the code section's L2 entry
+ * into that slot after the tables are built. The alias VA then walks the same
+ * L3 table page and the same leaf descriptor as 0x01000000, so a read through
+ * it differs from the code read only by the VA. 2401 uses 0x05000000 (L2[40]).
+ * Fails closed if the slot is already mapped or the code L3 page is absent. */
+#ifndef SWEET_CSF_SHARE_CODE_L3_VA
+#define SWEET_CSF_SHARE_CODE_L3_VA 0
+#endif
 struct sweet_csf_mapping {
     uint32_t va, bytes, flags, arena_offset, data_start, data_bytes;
 };
