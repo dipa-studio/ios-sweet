@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 00:05: 2402 BUILT (BIT-9 MATRIX) - 2401 RAN AND THE FIRST NON-CODE BIT-9 READ STALLS <<<
+## >>> ACTIVE 2026-11-07 23:45: 2402 BUILT (BIT-9 MATRIX) - 2401 RAN AND THE FIRST NON-CODE BIT-9 READ STALLS <<<
 
 **RESULT: `input_va = 1`.** The ladder ran from the mirror at `0x0300E000`
 (its marker 1 is in shared, and nothing else writes that word), then the *first*
