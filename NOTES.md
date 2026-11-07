@@ -1,6 +1,58 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-07 13:30: 2401 BUILT - 2396..2400 NEVER RAN THEIR FIRST TWO READS <<<
+## >>> ACTIVE 2026-11-07 23:40: 2401 REBUILT - OWN-PAGE READ + 0xE3 FAULT ENTRY, WAITING FOR APPROVAL <<<
+
+**What changed against the 13:30 build.** Same manipulation (mirror at `0x03000000`
+through a fresh L3 page, `L2[40]` reusing `L2[8]`'s L3 page, reset word
+`0x4 = 0x0300e001`), two observation changes and two metadata fixes:
+
+1. **Read 3 is now `0x0300E200`** - a word in the very page the ladder is being
+   fetched from, so its translation cannot be cold. It separates "the data path
+   into an executable section refuses" from "the cold walk refuses" in one boot.
+   Markers shift: 4 `0x03001200`, 5 `0x05001200`, 6 `0x01001200`, 7 all returned.
+   The ladder is 84 bytes (`84 % 4 == 0`); the vendor region it replaces grew by
+   the same eight bytes (`...4ff00101 1cbf01231365012d`).
+2. **The fault entry writes `input_va = 0xE3`** instead of `groups = 20`. It is a
+   new source file `tools/matisse-csf-fault-entry-e3.S` and a new pinned constant
+   `FAULT_ENTRY_2401`, so 2383..2400 keep their bytes. It still writes the stacked
+   PC to `output_va` and CFSR to `group_stride`; the four bytes came from dropping
+   the `shared+16` store. A fault and an AXI stall are now one field apart, and
+   the vector table at `0x0C..0x18` is untouched.
+3. **The manifest's mirror PAs were wrong by `0x1000`** - `mirror_check()` added
+   its own stand-in base `0x40077000` to arena offsets. It now returns offsets and
+   `build()` resolves them against the arena symbol it pinned (`0x78000`).
+4. **The pinned leaf values were from the wrong encoding** - `mirror_check()`
+   rebuilt the arena without `SWEET_CSF_VENDOR_LEAVES/VENDOR_MEMATTR`, so `0x…cc7`
+   (AttrIdx 1, nG, SH) was recorded instead of the `0x…4c3` the image ships.
+
+```
+image     6f0e1fc1...5aa0  26,714,112 B  arena 0x78000, 8 mappings, 9 table pages
+kernel    83ec99c4...05d6  SWEET_BUILD_ID 0x2401 (unchanged, no new patch)
+container 121 B vs vendor de22d2fc...229a; only 0x19b0..0x19d8 and 0xE000..0xE054 moved
+mirror    0x03000000 -> PA 0x401a6000, 0x03001000 -> 0x401a7000, entry 0x0300E000 -> 0x401b4000
+code      0x01000000 -> PA 0x401b6000, 0x01001000 -> 0x401b7000, entry 0x0100E000 -> 0x401c4000
+leaves    0x30000000401a64c3 0x30000000401a74c3 0x30000000401b74c3 0x30000000401b74c3
+          (mirror, mirror page, share window, code page)
+tests     283 ran, 3 skipped
+```
+
+**Reading the capture.** `input_va` names the read that did *not* return:
+
+| `input_va` | what it means | next |
+|---|---|---|
+| `0xE3` | a Cortex-M7 fault entry ran, not an AXI stall; `output_va` is the stacked PC, `group_stride` is CFSR | decode the CFSR class; a never-completing bus read cannot raise one |
+| 3 | even a read of the page we are executing from stalls | the wall is the data path into the section, no walk involved |
+| 4 | own page readable, cold mirror page not | the walk or leaf index 1, not the data path |
+| 5 | mirror readable, the reused `L2[8]` L3 page not | the original L3 page frame; swapping that page would rescue stock firmware |
+| 6 | `0x05001200` readable, `0x01001200` not | the wall is the `0x0100xxxx` VA itself: same table, same leaf, same PA |
+| 7 | all six reads returned | the wall needs the core executing from `0x0100xxxx` at the same time |
+
+**Status: rebuilt, unit-tested, static-checked, preflight passed; not flown.**
+The device is in Recovery (`matisse`, `bootmode=recovery`, `id -u = 0`) and
+`boot_a` is the baseline `2931647a...86b1`. Flashing needs explicit approval of
+image SHA `6f0e1fc1...5aa0`; the runner restores and verifies `boot_a` afterwards.
+
+## >>> PREVIOUS 2026-11-07 13:30: 2401 BUILT - 2396..2400 NEVER RAN THEIR FIRST TWO READS <<<
 
 **The 2396..2400 ladder was broken, not the controls.** Those builds pinned
 `f8d40200` / `f8d60200` where `ldr.w` needs `d4f80002` / `d5f80002`. Capstone on
@@ -20,41 +72,11 @@ still runs. 2400's "a non-cacheable page still stalls" is valid; its controls
 were not.
 
 **2401 fixes the encoding and adds the two missing controls.** The ladder pins
-`d4f80002` / `d5f80002` and an assembly test now compares linked bytes with the
-manifest, so this cannot regress silently. The image carries 8 mappings, 9 table
-pages, required `0x14E000`, arena `0x78000`:
-
-```
-mirror    0x03000000  own L3 page + own data page, copy of the code section
-share     0x05000000  L2[40] = L2[8], the very same L3 page and leaf
-code      0x01000000  relocated to PA 0x401b6000 (entry 0x0100E000 -> 0x401c4000)
-mirror VA 0x03000000 -> PA 0x401a6000, page 0x03001000 -> 0x401a7000
-leaves    0x30000000401a6cc7 0x30000000401a7cc7 0x30000000401b7cc7 0x30000000401b7cc7
-          (mirror, mirror page, share window, code page)
-reset     word 0x4 = 0x0300e001; ladder at 0x0300E000, marker N before read N:
-          1 0x04000200 -> 2 0x02000200 -> 3 0x03001200 -> 4 0x05001200 -> 5 0x01001200 -> 6
-```
-
-```
-image  286035d9...870f  26,714,112 B  kernel 83ec99c4 (SWEET_BUILD_ID 0x2401)
-container d0ab5ccb...0a16 (121 B vs vendor de22d2fc...229a)
-manifest / ADT / payload / stock / signature intact; cmdline sweettrial=2401
-tests 281 ran, 3 skipped; patch series 0001-0197
-```
-
-**Branch criteria.** A marker 3 return (`0x03001200`) says the wall is the
-`0x01000000` window: marker 4 (same L3 page, new VA) separates "the window is
-hardware-special" from "the original L3 page/first cacheline is faulty", and a
-new L3 page that works would let the stock `0x01000000` firmware be rescued by
-replacing that page. A marker 3 stall says the wall follows the code section's
-cold data-read shape; then read `0x0100E200` in the executing ladder's own page,
-and put a two-instruction stub at `0x0000000C..0x00000018` writing `0xE3` to
-`input_va` to separate an AXI read-channel hang from a Cortex-M7 HardFault /
-MemManage / BusFault (`as_fault` stays 0 either way).
-
-**Status: image built, not flown.** The device is in Recovery with no fastboot.
-Flashing needs explicit approval and image SHA `286035d9...870f`; `boot_a` is
-`2931647a...86b1` and must be restored and verified after the run.
+`d4f80002` / `d5f80002` and an assembly test compares linked bytes with the
+manifest, so this cannot regress silently. *That build was superseded at 23:40:
+the reshape, the corrected leaf values and the new image SHA are in the active
+section above.* Its ladder order was 1 `0x04000200`, 2 `0x02000200`,
+3 `0x03001200`, 4 `0x05001200`, 5 `0x01001200`, 6 all returned.
 
 ## >>> PREVIOUS 2026-11-07 12:40: 2400 RAN - NON-CACHEABLE STILL STALLS; THE PAGE TABLE IS OUT OF LEVERS <<<
 

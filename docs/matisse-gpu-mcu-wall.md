@@ -1761,34 +1761,46 @@ code section at a second window (`0x03000000`), reset-vector a ladder there, and
 ask whether a `0x03001200` read returns - with a fresh L3 page and with a reuse
 of L2[8]'s L3 page, so the original frame is separated from the window too.
 
-## 47. 2401 built: second window plus a fresh-L3/share split, and the ladder bug
+## 47. 2401 rebuilt: the ladder reads the page it runs from, and the fault entry names itself
 
-2401 is the corrected six-step ladder. It maps the executable section a second
-time at `0x03000000` with its own L3 and data pages, aliases `0x05000000` onto
-`L2[8]`'s L3 page, and starts at the mirror's `0x0300E000`. The first two reads
-are the shared and stack controls the earlier ladders never issued; reads 3/4/5
-ask the same `0x...1200` question through the fresh mirror, the shared L3 page,
-and the original window.
+2401 maps the executable section a second time at `0x03000000` with its own L3
+and data pages, aliases `0x05000000` onto `L2[8]`'s L3 page, and starts at the
+mirror's `0x0300E000`. Read 3 is new: `0x0300E200`, a word in the very page the
+core is fetching from, so its translation cannot be cold. That single read splits
+"the data path into an executable section refuses" from "the cold walk refuses"
+without another build.
 
 | item | value |
 |---|---|
-| image | `286035d9...870f`, 26,714,112 B, arena `0x78000` |
-| kernel | `83ec99c4...05d6`, `SWEET_BUILD_ID 0x2401` |
-| container | `d0ab5ccb...0a16`, 121 B vs vendor `de22d2fc...229a` |
+| image | `6f0e1fc1...5aa0`, 26,714,112 B, arena `0x78000` |
+| kernel | `83ec99c4...05d6`, `SWEET_BUILD_ID 0x2401` (unchanged) |
+| container | 121 B vs vendor `de22d2fc...229a`; only `0x19b0..0x19d8` and `0xE000..0xE054` moved |
 | plan | 8 mappings, 9 table pages, required `0x14E000` |
 | mirror | `0x03000000` copy, entry `0x0300E000`; section PA `0x401a6000`, page `0x401a7000` |
-| share | `L2[40] = L2[8]`; `0x05001000` leaf identical to `0x01001000` |
+| share | `L2[40] = L2[8]`; `0x05001000` leaf identical to `0x01001000` (`0x30000000401b74c3`) |
 | code | relocated to PA `0x401b6000`; original entry `0x0100E000` -> `0x401c4000` |
 | reset | word `0x4 = 0x0300e001` |
-| ladder | marker 1 `0x04000200`, 2 `0x02000200`, 3 `0x03001200`, 4 `0x05001200`, 5 `0x01001200`, 6 all returned |
-| tests | 281 ran, 3 skipped; patch series 0001-0197 |
+| ladder | 84 B, marker 1 `0x04000200`, 2 `0x02000200`, 3 `0x0300E200`, 4 `0x03001200`, 5 `0x05001200`, 6 `0x01001200`, 7 all returned |
+| fault | `0x010019b0` writes `input_va = 0xE3`, stacked PC to `output_va`, CFSR to `group_stride` |
+| tests | 283 ran, 3 skipped; patch series 0001-0197 |
 
-`input_va` 1..5 names the read that stalled; 6 means all five returned. Branch A
-(marker 3 returns): the `0x01000000` window is the property; marker 4 then says
-whether a reused L3 page works, and marker 5 isolates the original VA. Branch B
-(marker 3 stalls): the wall follows the cross-page data-read shape; next read
-`0x0100E200` in the executing page and add the `0x0000000C..0x00000018` stub that
-writes `0xE3` to `input_va` to separate an AXI hang from an M7 fault vector.
+`input_va` names the read that did not return. 3 means even a word in the
+executing page stalls - no walk involved. 4 means that page is readable and the
+cold one is not, so the walk or leaf index 1 is the wall. 5 means the mirror is
+readable and the reused `L2[8]` L3 page is not, which would make the page frame
+the suspect and would let the stock firmware be rescued by replacing that one
+table page. 6 means `0x05001200` returned and `0x01001200` did not with an
+identical table page, leaf and PA, which leaves only the VA. 7 means the stall
+needs the core to be executing from `0x0100xxxx` at the same time. `0xE3` means
+the core took a synchronous fault instead - `output_va` is the stacked PC and
+`group_stride` is CFSR, and a bus read that never completes cannot raise one.
 
-The image is built and preflighted but **not flown**: the device was in Recovery
-with no fastboot. `boot_a` remains `2931647a...86b1`.
+Two metadata bugs were fixed on the way. `mirror_check()` added its own stand-in
+base (`0x40077000`) to arena offsets, so 2399/2401's manifest named every mirror
+PA `0x1000` below the image; it now returns offsets and `build()` resolves them
+against the arena symbol it pinned. It also rebuilt the arena without the vendor
+leaf macros, so it recorded `0x...cc7` (AttrIdx 1, nG, SH) where the image ships
+`0x...4c3`.
+
+The image is built, unit-tested, static-checked and preflighted but **not flown**.
+`boot_a` remains `2931647a...86b1`.

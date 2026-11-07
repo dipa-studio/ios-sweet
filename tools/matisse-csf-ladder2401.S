@@ -2,12 +2,19 @@
  * names this program at 0x0300E000. The ladder writes marker N before read N,
  * so the highest marker in shared+8 names the read that stopped the core:
  *
- *   marker 1  read shared 0x04000200          (control: RW, coherent)
- *   marker 2  read stack  0x02000200          (control: RW, cached, NX)
- *   marker 3  read mirror 0x03001200          (fresh L3 page, fresh data page)
- *   marker 4  read alias  0x05001200          (same L3 page and leaf as read 5)
- *   marker 5  read code   0x01001200          (original window)
- *   marker 6  all reads returned
+ *   marker 1  read shared    0x04000200   (control: RW, coherent)
+ *   marker 2  read stack     0x02000200   (control: RW, cached, NX)
+ *   marker 3  read same page 0x0300E200   (the page this program is fetched from)
+ *   marker 4  read mirror    0x03001200   (fresh L3 page, fresh data page)
+ *   marker 5  read alias     0x05001200   (same L3 page and leaf as read 6)
+ *   marker 6  read code      0x01001200   (original window)
+ *   marker 7  all reads returned
+ *
+ * Read 3 is the one that separates the two remaining readings: its translation
+ * must already be resident (the core fetches from that very page), so a stall
+ * there cannot be a cold walk. A stall at 4 with 3 returned says the walk or
+ * the leaf is the problem; a stall at 5 says the original L3 page frame is;
+ * a stall at 6 with 5 returned says the 0x0100xxxx VA itself is.
  *
  * No stack, no literal pool, no branch: every address is materialised in a
  * register, so nothing here can stall except the data read it names. The raw
@@ -37,6 +44,7 @@ csf_ladder_2401:
     movs r3, #5
     lsls r3, r3, #24              /* r3 = 0x05000000, shared code L3 */
     movw r9, #0x1200
+    movw r8, #0xE200
     movs r0, #1
     str  r0, [r4, #8]
     ldr.w r0, [r4, #0x200]        /* marker 1: 0x04000200 */
@@ -45,15 +53,17 @@ csf_ladder_2401:
     ldr.w r0, [r5, #0x200]        /* marker 2: 0x02000200 */
     movs r0, #3
     str  r0, [r4, #8]
-    ldr.w r0, [r7, r9]            /* marker 3: 0x03001200 */
+    ldr.w r0, [r7, r8]            /* marker 3: 0x0300E200, our own page */
     movs r0, #4
     str  r0, [r4, #8]
-    ldr.w r0, [r3, r9]            /* marker 4: 0x05001200 */
+    ldr.w r0, [r7, r9]            /* marker 4: 0x03001200 */
     movs r0, #5
     str  r0, [r4, #8]
-    ldr.w r0, [r6, r9]            /* marker 5: 0x01001200 */
+    ldr.w r0, [r3, r9]            /* marker 5: 0x05001200 */
     movs r0, #6
     str  r0, [r4, #8]
+    ldr.w r0, [r6, r9]            /* marker 6: 0x01001200 */
+    movs r0, #7
+    str  r0, [r4, #8]
 1:  b    1b
-    nop
     .balign 4

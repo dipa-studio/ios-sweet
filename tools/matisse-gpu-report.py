@@ -8,6 +8,23 @@ import struct
 STAGES = {1:'config',2:'power-domain',3:'firmware',4:'memory',5:'shared-init',
           6:'power-on',7:'gpu-id',8:'soft-reset',9:'power-off',10:'complete',
           11:'gpufreq-dvfs'}
+# 2401's fault entry writes SCB->CFSR to shared+20, which lands in group_stride.
+# The three sub-registers are packed into one word: MMFSR at 7:0, BFSR at 15:8
+# and UFSR at 31:16. Naming the bits here keeps the verdict readable instead of
+# printing a hex value the reader has to look up.
+CFSR_BITS = ((0, 'IACCVIOL'), (1, 'DACCVIOL'), (3, 'MUNSTKERR'), (4, 'MSTKERR'),
+             (5, 'MLSPERR'), (7, 'MMARVALID'),
+             (8, 'IBUSERR'), (9, 'PRECISERR'), (10, 'IMPRECISERR'), (11, 'UNSTKERR'),
+             (12, 'STKERR'), (13, 'LSPERR'), (15, 'BFARVALID'),
+             (16, 'UNDEFINSTR'), (17, 'INVSTATE'), (18, 'INVPC'), (19, 'NOCP'),
+             (24, 'UNALIGNED'), (25, 'DIVBYZERO'))
+
+
+def cfsr_flags(value):
+    """The named CFSR bits set in `value`, in bit order."""
+    return [name for bit, name in CFSR_BITS if (value >> bit) & 1]
+
+
 ERRORS = {0:'success',-20:'argument',-21:'handoff',-22:'overlap',-23:'timeout',
           -24:'stale-reply',-25:'invalid-reply',-26:'ownership',-27:'unpowered',
           -28:'gpu-model',-29:'frequency'}
@@ -913,10 +930,12 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['cold_boot_ladder'] = {
                 '0x1': 'stopped reading shared 0x04000200',
                 '0x2': 'stopped reading stack 0x02000200',
-                '0x3': 'stopped reading mirrored code 0x03001200',
-                '0x4': 'stopped reading 0x05001200, the original L3 page at a new VA',
-                '0x5': 'stopped reading original code 0x01001200',
-                '0x6': 'all five reads returned'}
+                '0x3': 'stopped reading 0x0300E200, the page the ladder itself runs from',
+                '0x4': 'stopped reading mirrored code 0x03001200',
+                '0x5': 'stopped reading 0x05001200, the original L3 page at a new VA',
+                '0x6': 'stopped reading original code 0x01001200',
+                '0x7': 'all six reads returned',
+                '0xe3': 'a Cortex-M7 fault entry ran; input_va carries 0xE3'}
             mirror_leaf = csf.get('leaf_0x03000000')
             mirror_page = csf.get('leaf_0x03001000')
             alias_leaf = csf.get('leaf_0x05001000')
@@ -935,7 +954,16 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             # its descriptor has to match the code page word for word.
             csf['alias_applied'] = bool(code_page is not None and alias_leaf == code_page)
             marker = csf['input_va']
-            csf['cold_boot_marker_present'] = marker in (1, 2, 3, 4, 5, 6)
+            # 0xE3 is the fault entry's marker: a synchronous Cortex-M7 exception
+            # ran, which no AXI stall can produce. It is checked before the ladder
+            # so a fault on read N is never decoded as "read N stalled".
+            fault = marker == 0xE3
+            csf['m7_fault_taken'] = fault
+            if fault:
+                csf['m7_stacked_pc'] = csf['output_va']
+                csf['m7_cfsr'] = csf['group_stride']
+                csf['m7_cfsr_flags'] = cfsr_flags(csf['group_stride'])
+            csf['cold_boot_marker_present'] = (not fault) and marker in (1, 2, 3, 4, 5, 6, 7)
             if not csf['relocation_observed']:
                 outcome = 'not-relocated'
                 verdict = ('the executable probe PA is not the relocated one; this is not the '
@@ -945,6 +973,17 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 verdict = ('the MMU refused something before any marker appeared (AS_FAULT %#x at '
                            '%#x), so the ladder never reached its first read' %
                            (csf['as_fault'], csf['as_fault_hi'] << 32 | csf['as_fault_lo']))
+            elif fault:
+                outcome = 'm7-fault-taken'
+                csf['cold_boot_start'] = 'fault-0xe3'
+                verdict = ('the core took a synchronous fault, not an AXI stall: input_va is 0xE3, '
+                           'the stacked PC is %#x and CFSR is %#x (%s). A bus read that never '
+                           'completes cannot raise one, so as_fault = 0 here means the exception '
+                           'fired before the read - the faulting instruction is the one named by '
+                           'the stacked PC, and the CFSR class says whether it was a fetch, a '
+                           'precise data access or an imprecise one' %
+                           (csf['output_va'], csf['group_stride'],
+                            ', '.join(csf['m7_cfsr_flags']) or 'no named bit'))
             elif not csf['mirror_applied']:
                 outcome = 'mirror-not-applied'
                 csf['cold_boot_marker_present'] = False
@@ -966,30 +1005,33 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             elif marker == 1:
                 outcome = 'shared-stalls'
                 csf['cold_boot_start'] = 'shared-0x04000200'
-                verdict = ('the first bit-9 read, in the shared section, stalled. This is the '
-                           'first time that read has actually executed: the 2396..2400 ladders '
-                           'encoded both control reads as b<c> plus movs, so only 0x01001200 ever '
-                           'ran. A stall here means bit 9 is not specific to the code section; '
-                           'the ladder has to start with a read that does return before it can '
-                           'separate the windows')
+                verdict = ('the first read, in the shared section, stalled. A stall here means the '
+                           'ladder could not even reach a page known to work; the run says nothing '
+                           'about the mirror')
             elif marker == 2:
                 outcome = 'stack-stalls'
                 csf['cold_boot_start'] = 'stack-0x02000200'
-                verdict = ('the shared read returned and the stack read stalled. That is the '
-                           'control 2396..2400 never actually ran, so 2399\'s alias conclusion '
-                           '(same physical word readable through the stack VA) was never '
-                           'tested. The mirror comparison is still unread; lower the stack read '
-                           'to a non-bit-9 offset first')
+                verdict = ('the shared read returned and the stack read stalled. No prior build '
+                           'ever executed this read, so the code section is not the only place '
+                           'data accesses can stall')
             elif marker == 3:
-                outcome = 'wall-follows-the-code-bytes'
-                csf['cold_boot_start'] = 'mirror-0x03001200'
-                verdict = ('the mirror stalled even though its VA, L2 slot, L3 page and data page '
-                           'are all different from the original section. Neither the 0x0100xxxx '
-                           'window nor L2[8]\'s L3 page nor the original physical pages can be '
-                           'the wall by themselves; it follows the code bytes or the shape of a '
-                           'data read into this section (branch B)')
+                outcome = 'own-page-data-stall'
+                csf['cold_boot_start'] = 'mirror-0x0300E200'
+                verdict = ('the ladder could not read 0x0300E200, a word in the very page it is '
+                           'being fetched from. That translation must already be resident - the '
+                           'core is executing out of it - so this is not a cold walk, not the '
+                           '0x0100xxxx window and not the L3 page: the data path into an '
+                           'executable section refuses, while the fetch path through the same '
+                           'leaf completes')
             elif marker == 4:
-                outcome = 'wall-follows-the-original-l3-or-data-page'
+                outcome = 'cold-walk-or-leaf'
+                csf['cold_boot_start'] = 'mirror-0x03001200'
+                verdict = ('0x0300E200 returned - the data path into the mirror works with the '
+                           'translation resident - and the cold page 0x03001200 stalled. The '
+                           'difference is a walk of the fresh L3 page to leaf 1, so the wall is '
+                           'the cold walk or that leaf index, not the data path')
+            elif marker == 5:
+                outcome = 'wall-follows-the-original-l3-page'
                 csf['cold_boot_start'] = 'alias-0x05001200'
                 verdict = ('the mirror returned and the shared-L3 window stalled. 0x05001200 '
                            'walks the identical L3 page and leaf descriptor as 0x01001200, so '
@@ -997,26 +1039,27 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                            'moved the code data page without moving the wall, which leaves the '
                            'L2[8] L3 page frame as the prime suspect; the next build should '
                            'point L2[8] at a fresh L3 page')
-            elif marker == 5:
+            elif marker == 6:
                 outcome = 'wall-is-the-original-va'
                 csf['cold_boot_start'] = 'original-0x01001200'
                 verdict = ('0x05001200 returned and 0x01001200 stalled with an identical L3 '
                            'page, leaf descriptor and physical address. Only the virtual address '
                            'differs, so the wall is the 0x0100xxxx VA itself, above the page '
                            'table in the AS or the platform address window')
-            elif marker == 6:
+            elif marker == 7:
                 outcome = 'all-reads-returned'
-                csf['cold_boot_start'] = 'all-five-returned'
-                verdict = ('every read returned, the original 0x01001200 included. The corrected '
-                           'ladder now executes the two control reads the 2396..2400 ladders '
-                           'skipped, so this result cannot be compared to those trials; the '
-                           'earlier stalls must be re-derived from the fixed ladder before '
-                           'another attribute is called null')
+                csf['cold_boot_start'] = 'all-six-returned'
+                verdict = ('every read returned, the original 0x01001200 included. The mirror '
+                           'boot moved the wall, so the stall needs the core to be executing '
+                           'from the 0x0100xxxx window at the same time - re-run the fixed '
+                           'ladder from 0x0100E000 before calling any attribute null')
             else:
                 outcome = 'no-marker'
                 csf['cold_boot_start'] = None
                 verdict = ('the core never wrote a marker, so 0x0300E000 did not start; check '
-                           'the mirror entry leaf before reading the ladder')
+                           'the mirror entry leaf before reading the ladder. groups = %#x, '
+                           'which is not the fault entry either (it would leave 0xE3 in '
+                           'input_va)' % csf['groups'])
             csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
         if expected_build == 0x2398:

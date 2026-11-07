@@ -122,7 +122,8 @@ def check_access(arena, root_pa, va, size, operation, unprivileged=False):
 
 
 def build_arena(firmware, arena_pa, compiler='cc', memory_group=0, entry_probe=False,
-                inline_entry=False, relocate_code=False, mirror_code=False, share_code_l3=False):
+                inline_entry=False, relocate_code=False, mirror_code=False, share_code_l3=False,
+                vendor=False):
     if not isinstance(memory_group, int) or not 0 <= memory_group <= 15:
         raise ValueError('memory group must fit four bits')
     with tempfile.TemporaryDirectory(prefix='csf-fetch-') as tmp:
@@ -134,6 +135,11 @@ def build_arena(firmware, arena_pa, compiler='cc', memory_group=0, entry_probe=F
             defines.append('-DSWEET_CSF_MIRROR_CODE_VA=0x03000000u')
         if share_code_l3:
             defines.append('-DSWEET_CSF_SHARE_CODE_L3_VA=0x05000000u')
+        if vendor:
+            # The shim compiles both of these on for every 2393+ image; a host
+            # rebuild without them reports the default AttrIdx 1 / nG / SH
+            # descriptor instead of the one the MCU actually walks.
+            defines += ['-DSWEET_CSF_VENDOR_LEAVES=1', '-DSWEET_CSF_VENDOR_MEMATTR=1']
         subprocess.run([compiler, '-std=c11', '-Wall', '-Wextra', '-Werror',
                         '-fsanitize=address,undefined', *defines, '-I', str(ROOT / 'xnu/gpu'),
                         str(source), str(ROOT / 'xnu/gpu/mali_csf_firmware.c'),

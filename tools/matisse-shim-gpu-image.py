@@ -990,6 +990,19 @@ TRACE_PROBE[0x2382] = TRACE_PROBE[0x2379]
 FAULT_ENTRY_2383 = (
     '1ef0040f0cbfeff30880eff309802de9f04f6946eff3058200f0f0fb08b000bd4ff0ff3070470000',
     '734613f0040f0cbfeff30880eff30980816901229206d16002490868506114211161fee728ed00e0')
+# 2401 puts the fault answer in `input_va` instead of `groups`. 2383's stub
+# already proved a fault can be observed (stacked PC, CFSR, shared+16 = 20), but
+# every capture is read for input_va first, and a stall leaves input_va at the
+# last marker either way. Writing 0xE3 there - a value no marker and no probe
+# ever writes - makes "the core took a synchronous exception" and "the AXI read
+# channel never answered" distinguishable in one field. The slot at 0x010019b0
+# is the vendor's own forty-byte handler and the patch engine refuses a length
+# change, so the four bytes for the 0xE3 store come from dropping the
+# shared+16 write; the stacked PC and CFSR stay. It keeps its own source file so
+# 2383..2400 stay byte-identical.
+FAULT_ENTRY_2401 = (
+    '1ef0040f0cbfeff30880eff309802de9f04f6946eff3058200f0f0fb08b000bd4ff0ff3070470000',
+    '01229206e32090601ef0040f0cbfeff30880eff309808169d160024908685061fee700bf28ed00e0')
 TRACE_PROBE[0x2383] = dict(TRACE_PROBE[0x2379])
 TRACE_PROBE[0x2383]['patches'] = dict(TRACE_PROBE[0x2379]['patches'])
 TRACE_PROBE[0x2383]['patches'][0x010019b0] = FAULT_ENTRY_2383
@@ -1277,20 +1290,23 @@ TRACE_PROBE[0x2400] = dict(TRACE_PROBE[0x2396], kind='cold-boot-fetch',
 
 # 2401 mirrors the executable section at 0x03000000 and starts the core at
 # 0x0300E000, so the same block is fetched through L2[24] and a *fresh* L3
-# page. The ladder then reads the mirror's 0x03001200, the same page through a
-# second window 0x05000000 whose L2 entry is copied from L2[8] (identical L3
-# page and leaf descriptor), and finally the original 0x01001200. One boot
-# therefore separates "the 0x0100xxxx window is special" (read 4 returns) from
-# "the L3 page behind L2[8] is special" (read 3 returns, read 4 stalls) from
-# "the cross-page read shape follows the code bytes" (all three stall).
-# The ladder is tools/matisse-csf-ladder2401.S; its 76 bytes replace the
-# vendor's 76 bytes at 0x0100E000, and the mirror copies the patched bytes.
+# page. The ladder reads the page it is itself fetched from (0x0300E200), then
+# the mirror's cold page 0x03001200, then the same page through a second window
+# 0x05000000 whose L2 entry is copied from L2[8] (identical L3 page and leaf
+# descriptor), and finally the original 0x01001200. Read 3 cannot involve a cold
+# walk - its translation is the one the core is fetching through - so a stall
+# there puts the wall in the data path itself. Read 4 returning instead of
+# stalling would name the walk; read 5 stalling would name the original L3 page
+# frame; read 6 stalling with read 5 returned names the 0x0100xxxx VA.
+# The ladder is tools/matisse-csf-ladder2401.S; its 84 bytes replace the
+# vendor's 84 bytes at 0x0100E000, and the mirror copies the patched bytes.
 COLD_BOOT_2401 = ('41114ff0000999652b46c0f200070021002527e040f294370021c0f200071de0'
                   '44f220010622c4f20301725044f22003c4f20303191d7258062afcd1f218916f'
-                  '11f4006f01f4a0694ff00101',
-                  '72b60124a40602252d060126360603273f0605231b0641f200290120a060d4f8'
-                  '00020220a060d5f800020320a06057f809000420a06053f809000520a06056f8'
-                  '09000620a060fee700bf00bf')
+                  '11f4006f01f4a0694ff00101'
+                  '1cbf01231365012d',
+                  '72b60124a40602252d060126360603273f0605231b0641f200294ef200280120a060d4f8'
+                  '00020220a060d5f800020320a06057f808000420a06057f809000520a06053f809000620a0'
+                  '6056f809000720a060fee7')
 TRACE_PROBE[0x2401] = dict(
     TRACE_PROBE[0x2396], kind='cold-boot-fetch',
     reset_vector=(0x010018ed, 0x0300E001),
@@ -1298,7 +1314,7 @@ TRACE_PROBE[0x2401] = dict(
     stub=bytes.fromhex(COLD_BOOT_2401[1]),
     mirror_code=0x03000000, share_code_l3=0x05000000,
     leaf_probe_va=(0x03000000, 0x03001000, 0x05001000, 0x01001000),
-    patches={0x010019b0: TRACE_PROBE[0x2383]['patches'][0x010019b0],
+    patches={0x010019b0: FAULT_ENTRY_2401,
              0x01000200: ('01340a2c', '00bf7047'),
              0x0100E000: COLD_BOOT_2401})
 
@@ -1336,9 +1352,15 @@ def l2_entry(arena, root, va):
 def mirror_check(fetch, candidate, plan, spec, stub, section):
     """2401: prove the image really carries a mirrored copy and a shared L3."""
     mirror, share = spec['mirror_code'], spec.get('share_code_l3', 0)
+    # 0x40077000 is only a stand-in for the C builder's "physical address must
+    # be 4 KiB aligned and at least 4 GiB/1" check; it is deliberately NOT the
+    # linked arena base. The metadata below is therefore arena-relative, and
+    # build() adds 0x40000000 + the arena offset it read from the linked ELF.
+    # Recording root+dst here is what made 2399/2401's manifest point 0x1000
+    # below the image for a whole build.
     arena, mplan = fetch.build_arena(candidate, 0x40077000, memory_group=6,
                                      relocate_code=True, mirror_code=True,
-                                     share_code_l3=bool(share))
+                                     share_code_l3=bool(share), vendor=True)
     if len(mplan['sections']) != len(plan['sections']) + 1:
         raise ValueError('mirror did not add exactly one mapping')
     code = next(s for s in mplan['sections'] if s['va'] == section['va'])
@@ -1365,8 +1387,7 @@ def mirror_check(fetch, candidate, plan, spec, stub, section):
         raise ValueError('mirror leaf moved bits other than the physical address')
     result = dict(va='%#x' % mirror, data_bytes=copy['data_bytes'],
                   arena_offset=copy['arena_offset'], fresh_l3_page=True,
-                  entry_pa='%#x' % (root + dst),
-                  original_entry_pa='%#x' % (root + src))
+                  entry_offset=dst, original_entry_offset=src)
     if share:
         shared_leaf_at = l2_entry(arena, root, share)
         if shared_leaf_at != l2_entry(arena, root, section['va']):
@@ -1376,8 +1397,10 @@ def mirror_check(fetch, candidate, plan, spec, stub, section):
         if aliased != original:
             raise ValueError('shared-L3 alias does not reach the code leaf')
         result['share_va'] = '%#x' % share
-        result['shared_leaf'] = '%#x' % aliased
-        result['shared_pa'] = '%#x' % (root + at)
+        # Attribute bits only: the physical field of this descriptor was built
+        # against the stand-in base, so the leaf is assembled in build().
+        result['shared_leaf_attributes'] = '%#x' % (aliased & ~page)
+        result['shared_offset'] = at
     return result
 
 
@@ -1619,10 +1642,12 @@ def fault_vector_probe(path, expected, build_id):
                 patch['cold_boot']['ladder'][2]['section'] = (
                     'code, R-X, on the stack page the previous read just returned')
         if build_id == 0x2401:
-            # Six markers: two controls, the mirror through a fresh L3 page, the
-            # same leaf through the shared-L3 window, and the original read.
+            # Seven markers: two controls, the page the core is fetching from,
+            # the mirror through a fresh L3 page, the same leaf through the
+            # shared-L3 window, and the original read.
             patch['cold_boot'] = dict(
-                target='0x300e000', marker_field='input_va', marker_value='0x1..0x6',
+                target='0x300e000', marker_field='input_va', marker_value='0x1..0x7',
+                fault_marker=0xE3, fault_field='input_va',
                 counter_field='groups', counter_seed=8,
                 mirror_va='0x3000000', fresh_l3_page=True, share_code_l3='0x5000000',
                 entry_program='tools/matisse-csf-ladder2401.S',
@@ -1632,24 +1657,29 @@ def fault_vector_probe(path, expected, build_id):
                         dict(marker='0x2', read_va='0x02000200',
                              section='stack, RW non-executable',
                              meaning='the shared read returned; this one stalled'),
-                        dict(marker='0x3', read_va='0x03001200',
+                        dict(marker='0x3', read_va='0x0300E200',
+                             section='mirror, R-X, the very page this program is fetched from',
+                             meaning='both controls returned; a data read of our own page stalled'),
+                        dict(marker='0x4', read_va='0x03001200',
                              section='mirror, R-X, fresh L3 page and data page',
-                             meaning='both controls returned; the mirror read stalled'),
-                        dict(marker='0x4', read_va='0x05001200',
+                             meaning='our own page is readable; the cold mirror page stalled'),
+                        dict(marker='0x5', read_va='0x05001200',
                              section='mirror window, same L3 page and leaf as 0x01001200',
                              meaning='the fresh-L3 mirror read returned; this one stalled'),
-                        dict(marker='0x5', read_va='0x01001200',
+                        dict(marker='0x6', read_va='0x01001200',
                              section='code, R-X, original window and L3 page',
                              meaning='the shared-L3 read returned; this one stalled'),
-                        dict(marker='0x6', read_va=None, section='none',
+                        dict(marker='0x7', read_va=None, section='none',
                              meaning='every read returned, including the original window')],
                 counter_meanings={
                     '0x1': 'the shared control stalled',
                     '0x2': 'the stack control stalled',
-                    '0x3': '0x03001200 stalled: not the L3 page or the data page',
-                    '0x4': '0x05001200 stalled: the original L3 page or its PTE',
-                    '0x5': '0x01001200 stalled: the original VA window or its PTE/page',
-                    '0x6': 'the original read returned: the wall moved with the mirror'})
+                    '0x3': '0x0300E200 stalled: the data path to our own page, no walk involved',
+                    '0x4': '0x03001200 stalled: the cold walk or that leaf/page',
+                    '0x5': '0x05001200 stalled: the original L3 page frame or its leaf',
+                    '0x6': '0x01001200 stalled: the original VA window itself',
+                    '0x7': 'every read returned: the wall moved with the mirror',
+                    '0xe3': 'the core took a synchronous fault; input_va carries 0xE3'})
         if build_id in (0x2391, 0x2393, 0x2395):
             # Three landings instrumented at once, so the marker names not just
             # whether the vector was used but which of the three rules applied.
@@ -2116,9 +2146,29 @@ def build(a):
                              'tools/matisse-csf-coldboot.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
             if a.build_id == 0x2401:
-                for name in ('tools/matisse-csf-fault-entry.S',
+                for name in ('tools/matisse-csf-fault-entry-e3.S',
                              'tools/matisse-csf-ladder2401.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
+                # mirror_check() works in arena offsets because the linked base
+                # is only known here, after the shim is compiled. Resolve them
+                # once, against the same symbol the pin above accepted.
+                mirror_md = info['trace_probe'].get('mirror_code')
+                if mirror_md:
+                    base = 0x40000000 + arena
+                    page = 0x0000fffffffff000
+                    for pa_key, off_key in (('entry_pa', 'entry_offset'),
+                                            ('original_entry_pa', 'original_entry_offset'),
+                                            ('shared_pa', 'shared_offset')):
+                        if off_key in mirror_md:
+                            mirror_md[pa_key] = '%#x' % (base + mirror_md[off_key])
+                    if 'shared_leaf_attributes' in mirror_md and 'shared_offset' in mirror_md:
+                        # mirror_check can only see the attributes; the physical
+                        # field is the resolved window PA plus the code page's
+                        # offset inside the relocated section.
+                        attrs = int(mirror_md['shared_leaf_attributes'], 16)
+                        mirror_md['shared_leaf'] = '%#x' % (
+                            attrs | ((base + mirror_md['shared_offset']) & page))
+                    mirror_md['arena_pa'] = '%#x' % base
     if a.relocate_code:
         moved = relocation_evidence(firmware, a.mirror_code, a.share_code_l3)
         base = 0x40000000 + arena

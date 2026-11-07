@@ -619,25 +619,28 @@ class ReportDecodeTests(unittest.TestCase):
         leaves = ((self.LEAVES[0] & ~page) | 0x401a6000,
                   (self.LEAVES[1] & ~page) | 0x401a7000,
                   self.LEAVES[1], self.LEAVES[1])
-        csf = self.cold_report(build=0x2401, input_va=6,
+        csf = self.cold_report(build=0x2401, input_va=7,
                                firmware_probe_pa_lo=0x401b6000, leaf=leaves)['csf']
         self.assertTrue(csf['mirror_applied'])
         self.assertTrue(csf['alias_applied'])
         self.assertEqual(csf['cold_boot_target'], 0x0300E000)
         self.assertEqual(csf['cold_boot_outcome'], 'all-reads-returned')
-        self.assertIn('skipped', csf['instrument_verdict'])
+        self.assertIn('from the 0x0100xxxx window', csf['instrument_verdict'])
+        self.assertFalse(csf['m7_fault_taken'])
 
         for input_va, outcome in ((1, 'shared-stalls'), (2, 'stack-stalls'),
-                                  (3, 'wall-follows-the-code-bytes'),
-                                  (4, 'wall-follows-the-original-l3-or-data-page'),
-                                  (5, 'wall-is-the-original-va')):
+                                  (3, 'own-page-data-stall'),
+                                  (4, 'cold-walk-or-leaf'),
+                                  (5, 'wall-follows-the-original-l3-page'),
+                                  (6, 'wall-is-the-original-va')):
             csf = self.cold_report(build=0x2401, input_va=input_va,
                                    firmware_probe_pa_lo=0x401b6000, leaf=leaves)['csf']
             self.assertEqual(csf['cold_boot_outcome'], outcome, input_va)
+            self.assertFalse(csf['m7_fault_taken'])
 
         # A leaf set from an earlier build has no mirror page: the run cannot
         # answer the mirror question and must say so, not read the ladder.
-        csf = self.cold_report(build=0x2401, input_va=6,
+        csf = self.cold_report(build=0x2401, input_va=7,
                                firmware_probe_pa_lo=0x401b6000, leaf=self.LEAVES)['csf']
         self.assertFalse(csf['mirror_applied'])
         self.assertEqual(csf['cold_boot_outcome'], 'mirror-not-applied')
@@ -645,11 +648,44 @@ class ReportDecodeTests(unittest.TestCase):
 
         # Mirror applied but the shared-L3 window naming a different leaf.
         split = (leaves[0], leaves[1], self.LEAVES[0], self.LEAVES[1])
-        csf = self.cold_report(build=0x2401, input_va=6,
+        csf = self.cold_report(build=0x2401, input_va=7,
                                firmware_probe_pa_lo=0x401b6000, leaf=split)['csf']
         self.assertTrue(csf['mirror_applied'])
         self.assertFalse(csf['alias_applied'])
         self.assertEqual(csf['cold_boot_outcome'], 'alias-not-applied')
+
+    def test_2401_reads_the_fault_entry_marker_before_the_ladder(self):
+        """input_va = 0xE3 is a fault, not a marker: the ladder must not be read."""
+        page = 0x0000fffffffff000
+        leaves = ((self.LEAVES[0] & ~page) | 0x401a6000,
+                  (self.LEAVES[1] & ~page) | 0x401a7000,
+                  self.LEAVES[1], self.LEAVES[1])
+        # A precise data bus fault at the read that stalled, with BFAR valid.
+        csf = self.cold_report(build=0x2401, input_va=0xE3,
+                               firmware_probe_pa_lo=0x401b6000, leaf=leaves,
+                               output_va=0x03000E32, group_stride=(1 << 9) | (1 << 15))['csf']
+        self.assertTrue(csf['m7_fault_taken'])
+        self.assertEqual(csf['cold_boot_outcome'], 'm7-fault-taken')
+        self.assertEqual(csf['m7_stacked_pc'], 0x03000E32)
+        self.assertEqual(csf['m7_cfsr'], (1 << 9) | (1 << 15))
+        self.assertEqual(csf['m7_cfsr_flags'], ['PRECISERR', 'BFARVALID'])
+        self.assertFalse(csf['cold_boot_marker_present'])
+        self.assertIn('synchronous fault', csf['instrument_verdict'])
+
+        # An imprecise bus error is the other reading of the same stall.
+        csf = self.cold_report(build=0x2401, input_va=0xE3,
+                               firmware_probe_pa_lo=0x401b6000, leaf=leaves,
+                               output_va=0x03000E30, group_stride=1 << 10)['csf']
+        self.assertEqual(csf['m7_cfsr_flags'], ['IMPRECISERR'])
+
+        # The stale 2383 stub writes groups = 20 and leaves input_va at 3; that
+        # must still decode as a stalled read, which is why 2401 replaced it.
+        csf = self.cold_report(build=0x2401, input_va=3,
+                               firmware_probe_pa_lo=0x401b6000, leaf=leaves,
+                               groups=20)['csf']
+        self.assertFalse(csf['m7_fault_taken'])
+        self.assertEqual(csf['cold_boot_outcome'], 'own-page-data-stall')
+        self.assertEqual(csf['cold_boot_counter'], 20)
 
     def test_2399_aliases_one_page_onto_the_stack(self):
         csf = self.cold_report(build=0x2399, input_va=4, firmware_probe_pa_lo=0x401a5000,

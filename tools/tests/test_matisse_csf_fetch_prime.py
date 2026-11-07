@@ -80,8 +80,47 @@ class FetchPrimeTests(unittest.TestCase):
         self.assertEqual(len(bytes.fromhex(want)), len(bytes.fromhex(stub)))
         self.assertEqual(sections[1][3], 0x010019b0)
 
+    def test_fault_entry_2401_writes_the_e3_marker_and_keeps_the_frame(self):
+        """2401's fault stub is the linked bytes, and still forty of them."""
+        bins = sorted((Path.home() / 'Library/Android/sdk/ndk').glob(
+            '*/toolchains/llvm/prebuilt/darwin-x86_64/bin'))
+        if not bins:
+            self.skipTest('requires ARM linker from Android NDK')
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory)
+            (p / 'fault.ld').write_text('SECTIONS { '
+                '.text.fault 0x010019b0 : { *(.text.fault) } }')
+            subprocess.run([str(bins[-1] / 'clang'), '--target=armv7m-none-eabi',
+                '-mcpu=cortex-m7', '-mthumb', '-nostdlib', '-Wl,--build-id=none',
+                '-Wl,-e,csf_fault_entry_2401', '-Wl,-T,' + str(p / 'fault.ld'),
+                str(ROOT / 'tools/matisse-csf-fault-entry-e3.S'), '-o', str(p / 'fault.elf')],
+                check=True, capture_output=True)
+            elf = (p / 'fault.elf').read_bytes()
+            shoff, = struct.unpack_from('<I', elf, 32)
+            size, count, names_index = struct.unpack_from('<HHH', elf, 46)
+            sections = [struct.unpack_from('<10I', elf, shoff + i * size) for i in range(count)]
+            names_section = sections[names_index]
+            names = elf[names_section[4]:names_section[4] + names_section[5]]
+            actual = {names[s[0]:].split(b'\0', 1)[0].decode(): elf[s[4]:s[4] + s[5]]
+                      for s in sections}
+        want, stub = self.builder.FAULT_ENTRY_2401
+        self.assertEqual(actual['.text.fault'], bytes.fromhex(stub))
+        # The patch engine keeps the replaced region's length, and 0x010019b0
+        # holds exactly the vendor's forty bytes.
+        self.assertEqual(len(bytes.fromhex(stub)), 40)
+        self.assertEqual(len(bytes.fromhex(want)), 40)
+        self.assertEqual(len(bytes.fromhex(stub)) % 4, 0)
+        self.assertEqual(sections[1][3], 0x010019b0)
+        # shared+8 = 0xE3, then the stacked PC at +12 and CFSR at +20.
+        self.assertEqual(bytes.fromhex(stub)[:8], bytes.fromhex('01229206e3209060'))
+        self.assertEqual(bytes.fromhex(stub)[22:26], bytes.fromhex('8169d160'))
+        self.assertEqual(bytes.fromhex(stub)[32:36], bytes.fromhex('fee700bf'))
+        self.assertEqual(bytes.fromhex(stub)[36:], bytes.fromhex('28ed00e0'))
+        # 2383's stub must stay untouched: 2383..2400 keep their pinned bytes.
+        self.assertNotEqual(self.builder.FAULT_ENTRY_2383[1], stub)
+
     def test_ladder_2401_assembly_matches_the_pinned_bytes(self):
-        """2401's six-step ladder is the linked bytes, not objdump's display."""
+        """2401's seven-step ladder is the linked bytes, not objdump's display."""
         bins = sorted((Path.home() / 'Library/Android/sdk/ndk').glob(
             '*/toolchains/llvm/prebuilt/darwin-x86_64/bin'))
         if not bins:
@@ -105,12 +144,16 @@ class FetchPrimeTests(unittest.TestCase):
                       for s in sections}
         want = bytes.fromhex(self.builder.COLD_BOOT_2401[1])
         self.assertEqual(actual['.text.ladder'], want)
-        self.assertEqual(len(want), 76)
+        self.assertEqual(len(want), 84)
+        self.assertEqual(len(want), len(bytes.fromhex(self.builder.COLD_BOOT_2401[0])))
         self.assertEqual(sections[1][3], 0x0300E000)
         # The two control reads must be the real ldr.w bytes (d4 f8 ...), not
         # the halfword-swapped form that made 2396..2400 execute a branch.
-        self.assertEqual(want[0x1e:0x22], bytes.fromhex('d4f80002'))
-        self.assertEqual(want[0x26:0x2a], bytes.fromhex('d5f80002'))
+        self.assertEqual(want[0x22:0x26], bytes.fromhex('d4f80002'))
+        self.assertEqual(want[0x2a:0x2e], bytes.fromhex('d5f80002'))
+        # Read 3 is the same page the program is fetched from: register offset
+        # r8 = 0xE200, not the 0x1200 window the other reads use.
+        self.assertEqual(want[0x32:0x36], bytes.fromhex('57f80800'))
 
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2401_moves_only_the_vector_and_the_mirror_program(self):
@@ -120,10 +163,14 @@ class FetchPrimeTests(unittest.TestCase):
         stub = bytes.fromhex(self.builder.COLD_BOOT_2401[1])
         allowed = set(range(config + 4, config + 8))
         allowed |= set(range(code + 0xE000, code + 0xE000 + len(stub)))
+        # 2401 is the first build whose fault entry puts 0xE3 in input_va.
+        allowed |= set(range(code + 0x19b0, code + 0x19b0 + 40))
         changed = {i for i, (a, b) in enumerate(zip(embedded_2400, embedded_2401))
                    if a != b}
         self.assertTrue(changed)
         self.assertLessEqual(changed, allowed)
+        self.assertEqual(embedded_2401[code + 0x19b0:code + 0x19b0 + 40],
+                         bytes.fromhex(self.builder.FAULT_ENTRY_2401[1]))
         self.assertEqual(int.from_bytes(embedded_2401[config + 4:config + 8], 'little'),
                          0x0300E001)
         self.assertEqual(embedded_2401[code + 0xE000:code + 0xE000 + len(stub)], stub)
@@ -133,13 +180,32 @@ class FetchPrimeTests(unittest.TestCase):
         self.assertEqual(cold['share_code_l3'], '0x5000000')
         self.assertTrue(cold['fresh_l3_page'])
         self.assertEqual([step['read_va'] for step in cold['ladder']],
-                         ['0x04000200', '0x02000200', '0x03001200',
+                         ['0x04000200', '0x02000200', '0x0300E200', '0x03001200',
                           '0x05001200', '0x01001200', None])
+        self.assertEqual(cold['fault_marker'], 0xE3)
+        self.assertEqual(cold['marker_value'], '0x1..0x7')
         mirror = patch['mirror_code']
         self.assertTrue(mirror['fresh_l3_page'])
         self.assertEqual(mirror['va'], '0x3000000')
         self.assertEqual(mirror['share_va'], '0x5000000')
-        self.assertEqual(mirror['shared_leaf'], '0x30000000401b6cc7')
+        # Attribute bits only: vendor AltIdx 0, RO, no nG, no SH, group 6. The
+        # physical field is resolved in build() against the linked arena.
+        self.assertEqual(mirror['shared_leaf_attributes'], '0x30000000000004c3')
+        self.assertNotIn('shared_leaf', mirror)
+        # The mirror copy sits one whole 64 KiB section below the relocated code,
+        # so 0x0300E000 and 0x0100E000 are 0x10000 apart in physical addresses.
+        self.assertEqual(mirror['original_entry_offset'] - mirror['entry_offset'], 0x10000)
+        # 2399/2401 shipped a manifest whose mirror PAs were 0x1000 below the
+        # image because mirror_check() added its stand-in base. Nothing here may
+        # be an absolute address: build() resolves these against the arena symbol
+        # it just pinned.
+        self.assertEqual(mirror['entry_offset'], mirror['arena_offset'] + 0xE000)
+        self.assertNotIn('entry_pa', mirror)
+        self.assertNotIn('shared_pa', mirror)
+        self.assertNotIn('original_entry_pa', mirror)
+        source = (ROOT / 'tools/matisse-shim-gpu-image.py').read_text()
+        self.assertIn('base = 0x40000000 + arena', source)
+        self.assertIn("mirror_md[pa_key] = '%#x' % (base + mirror_md[off_key])", source)
         self.assertEqual(patch['leaf_probe']['va'],
                          ['0x3000000', '0x3001000', '0x5001000', '0x1001000'])
 
