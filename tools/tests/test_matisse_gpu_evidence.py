@@ -692,7 +692,7 @@ class ReportDecodeTests(unittest.TestCase):
         # The expected result: three bit-9 = 0 reads returned, then 0x0100E200
         # stalled in the very page the ladder is executing from.
         csf = self.cold_report(build=0x2402, input_va=4,
-                               firmware_probe_pa_lo=0x401b6000, leaf=self.LEAVES)['csf']
+                               firmware_probe_pa_lo=0x401a4000, leaf=self.LEAVES)['csf']
         self.assertEqual(csf['cold_boot_target'], 0x0100E000)
         self.assertEqual(csf['cold_boot_outcome'], 'bit-9-decides')
         self.assertTrue(csf['bit9_confirmed'])
@@ -710,19 +710,19 @@ class ReportDecodeTests(unittest.TestCase):
                 (6, 'only-shared-stalls-at-bit9', False),
                 (7, 'all-reads-returned', False)):
             csf = self.cold_report(build=0x2402, input_va=marker,
-                                   firmware_probe_pa_lo=0x401b6000, leaf=self.LEAVES)['csf']
+                                   firmware_probe_pa_lo=0x401a4000, leaf=self.LEAVES)['csf']
             self.assertEqual(csf['cold_boot_outcome'], outcome, marker)
             self.assertEqual(csf['bit9_confirmed'], confirmed, marker)
 
         # All six returned: the mirror boot was the difference, not the address.
         csf = self.cold_report(build=0x2402, input_va=7,
-                               firmware_probe_pa_lo=0x401b6000, leaf=self.LEAVES)['csf']
+                               firmware_probe_pa_lo=0x401a4000, leaf=self.LEAVES)['csf']
         self.assertEqual(len(csf['bit9_returned']), 6)
         self.assertIsNone(csf['bit9_stalled'])
 
         # A fault entry is never read as a marker, here either.
         csf = self.cold_report(build=0x2402, input_va=0xE3,
-                               firmware_probe_pa_lo=0x401b6000,
+                               firmware_probe_pa_lo=0x401a4000,
                                output_va=0x0100E2F2, group_stride=1 << 10,
                                leaf=self.LEAVES)['csf']
         self.assertTrue(csf['m7_fault_taken'])
@@ -733,7 +733,7 @@ class ReportDecodeTests(unittest.TestCase):
 
         # An address that is not the relocated one cannot be read as this build.
         csf = self.cold_report(build=0x2402, input_va=4,
-                               firmware_probe_pa_lo=0x401a4000, leaf=self.LEAVES)['csf']
+                               firmware_probe_pa_lo=0x401b6000, leaf=self.LEAVES)['csf']
         self.assertEqual(csf['cold_boot_outcome'], 'not-relocated')
 
     def test_2399_aliases_one_page_onto_the_stack(self):

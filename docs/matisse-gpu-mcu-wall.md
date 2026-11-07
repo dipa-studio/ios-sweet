@@ -1886,7 +1886,7 @@ the same boot that tests bit 9.
 | kernel | `ff842023...27ba`, `SWEET_BUILD_ID 0x2402`, patch 0198 |
 | container | 115 B changed: vector word, 72 B at `0x0100E000`, 40 B at `0x010019b0` |
 | ladder | 72 B, `tools/matisse-csf-ladder2402.S`, pinned as `COLD_BOOT_2402` |
-| leaves | `0x01000000` -> `0x401b6000`, `0x01001000` -> `0x401b7000`, vendor encoding |
+| leaves | `0x01000000` -> `0x401a4000`, `0x01001000` -> `0x401a5000`, vendor encoding |
 | tests | 286 ran, 3 skipped |
 
 Readings: `4` proves bit 9 above the MMU (same entry, leaf, PA - only the address

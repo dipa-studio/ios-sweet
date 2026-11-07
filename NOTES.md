@@ -88,7 +88,8 @@ that the first stall ends the run:
 image      e7f00f28...e329  26,714,112 B  arena 0x77000 (2400's layout)
 kernel     ff842023...27ba  SWEET_BUILD_ID 0x2402, patch 0198, no new source patch
 container  115 B changed: vector word, 72 B at 0x0100E000, 40 B at 0x010019b0
-leaves     0x01000000 -> 0x401b6000, 0x01001000 -> 0x401b7000, unchanged encoding
+leaves     0x01000000 -> 0x401a4000, 0x01001000 -> 0x401a5000, vendor encoding
+           (0x...44c3, 0x...54c3, 0x...24c3 at 0x0100E000, 0x...34c3 at 0x0100F000)
 tests      286 ran, 3 skipped
 ```
 

@@ -1077,7 +1077,10 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             # the page offset: the L2 entry, L3 entry, leaf and physical page are
             # word for word equal within a pair.
             csf['cold_boot_counter'] = csf['groups']
-            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401b6000
+            # No mirror, so the relocated code section sits at 2400's PA. 2401's
+            # 0x401b6000 was one 64 KiB section higher because the mirror copy
+            # took the lower slot.
+            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a4000
             csf['cold_boot_target'] = 0x0100E000
             reads = (('0x04000000', 0, 'shared'), ('0x02000000', 0, 'stack'),
                      ('0x0100E400', 0, 'code'), ('0x0100E200', 1, 'code'),
