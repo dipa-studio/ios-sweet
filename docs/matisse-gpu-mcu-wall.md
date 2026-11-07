@@ -1898,3 +1898,66 @@ section. `7` says 2401's stall needed the mirror, i.e. the core executing at
 
 Built, unit-tested, statically verified and preflighted, **not flown**. `boot_a`
 is `2931647a...86b1`.
+
+## 50. 2402 ran: bit 9 decides, in one page, and no mapping can move it
+
+Image `e7f00f28...e329`, kernel `0x2402`. `input_va = 4`, `groups = 8`,
+`as_fault = 0`, `mcu_status = 1`, `error = -53`: no fault, no response.
+
+| marker | read | section | bit 9 | outcome |
+|---|---|---|---|---|
+| 1 | `0x04000000` | shared | 0 | returned - first data read ever made there |
+| 2 | `0x02000000` | stack | 0 | returned, cold |
+| 3 | `0x0100E400` | code | 0 | returned - cold line in the executing page |
+| 4 | `0x0100E200` | code | 1 | never returned |
+| 5, 6 | - | - | 1 | never issued |
+
+**The pair is the proof.** Reads 3 and 4 are 0x200 apart inside one 4 KiB page:
+same L2 entry, same L3 entry, same leaf word (`0x30000000401b24c3`), same
+physical page (`0x401b2000`), no walk for either, and 3 returned before 4 was
+issued. They differ in bit 10 as well (`0x0100E400` has it set), so bit 10 is
+ruled out by the same read and only bit 9 correlates.
+
+**Two older readings are dead.**
+
+- *"A cold data read of an RX line never completes"* (2373/2374). Read 3 **is**
+  that access - cold line, executable page, in the page the core is fetching -
+  and it returned.
+- *"The wall is the `0x0100xxxx` window / a section / an attribute"*. The stall
+  is now on record for a fetch (2386, 2393) and a data read (2393..2402), in
+  three sections, under every leaf encoding tried, cached and non-cacheable,
+  with the mirror and without it.
+
+**Why no page table can ever separate VA from PA here.** `AS_TRANSCFG` reads
+`0x42000006` → `ADRMODE = 6 = AS_TRANSCFG_ADRMODE_AARCH64_4K`: a plain AArch64
+4 KiB stage-1 translation. Its output address is 4 KiB aligned, so
+`PA[11:0] == VA[11:0]` for every mapping the hardware can hold. Bit 9 is inside
+that window, so "VA bit 9" and "PA bit 9" are one bit, permanently. 2382 moved
+the PA, 2399 repointed a leaf, 2401 built a fresh L3 page - none of them could
+have changed it, and none did.
+
+**What is left to explain.** Not the MMU. The CPU wrote the whole 64 KiB section
+(bit-9 = 1 halves included) and read the arena back, so the memory and the
+system-level path are fine; the MCU's read at the same PA never gets a response.
+The vendor firmware's own first data read, `0x01001BC4`, is bit-9 = 1, which is
+why the stock firmware cannot boot while this holds.
+
+**2403: split load from store at bit 9, and check the returned data.**
+
+```
+1 read  0x0100E000 (b9 0) -> shared+16    does the word match the image?
+2 read  0x0100E1FC (b9 0) -> shared+20    last word of the even half
+3 store 0x5a5a5a5a to 0x0100E200 (b9 1)   does a write complete where a read cannot?
+4 read  0x0100E200 (b9 1) -> shared+24
+5 read  0x0100E400 (b9 0)
+```
+
+Stall at 3: the address is dead in both directions. Pass 3 and stall at 4: the
+address decodes and accepts writes, only the read response never arrives. A
+mismatched value at 1 would retroactively question every "returned" in the
+series.
+
+```
+fastboot 101.14 s; fbraw reboot-recovery -> Recovery in 18 s
+boot_a restored and verified 2931647a...86b1; capture 23:49
+```

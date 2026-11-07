@@ -1,109 +1,111 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-07 23:45: 2402 BUILT (BIT-9 MATRIX) - 2401 RAN AND THE FIRST NON-CODE BIT-9 READ STALLS <<<
+## >>> ACTIVE 2026-11-07 23:52: 2402 RAN - BIT 9 IS THE WALL, AND IT IS THE ONLY MOVING PART <<<
 
-**RESULT: `input_va = 1`.** The ladder ran from the mirror at `0x0300E000`
-(its marker 1 is in shared, and nothing else writes that word), then the *first*
-read - shared `0x04000200` - never completed. `groups = 8` (no counter), no
-`0xE3`, so the fault entry was never entered: `as_fault = 0`, `mcu_status = 1`,
-`error = -53`, one-second budget. Reads 2..6 were never issued.
+**RESULT: `input_va = 4`.** The ladder ran from `0x0100E000` and wrote all four
+markers, so three reads returned and the fourth never did:
 
-**The mirror plumbing is proven, exactly as designed.** The four live leaves the
-shim published are the predicted values to the bit:
+| marker | read | section | bit 9 | outcome |
+|---|---|---|---|---|
+| 1 | `0x04000000` | shared | 0 | returned (first read ever made there) |
+| 2 | `0x02000000` | stack | 0 | returned (cold; also returned in 2375) |
+| 3 | `0x0100E400` | code | 0 | **returned** - cold line in the page we execute from |
+| 4 | `0x0100E200` | code | 1 | **never returned** |
+| 5, 6 | - | - | 1 | never issued |
 
-```
-leaf_0x03000000 = 0x30000000401a64c3   (mirror section, PA 0x401a6000)
-leaf_0x03001000 = 0x30000000401a74c3   (mirror read page, PA 0x401a7000)
-leaf_0x05001000 = 0x30000000401b74c3   (= 0x01001000 leaf, same L3 page + leaf)
-leaf_0x01001000 = 0x30000000401b74c3   (code read page, PA 0x401b7000)
-```
+`groups = 8`, no `0xE3`, `as_fault = 0`, `mcu_status = 1`, `error = -53`: the
+read reached the bus and no response ever came back. It is not a fault.
 
-`mirror_applied` and `alias_applied` both true, `relocation_observed` true. The
-new L3 page, the copied L2 entry and the corrected manifest are all real.
+**Reads 3 and 4 differ in exactly one address bit.** Same 4 KiB page
+(`0x0100E000`), same L2 entry, same L3 entry, same leaf word, same physical page,
+0x200 apart, no walk involved for either. They also differ in bit 10
+(`0x0100E400` has it set and returned), so bit 10 is not a factor - only bit 9
+correlates.
 
-**What the run actually says - and it is not about the code window.** `0x04000200`
-has **bit 9 set**. Every address that ever returned has bit 9 clear, and every
-address that ever hung has it set:
-
-| address | bit 9 | outcome |
-|---|---|---|
-| `0x01001900` (2375 code) | 0 | returned |
-| `0x02000000` (2375 stack) | 0 | returned |
-| `0x02800000` (2375 RO) | 0 | returned |
-| `0x0100E000` (2385..2395 fetch) | 0 | ran the program |
-| `0x010018ec` (2390 entry) | 0 | ran the program |
-| `0x01000200` | 1 | stalled (2386 fetch, 2374 read) |
-| `0x01001BC4` (vendor `ldr` target) | 1 | stalled (2376) |
-| `0x0100EA00` | 1 | never executed (2393) |
-| `0x01001200` | 1 | stalled (2393..2400) |
-| `0x04000200` | 1 | **stalled (2401, first non-code bit-9 read ever issued)** |
-
-So the "wall" is one address bit, not a VA window and not the code section: any
-access whose address has bit 9 set never completes, whether it is a fetch or a
-data read, in any section, under any leaf encoding tried. Bit 9 is below the
-4 KiB page offset, so VA and PA bit 9 are always the same bit - which is why
-2399's page move and 2382's PA move could never separate them.
-
-**Correction to 2401's own design.** Both "control" reads (`0x04000200`,
-`0x02000200`) are bit-9 = 1 addresses, inherited from the 2396 ladder and never
-questioned because that ladder never executed them. So this run could not get
-past read 1 and says nothing about the mirror, the L3 page, or `0x0300E200`.
+**The image is exactly what the build said it was.** `firmware_probe_pa =
+0x401a4000` and the four live leaves are the predicted words, so the pre-flight
+correction (2402 uses 2400's relocated PA, not 2401's) was right:
 
 ```
-image  6f0e1fc1...5aa0  partition 6471eb5b...2f7d written and read back
-fastboot observed at 82.53 s (same window as 2385..2400); capture 23:28
-boot_a restored and verified 2931647a...86b1
+0x01000000 -> 0x30000000401a44c3    0x0100E000 -> 0x30000000401b24c3
+0x01001000 -> 0x30000000401a54c3    0x0100F000 -> 0x30000000401b34c3
 ```
 
-**2402 is built, preflighted and waiting for approval.** It is the bit-9 matrix,
-and it drops the mirror so nothing but the read sequence moves: 2400's layout,
-reset word `0x4 = 0x0100e001`, the ladder back at `0x0100E000`. Marker N is
-written before read N:
+**Two theories die with this run.**
+
+1. **"A cold data read of an RX page never completes"** (2373/2374). Read 3 is
+   exactly that - a cold line, in an executable page, in the page the core is
+   fetching from - and it returned.
+2. **"The wall is the `0x0100xxxx` window, or a section, or a leaf encoding."**
+   It has now been observed with a fetch (2386, 2393) and a data read (2393..2402),
+   in three sections, under every leaf encoding tried, cached and non-cacheable,
+   with and without the mirror. Bit 9 is the only property that never varies.
+
+**Bit 9 can never be split into a VA half and a PA half.** `AS_TRANSCFG` reads
+back `0x42000006`, i.e. `ADRMODE = 6 = AS_TRANSCFG_ADRMODE_AARCH64_4K`: the AS is
+a plain AArch64 4 KiB stage-1 MMU. Its output address is 4 KiB aligned, so
+`PA[11:0] == VA[11:0]` for every mapping that can be built - bit 9 included.
+2382's PA move and 2399's leaf repoint could not have separated them, and no
+future page-table change can either.
+
+**What that means for the project.** The vendor firmware's own first data read
+(`0x01001BC4`, bit 9 = 1) is in the dead half, so the stock firmware cannot boot
+while this holds, and no page table can route around it. The remaining question
+is no longer the MMU. It is what makes `A9 = 1` fatal for the MCU and not for the
+CPU: the CPU wrote that whole 64 KiB section, bit-9 = 1 halves included, and read
+the arena back.
 
 ```
-1 0x04000000  shared  bit9 0   never read before (2375's shared probe never ran)
-2 0x02000000  stack   bit9 0   returned in 2375, cold
-3 0x0100E400  code    bit9 0   the page the ladder is fetched from, cold line
-4 0x0100E200  code    bit9 1   same page, 0x200 away - the decisive read
-5 0x02000200  stack   bit9 1
-6 0x04000200  shared  bit9 1   2401 stalled here
-7 all six returned
+image  e7f00f28...e329  partition a9441792...feaf written and read back
+fastboot observed at 101.14 s, Recovery 18 s after fbraw reboot-recovery
+boot_a restored and verified 2931647a...86b1 (capture 23:49)
+kernel 0x2402 (patch 0198), 286 tests
 ```
 
-Two design changes against the sketch recorded above, both forced by the fact
-that the first stall ends the run:
+**Next, 2403: split load from store at bit 9, and check the data.** Read 3's
+returning word has never been compared to what the image actually holds. One
+ladder can do both, in the same page:
+
+```
+1 read  0x0100E000 (b9 0)  -> store the word to shared+16   value check
+2 read  0x0100E1FC (b9 0)  -> store the word to shared+20   last word of the even half
+3 store 0x5a5a5a5a to 0x0100E200 (b9 1)                     does a write complete there?
+4 read  0x0100E200 (b9 1)  -> store the word to shared+24   and does the read still stall?
+5 read  0x0100E400 (b9 0)                                   still alive
+```
+
+A stall at 3 says the address itself is dead for both directions. Passing 3 and
+stalling at 4 says the address decodes and accepts writes, and only the read
+response never comes back - which is a different bug with a different fix. A
+value that does not match the image at step 1 would put every "returned" in this
+series in question.
+
+## >>> PREVIOUS 2026-11-07 23:45: 2402 BUILT - 2401 RAN AND THE FIRST NON-CODE BIT-9 READ STALLS <<<
+
+**2401's result was `input_va = 1`.** The ladder ran from the mirror at
+`0x0300E000` (its marker 1 is in shared and nothing else writes that word), then
+the first read - shared `0x04000200` - never completed. Both "control" reads in
+that ladder were bit-9 = 1 addresses inherited from 2396, so it could not get
+past read 1 and said nothing about the mirror. The mirror plumbing itself was
+proven: the four leaves were the predicted words and `mirror_applied`,
+`alias_applied` and `relocation_observed` were all true.
+
+**2402 dropped the mirror** so only the read sequence moved: 2400's layout, reset
+word `0x4 = 0x0100e001`, ladder back at `0x0100E000`, 72 bytes. Two design
+changes against the sketch, both forced by the fact that a stall ends the run:
 
 - **All bit-9 = 0 reads go first.** The earlier order put `0x04000200` second and
-  would have stopped at the address 2401 already answered, learning nothing. Now
-  the three controls must return before any bit-9 = 1 read is issued, and they
-  are measured in the same boot.
-- **The code pair is `0x0100E400` vs `0x0100E200`, not `0x0100E000` vs
-  `0x0100E200`.** Both probes then sit at the same kind of offset from the page
-  base (0x400 and 0x200, neither of them the entry instruction), 0x200 apart, in
-  one 4 KiB page, on one leaf. Read 3 is also the RX cold-line control the
-  2373/2374 hypothesis needs: if it stalls, the wall is a cold data read of an
-  RX page and bit 9 is irrelevant; if it returns, that theory dies with it.
+  would have stopped at the address 2401 had already answered.
+- **The code pair is `0x0100E400` vs `0x0100E200`**, not `0x0100E000` vs
+  `0x0100E200`: neither probe is the entry instruction and both sit the same
+  distance from the page base.
 
 ```
 image      e7f00f28...e329  26,714,112 B  arena 0x77000 (2400's layout)
-kernel     ff842023...27ba  SWEET_BUILD_ID 0x2402, patch 0198, no new source patch
+kernel     ff842023...27ba  SWEET_BUILD_ID 0x2402, patch 0198
 container  115 B changed: vector word, 72 B at 0x0100E000, 40 B at 0x010019b0
-leaves     0x01000000 -> 0x401a4000, 0x01001000 -> 0x401a5000, vendor encoding
-           (0x...44c3, 0x...54c3, 0x...24c3 at 0x0100E000, 0x...34c3 at 0x0100F000)
 tests      286 ran, 3 skipped
 ```
-
-Reading it: `4` → bit 9 decides above the MMU (same table, leaf, PA; only the
-address bit differs). `3` → the code page refuses any cold data read, bit 9 or
-not. `1`/`2` → the shared or stack section itself is the wall. `5`/`6` → bit 9 is
-not the rule and the wall is per section. `7` → 2401's stall needed the mirror,
-i.e. the core executing at `0x0300E000`. `0xE3` → a synchronous M7 fault, with
-the stacked PC in `output_va` and CFSR in `group_stride`.
-
-**Status: built, unit-tested, statically verified, preflight passed; not flown.**
-`boot_a` is the baseline `2931647a...86b1`; flashing needs explicit approval of
-image SHA `e7f00f28...e329`.
-
 
 ## >>> PREVIOUS 2026-11-07 23:40: 2401 REBUILT - OWN-PAGE READ + 0xE3 FAULT ENTRY <<<
 
