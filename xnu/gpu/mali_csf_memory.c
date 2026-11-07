@@ -206,6 +206,15 @@ int sweet_csf_memory_build_group(const uint8_t *fw, size_t bytes, const struct s
 #endif
             if (!(p->flags & 2) && !SWEET_CSF_RO_LEAVES_WRITABLE) desc |= 0x80;
             if (!(p->flags & 4)) desc |= UINT64_C(3) << 53;
+#if SWEET_CSF_UNCACHED_VA
+            /* 2400: page-selective cache mode. AttrIdx is bits[4:2] and SH is
+             * bits[9:8]; both are cleared before index 5 is installed so no
+             * branch above can leak a share bit into a non-cacheable page. */
+            if (va == (uint64_t)SWEET_CSF_UNCACHED_VA) {
+                desc &= ~(UINT64_C(0x1c) | UINT64_C(0x300));
+                desc |= UINT64_C(5) << 2;
+            }
+#endif
 #if SWEET_CSF_XN_VA
             /* 2397: page-selective XN. The section keeps its own permissions and
              * only this one 4 KiB page loses X, so the core still fetches from

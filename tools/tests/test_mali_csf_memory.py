@@ -254,6 +254,40 @@ class CsfMemoryTests(unittest.TestCase):
                 '-o',str(p/'test')],check=True,capture_output=True)
             subprocess.run([str(p/'test')],check=True,capture_output=True)
 
+    def test_page_uncached_changes_only_that_leaf(self):
+        """2400: one page takes AS_MEMATTR index 5, the section keeps the rest."""
+        def dump(define):
+            with tempfile.TemporaryDirectory() as directory:
+                p=Path(directory);(p/'d.c').write_text(ALIAS_DUMP)
+                cmd=['cc','-std=c11','-Wall','-Wextra','-Werror','-I',str(ROOT/'xnu/gpu')]
+                if define:cmd.append(define)
+                cmd+=[str(p/'d.c'),str(ROOT/'xnu/gpu/mali_csf_firmware.c'),
+                      str(ROOT/'xnu/gpu/mali_csf_memory.c'),'-o',str(p/'dump')]
+                subprocess.run(cmd,check=True,capture_output=True)
+                out=subprocess.run([str(p/'dump')],check=True,capture_output=True,text=True).stdout
+                rows={}
+                for line in out.splitlines():
+                    head=line.split()
+                    if len(head)!=2:continue
+                    try:rows[int(head[0],16)]=int(head[1],16)
+                    except ValueError:continue
+                return rows
+        base=dump(None);uncached=dump('-DSWEET_CSF_UNCACHED_VA=0x01000000u')
+        self.assertEqual(set(base),set(uncached))
+        self.assertIn(0x01000000,base);self.assertIn(0x01001000,base)
+        for va,desc in base.items():
+            new=uncached[va]
+            if va!=0x01000000:
+                self.assertEqual(desc,new,'leaf 0x%x must not move'%va)
+                continue
+            self.assertEqual((new>>2)&7,5,'the named page must take AttrIdx 5')
+            self.assertEqual((new>>8)&3,0,'a non-cacheable leaf must carry no SH bits')
+            self.assertEqual(desc&~0x31c,new&~0x31c,
+                             'only AttrIdx and SH may move on the named page')
+        # The entry page keeps its cached leaf, which is what lets the start
+        # stay at 2394's.
+        self.assertEqual(uncached[0x01001000],base[0x01001000])
+
     def test_alias_repoints_one_leaf_and_keeps_its_bits(self):
         """2399: one page takes another section's PA, its attributes stay."""
         def dump(from_va,to_va):

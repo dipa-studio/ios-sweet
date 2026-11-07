@@ -499,6 +499,9 @@ class ReportDecodeTests(unittest.TestCase):
     # (the page behind 0x02000000) with the code section's own attribute bits.
     LEAVES_ALIAS = (0x30000000401a54c3, 0x30000000400914c3,
                     0x30000000401b34c3, 0x30000000401b44c3)
+    # 2400: only the page holding the read target takes AS_MEMATTR index 5 with
+    # no SH bits; the entry page and the rest of the section keep 2396's leaf.
+    LEAVES_UNCACHED_PAGE = ((LEAVES[0], (LEAVES[1] & ~0x31c) | (5 << 2)) + LEAVES[2:])
 
     def test_2388_reads_the_live_leaves_out_of_the_arena(self):
         csf = self.cold_report(build=0x2388, input_va=0x01001200,
@@ -587,6 +590,26 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertIsNone(csf['cold_boot_start'])
         self.assertEqual(len(csf['cold_boot_landings']), 3)
         self.assertIn('survives AttrIdx 0/5', csf['instrument_verdict'])
+
+    def test_2400_maps_one_page_non_cacheable(self):
+        csf = self.cold_report(build=0x2400, input_va=4,
+                               leaf=self.LEAVES_UNCACHED_PAGE)['csf']
+        self.assertTrue(csf['probe_page_uncached'])
+        self.assertEqual(csf['probe_page_attr_index'], 5)
+        self.assertEqual(csf['probe_page_share'], 0)
+        self.assertEqual(csf['cold_boot_outcome'], 'cacheable-fill-is-the-wall')
+        self.assertIn('cacheable fill', csf['instrument_verdict'])
+
+        csf = self.cold_report(build=0x2400, input_va=3,
+                               leaf=self.LEAVES_UNCACHED_PAGE)['csf']
+        self.assertEqual(csf['cold_boot_outcome'],
+                         'data-access-to-the-code-window-never-completes')
+        self.assertIn('cached or not', csf['instrument_verdict'])
+
+        # A live leaf that kept index 0 cannot answer the cache question.
+        csf = self.cold_report(build=0x2400, input_va=3, leaf=self.LEAVES)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'cache-mode-not-applied')
+        self.assertFalse(csf['probe_page_uncached'])
 
     def test_2399_aliases_one_page_onto_the_stack(self):
         csf = self.cold_report(build=0x2399, input_va=4, firmware_probe_pa_lo=0x401a5000,

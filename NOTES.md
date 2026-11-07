@@ -1,6 +1,46 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-07 12:15: 2399 RAN - THE WALL IS THE VIRTUAL RANGE, NOT THE PHYSICAL PAGE <<<
+## >>> ACTIVE 2026-11-07 12:40: 2400 RAN - NON-CACHEABLE STILL STALLS; THE PAGE TABLE IS OUT OF LEVERS <<<
+
+**RESULT: `input_va = 3`.** 2400 kept 2396's container and ladder and changed
+only the cache mode of one leaf: VA `0x01001000` takes AS_MEMATTR index 5 with no
+SH bits (`leaf_0x01001000 = 0x30000000401a54d7`), the entry page and every other
+leaf keep `0x...4c3`. The read at `0x01001200` stalled anyway.
+
+```
+image  fff61b73...84b3  26,714,112 B  kernel a321ee94 (SWEET_BUILD_ID 0x2400)
+container d59eb487...0ba8 - byte-identical to 2396..2399 (93 B vs vendor)
+leaves 0x30000000401a44c3 0x30000000401a54d7 0x30000000401b24c3 0x30000000401b34c3
+probe_page_uncached true (AttrIdx 5, SH 0)
+part.  bb4cf321...c63e written and read back, fastboot 121.28 s
+boot_a restored 2931647a...86b1 (verified)
+```
+
+**The page table has nothing left.** 2393 AttrIdx/MemAttr, 2395 cache in the
+fetch direction, 2400 cache in the data direction, 2378 AP, 2374 SH, 2393 nG,
+2397 XN, 2398 group/PBHA, 2399 physical page - all null. A fetch from the same
+window at `0x0100E000` still completes and runs the ladder; a data read at
+`0x01001200` never does, cached or not.
+
+**Also checked, in reply to an outside analysis.** The registers it blamed were
+already at vendor values in this capture: `0x304` 0 -> 31 (readback 31,
+`noncoherent_protocol_verified` true), AS_MEMATTR `0x888d8f88/0x00084c8d`,
+AS_TRANSCFG `0x42000006` = ADRMODE 6 + PTW_MEMATTR_WB + R_ALLOCATE, exactly the
+r32p1 pairing. XREADABLE (bit36) and DISABLE_AF_FAULT (bit34) do not exist in the
+r32p1 regmap and panthor, the working driver, does not set them either. Its
+"PBHA = 0b0011 at bits 63:60" reading is off by a nibble: the field is bits 62:59
+and the value was 6, which 2398 already cleared to 0 with no effect.
+
+**Next: 2401 maps the same code section at a second window.** The open question
+is whether the wall is the `0x01000000` window or that VA value: map the code
+section again at `0x03000000`, reset-vector a ladder at `0x0300E000`, and read
+`0x03001200`. Runs and reads -> the window is the property and the firmware could
+move; stalls -> the VA value itself is hardwired somewhere above the AS.
+
+Tests: 277 ran, 3 skipped (one memory-builder test and one decode test added for
+2400). Patch series is 0001-0196.
+
+## >>> PREVIOUS 2026-11-07 12:15: 2399 RAN - THE WALL IS THE VIRTUAL RANGE, NOT THE PHYSICAL PAGE <<<
 
 **RESULT: `input_va = 3`.** 2399 repointed exactly one leaf: VA `0x01001000`
 (the page holding the read target `0x01001200`) now names the physical page behind

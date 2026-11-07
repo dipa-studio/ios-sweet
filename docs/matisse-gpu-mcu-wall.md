@@ -1714,3 +1714,38 @@ moved the 0x4000-aligned BSS array ahead of the arena by one page: this build's
 arena is `0x40078000`, not `0x40077000`, so every PA in the run is 2396's plus
 `0x1000`. The builder pins the per-build arena value instead of relaxing the
 check, and the manifest records it (`csf_arena.shim_offset = 0x78000`).
+
+## 46. 2400 ran: the cache mode is not the wall either; the page table is out of levers
+
+2400 is 2396's container and ladder with one page mapped non-cacheable: VA
+`0x01001000` takes AS_MEMATTR index 5 with no SH bits, the entry page and every
+other leaf keep 2396's values. 2395 had made the whole section non-cacheable but
+only asked a fetch to land there, never this read.
+
+| field | value |
+|---|---|
+| image | `fff61b73...84b3`, 26,714,112 B |
+| kernel | `a321ee94...0bb0`, `SWEET_BUILD_ID 0x2400` |
+| container | `d59eb487...0ba8` - byte-identical to 2396..2399 |
+| leaves | `0x30000000401a44c3`, **`0x30000000401a54d7`**, `0x30000000401b24c3`, `0x30000000401b34c3` |
+| `probe_page_uncached` | **true** - AttrIdx 5, SH 0, the other three leaves untouched |
+| `input_va` | **3** - shared and stack reads returned, the code read did not |
+| `groups` / `cleanup_error` | 8 / -53 |
+| `as_fault` / `mmu_raw` | 0 / 0 |
+| fastboot | 121.28 s, `boot_a` restored to `2931647a...86b1` (verified) |
+
+**The page table has nothing left to vary.** AttrIndx/MemAttr (2393), cacheability
+in the fetch direction (2395) and now in the data direction (2400), AP (2378),
+SH (2374), nG (2393), XN (2397), memory group/PBHA (2398), physical page (2399) -
+every one null, each on a container that differs from 2396's by nothing else.
+A data read of `0x01001200` stalls whether the page is cached or not, while a
+fetch from the same window at `0x0100E000` completes and runs the ladder.
+
+**What is left.** The wall is a property of the `0x01000000`-`0x0100FFFF`
+virtual window, not of any field the shim writes: same table, same PA bit 9,
+same attributes, different VA range, different outcome. 2399 already showed the
+same physical page reads fine through the stack VA, so the data path to that
+memory exists. The open question for 2401 is whether the window or the VA value
+is the property: map the very same code section at a second window
+(`0x03000000`), reset-vector a ladder there, and ask whether a bit-9 read inside
+`0x0300xxxx` returns.

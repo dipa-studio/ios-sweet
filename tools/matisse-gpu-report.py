@@ -109,7 +109,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -822,6 +822,84 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 verdict = ('the core never wrote a marker, so 0x0100E000 did not start even though '
                            'only 0x01001000 lost X. Check the entry page leaf before reading the '
                            'ladder')
+            csf['cold_boot_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2400:
+            # 2396's container and ladder, with one page mapped non-cacheable:
+            # VA 0x01001000, the page holding the read target, takes AS_MEMATTR
+            # index 5. The entry page keeps its cached leaf, so the start is
+            # 2394's. Read 3 returning names the cacheable fill as the wall;
+            # read 3 stalling says no data access to the code window completes.
+            csf['cold_boot_counter'] = csf['groups']
+            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a4000
+            csf['cold_boot_target'] = 0x0100E000
+            csf['cold_boot_ladder'] = {
+                '0x1': 'stopped reading shared 0x04000200',
+                '0x2': 'stopped reading stack 0x02000200',
+                '0x3': 'stopped reading code 0x01001200, now non-cacheable',
+                '0x4': 'all three reads returned, the non-cacheable code one included'}
+            page = csf.get('leaf_0x01001000')
+            entry = csf.get('leaf_0x0100e000')
+            csf['probe_page_leaf'] = page
+            csf['probe_page_attr_index'] = None if page is None else (page >> 2) & 7
+            csf['probe_page_share'] = None if page is None else (page >> 8) & 3
+            csf['probe_page_uncached'] = bool(
+                page is not None and (page >> 2) & 7 == 5 and (page >> 8) & 3 == 0 and
+                entry is not None and (entry >> 2) & 7 == 0)
+            marker = csf['input_va']
+            csf['cold_boot_marker_present'] = marker in (1, 2, 3, 4)
+            if not csf['relocation_observed']:
+                outcome = 'not-relocated'
+                verdict = ('the executable probe PA is not the relocated one; this is not the '
+                           '2382 mapping the build reuses')
+            elif csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault']:
+                outcome = 'cold-boot-refused'
+                verdict = ('the MMU refused something before any marker appeared (AS_FAULT %#x at '
+                           '%#x), so the ladder never reached its first read' %
+                           (csf['as_fault'], csf['as_fault_hi'] << 32 | csf['as_fault_lo']))
+            elif not csf['probe_page_uncached']:
+                outcome = 'cache-mode-not-applied'
+                csf['cold_boot_marker_present'] = False
+                csf['cold_boot_start'] = None
+                verdict = ('the live leaf for 0x01001000 is %s, i.e. AttrIdx %s with SH %s, so the '
+                           'image did not travel with the non-cacheable page and this run says '
+                           'nothing about the cache mode' %
+                           (None if page is None else hex(page), csf['probe_page_attr_index'],
+                            csf['probe_page_share']))
+            elif marker == 1:
+                outcome = 'shared-stalls-again'
+                csf['cold_boot_start'] = 'shared-0x04000200'
+                verdict = ('the shared read stalled, which 2396 did not do; the run is not '
+                           'comparable and says nothing about the cache mode')
+            elif marker == 2:
+                outcome = 'stack-stalls-again'
+                csf['cold_boot_start'] = 'stack-0x02000200'
+                verdict = ('the stack read stalled, which 2396 did not do; the run is not '
+                           'comparable and says nothing about the cache mode')
+            elif marker == 3:
+                outcome = 'data-access-to-the-code-window-never-completes'
+                csf['cold_boot_start'] = 'code-0x01001200'
+                verdict = ('the read of 0x01001200 stalled even with its page non-cacheable, so '
+                           'the fill path is not the wall: no MCU data access to the '
+                           '0x01000000-0x0100FFFF window completes, cached or not. Every leaf '
+                           'field is now null, cached fill included, and the remaining '
+                           'explanations are above the page table - the window itself, or what '
+                           'the AS applies to that range')
+            elif marker == 4:
+                outcome = 'cacheable-fill-is-the-wall'
+                csf['cold_boot_start'] = 'all-three-returned'
+                verdict = ('the code read returned as soon as its page stopped being cacheable, '
+                           'while the same read stalled in 2396 with a cached leaf and the entry '
+                           'page stayed cached here. The wall is the cacheable fill of the code '
+                           'window, not the address: the MCU can serve a hit but cannot complete '
+                           'a linefill from that range, which is a cache or coherency '
+                           'configuration, not a page-table one')
+            else:
+                outcome = 'no-marker'
+                csf['cold_boot_start'] = None
+                verdict = ('the core never wrote a marker, so 0x0100E000 did not start even though '
+                           'its page kept 2394\'s cached leaf. Check the entry leaf before reading '
+                           'the ladder')
             csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
         if expected_build == 0x2398:
@@ -1892,7 +1970,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2399)')
+                   help='expected kernel/report build (0x2321 through 0x2400)')
     p.add_argument('--allow-missing-leaf',action='store_true',
                    help='decode a build >=0x2388 whose image shipped without the '
                         'sweet-csf-leaf property (2389 did); leaf fields stay absent')

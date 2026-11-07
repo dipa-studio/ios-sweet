@@ -62,6 +62,19 @@
 #ifndef SWEET_CSF_XN_VA
 #define SWEET_CSF_XN_VA 0
 #endif
+/* 0 leaves every page on its section's cache mode. Set to one 4 KiB virtual
+ * address and only that page takes AS_MEMATTR index 5 (non-cacheable) with no
+ * SH bits; the rest of the section, including the page the MCU starts on, keeps
+ * its own. 2396 showed a cached bit-9 read stalls in the code window while the
+ * cached stack page reads, 2399 moved the page underneath it and the read still
+ * stalled, so the one leaf field never varied in the *data* direction at this
+ * VA is cacheability: 2395 made the whole section non-cacheable but tested a
+ * fetch landing, not this read. A read that returns here names the cacheable
+ * fill as the wall; a read that still stalls says no data access to the code
+ * window can complete, whatever the cache mode. */
+#ifndef SWEET_CSF_UNCACHED_VA
+#define SWEET_CSF_UNCACHED_VA 0
+#endif
 /* 0 leaves every leaf pointing at the page its own section placed there. Set
  * both to page-aligned virtual addresses inside the plan and the leaf at
  * SWEET_CSF_ALIAS_VA is repointed at the physical page that backs

@@ -1263,6 +1263,18 @@ TRACE_PROBE[0x2398] = dict(TRACE_PROBE[0x2396], kind='cold-boot-fetch',
 TRACE_PROBE[0x2399] = dict(TRACE_PROBE[0x2396], kind='cold-boot-fetch',
                            alias_va=0x01001000, alias_to_va=0x02000000)
 
+# 2400 leaves the page where 2399 put it and moves only the cache mode of the
+# page the read goes through. 2399 proved the stall is not the physical page;
+# 2397 forced this page non-executable and 2378 made the whole section writable,
+# so AP and XN are already out. The one leaf field never varied in the *data*
+# direction at this VA is cacheability: 2395 made the whole section non-cacheable
+# but only asked a fetch to land, never this read. Giving exactly this page
+# AS_MEMATTR index 5 keeps the entry page cached, so a fourth marker says the
+# cacheable fill of the code window is the wall, and a third marker says no data
+# access to that window can complete at all.
+TRACE_PROBE[0x2400] = dict(TRACE_PROBE[0x2396], kind='cold-boot-fetch',
+                           uncached_page=0x01001000)
+
 
 def encode_bl(src, dst):
     """Thumb-2 BL from src to dst, as the four bytes the core will fetch."""
@@ -1465,13 +1477,14 @@ def fault_vector_probe(path, expected, build_id):
                   0x2391: '0x1001a00', 0x2393: '0x100ea00',
                   0x2394: '0x100e000', 0x2395: '0x100ea00',
                   0x2396: '0x100e000', 0x2397: '0x100e000',
-                  0x2398: '0x100e000', 0x2399: '0x100e000'}[build_id]
+                  0x2398: '0x100e000', 0x2399: '0x100e000',
+                  0x2400: '0x100e000'}[build_id]
         patch['cold_boot'] = dict(
             target=target, marker_value=target, marker_field='input_va',
             counter_field='groups', counter_seed=8, counter_meanings={
                 'present': 'the core fetched this block at reset and executed it',
                 'absent': 'the first fetch stalls exactly like every other cold one'})
-        if build_id in (0x2396, 0x2397, 0x2398, 0x2399):
+        if build_id in (0x2396, 0x2397, 0x2398, 0x2399, 0x2400):
             # Not a landing: a ladder. Marker N is written before read N, so the
             # highest marker in input_va names the read that stopped the core.
             patch['cold_boot'] = dict(
@@ -1499,6 +1512,10 @@ def fault_vector_probe(path, expected, build_id):
                     'code, R-X, but this page is forced non-executable')
             if build_id == 0x2398:
                 patch['cold_boot']['leaf_group'] = 0
+            if build_id == 0x2400:
+                patch['cold_boot']['uncached_page'] = '0x1001000'
+                patch['cold_boot']['ladder'][2]['section'] = (
+                    'code, R-X, this page mapped non-cacheable')
             if build_id == 0x2399:
                 patch['cold_boot']['alias'] = dict(
                     from_va='0x1001000', to_va='0x2000000', section='stack',
@@ -1634,7 +1651,7 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
 # neither), and a build that declares a leaf_probe without the property fails
 # closed at decode time, which is the right failure but a wasted trial.
 LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
-                    0x2396, 0x2397, 0x2398, 0x2399)
+                    0x2396, 0x2397, 0x2398, 0x2399, 0x2400)
 
 
 def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False):
@@ -1690,7 +1707,8 @@ def build(a):
     #2393 is the vendor-faithful repeat of 2391's 512-byte-aligned target:
     # leaf AttrIdx 0/5, vendor MEMATTR, no nG, read-only code. The entry and
     # its fetch target are the only other things that move.
-    if a.build_id in (0x2393, 0x2394, 0x2395, 0x2396, 0x2397, 0x2398, 0x2399):
+    if a.build_id in (0x2393, 0x2394, 0x2395, 0x2396, 0x2397, 0x2398, 0x2399,
+                      0x2400):
         if not (a.trace_probe and a.vendor_leaves and a.relocate_code and a.mcu_control == '2'):
             raise ValueError('build%x requires --trace-probe --vendor-leaves --relocate-code --mcu-control 2' % a.build_id)
         if a.uncached_code != (a.build_id == 0x2395):
@@ -1702,6 +1720,8 @@ def build(a):
                              (a.build_id, 0 if a.build_id == 0x2398 else 6))
         if a.alias_page != (a.build_id == 0x2399):
             raise ValueError('build%x requires --alias-page exactly when it is 2399' % a.build_id)
+        if a.uncached_page != (a.build_id == 0x2400):
+            raise ValueError('build%x requires --uncached-page exactly when it is 2400' % a.build_id)
         if (a.ro_as_rw or a.vendor_memattr or a.global_init or a.fault_probe or
                 a.entry_probe or a.reset_store_stub or a.inline_entry or
                 a.entry_pte_guard or a.redirect_mcu_stores):
@@ -1722,6 +1742,8 @@ def build(a):
         raise ValueError('--leaf-group other than 6 is only defined for build2398')
     elif a.alias_page:
         raise ValueError('--alias-page is only defined for build2399')
+    elif a.uncached_page:
+        raise ValueError('--uncached-page is only defined for build2400')
     if a.fault_probe or a.trace_probe:
         if a.redirect_mcu_stores or a.entry_probe or a.inline_entry or a.entry_pte_guard or a.reset_store_stub:
             raise ValueError('the fault vector probe replaces the handler and takes no other patch')
@@ -1774,6 +1796,7 @@ def build(a):
                    '-DSWEET_CSF_LEAF_GROUP=%d' % a.leaf_group,
                    '-DSWEET_CSF_ALIAS_VA=' + ('0x01001000u' if a.alias_page else '0'),
                    '-DSWEET_CSF_ALIAS_TO_VA=' + ('0x02000000u' if a.alias_page else '0'),
+                   '-DSWEET_CSF_UNCACHED_VA=' + ('0x01001000u' if a.uncached_page else '0'),
                    '-DSWEET_CSF_GLOBAL_INIT=' + ('1' if a.global_init else '0'),
                    '-DSWEET_CSF_RELOCATE_CODE=' + ('1' if a.relocate_code else '0'),
                    '-DSWEET_CSF_LEAF_PROBE=' + ('1' if a.build_id in LEAF_PROBE_BUILDS else '0'),
@@ -1879,6 +1902,7 @@ def build(a):
     info['csf_xn_page'] = '0x1001000' if a.xn_page else None
     info['csf_alias_page'] = (dict(from_va='0x1001000', to_va='0x2000000') if a.alias_page
                               else None)
+    info['csf_uncached_page'] = '0x1001000' if a.uncached_page else None
     # The shim publishes the96-byte block, but sweet_ufs.c does not forward it
     # into SWEETMRK yet, so2381 evidence is console-only until that lands.
     info['csf_global_init'] = (dict(enabled=True, report_bytes=96, kernel_marks_wired=False)
@@ -1937,7 +1961,7 @@ def build(a):
                              'tools/matisse-csf-fault-control.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
             if a.build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
-                             0x2396, 0x2397, 0x2398, 0x2399):
+                             0x2396, 0x2397, 0x2398, 0x2399, 0x2400):
                 for name in ('tools/matisse-csf-fault-entry.S',
                              'tools/matisse-csf-coldboot.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
@@ -1980,7 +2004,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',
@@ -2017,6 +2041,9 @@ def main():
     p.add_argument('--leaf-group', type=lambda s:int(s,0), default=6,
                    help='physical memory group tag written into leaf bits 59..62 '
                         '(default 6; 2398 uses 0)')
+    p.add_argument('--uncached-page', action='store_true',
+                   help='2400: give exactly the 4 KiB page at VA 0x01001000 AS_MEMATTR index 5 '
+                        '(non-cacheable), holding the container, the entry and every other leaf')
     p.add_argument('--alias-page', action='store_true',
                    help='2399: repoint the leaf at VA 0x01001000 at the physical page behind '
                         '0x02000000, so the code-section read and the stack read hit one word')
