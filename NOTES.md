@@ -1,6 +1,45 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 15:35: 2411 ANSWERED - A WRITE AT BIT 9 = 1 STALLS TOO; 2412 IS THAT MINUS THE STORE <<<
+## >>> ACTIVE 2026-11-08 15:32: 2412 ANSWERED - BIT 9 IS THE ADDRESS, NOT THE ARENA; THE WALL IS DATA-SIDE <<<
+
+2412 asked one question and got a clean two-line answer. All three control
+selections held: the arena leaf `0x0100C400` (bit 9 = 0) returned the firmware's
+own `0xb001500c`; the remapped out-of-arena leaf `0x0100D400` (bit 9 = 0) returned
+`0x2412a400`, **the word this shim itself planted** at `pa_near + 0x400`, so a
+page the arena does not back was translated by the MCU's own table and read
+correctly; and `0x0100D200` - same page, same leaf, same tag 6, one address bit
+away - never returned. `input_va` 3, `output_va` `0x2412a400`, `mcu_status` 1,
+`as_fault` 0, fastboot at 81.37 s (2411 83.42, 2410's crash 73.41 = the normal
+timeout path).
+
+Decoded: `bit9-not-arena-shaped`. **The wall is not the arena allocation, not the
+read side (2411), not the VA range (code, mirror, shared, BSS page), not the tag
+(2409).** It follows the address.
+
+Two things this run pins down beyond the answer:
+
+* **The wall is data-side.** Instruction fetch at bit 9 = 1 has always worked:
+  the firmware's reset handler is at `0x010018ec` and 2358-2362 watched rungs at
+  `0x010019b0/0x010019e2/0x010019f0/0x010019f6` run. Loads and stores are what
+  never complete. The firmware therefore does not fail because it cannot be
+  fetched; it fails on its first data access past the 512-byte boundary.
+* **The offset is not separable from the PA bit.** A translation preserves the
+  12-bit offset, so "PA bit 9" and "second 512 B of the 1 KiB" are the same bit
+  and no mapping can tell them apart. The series has only sampled offsets
+  `0x000`, `0x200`, `0x400` in one page; the periodic shape is unmeasured.
+
+**Where the mechanism has to live:** a 512-byte granule cannot come from a 4 KiB
+leaf (attributes and PBHA are per leaf). It has to be outside the MMU - the SLC
+group the ADT hands out (`arm,physical-memory-group-manager`), MTK's GMPU, or the
+interconnect. That is exactly the §9 item left over. Next is desk work before any
+flight: read the live ADT's MGM/GPU nodes and the vendor GMPU/SLC programming, and
+compare with what the shim leaves unprogrammed.
+
+**Not flown anything since.** `boot_a` restored to `2931647a...86b1`, device in
+Recovery, image `333acd79...a3e72` reproducible byte for byte (verified again
+today from the recorded recipe), `docs/matisse-gpu-mcu-wall.md` §65.
+
+## >>> PREVIOUS 2026-11-08 15:35: 2411 ANSWERED - A WRITE AT BIT 9 = 1 STALLS TOO; 2412 IS THAT MINUS THE STORE <<<
 
 2411 did not reach its question, and what stopped it is the cleanest result of
 the series. Marker 1 landed, the MCU read `0x0100C400` - an **untouched** firmware

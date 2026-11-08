@@ -2810,3 +2810,70 @@ Build: image `333acd79...a3e72`, payload `156b7f6c...2e9d`, kernel
 `c01dcbea...d5ea`, arena `0x40078000`, code `0x401a5000`, 303 tests. Runner
 `shim2412-ooa4-trials-run-once.py`, partition hash `28a0b698...7fc1`.
 **Not flown.**
+
+## 65. 2412 ran: bit 9 is the address, not the allocation - and the wall is data-side
+
+Flew `333acd79...a3e72` on 2026-11-08 15:28, restored to `2931647a...86b1` in the
+same run. Report published (before/after marks differ), `input_va` = 3,
+`output_va` = `0x2412a400`, `mcu_status` = 1, `as_fault` = 0, `groups` = 8,
+fastboot at 81.37 s (2411: 83.42 s, 2410's crash: 73.41 s - the normal
+full-timeout path, not the crash path).
+
+**Every control held, and the third read is the answer.**
+
+| # | address | PA | bit 9 | outcome |
+|---|---|---|---|---|
+| 1 | `0x0100C400` | `0x401b1400` (arena, firmware leaf) | 0 | returned `0xb001500c` |
+| 2 | `0x0100D400` | `0x40279400` (shim BSS, remapped leaf) | 0 | returned `0x2412a400` |
+| 3 | `0x0100D200` | `0x40279200` (same page as #2) | 1 | never returned |
+
+Read 1 is witnessed by marker 2 with a `DSB` behind it, and by the value: it is
+the firmware's own word at that VA, so the instrument was alive. Read 2 is
+witnessed by the value itself - `0x2412a400` is the word *this shim* writes at
+`pa_near + 0x400`, which no other build or page carries - so a page the arena
+does not back was translated by the MCU's own page table and read correctly.
+Read 3 then stalled in the same page, through the same leaf, with the same tag,
+one address bit away.
+
+The decoded verdict is `cold_boot_outcome: bit9-not-arena-shaped`: **the wall is
+not a property of the arena allocation.** `ooa_pa_near` `0x40279000` is one page
+past the 2 MiB window the series calls the arena, and it answers at bit 9 = 0;
+the arena's own pages answer at bit 9 = 0 and stall at bit 9 = 1. One rule covers
+both.
+
+**What that rules out, in the series' own terms.**
+
+* Not the arena: an out-of-arena page behaves identically (2412).
+* Not the read side: writes stall the same way (2411).
+* Not the VA range: code pages, the mirror window, the shared section and now a
+  BSS page past the arena all behave the same (2401-2412).
+* Not the group tag: both leaves carry the firmware's tag 6, and 2409's untagged
+  probe stalled the same way (2409).
+* Not the register block: 2407 sampled it and the second half of every 1 KiB is
+  exactly what does *not* answer, at every address tried.
+
+**The one thing this run does not separate.** "Bit 9 of the physical address" and
+"the second 512 bytes of each 1 KiB" are the same bit, and no page-table mapping
+can tell them apart, because a translation preserves the 12-bit offset. The
+series has only ever sampled offsets `0x000`, `0x200` and `0x400` inside a page.
+The pattern is consistent with a 512-byte sector that does not complete, but the
+*shape* (periodic at 512 B vs. a single boundary) is not yet measured.
+
+**And the wall is data-side.** Instruction fetch at bit 9 = 1 has demonstrably
+worked: the firmware's own reset handler is at `0x010018ec` and 2358-2362 put
+rungs at `0x010019b0`/`0x010019e2`/`0x010019f0`/`0x010019f6` and watched them run,
+every one of them at bit 9 = 1. So the MCU fetches fine through the same AS and
+the same leaves; it is *loads and stores* that never complete. That matters for
+the goal: the firmware does not fail because it cannot be fetched, it fails
+because its first data access on the wrong side of the boundary hangs.
+
+**Where the mechanism has to be.** A 512-byte granule is not a page-table
+property - attributes and PBHA are per 4 KiB leaf. Anything that splits a page in
+half on this SoC is outside the MMU: the SLC group base/size the ADT hands out
+(`arm,physical-memory-group-manager`), MTK's GMPU, or the interconnect's sector
+handling. 2407's `slc_group6` = `0x06000006` and the path-blocked words are the
+only measurements of that side so far, and both were unchanged before and after
+the transaction.
+
+Build: image `333acd79...a3e72`, payload `156b7f6c...2e9d`, kernel
+`c01dcbea...d5ea`, arena `0x40078000`, code `0x401a5000`, 303 tests.
