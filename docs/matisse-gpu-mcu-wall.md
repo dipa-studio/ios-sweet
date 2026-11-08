@@ -3485,3 +3485,59 @@ because its own platform never needed to.
 Build: image `cc0f601c...12bf`, payload `641c5862...d556`, kernel
 `c01dcbea...d5ea`, 306 tests / 3 skipped, `boot_a` restored to
 `2931647a...86b1`, device in Recovery.
+
+## 76. 2418 built: ask the bridge for the one setting nobody asked for
+
+2413 and 2414 both treated the 1-to-2 dispatch words and both were the wrong
+experiment. 2413 wrote the vendor's own values, which is a no-op if they are
+already there. 2414 wrote `0xAAA`, which is arbitrary - it proves the write lands,
+not that the bridge was asked for anything meaningful. Neither asked for the one
+setting that would *remove* a per-address split: **route everything to one port.**
+
+That matters because bit 9 = 0 accesses return today. Whatever port serves them
+works; the question is whether the words can stop bit 9 = 1 from being sent
+somewhere else.
+
+**2418 records the eight words first, full 32 bits.** The vendor driver only ever
+ORs `0x855`/`0x055` into bits 11:0 and never reads a dispatch register back, so
+bits 31:12 have never been observed in this series - and an enable or a bypass bit
+would live exactly there. Then it writes `0x000` into the four in-direction words
+(`0x8E0/0x8E8/0x910/0x918`) and leaves the out-direction at the vendor `0x055`,
+so a read-only fix is distinguishable from a bidirectional one.
+
+Everything else is 2412 byte for byte: container, arena `0x40078000`, code
+`0x401a5000`, both leaves, sentinels and the three-read ladder (`0xC400` control,
+`0xD400` bit 9 = 0, `0xD200` bit 9 = 1). Marker 3 means the zero did not move the
+wall; marker 4 means it did.
+
+**The ABI still does not move.** Same 40-byte register block, ten labels under
+`SWEET_CSF_DISPATCH_SURVEY` (eight words plus two spares), `gpu_regs_flags == 1`
+because these are pre-write samples taken before `MCU_CONTROL`. `diag_flags` bit 11
+says the block ran and bit 12 says all four in-words already read `0x855` before
+the write - so a no-op is visible rather than silent, which is the lesson 2413
+taught.
+
+**Static check.** `csf_boot.o` reads `0x13FBF8E0` then `orr #0x8`, `add #0x30`,
+`add #0x38` (the four in-words) and `add #0x20`, `#0x28`, `#0x40`, `#0x48` (the
+four out-words), then executes exactly four stores with `w2 = wzr` to those same
+in-word addresses - the out-direction words are read but never written.
+
+Reading:
+
+* **marker 4** -> the second 512-byte half answered once every read was sent to
+  one port. The wall is the dispatch, and the next build has to find the smallest
+  value that keeps the bridge usable while still serving both halves;
+* **marker 3** -> `0x000` changed nothing. Then the field is not a per-address
+  selector, or the second port cannot be reached by any value in it, and with
+  2414's `0xAAA` also inert the bridge stops being a plausible lever;
+* **marker 1 or 2** -> `0x000` broke the in path (the ladder no longer runs), which
+  is itself a measurement: the field is load-bearing and zero is not a legal
+  setting;
+* `diag_flags` bit 12 set means the words already read `0x855`, so the write was a
+  no-op and the run repeats 2413's mistake - it would be reported as such.
+
+Build: image `555c10e7...aef7`, payload `93b27ab6...2e21`, kernel
+`c01dcbea...d5ea`, 307 tests / 3 skipped (one new: the eight reads' order, the four
+zero-writes and both `diag` states). 2412 through 2417 all still rebuild byte for
+byte. Runner `shim2418-disp-trials-run-once.py`, partition hash `33f1c7c3...a367`,
+preflight passed, **not flown**.

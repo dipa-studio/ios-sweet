@@ -131,7 +131,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415,0x2416,0x2417):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415,0x2416,0x2417,0x2418):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -197,7 +197,8 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             names = (('leaf_0x0100e000','leaf_0x0604e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406, 0x2407, 0x2408) else
                      ('leaf_0x0100d000','leaf_0x0100c000',
-                      'leaf_0x0100e000','leaf_0x01001000') if expected_build in (0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414, 0x2415, 0x2416, 0x2417) else
+                      'leaf_0x0100e000','leaf_0x01001000') if expected_build in (0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414, 0x2415, 0x2416, 0x2417,
+                                                                       0x2418) else
                      ('leaf_0x0100e000','leaf_0x0300e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
                      ('leaf_0x03000000','leaf_0x03001000',
@@ -414,6 +415,35 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 'The vendor writes 0xFFFFFFFF to every base and limit and 0 for group0, so a '
                 'word that differs from that was programmed by the boot chain, not by the '
                 'Linux driver - which never runs on this device.')
+        if expected_build == 0x2418:
+            # Eight dispatch words, full 32 bits, read before the write. The
+            # vendor only ever ORs 0x855/0x055 into bits 11:0 and never reads
+            # them back, so anything in 31:12 is new information.
+            order = ('reg_000', 'reg_004', 'reg_00c', 'reg_034', 'reg_048',
+                     'reg_04c', 'reg_2c0', 'reg_2c4', 'reg_2c8', 'reg_2cc')
+            names = ('in_0', 'in_2', 'in_4', 'in_6', 'out_0',
+                     'out_2', 'out_4', 'out_6', 'spare0', 'spare1')
+            survey = dict(zip(names, [csf['gpu_regs_before'][key] for key in order]))
+            csf['dispatch_survey'] = survey
+            for key in ('gpu_regs_before', 'gpu_regs_after', 'gpu_regs_block_live',
+                        'gpu_regs_slice_signal', 'gpu_regs_note'):
+                csf.pop(key, None)
+            csf['dispatch_in_values'] = [survey['in_%d' % n] for n in (0, 2, 4, 6)]
+            csf['dispatch_out_values'] = [survey['out_%d' % n] for n in (0, 2, 4, 6)]
+            csf['dispatch_in_low12'] = [v & 0xfff for v in csf['dispatch_in_values']]
+            csf['dispatch_out_low12'] = [v & 0xfff for v in csf['dispatch_out_values']]
+            csf['dispatch_high_bits'] = (
+                any(v >> 12 for v in csf['dispatch_in_values']) or
+                any(v >> 12 for v in csf['dispatch_out_values']))
+            # diag bit12 was set by the shim when all four in-words already read
+            # 0x855 before the write, i.e. the treatment was a no-op.
+            csf['dispatch_already_vendor'] = bool(csf['diag_flags'] & 4096)
+            csf['dispatch_survey_note'] = (
+                'The eight 1-to-2 AXI dispatch words (0x8E0/0x8E8/0x910/0x918 in, '
+                '0x900/0x908/0x920/0x928 out), full 32 bits, read before this build wrote '
+                '0x000 into the four in-direction ones. The vendor driver ORs 0x855/0x055 '
+                'into bits 11:0 on every power-on and never reads the words back, so the '
+                'upper bits have never been observed before this run.')
         if expected_build >= 0x2408:
             # 2408 issues the soft reset panthor issues on its reset/resume path
             # and records four facts instead of a verdict. Completion means
@@ -1721,7 +1751,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 hex(marker), None)
             csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
-        if expected_build in (0x2412, 0x2413, 0x2414, 0x2416, 0x2417):
+        if expected_build in (0x2412, 0x2413, 0x2414, 0x2416, 0x2417, 0x2418):
             # 2411's ladder with the shared+0x200 store removed: that store, at
             # bit 9 = 1, is what stopped 2411 before it could ask about the page.
             leaf_near = csf.get('leaf_0x0100d000')
@@ -1864,6 +1894,33 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                                if csf['slc_window_full_range'] else
                                'The window is not full range, so its extent is now the '
                                'first thing to compare with the arena span.'))
+            if expected_build == 0x2418 and marker == 4:
+                # The wall is gone with every read dispatched to one port. That is
+                # the outcome this build exists to make possible, and it needs its
+                # own verdict: 2412's marker-4 text talks about the allocation.
+                outcome = 'dispatch-zero-removed-the-wall'
+                verdict = ('every access returned and shared+12 holds %#x, the word this shim '
+                           'planted at +0x200 - the offset that never answered through any '
+                           'previous build. The image, both leaves and the ladder are 2412 '
+                           'byte for byte; the only change is 0x000 written into the four '
+                           '1-to-2 in-dispatch words, so the per-address split was the wall '
+                           'and "all reads to one port" removes it. The pre-write words were '
+                           'in %s / out %s' % (csf['output_va'],
+                                              ', '.join('%#x' % v for v in csf['dispatch_in_values']),
+                                              ', '.join('%#x' % v for v in csf['dispatch_out_values'])))
+            if expected_build == 0x2418 and outcome == 'bit9-not-arena-shaped':
+                verdict += (' This build recorded the dispatch words before writing 0x000 into '
+                            'the four in-direction ones: in %s, out %s (low 12 bits %s / %s, '
+                            'upper bits %s, already at the vendor value before the write=%s). '
+                            'The read at bit 9 = 1 still never returned, so routing every read '
+                            'to one port did not remove the wall: the field is not a per-address '
+                            'selector, or the second port is not selectable from here.'
+                            % (', '.join('%#x' % v for v in csf['dispatch_in_values']),
+                               ', '.join('%#x' % v for v in csf['dispatch_out_values']),
+                               ', '.join('%#x' % v for v in csf['dispatch_in_low12']),
+                               ', '.join('%#x' % v for v in csf['dispatch_out_low12']),
+                               'present' if csf['dispatch_high_bits'] else 'all zero',
+                               csf['dispatch_already_vendor']))
             if expected_build == 0x2417 and outcome == 'bit9-not-arena-shaped':
                 off = csf['slc_groups_off_vendor']
                 words = ', '.join('%s=%#x' % (k, v) for k, v in sorted(csf['slc_groups'].items()))

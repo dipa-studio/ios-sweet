@@ -87,6 +87,12 @@ static uint32_t rd(void *p,uint64_t a) {
  if(a>=0x13fbf000 && a<0x13fc0000)return 0xb0000000u|(uint32_t)(a-0x13fbf700);
 #endif
 #if SWEET_CSF_MFG_GLUE
+#if SWEET_CSF_DISPATCH_SURVEY
+ /*2418: the page returns its own offset, so the test can prove which register
+  *each report field came from before the write. */
+ if(!m->glue_already && a>=0x13fbf000 && a<0x13fc0000)
+  return 0xc0000000u|(uint32_t)(a-0x13fbf000);
+#endif
  /*2413: the MFG top page reads back as zero in this model, so the test can
   *assert the exact word the glue ORs in. glue_already models a boot that
   *arrives with the vendor values already programmed, which is what 2413
@@ -218,7 +224,39 @@ static struct model model(void){return (struct model){.gpu_mask=0x55,.job_mask=0
 static struct sweet_csf_boot_config cfg(void){return (struct sweet_csf_boot_config){.gpu=0x13000000,.root_pa=0x90000000,.arena_pa=0x90000000,.arena_bytes=0x200000,.shared_offset=0x10000,.shared_bytes=0x20000,.timeout_ms=1,.private_probe_offset=0x5000};}
 static int run(struct model*m,struct sweet_csf_boot_config*c,struct sweet_csf_boot_report*r){struct sweet_gpu_io io={m,rd,wr,ticks,barrier,1000};return sweet_csf_boot(c,&io,r);}
 static void clean(struct model*m,struct sweet_csf_boot_report*r){assert(m->gpu_mask==0x55 && m->job_mask==0xaa && m->mmu_mask==0xbb && m->resets==1+PRESTART_RESETS);assert(r->reset_completed);}
-#if SWEET_CSF_SLC_GROUPS
+#if SWEET_CSF_DISPATCH_SURVEY
+/*2418: the eight dispatch words are recorded full width, then 0 is written into
+ *the four in-direction ones. Nothing else in the block moves. */
+int main(void) {
+ static const uint64_t in_addr[4]={0x13fbf8e0,0x13fbf8e8,0x13fbf910,0x13fbf918};
+ static const uint32_t in_seen[4]={0xc00008e0u,0xc00008e8u,0xc0000910u,0xc0000918u};
+ static const uint32_t out_seen[4]={0xc0000900u,0xc0000908u,0xc0000920u,0xc0000928u};
+ struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
+ assert(!run(&m,&c,&r));
+ const uint32_t gin[4]={r.gpu_regs_before.in_0,r.gpu_regs_before.in_2,
+  r.gpu_regs_before.in_4,r.gpu_regs_before.in_6};
+ const uint32_t gout[4]={r.gpu_regs_before.out_0,r.gpu_regs_before.out_2,
+  r.gpu_regs_before.out_4,r.gpu_regs_before.out_6};
+ for(int i=0;i<4;i++){assert(gin[i]==in_seen[i]);assert(gout[i]==out_seen[i]);}
+ /* Exactly four writes, all to the in-direction words, all zero. */
+ assert(m.glue_writes==4);
+ for(int i=0;i<4;i++){assert(m.glue_addr[i]==in_addr[i]);assert(m.glue_value[i]==0);}
+ /* One before-pass sample, and bit12 clear because the words were not 0x855. */
+ assert(r.gpu_regs_flags==1);
+ assert(r.diag_flags==(31|2048));
+ assert(r.stage==7 && r.firmware_ready);
+ clean(&m,&r);
+ /* Second run: the page already carries the vendor values, so the shim must
+  *say the treatment was a no-op (bit12) instead of implying it changed one. */
+ {struct model m2=model();m2.glue_already=1;struct sweet_csf_boot_report r2;
+  assert(!run(&m2,&c,&r2));
+  assert(r2.gpu_regs_before.in_0==0x855 && r2.gpu_regs_before.out_0==0x55);
+  assert(r2.diag_flags==(31|2048|4096));
+  clean(&m2,&r2);}
+ puts("PASS: 2418 records the dispatch words and routes every read to one port");
+ return 0;
+}
+#elif SWEET_CSF_SLC_GROUPS
 /*2417: ten base words, one per group, read once after the MCU start. The model
  *encodes each offset into the value, so this asserts both the addresses and the
  *field order: group0's single word at0x700, then 0x704 + 12*(N-1). */
@@ -567,6 +605,11 @@ class CsfBootTests(unittest.TestCase):
 
     def test_vendor_memattr_with_global_interface(self):
         self._run(['-DSWEET_CSF_VENDOR_MEMATTR=1','-DSWEET_CSF_GLOBAL_INIT=1'])
+
+    def test_dispatch_survey(self):
+        """2418: eight dispatch words recorded, four in-words zeroed."""
+        self._run(['-DSWEET_CSF_MFG_GLUE=3', '-DSWEET_CSF_GPU_REGS=1',
+                   '-DSWEET_CSF_DISPATCH_SURVEY=1'])
 
     def test_slc_group_table(self):
         """2417: ten group base words, in order, one post-start snapshot."""

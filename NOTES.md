@@ -1,6 +1,34 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 16:50: 2417 RAN - THE GROUP TABLE IS NOT TEN WINDOWS; THE LAST REGISTER LEAD CLOSES <<<
+## >>> ACTIVE 2026-11-08 16:56: 2418 BUILT - ASK THE 1-TO-2 BRIDGE TO ROUTE EVERYTHING TO ONE PORT <<<
+
+2413 applied the vendor's dispatch values (a no-op if already there) and 2414 wrote
+`0xAAA` (arbitrary). Neither asked the bridge for the setting that would *remove* a
+per-address split, and bit-9 = 0 accesses prove one port works. 2418 asks for that.
+
+It records the eight dispatch words first, **full 32 bits** - the vendor only ever
+ORs `0x855`/`0x055` into bits 11:0 and never reads them back, so bits 31:12 have
+never been seen and an enable/bypass would live there - then writes `0x000` to the
+four in-direction words (`0x8E0/0x8E8/0x910/0x918`) and leaves the out-direction at
+the vendor `0x055`, so a read-only fix is separable from a bidirectional one.
+
+Everything else is 2412 byte for byte: container, arena `0x40078000`, code
+`0x401a5000`, both leaves, sentinels and the three-read ladder, so marker 3 means
+the zero did not move the wall and marker 4 means it did. ABI unchanged: same
+40-byte block, ten labels (`SWEET_CSF_DISPATCH_SURVEY`), `gpu_regs_flags == 1`
+(pre-write samples), `diag_flags` bit 11 = block ran, bit 12 = the in-words already
+read `0x855` (a no-op, reported rather than silent).
+
+Static: `csf_boot.o` reads `0x13FBF8E0` then `orr #0x8`, `add #0x30`, `add #0x38`
+and `add #0x20`, `#0x28`, `#0x40`, `#0x48`; exactly four stores carry `w2 = wzr`
+and all four go to the in-word addresses.
+
+Image `555c10e7...aef7`, payload `93b27ab6...2e21`, kernel `c01dcbea...d5ea`,
+307 tests / 3 skipped, 2412-2417 all rebuild byte-identical. Runner
+`shim2418-disp-trials-run-once.py`, partition hash `33f1c7c3...a367`, preflight
+passed, `boot_a` `2931647a...86b1`, device in Recovery. **Not flown.**
+
+## >>> PREVIOUS 2026-11-08 16:50: 2417 RAN - THE GROUP TABLE IS NOT TEN WINDOWS; THE LAST REGISTER LEAD CLOSES <<<
 
 2417 flew (`cc0f601c...12bf`), restored `2931647a...86b1` in the same run, fastboot
 93.71 s, marks fresh. Control intact: `input_va` 3, `output_va` `0x2412a400`,

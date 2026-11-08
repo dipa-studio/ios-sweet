@@ -98,7 +98,18 @@ struct sweet_csf_access_snapshot {
  *Raw offsets only - naming bits nobody documented is how a sample turns into an
  *assumption. Guarded so every earlier build still compiles to its old size. */
 #if SWEET_CSF_GPU_REGS
-#if SWEET_CSF_SLC_GROUPS
+#if SWEET_CSF_DISPATCH_SURVEY
+/*2418 records what the eight 1-to-2 AXI dispatch words hold before it touches
+ *them, full32 bits, and then writes0x000 into the four in-direction words so
+ *every read is dispatched to the port that already answers. The vendor driver
+ *only ever ORs0x855/0x055 into the low12 bits and never reads them back, so
+ *the upper20 bits have never been observed. Ten slots: eight words plus two
+ *spares, same40 bytes, same offsets in the784-byte report. */
+struct sweet_csf_gpu_regs {
+    uint32_t in_0, in_2, in_4, in_6, out_0;
+    uint32_t out_2, out_4, out_6, spare0, spare1;
+};
+#elif SWEET_CSF_SLC_GROUPS
 /*2417 asks one question about the whole table instead of five words about one
  *group: the base word of groups0..9, all ten in one40-byte block, sampled once
  *after the MCU start. 2416 established that this page is configuration, not
@@ -178,6 +189,11 @@ struct sweet_csf_boot_report {
      *table was sampled once, after the MCU start. There is no before pass in
      *that build, so bit15 is the honest counterpart of gpu_regs_flags bit1
      *being clear.
+     *2418 uses SWEET_CSF_MFG_GLUE == 3: it reads the eight dispatch words into
+     *the report (full32 bits, which nothing has ever stored) and writes0x000 to
+     *the four in-direction ones, so every read goes to the port that already
+     *answers. Bit11 says the block ran; bit12 says all four in-words already
+     *read0x855 before the write, which would make the treatment a no-op.
      *Bits7..15 are zero on every build that does not do this. */
     uint32_t diag_flags, coherency_features;
     uint32_t coherency_before, coherency_after;
@@ -261,6 +277,9 @@ enum sweet_csf_boot_error {
 /*0 = the2407 GPU register block, 1 = the2416 SLC group window, 2 = the2417
  *group base table. All are40 bytes at the same offsets in the784-byte report,
  *so the view is chosen by kernel build id and the ABI never moves. */
+#ifndef SWEET_CSF_DISPATCH_SURVEY
+#define SWEET_CSF_DISPATCH_SURVEY 0
+#endif
 #ifndef SWEET_CSF_SLC_GROUPS
 #define SWEET_CSF_SLC_GROUPS 0
 #endif

@@ -125,7 +125,7 @@ static void platform_state(const struct sweet_csf_boot_config *c,const struct sw
      else      {g->g0_before=b0;g->g6_base_before=b1;g->g6_limit_before=b2;
                 g->g6_ctl_before=b3;g->g7_base_before=b4;}
      r->gpu_regs_flags|=after?2:1;}
-#elif SWEET_CSF_GPU_REGS
+#elif SWEET_CSF_GPU_REGS && !SWEET_CSF_DISPATCH_SURVEY
     /*2407: raw GPU words, offsets only. 0x048 is the L2 config the dual-slice
      *hypothesis hangs on;0x2c0.. is what the vendor dump reads beside it. Read
      *both states so a value that only exists while powered is visible. */
@@ -573,6 +573,34 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
         if(in_already)r->diag_flags|=4096;
         if(out_already)r->diag_flags|=8192;
         if(slc_already)r->diag_flags|=16384;
+    }
+#endif
+#if SWEET_CSF_MFG_GLUE == 3 && SWEET_CSF_GPU_REGS && SWEET_CSF_DISPATCH_SURVEY
+    /*2418: the 1-to-2 AXI bridge, treated instead of applied. 2413/2414 wrote
+     *the vendor values and then an arbitrary one (0xAAA) and the wall did not
+     *move; neither experiment asked the bridge to route everything to the port
+     *that already answers. Bit9 =0 reads return, so that port works; the field
+     *that spreads by address is the candidate, and "all to one port" is the
+     *value that would remove a per-address split if the field means what its
+     *name says. The eight words are recorded first, full32 bits - the vendor
+     *only ever ORs the low12 and never reads them back - so this run also
+     *shows whether the upper20 carry anything, and whether the words were at
+     *the vendor values before the write (diag bit12). */
+    {
+        static const uint16_t in_word[4]={0x8e0,0x8e8,0x910,0x918};
+        static const uint16_t out_word[4]={0x900,0x908,0x920,0x928};
+        struct sweet_csf_gpu_regs *g=&r->gpu_regs_before;
+        uint32_t *dst[8]={&g->in_0,&g->in_2,&g->in_4,&g->in_6,
+                          &g->out_0,&g->out_2,&g->out_4,&g->out_6};
+        uint32_t v[8];unsigned in_ok=1;
+        for(unsigned i=0;i<4;i++)v[i]=rd(io,SWEET_CSF_MFG_BASE+in_word[i]);
+        for(unsigned i=0;i<4;i++)v[4+i]=rd(io,SWEET_CSF_MFG_BASE+out_word[i]);
+        for(unsigned i=0;i<8;i++)*dst[i]=v[i];
+        for(unsigned i=0;i<4;i++)if((v[i]&0xfffu)!=0x855u)in_ok=0;
+        for(unsigned i=0;i<4;i++)wr(io,SWEET_CSF_MFG_BASE+in_word[i],0);
+        r->gpu_regs_flags|=1;
+        r->diag_flags|=2048;
+        if(in_ok)r->diag_flags|=4096;
     }
 #endif
     /* Drive the MCU to a halt we measured ourselves before starting it. The
