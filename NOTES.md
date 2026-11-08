@@ -1,6 +1,37 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 12:45: 2404 BUILT - CAN THE MMU READ A DESCRIPTOR AT PA BIT 9 = 1? <<<
+## >>> ACTIVE 2026-11-08 13:05: 2404 RAN - MARKER 1 ONLY, AND THE DATA SLOT WAS FILLER <<<
+
+Flew `3c58fb31...cecd`, `boot_a` restored to `2931647a...86b1`. No fault, MCU still
+enabled, `error` -53, `input_va` 1, `output_va` `0x04003000`.
+
+**The build did relocate exactly as planned.** `firmware_probe_pa` `0x401b5000` is
+the firmware base for VA `0x01000000`, the live code leaf `0x401c34c3` is base +
+0xE000, the mirror leaf `0x401b34c3` has the same attribute bits, and the ladder at
+0xE000 really is this build's 88 bytes. The first decode said `not-relocated`
+because it compared the base against the probe page; that check now requires the
+base plus `code_leaf == base + 0xE000` (68 evidence tests pass).
+
+**`0x04003000` is not a read result.** 2402's shipped ladder contains no store to
+`shared+12` at all - it writes markers only - yet 2402's flight read the same word
+from that slot. The arena arrives uninitialised, so the slot holds filler until the
+ladder writes it. 2404 therefore cannot say what read 1 returned, and the decoder
+no longer scores the word at marker 1.
+
+**So the descriptor question is still open**, because marker 1 is written *before*
+read 1 and nothing in 2404 separates "read 1 stalled" from "marker 2 was still in
+the store buffer behind a stalled read 2". 2402 and 2403 both got `0x0100E400`
+back, which makes a stalled baseline unlikely - but that is an argument, not a
+measurement.
+
+**2405 = instrument first, same addresses.** `dsb sy` after every marker store and
+after the result store; the kernel seeds `shared+12` with `0xDEADBEEF` before it
+writes `MCU_CONTROL`; the four accesses stay identical to 2404. Then marker 1 +
+intact sentinel means read 1 stalled, marker 2 + `0x0f10f857` means the bit-9 walk
+is the wall, and marker 2 + any other word means read 1 translated to the wrong PA.
+The 0x48 / 0x2C0 L2-slice snapshot moves to the round after that.
+
+## >>> PREVIOUS 2026-11-08 12:45: 2404 BUILT - CAN THE MMU READ A DESCRIPTOR AT PA BIT 9 = 1? <<<
 
 **The one question that decides whether the address is unfixable.** 2401..2403 left
 a single invariate: every MCU access with address bit 9 = 1 hangs and every access

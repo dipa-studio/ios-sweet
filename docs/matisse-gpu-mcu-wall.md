@@ -2146,3 +2146,48 @@ written; `0xe3` => a synchronous fault, which itself proves the walk completed.
 
 Built, unit-tested, statically verified and preflighted, **not flown**. `boot_a` is
 `2931647a...86b1`.
+
+## 54. 2404 ran: the ladder stopped at marker 1, and the data slot was never a data check
+
+Flew `3c58fb31...cecd` on 2026-11-08 12:53. `boot_a` is back at `2931647a...86b1`.
+No fault (`as_fault` 0, `mmu_raw` 0, `mcu_status` 1), `error` -53, `input_va` 1,
+`output_va` `0x04003000`, `groups` 8 (the seed, never overwritten).
+
+**The layout was right.** Live leaves are code `0x401c34c3`, mirror `0x401b34c3`
+with identical attribute bits, and `firmware_probe_pa` `0x401b5000` is exactly
+`0x401c3000 - 0xE000`, i.e. the firmware base with the ladder 0xE000 into the
+64 KiB section. The first decode called this `not-relocated` because it compared
+the *base* the kernel reports for VA `0x01000000` against the *probe page*; the
+check now requires the base plus `code_leaf == base + 0xE000`.
+
+**`shared+12` is filler, not a read result.** 2402's ladder, disassembled this
+session from the shipped `stub_bytes`, writes only markers: there is no
+`str [r4, #0xc]` anywhere in it. Its flight nevertheless read `0x04003000` from
+`shared+12`. The arena is therefore not zeroed, and that word was sitting there
+before any MCU store. 2404 shows the same value for the same reason, so it says
+nothing about what read 1 returned - the decoder no longer scores it, and
+`marker 1` no longer carries a data WARNING.
+
+**What is left.** Marker 1 is written before read 1, marker 2 before read 2, and
+nothing separates them: 2404 has no barrier after a marker store, so "read 1
+stalled" and "marker 2 was still in the store buffer behind a stalled read 2"
+produce the same report. 2402 and 2403 both got `0x0100E400` back, so the
+baseline is not expected to stall and the second reading is the likelier one -
+but likelier is not measured, and the descriptor question stays open.
+
+| reading | state |
+|---|---|
+| marker 1 | stopped at or before read 1; unreachable as evidence |
+| marker 2 + `0x0f10f857` | read 1 returned, the bit-9 walk stalled: the wall is below the page table |
+| marker 2 + other word | read 1 returned the wrong PA: a mapping fault, not a walk fault |
+
+**2405 must fix the instrument before it asks anything.** Three changes, no new
+addresses: `dsb sy` after every marker store and after the result store, so a
+marker cannot be lost behind the read that follows it; the kernel writes
+`0xDEADBEEF` into `shared+12` before it writes `MCU_CONTROL`, so a word that is
+still the sentinel proves no store landed and a replaced word proves one did;
+and the same four accesses as 2404, unchanged, so the result is comparable.
+
+`0x004`/`0x048`/`0x2C0..0x2CC` stay for the build after that: they answer the
+GPU L2 slice question and cannot be read out of a run whose ladder never got past
+marker 1.

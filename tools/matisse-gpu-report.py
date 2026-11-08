@@ -1203,7 +1203,17 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             # descriptor fetch at PA bit 9 = 1 while the access itself is at
             # bit 9 = 0. Read 1 is the same word through the warm original.
             csf['cold_boot_counter'] = csf['groups']
-            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401C3000
+            code_leaf = csf.get('leaf_0x0100e000')
+            mirror_leaf = csf.get('leaf_0x0604e000')
+            page = 0x0000fffffffff000
+            # firmware_probe_pa is the PA the live table gives VA 0x01000000, i.e.
+            # this build's firmware base (0x401B5000), not the probe page: the
+            # ladder sits 0xE000 into the 64 KiB code section. Checking it against
+            # 0x401C3000 would fail a run that relocated exactly as built, which
+            # is what 2404's first decode did.
+            csf['relocation_observed'] = (
+                csf['firmware_probe_pa'] == 0x401B5000 and
+                code_leaf is not None and (code_leaf & page) == 0x401C3000)
             csf['cold_boot_target'] = 0x0100E000
             csf['cold_boot_ladder'] = {
                 '0x1': 'stopped reading 0x0100E400 (bit 9 = 0, warm translation)',
@@ -1212,9 +1222,6 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 '0x4': 'the store completed; the read back hung',
                 '0x5': 'every access returned, store included',
                 '0xe3': 'a Cortex-M7 fault entry ran; input_va carries 0xE3'}
-            code_leaf = csf.get('leaf_0x0100e000')
-            mirror_leaf = csf.get('leaf_0x0604e000')
-            page = 0x0000fffffffff000
             csf['code_leaf'] = code_leaf
             csf['mirror_leaf'] = mirror_leaf
             # The mirror has to be a real second copy: its own physical page with
@@ -1238,8 +1245,16 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['sampled_word_expected'] = 0x0F10F857
             csf['store_value'] = csf['output_va']
             csf['store_verified'] = marker == 5 and csf['output_va'] == 0x5A5A5A5A
-            csf['value_verified'] = (marker in (1, 2, 3, 4) and
+            # Marker 1 is stored before read 1 runs, so a run that stops there
+            # has not carried any read result into shared+12. The arena is not
+            # zeroed: 2402's ladder never stored this slot and the flight still
+            # read 0x04003000 out of it, so for marker 1 the word is pre-existing
+            # filler and cannot be scored as a data check.
+            csf['value_verified'] = (marker in (2, 3, 4) and
                                      csf['output_va'] == 0x0F10F857)
+            csf['sampled_word_note'] = (
+                'pre-existing arena filler, not a read result' if marker == 1 else
+                'read result carried by the ladder')
             if not csf['relocation_observed']:
                 outcome = 'not-relocated'
                 verdict = ('the executable probe PA is not 0x401c3000; this is not the mirror '
@@ -1267,11 +1282,17 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                            (None if code_leaf is None else hex(code_leaf),
                             None if mirror_leaf is None else hex(mirror_leaf)))
             elif marker == 1:
-                outcome = 'baseline-stalls'
+                outcome = 'stopped-before-mirror'
                 csf['cold_boot_start'] = 'code-0x0100E400'
-                verdict = ('the baseline read in the warm page stalled, which 2402 and 2403 both '
-                           'got right; this build changed more than the mirror and cannot be '
-                           'read against them')
+                verdict = ('the ladder wrote marker 1 and never wrote marker 2, so it stopped in '
+                           'read 1 (0x0100E400) or in the store of its result. This build writes '
+                           'its markers without a barrier after each one and starts from an arena '
+                           'that is not zeroed - shared+12 still holds 0x04003000, which 2402 read '
+                           'from the same slot with a ladder that never writes it - so this run '
+                           'cannot separate "read 1 stalled" from "marker 2 stayed in the store '
+                           'buffer behind the stalled read 2". 2402 and 2403 both got 0x0100E400 '
+                           'back, so the baseline is not expected to stall here. Re-fly with a '
+                           'DSB after every marker store and a sentinel in shared+12')
             elif marker == 2:
                 outcome = 'walk-dies-at-bit9'
                 csf['cold_boot_start'] = 'mirror-0x0604E400'
@@ -1307,7 +1328,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 verdict = ('the core never wrote a marker, so 0x0100E000 did not start; check the '
                            'entry leaf and the fault entry before reading anything into it. '
                            'groups = %#x' % csf['groups'])
-            if csf['cold_boot_marker_present'] and marker in (1, 2, 3, 4) and not csf['value_verified']:
+            if csf['cold_boot_marker_present'] and marker in (2, 3, 4) and not csf['value_verified']:
                 csf['instrument_verdict'] = verdict + (' WARNING: shared+12 is %#x, not the vendor '
                     'word 0x0f10f857, so the read that returned did not return the right bytes' %
                     csf['output_va'])

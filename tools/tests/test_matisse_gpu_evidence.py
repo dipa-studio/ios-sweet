@@ -752,30 +752,41 @@ class ReportDecodeTests(unittest.TestCase):
     def test_2404_asks_whether_the_walk_survives_bit9(self):
         """2404: a descriptor fetch at PA bit 9 = 1, then the store direction."""
         csf = self.cold_report(build=0x2404, input_va=2,
-                               firmware_probe_pa_lo=0x401C3000,
+                               firmware_probe_pa_lo=0x401B5000,
                                output_va=0x0F10F857, leaf=self.LEAVES_2404)['csf']
         self.assertTrue(csf['mirror_applied'])
+        self.assertTrue(csf['relocation_observed'])
         self.assertTrue(csf['value_verified'])
         self.assertEqual(csf['cold_boot_outcome'], 'walk-dies-at-bit9')
         self.assertIn('dead for the MMU too', csf['instrument_verdict'])
 
-        for marker, outcome in ((1, 'baseline-stalls'), (3, 'store-stalls'),
+        for marker, outcome in ((1, 'stopped-before-mirror'), (3, 'store-stalls'),
                                 (4, 'store-lands-read-hangs'), (5, 'all-returned')):
             csf = self.cold_report(build=0x2404, input_va=marker,
-                                   firmware_probe_pa_lo=0x401C3000,
+                                   firmware_probe_pa_lo=0x401B5000,
                                    output_va=0x5A5A5A5A if marker == 5 else 0x0F10F857,
                                    leaf=self.LEAVES_2404)['csf']
             self.assertEqual(csf['cold_boot_outcome'], outcome, marker)
 
+        # Marker 1 is written before read 1, and the arena is not zeroed, so the
+        # word in shared+12 is filler: it must not be scored as a failed data
+        # check (0x04003000 is what the 2026-11-08 flight actually carried).
+        csf = self.cold_report(build=0x2404, input_va=1,
+                               firmware_probe_pa_lo=0x401B5000,
+                               output_va=0x04003000, leaf=self.LEAVES_2404)['csf']
+        self.assertFalse(csf['value_verified'])
+        self.assertNotIn('WARNING', csf['instrument_verdict'])
+        self.assertIn('pre-existing', csf['sampled_word_note'])
+
         csf = self.cold_report(build=0x2404, input_va=5,
-                               firmware_probe_pa_lo=0x401C3000,
+                               firmware_probe_pa_lo=0x401B5000,
                                output_va=0x5A5A5A5A, leaf=self.LEAVES_2404)['csf']
         self.assertTrue(csf['store_verified'])
         self.assertNotIn('WARNING', csf['instrument_verdict'])
 
         # The store completed but the data did not land: the decoder must say so.
         csf = self.cold_report(build=0x2404, input_va=5,
-                               firmware_probe_pa_lo=0x401C3000,
+                               firmware_probe_pa_lo=0x401B5000,
                                output_va=0x00000000, leaf=self.LEAVES_2404)['csf']
         self.assertFalse(csf['store_verified'])
         self.assertIn('WARNING', csf['instrument_verdict'])
@@ -785,7 +796,7 @@ class ReportDecodeTests(unittest.TestCase):
         split = (self.LEAVES_2404[0], self.LEAVES_2404[0],
                  self.LEAVES_2404[2], self.LEAVES_2404[3])
         csf = self.cold_report(build=0x2404, input_va=2,
-                               firmware_probe_pa_lo=0x401C3000,
+                               firmware_probe_pa_lo=0x401B5000,
                                output_va=0x0F10F857, leaf=split)['csf']
         self.assertFalse(csf['mirror_applied'])
         self.assertEqual(csf['cold_boot_outcome'], 'mirror-not-applied')
