@@ -226,3 +226,103 @@ AOC/Buck/MTCMOS/Clock/PDCv2/SLC 顺序、GPUEB 的 IPI 电源接口、以及
    挂死 → bit 9 是全局的，转向 SLC/MGM 与 GMPU。
 3. **SLC/MGM**：读 `0x13fbf748` 一族确认 group 6 策略是否真的配过；
    未配则按 `__gpufreq_slc_control()` 补写，再飞。
+
+## 10. 2026-11-08 15:40 追查：512 字节粒度只可能来自 SoC 侧 glue，而它确实没被配过
+
+2412 之后，内存侧能够改变的量已经全部排除（叶子属性 2400、PBHA/tag 2409、
+读写 2411、arena 2412、VA 段、walk 与 TLB 命中都一样）。也就是说：**同一条
+指令、同一个 TLB 项、同一个叶子，只因为地址 bit 9 不同，一个返回一个挂死。**
+页表里没有任何东西可以是这个差异的原因，它必须在 GPU 的 SoC 侧接口上。
+
+按 §9.3 的要求，这一节只做三份仓库的静态核对，不飞。
+
+### 10.1 MGM：DT 节点是空的
+
+`arch/arm64/boot/dts/mediatek/mt6983.dts:6822`：
+
+```dts
+mgm: mgm {
+	compatible = "arm,physical-memory-group-manager";
+};
+```
+
+没有 region、没有 group 表。GPU 节点只有一行 `physical-memory-group-manager
+= <&mgm>;`。也就是说 group→物理区间的映射**不在 kernel 里**，由 LK/GPUEB
+建立；2409 用 tag 0 与 tag 6 各探一次、结果相同，这条线到此为止。
+
+### 10.2 GMPU：存在，但只服务 protected memory
+
+`mt6983.dts:1600` 的 protected-memory-allocator 节点给出全部参数：
+
+```dts
+reg = <0 0x13c40000 0 0x22000>;  reg-names = "gpueb_base";
+gpr_offset = <0x1FD1C>;  gpr_id = <6>;
+gmpu_table_size = <0x00400000>;      /* 4 MiB */
+protected_reserve_size = <0x1000000>; /* 16 MiB */
+```
+
+GMPU 表由 GPUEB 通过 GPR 建立，管的是那 16 MiB 受保护保留区。我们的访问
+全部落在普通 DRAM（arena、shim BSS），不在保留区内，所以 GMPU 不是 2412 的墙。
+`arm,protected-memory-allocator` 的通用实现（r25p0 里那份）只是一个按页分配
+保留区的示例，不碰任何 512 字节粒度。
+
+### 10.3 真正的候选：`mfg_axi1to2_R_dispatch_mode`
+
+厂商 gpufreq 的**每次上电**都会调用 `__gpufreq_acp_control()`
+（`gpufreq_mt6983.c:3323`），它做两件事，第二件就是按地址把读事务分到两个
+下游端口：
+
+```
+MFG_AXCOHERENCE        0x13FBF168  |= 0xF          /* M0..M3 coherence enable */
+MFG_1TO2AXI_CON_00/02/04/06  0x13FBF8E0/8E8/910/918  |= 0x855   /* R dispatch */
+MFG_OUT_1TO2AXI_CON_00/02/04/06 0x13FBF900/908/920/928 |= 0x055 /* R dispatch, out */
+```
+
+一个 "1 to 2 AXI" 桥的全部工作就是**按地址位把事务分给两个下游**。它没有别的
+可分的维度，而我们的墙恰好是"每 1 KiB 只有一半应答"。这与"某个下游从未被
+使能/从未收到 dispatch 配置"完全吻合，也是三份仓库里唯一存在的 512 字节量级
+的机制。
+
+**而且它确实没被配过，这是实测的，不是推断。** 2407 起 shim 就在读
+`0x13FBF748`（SLC group 6 策略字，同一页），读到的是：
+
+| 寄存器 | 厂商 `__gpufreq_slc_control()` 写的值 | shim 读到的值 |
+|---|---|---|
+| `0x13FBF748` group6 | `0x06002006`（W-alloc, R cache, no spec） | **`0x06000006`** |
+| `0x13FBF8E0` 等 8 个 dispatch | `0x855` / `0x055` | 从未写过 |
+| `0x13FBF168` AXCOHERENCE | `|= 0xF` | 从未写过 |
+
+`0x06000006` 与 `0x06002006` 的差别是 bit 13 —— 也就是厂商注释里的 "R cache"。
+这一条就把"这块寄存器被配好了"排除掉了：LK 没有按这张表配，或者干脆是复位值。
+
+### 10.4 为什么 panthor 不管这些
+
+panthor 只写 `0x13000000` 起的 GPU 寄存器（`AS_TRANSTAB/TRANSCFG/MEMATTR`、
+`MCU_CONTROL`、`COHERENCY_ENABLE`）。`0x13fbf000` 这一块是 MTK 的 "MFG top"
+glue，DDK 假设它已经由平台侧（gpufreq 上电序列 / GPUEB）配好。我们的 shim
+自己做了上电，却没有做这一段 glue，于是 MCU 是在一个"SoC 侧 AXI 分派与 SLC
+策略都没配"的 GPU 上启动的——**这正好解释了为什么取指能用而数据不能**：
+四个 in / 四个 out 的桥是分开的，不是每个 master 都被同样地配过。
+
+### 10.5 下一步（2413 的设计，不改阶梯）
+
+2413 = 2412 的镜像、地址、阶梯**一字不动**，只在 `MCU_CONTROL` 之前补上厂商
+上电序列那一段 glue：
+
+1. `__gpufreq_acp_control()` 的九个 read-modify-write（`0x168`、`0x8E0/8E8/
+   910/918`、`0x900/908/920/928`），顺序、掩码与厂商一致；
+2. `__gpufreq_slc_control()` 的 group 6 三字（`0x740/0x744/0x748`），
+   至少把 `0x748` 写成 `0x06002006`。
+
+证据：`diag_flags` 增加一位"glue applied"；四个 dispatch 字与 `0x748` 的
+before/after 打到 console（不加进 784 字节 ABI）。
+
+读法与 2412 完全一致，所以两者可直接对比：
+
+* `input_va` = 4 → 墙消失，bit 9 的成因就是这段 glue，接下来只要把它固化；
+* `input_va` = 3 且 `output_va` 仍是 `0x2412a400` → glue 不是原因，SLC/AXI
+  分派这条线也可以划掉，剩下的只有 LK 在交接前建立的 group 表（需要 LK 源码，
+  三份仓库里没有）。
+
+风险与 2410 不同：这次只写 MFG top 这一页（shim 已经能读它），不碰任何
+不属于本镜像的内存，也不 dereference LK 的分配。

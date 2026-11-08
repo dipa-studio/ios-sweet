@@ -31,9 +31,25 @@ Two things this run pins down beyond the answer:
 **Where the mechanism has to live:** a 512-byte granule cannot come from a 4 KiB
 leaf (attributes and PBHA are per leaf). It has to be outside the MMU - the SLC
 group the ADT hands out (`arm,physical-memory-group-manager`), MTK's GMPU, or the
-interconnect. That is exactly the §9 item left over. Next is desk work before any
-flight: read the live ADT's MGM/GPU nodes and the vendor GMPU/SLC programming, and
-compare with what the shim leaves unprogrammed.
+interconnect. That is exactly the §9 item left over.
+
+**The desk audit found it** (`docs/matisse-gpu-upstream-audit.md` §10). MGM is an
+empty DT node; GMPU only guards the 16 MiB protected reserve, so neither can
+explain ordinary pages. What can: `__gpufreq_acp_control()` in
+`gpufreq_mt6983.c:3323`, which the vendor runs on **every** GPU power-on and which
+writes `mfg_axi1to2_R_dispatch_mode` = `0x855`/`0x055` into
+`0x13FBF8E0/8E8/910/918` and `0x13FBF900/908/920/928`, plus `AXCOHERENCE`
+`|= 0xF` at `0x13FBF168`. A "1 to 2 AXI" bridge splits transactions by an address
+bit and has no other dimension to split on - and the wall is exactly "one half of
+every 1 KiB answers". **And the block is measurably unprogrammed:** the shim has
+been reading `0x13FBF748` since 2407 and gets `0x06000006` where
+`__gpufreq_slc_control()` writes `0x06002006` (bit 13, "R cache"). panthor never
+touches `0x13fbf000`; the DDK assumes the platform already did.
+
+**Next is 2413**: 2412's image, addresses and ladder byte for byte, plus that
+vendor glue applied before `MCU_CONTROL`, with the dispatch words' before/after on
+the console. `input_va` 4 = the wall is the glue; `input_va` 3 with the same
+`output_va` = the glue is not it and only LK's group table is left.
 
 **Not flown anything since.** `boot_a` restored to `2931647a...86b1`, device in
 Recovery, image `333acd79...a3e72` reproducible byte for byte (verified again
