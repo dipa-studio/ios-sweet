@@ -125,7 +125,7 @@ static void platform_state(const struct sweet_csf_boot_config *c,const struct sw
      else      {g->g0_before=b0;g->g6_base_before=b1;g->g6_limit_before=b2;
                 g->g6_ctl_before=b3;g->g7_base_before=b4;}
      r->gpu_regs_flags|=after?2:1;}
-#elif SWEET_CSF_GPU_REGS && !SWEET_CSF_DISPATCH_SURVEY
+#elif SWEET_CSF_GPU_REGS && !SWEET_CSF_DISPATCH_SURVEY && !SWEET_CSF_DISPATCH_READBACK
     /*2407: raw GPU words, offsets only. 0x048 is the L2 config the dual-slice
      *hypothesis hangs on;0x2c0.. is what the vendor dump reads beside it. Read
      *both states so a value that only exists while powered is visible. */
@@ -601,6 +601,42 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
         r->gpu_regs_flags|=1;
         r->diag_flags|=2048;
         if(in_ok)r->diag_flags|=4096;
+    }
+#endif
+#if SWEET_CSF_MFG_GLUE == 4 && SWEET_CSF_GPU_REGS && SWEET_CSF_DISPATCH_READBACK
+    /*2419: three builds have written this page and none has read a word back, so
+     *"the bridge ignores the field" and "the write never landed" are still one
+     *observation. This block writes0x800 - the vendor's0x855 with only the
+     *512-byte port pattern zeroed (2418 showed0x055 = 0101_0101, one bit per
+     *512-byte slot, exactly the alternation 2415 measured) and bit11 preserved,
+     *which0x000 in 2418 cleared as well - and then reads the same four words
+     *back into their own slots. diag bit11 says the block ran, bit12 that the
+     *words already held the vendor value, bit13 that all four read back0x800,
+     *bit14 that all four still read their pre-value, i.e. the write was inert. */
+    {
+        static const uint16_t in_word[4]={0x8e0,0x8e8,0x910,0x918};
+        static const uint16_t out_word[2]={0x900,0x928};
+        struct sweet_csf_gpu_regs *g=&r->gpu_regs_before;
+        uint32_t *pre[4]={&g->in_0,&g->in_2,&g->in_4,&g->in_6};
+        uint32_t *post[4]={&g->post_0,&g->post_2,&g->post_4,&g->post_6};
+        uint32_t v[4];unsigned in_ok=1,landed=1,inert=1;
+        for(unsigned i=0;i<4;i++)v[i]=rd(io,SWEET_CSF_MFG_BASE+in_word[i]);
+        for(unsigned i=0;i<4;i++)*pre[i]=v[i];
+        g->out_0=rd(io,SWEET_CSF_MFG_BASE+out_word[0]);
+        g->out_2=rd(io,SWEET_CSF_MFG_BASE+out_word[1]);
+        for(unsigned i=0;i<4;i++)if((v[i]&0xfffu)!=0x855u)in_ok=0;
+        for(unsigned i=0;i<4;i++)wr(io,SWEET_CSF_MFG_BASE+in_word[i],0x800);
+        for(unsigned i=0;i<4;i++) {
+            uint32_t p=rd(io,SWEET_CSF_MFG_BASE+in_word[i]);
+            *post[i]=p;
+            if(p!=0x800u)landed=0;
+            if(p!=v[i])inert=0;
+        }
+        r->gpu_regs_flags|=1;
+        r->diag_flags|=2048;
+        if(in_ok)r->diag_flags|=4096;
+        if(landed)r->diag_flags|=8192;
+        if(inert)r->diag_flags|=16384;
     }
 #endif
     /* Drive the MCU to a halt we measured ourselves before starting it. The

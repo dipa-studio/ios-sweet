@@ -131,7 +131,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415,0x2416,0x2417,0x2418):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415,0x2416,0x2417,0x2418,0x2419):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -198,7 +198,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                       'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406, 0x2407, 0x2408) else
                      ('leaf_0x0100d000','leaf_0x0100c000',
                       'leaf_0x0100e000','leaf_0x01001000') if expected_build in (0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414, 0x2415, 0x2416, 0x2417,
-                                                                       0x2418) else
+                                                                       0x2418, 0x2419) else
                      ('leaf_0x0100e000','leaf_0x0300e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
                      ('leaf_0x03000000','leaf_0x03001000',
@@ -444,6 +444,48 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 '0x000 into the four in-direction ones. The vendor driver ORs 0x855/0x055 '
                 'into bits 11:0 on every power-on and never reads the words back, so the '
                 'upper bits have never been observed before this run.')
+        if expected_build == 0x2419:
+            # Four words before the write, the same four after it, two
+            # out-direction words that are never written. The post-words are the
+            # new information: 2413/2414/2418 all wrote this page and none of them
+            # ever checked that the write landed.
+            order = ('reg_000', 'reg_004', 'reg_00c', 'reg_034', 'reg_048',
+                     'reg_04c', 'reg_2c0', 'reg_2c4', 'reg_2c8', 'reg_2cc')
+            names = ('in_0', 'in_2', 'in_4', 'in_6', 'post_0',
+                     'post_2', 'post_4', 'post_6', 'out_0', 'out_2')
+            rb = dict(zip(names, [csf['gpu_regs_before'][key] for key in order]))
+            csf['dispatch_readback'] = rb
+            for key in ('gpu_regs_before', 'gpu_regs_after', 'gpu_regs_block_live',
+                        'gpu_regs_slice_signal', 'gpu_regs_note'):
+                csf.pop(key, None)
+            pre = [rb['in_%d' % n] for n in (0, 2, 4, 6)]
+            post = [rb['post_%d' % n] for n in (0, 2, 4, 6)]
+            csf['dispatch_in_values'] = pre
+            csf['dispatch_post_values'] = post
+            csf['dispatch_out_values'] = [rb['out_0'], rb['out_2']]
+            csf['dispatch_in_low12'] = [v & 0xfff for v in pre]
+            csf['dispatch_post_low12'] = [v & 0xfff for v in post]
+            csf['dispatch_already_vendor'] = bool(csf['diag_flags'] & 4096)
+            landed = bool(csf['diag_flags'] & 8192)
+            inert = bool(csf['diag_flags'] & 16384)
+            # The two flags are the shim's own compare; hold them to the words it
+            # stored, so a mis-set bit cannot be read as a hardware result.
+            if landed != all(v == 0x800 for v in post):
+                raise ValueError('diag bit13 disagrees with the post words')
+            if inert != all(p == v for p, v in zip(post, pre)):
+                raise ValueError('diag bit14 disagrees with the post words')
+            if landed and inert:
+                raise ValueError('a write cannot both land and be inert')
+            csf['dispatch_written'] = 0x800
+            csf['dispatch_landed'] = landed
+            csf['dispatch_inert'] = inert
+            csf['dispatch_readback_note'] = (
+                'The four 1-to-2 in-direction words (0x8E0/0x8E8/0x910/0x918) before this '
+                'build wrote 0x800 and the same four read back afterwards, plus 0x900/0x928 '
+                'which it never writes. 0x800 is the vendor 0x855 with only the 512-byte port '
+                'pattern zeroed: 2418 showed 0x055 = 0101_0101 is one bit per 512-byte slot, '
+                'the alternation 2415 measured, and that the read path carries bit 11 while '
+                'the write path does not.')
         if expected_build >= 0x2408:
             # 2408 issues the soft reset panthor issues on its reset/resume path
             # and records four facts instead of a verdict. Completion means
@@ -1751,7 +1793,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 hex(marker), None)
             csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
-        if expected_build in (0x2412, 0x2413, 0x2414, 0x2416, 0x2417, 0x2418):
+        if expected_build in (0x2412, 0x2413, 0x2414, 0x2416, 0x2417, 0x2418, 0x2419):
             # 2411's ladder with the shared+0x200 store removed: that store, at
             # bit 9 = 1, is what stopped 2411 before it could ask about the page.
             leaf_near = csf.get('leaf_0x0100d000')
@@ -1921,6 +1963,45 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                                ', '.join('%#x' % v for v in csf['dispatch_out_low12']),
                                'present' if csf['dispatch_high_bits'] else 'all zero',
                                csf['dispatch_already_vendor']))
+            if expected_build == 0x2419:
+                pre = ', '.join('%#x' % v for v in csf['dispatch_in_values'])
+                post = ', '.join('%#x' % v for v in csf['dispatch_post_values'])
+                if marker == 4:
+                    outcome = 'dispatch-pattern-removed-the-wall'
+                    verdict = ('every access returned with 0x800 in the four in-direction '
+                               'dispatch words, and all four read back %s - the write landed and '
+                               'zeroing only the 512-byte port pattern removed the wall. 0x055 is '
+                               'a per-slot port map, the odd slots were pointed at a port with no '
+                               'responder, and 0x800 keeps the read path enabled while sending '
+                               'every slot to the port that answers. The pre-write words were %s'
+                               % (post, pre))
+                elif marker == 3 and csf['dispatch_landed']:
+                    outcome = 'dispatch-writable-not-the-wall'
+                    verdict = ('the four words read back %s, so the write landed - and the '
+                               'bit-9 = 1 read stalled anyway. The field is writable and is not '
+                               'what refuses the second 512 bytes: 0x855, 0xAAA, 0x000 and 0x800 '
+                               'have all held, and the pattern bits change nothing about which '
+                               'addresses answer. The AXI 1-to-2 dispatch is excluded as a lever '
+                               'with the write proven rather than assumed' % post)
+                elif marker == 3 and csf['dispatch_inert']:
+                    outcome = 'dispatch-write-inert'
+                    verdict = ('the four words still read %s - the exact pre-write value - after '
+                               'this build wrote 0x800. Writes to 0x13FBF000 do not land from this '
+                               'context, so 2413, 2414 and 2418 all measured nothing and what they '
+                               'said about the MFG top page is void. The question is no longer '
+                               'which value to write but how the AP is supposed to reach this page '
+                               'at all' % post)
+                elif marker == 3:
+                    outcome = 'dispatch-partial-write'
+                    verdict = ('the four words read back %s against %s before the write - neither '
+                               'the written value nor the old one, so the page takes some bits and '
+                               'not others. Which bits survive is the writable mask, and the wall '
+                               'stayed regardless' % (post, pre))
+                else:
+                    verdict += (' This build also wrote 0x800 to the four in-direction dispatch '
+                                'words and read them back: %s against %s before the write, '
+                                'landed=%s inert=%s.'
+                                % (post, pre, csf['dispatch_landed'], csf['dispatch_inert']))
             if expected_build == 0x2417 and outcome == 'bit9-not-arena-shaped':
                 off = csf['slc_groups_off_vendor']
                 words = ', '.join('%s=%#x' % (k, v) for k, v in sorted(csf['slc_groups'].items()))

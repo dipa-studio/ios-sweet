@@ -41,7 +41,17 @@ struct model {
  uint32_t in_page[64],in_req,out_req,in_va,out_va;unsigned doorbell_writes,ack_mode,global_writes;
  /*2413: every write into the MFG top page, in order. */
  unsigned glue_writes;uint64_t glue_addr[16];uint32_t glue_value[16];int glue_already;
+ /*2419: what the four in-direction dispatch words hold once written, and
+  *whether this model honours writes to them at all. */
+ unsigned mfg_rb_set;uint32_t mfg_rb[4];int mfg_ignore;
 };
+#if SWEET_CSF_DISPATCH_READBACK
+/*2419: index of the four in-direction dispatch words, or-1. */
+static int dsp_in(uint64_t a) {
+ switch(a){case 0x13fbf8e0:return 0;case 0x13fbf8e8:return 1;
+           case 0x13fbf910:return 2;case 0x13fbf918:return 3;default:return-1;}
+}
+#endif
 static uint32_t rd(void *p,uint64_t a) {
  struct model*m=p;m->reads++;
  if(m->path_on) {
@@ -80,12 +90,6 @@ static uint32_t rd(void *p,uint64_t a) {
   *the exact word that moved - which is the failure 2416 hit one layer up. */
  if(a>=0x13fbf000 && a<0x13fc0000)return 0xb0000000u|(uint32_t)(a-0x13fbf700);
 #endif
-#if SWEET_CSF_SLC_GROUPS
- /*2417: the group table, with the offset encoded in the value. If a read uses
-  *the wrong stride or the report fields are shifted, the assertion below names
-  *the exact word that moved - which is the failure 2416 hit one layer up. */
- if(a>=0x13fbf000 && a<0x13fc0000)return 0xb0000000u|(uint32_t)(a-0x13fbf700);
-#endif
 #if SWEET_CSF_MFG_GLUE
 #if SWEET_CSF_DISPATCH_SURVEY
  /*2418: the page returns its own offset, so the test can prove which register
@@ -94,9 +98,18 @@ static uint32_t rd(void *p,uint64_t a) {
   return 0xc0000000u|(uint32_t)(a-0x13fbf000);
 #endif
  /*2413: the MFG top page reads back as zero in this model, so the test can
-  *assert the exact word the glue ORs in. glue_already models a boot that
-  *arrives with the vendor values already programmed, which is what 2413
-  *actually met. */
+ *assert the exact word the glue ORs in. glue_already models a boot that
+ *arrives with the vendor values already programmed, which is what 2413
+ *actually met. */
+#if SWEET_CSF_DISPATCH_READBACK
+ /*2419: the six words this build samples return their own offset until a write
+  *lands, and the written value afterwards - so a landed write and an ignored
+  *one are different readings rather than an assumption. */
+ if(a==0x13fbf900||a==0x13fbf928)return 0xc0000000u|(uint32_t)(a-0x13fbf000);
+ {int i=dsp_in(a);
+  if(i>=0)return (m->mfg_rb_set&(1u<<i))?m->mfg_rb[i]:
+                  (0xc0000000u|(uint32_t)(a-0x13fbf000));}
+#endif
  if(a>=0x13fbf000 && a<0x13fc0000) {
   if(!m->glue_already)return 0;
   switch(a) {
@@ -157,6 +170,15 @@ static void wr(void*p,uint64_t a,uint32_t v) {
 #endif
 #if SWEET_CSF_MFG_GLUE
  /*2413: the MFG top glue, recorded in order. */
+#if SWEET_CSF_DISPATCH_READBACK
+ /*2419: a write to one of the four in-direction words sticks unless this model
+  *is told to ignore writes to the page - the second case is the one that makes
+  *the readback worth a flight. */
+ if(a>=0x13fbf000 && a<0x13fc0000) {
+  int i=dsp_in(a);
+  if(i>=0 && !m->mfg_ignore){m->mfg_rb[i]=v;m->mfg_rb_set|=1u<<i;}
+ }
+#endif
  if(a>=0x13fbf000 && a<0x13fc0000) {
   if(m->glue_writes<16){m->glue_addr[m->glue_writes]=a;m->glue_value[m->glue_writes]=v;}
   m->glue_writes++;return;
@@ -224,7 +246,44 @@ static struct model model(void){return (struct model){.gpu_mask=0x55,.job_mask=0
 static struct sweet_csf_boot_config cfg(void){return (struct sweet_csf_boot_config){.gpu=0x13000000,.root_pa=0x90000000,.arena_pa=0x90000000,.arena_bytes=0x200000,.shared_offset=0x10000,.shared_bytes=0x20000,.timeout_ms=1,.private_probe_offset=0x5000};}
 static int run(struct model*m,struct sweet_csf_boot_config*c,struct sweet_csf_boot_report*r){struct sweet_gpu_io io={m,rd,wr,ticks,barrier,1000};return sweet_csf_boot(c,&io,r);}
 static void clean(struct model*m,struct sweet_csf_boot_report*r){assert(m->gpu_mask==0x55 && m->job_mask==0xaa && m->mmu_mask==0xbb && m->resets==1+PRESTART_RESETS);assert(r->reset_completed);}
-#if SWEET_CSF_DISPATCH_SURVEY
+#if SWEET_CSF_DISPATCH_READBACK
+/*2419: the four in-direction words are written0x800 and read back in the same
+ *block. This model stores the write, so a landed write reads back as0x800 and
+ *an ignored one as the page's own offset - the two answers this flight exists
+ *to tell apart, and the one three earlier builds never asked for. */
+int main(void) {
+ static const uint64_t in_addr[4]={0x13fbf8e0,0x13fbf8e8,0x13fbf910,0x13fbf918};
+ static const uint32_t in_seen[4]={0xc00008e0u,0xc00008e8u,0xc0000910u,0xc0000918u};
+ struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
+ assert(!run(&m,&c,&r));
+ const uint32_t gin[4]={r.gpu_regs_before.in_0,r.gpu_regs_before.in_2,
+  r.gpu_regs_before.in_4,r.gpu_regs_before.in_6};
+ const uint32_t gpost[4]={r.gpu_regs_before.post_0,r.gpu_regs_before.post_2,
+  r.gpu_regs_before.post_4,r.gpu_regs_before.post_6};
+ for(int i=0;i<4;i++){assert(gin[i]==in_seen[i]);assert(gpost[i]==0x800);}
+ assert(r.gpu_regs_before.out_0==0xc0000900u && r.gpu_regs_before.out_2==0xc0000928u);
+ /* Exactly four writes, in order, all0x800, and none to the out-direction. */
+ assert(m.glue_writes==4);
+ for(int i=0;i<4;i++){assert(m.glue_addr[i]==in_addr[i]);assert(m.glue_value[i]==0x800);}
+ /* One before-pass sample; bit12 clear because the words were not0x855, bit13
+  *set because they read back0x800, bit14 clear because they moved. */
+ assert(r.gpu_regs_flags==1);
+ assert(r.diag_flags==(31|2048|8192));
+ assert(r.stage==7 && r.firmware_ready);
+ clean(&m,&r);
+ /* Second run: the page ignores writes. The post words must equal the pre
+  *words and bit14 must say so, so an inert write cannot pass as a result. */
+ {struct model m2=model();m2.mfg_ignore=1;struct sweet_csf_boot_report r2;
+  assert(!run(&m2,&c,&r2));
+  const uint32_t p2[4]={r2.gpu_regs_before.post_0,r2.gpu_regs_before.post_2,
+   r2.gpu_regs_before.post_4,r2.gpu_regs_before.post_6};
+  for(int i=0;i<4;i++)assert(p2[i]==in_seen[i]);
+  assert(r2.diag_flags==(31|2048|16384));
+  clean(&m2,&r2);}
+ puts("PASS: 2419 writes 0x800 and reads the dispatch words back");
+ return 0;
+}
+#elif SWEET_CSF_DISPATCH_SURVEY
 /*2418: the eight dispatch words are recorded full width, then 0 is written into
  *the four in-direction ones. Nothing else in the block moves. */
 int main(void) {
@@ -605,6 +664,11 @@ class CsfBootTests(unittest.TestCase):
 
     def test_vendor_memattr_with_global_interface(self):
         self._run(['-DSWEET_CSF_VENDOR_MEMATTR=1','-DSWEET_CSF_GLOBAL_INIT=1'])
+
+    def test_dispatch_readback(self):
+        """2419: 0x800 written, then the same four words read back."""
+        self._run(['-DSWEET_CSF_MFG_GLUE=4', '-DSWEET_CSF_GPU_REGS=1',
+                   '-DSWEET_CSF_DISPATCH_READBACK=1'])
 
     def test_dispatch_survey(self):
         """2418: eight dispatch words recorded, four in-words zeroed."""

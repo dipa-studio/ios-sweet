@@ -98,7 +98,20 @@ struct sweet_csf_access_snapshot {
  *Raw offsets only - naming bits nobody documented is how a sample turns into an
  *assumption. Guarded so every earlier build still compiles to its old size. */
 #if SWEET_CSF_GPU_REGS
-#if SWEET_CSF_DISPATCH_SURVEY
+#if SWEET_CSF_DISPATCH_READBACK
+/*2419 asks the question 2413/2414/2418 never asked: does a write to the MFG top
+ *page land at all? Four in-direction words before the write, the same four read
+ *back after it, and two out-direction words that are never written as a control
+ *for the read path itself. 2418 established the pre-values (0xffc855 / 0xffc055)
+ *so the post-word is the only new number, and the value written is0x800 - the
+ *vendor's0x855 with the 512-byte port pattern zeroed and bit11 left alone.
+ *Ten slots, same40 bytes, same offsets in the784-byte report. */
+struct sweet_csf_gpu_regs {
+    uint32_t in_0, in_2, in_4, in_6;
+    uint32_t post_0, post_2, post_4, post_6;
+    uint32_t out_0, out_2;
+};
+#elif SWEET_CSF_DISPATCH_SURVEY
 /*2418 records what the eight 1-to-2 AXI dispatch words hold before it touches
  *them, full32 bits, and then writes0x000 into the four in-direction words so
  *every read is dispatched to the port that already answers. The vendor driver
@@ -279,6 +292,9 @@ enum sweet_csf_boot_error {
  *so the view is chosen by kernel build id and the ABI never moves. */
 #ifndef SWEET_CSF_DISPATCH_SURVEY
 #define SWEET_CSF_DISPATCH_SURVEY 0
+#endif
+#ifndef SWEET_CSF_DISPATCH_READBACK
+#define SWEET_CSF_DISPATCH_READBACK 0
 #endif
 #ifndef SWEET_CSF_SLC_GROUPS
 #define SWEET_CSF_SLC_GROUPS 0

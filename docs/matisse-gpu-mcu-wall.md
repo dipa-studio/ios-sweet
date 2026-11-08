@@ -3613,3 +3613,58 @@ back** in the same block. One boot then discriminates all three:
   read-path selector;
 * readback `0xFFC855` -> the writes are inert, 2413/2414/2418 are void, and the
   question becomes how the AP is supposed to reach this page at all.
+
+## 78. 2419 built: write `0x800`, then read the words back
+
+2418 left two readings standing. Either `0x000` was never the "all to one port"
+value - it zeroed the 512-byte pattern *and* bit 11 - or nothing has ever reached
+`0x13FBF000` from this context at all. 2419 separates them with one boot.
+
+**What it writes, and why `0x800`.** 2418 returned the eight dispatch words full
+width for the first time: in `0xFFC855`, out `0xFFC055`. The low 12 are
+`0x055` = `0101 0101` - eight bits, one per 512-byte slot of a 4 KiB page,
+alternating - which is exactly the alternation 2415 measured by hand. The read
+path carries one bit the write path does not (`0x855 = 0x800 | 0x055`). So the
+vendor literal is an 8-slot port map with an extra read-side bit, and the value
+that asks for "every slot to the port that answers" while leaving that bit alone
+is `0x800`, not `0x000`.
+
+**What it reads back.** The same four words are read again after the write, into
+their own slots. This is the control 2413, 2414 and 2418 never ran: three builds
+wrote this page and none of them checked that the write survived. If
+`0x13FBF000` ignores AP writes, all three measured nothing - which is 2413's
+original flaw one level lower.
+
+**The ABI still does not move.** Same 40-byte block, ten labels under
+`SWEET_CSF_DISPATCH_READBACK`: four pre-words, four post-words, and `0x900/0x928`
+which are read and never written. `gpu_regs_flags == 1`, `diag_flags` bit 11 =
+the block ran, bit 12 = the in-words already read `0x855`, bit 13 = all four read
+back `0x800`, bit 14 = all four still read their pre-value.
+
+**Static check.** `csf_boot.o` reads `0x13FBF8E0`, `+8`, `+0x30`, `+0x38`
+(`orr #0x8`, `add #0x30`, `add #0x38`), then `+0x20`, `+0x48`; executes exactly
+four stores carrying `w2 = 0x800` to the same four in-word addresses; then reads
+the same four again. `cmp #0x855` gates bit 12, `cmp #0x800` gates bit 13, and
+the pre-value comparison gates bit 14.
+
+Reading:
+
+* **marker 4 + readback `0x800`** -> the pattern *is* the wall and `0x800` is the
+  value. The 512-byte split can be switched off, and the next build moves the
+  ladder on to the word that never answered;
+* **marker 3 + readback `0x800`** -> the field is writable and is not what
+  refuses the second 512 bytes. With `0x855`, `0xAAA`, `0x000` and `0x800` all
+  held, the AXI 1-to-2 dispatch stops being a lever *with the write proven*, and
+  the wall is below it;
+* **marker 3 + readback `0xFFC855`** -> writes to `0x13FBF000` do not land from
+  this context. 2413, 2414 and 2418 become void, and the question stops being
+  which value to write and becomes how the AP reaches this page at all;
+* **marker 3 + anything else** -> a partial writable mask, which is itself the
+  answer to which bits this page takes;
+* **marker 1 or 2** -> the write broke the in path.
+
+Build: image `2f8f3789...eda8`, payload `fb0a2b7c...08c2`, kernel
+`c01dcbea...d5ea`, 308 tests / 3 skipped (one new: the two diag states and the
+readback), 2418 rebuilt byte for byte from the changed sources before 2419 was
+built. Runner `shim2419-disp-readback-run-once.py`, partition hash
+`cd212200...1e6a`, preflight passed, **not flown**.

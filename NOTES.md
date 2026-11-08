@@ -1,6 +1,34 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 17:01: 2418 RAN - THE ZERO DID NOT MOVE THE WALL; `0x055` SPELLS ITS SHAPE AND NO WRITE HAS EVER BEEN READ BACK <<<
+## >>> ACTIVE 2026-11-08 17:20: 2419 BUILT - WRITE `0x800`, THEN READ THE WORDS BACK <<<
+
+2418's two readings: `0x000` was never the minimal "all to one port" value (it
+zeroed the 512-byte pattern *and* bit 11), or nothing has ever reached
+`0x13FBF000` from this context. 2419 separates them in one boot.
+
+`0x055` = `0101 0101` is an 8-slot port map, one bit per 512-byte slot - the exact
+alternation 2415 measured - and the read path carries one extra bit
+(`0x855 = 0x800 | 0x055`). So 2419 writes `0x800`: pattern `0x00`, bit 11 kept,
+the smallest delta from the vendor literal. Then it **reads the same four words
+back**, the control 2413/2414/2418 never ran.
+
+Same 40-byte block, same offsets, ten labels under `SWEET_CSF_DISPATCH_READBACK`:
+four pre-words, four post-words, `0x900/0x928` read but never written.
+`gpu_regs_flags == 1`; `diag_flags` bit 11 ran, bit 12 already `0x855`, bit 13 all
+four read back `0x800`, bit 14 all four unchanged (inert). Everything else is
+2418 byte for byte, so marker 3 = wall stayed, marker 4 = pattern was the wall.
+
+Static: four reads (`+0x8e0`, `orr #8`, `add #0x30`, `add #0x38`), then `+0x20`
+and `+0x48`; exactly four stores with `w2 = 0x800`; then the same four reads
+again; `cmp #0x855` / `cmp #0x800` / pre-compare gate the bits.
+
+Image `2f8f3789...eda8`, payload `fb0a2b7c...08c2`, kernel `c01dcbea...d5ea`,
+308 tests / 3 skipped, 2418 rebuilt byte-identical from the changed sources
+first. Runner `shim2419-disp-readback-run-once.py`, partition hash
+`cd212200...1e6a`, preflight passed, `boot_a` `2931647a...86b1`, device in
+Recovery. **Not flown.**
+
+## >>> PREVIOUS 2026-11-08 17:01: 2418 RAN - THE ZERO DID NOT MOVE THE WALL; `0x055` SPELLS ITS SHAPE AND NO WRITE HAS EVER BEEN READ BACK <<<
 
 2418 flew (`555c10e7...aef7`), restored `2931647a...86b1` in the same run, fastboot
 96.93 s, marks fresh. `diag_flags` `0x183F` = bit 11 (block ran) + bit 12 (in-words
