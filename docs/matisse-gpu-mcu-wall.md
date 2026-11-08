@@ -2571,3 +2571,60 @@ handoff, not memory. Nothing here says the bit-9 wall is gone, and a bit-9 resul
 from a timed-out reset describes a GPU that was asked to reset, not one that did.
 
 **Not flown.** `boot_a` is still `2931647a...86b1`.
+
+## 61. 2408 ran: the reset completes, and nothing changes
+
+Flew `184d5353...9801` on 2026-11-08 14:43, read-back verified against
+`de922fdd...f7a8`, normal boot reached fastboot at 85.4 s (2407: 85.6 s), `boot_a`
+restored to `2931647a...86b1`.
+
+**The handshake works.** `diag_flags` = `2047`: bit 7 attempted, bit 8
+`RESET_COMPLETED` arrived inside the 100 ms budget, bit 9 `DBG_ENABLED` before,
+bit 10 still set after. This is the first soft reset in the series that completed,
+and it is the one issued *before* `MCU_CONTROL`, the coherency write, the L2
+power-on and AS0.
+
+**And it changes nothing that can be measured here.**
+
+| | 2407 | 2408 |
+|---|---|---|
+| `0x000` / `0x004` / `0x00c` | `0xa8620004` / `0x07130306` / `0x00000809` | identical |
+| `0x034` before / after | `0x100` / `0x101` | identical |
+| `0x048` / `0x04c` | `0x07130000` / `0` | identical |
+| `0x2c0`..`0x2cc` | all zero | identical |
+| `input_va` / `groups` / `version` / `mcu_status` / `error` | 2 / 8 / 0 / 1 / -53 | identical |
+| ladder | read 1 `0x0f10f857`, read 2 dies at bit 9 | identical |
+
+Every sampled word and every boot field matches 2407 bit for bit, before and
+after, and the ladder is 2406's bytes exactly. `reset_raw` `0x200` with
+`reset_completed` 0 is also unchanged: cleanup's reset, issued after the MCU was
+started and halted, times out in both builds.
+
+**What this rules out.** "The reset never really ran" is dead - it ran and
+completed. And because a completed soft reset left `DBG_ENABLED` and every other
+word untouched, bit 8 is not a runtime halt state inherited from LK/GPUEB: a
+reset that clears the pipeline would have cleared it. It behaves like a static
+strap. Note how thin the naming is - panthor calls bit 8 `GPU_STATUS_DBG_ENABLED`,
+and r32p1's `mali_kbase_gpu_regmap_csf.h` does not name a single `GPU_STATUS` bit,
+so the name is the only evidence for what it means.
+
+**The bit-9 wall is therefore independent of the reset state.** It survived a
+completed reset with no register moving, which is what a wall below the page table
+and above DRAM looks like. The debug-state lead loses its mechanism and can be
+dropped from the queue.
+
+**A side observation, recorded because it explains the series.** The same sequence
+completes before `MCU_CONTROL` and times out after the MCU has been started. Every
+reset this project issued before 2408 went through the cleanup path, i.e. after
+the MCU - so "the reset never completes" was a property of *when* it was asked,
+not of the block.
+
+**Next is 2409**, the out-of-arena page: map `0x0100D000` to a page outside the
+2 MiB arena (framebuffer `0x9c000000` is the cheapest), then read `0x0100D200`
+(VA and PA bit 9 = 1, not in the arena) and `0x0100D400` (bit 9 = 0). The word
+returning means the dead set is allocation-shaped; hanging means it is
+address-shaped.
+
+Decode note: the kernel was still tagged `SWEET_BUILD_ID 0x2407`, because it was
+not rebuilt for this trial, so the capture decodes as
+`--build 0x2408 --mark 0x2407`. The image sha identifies the run.

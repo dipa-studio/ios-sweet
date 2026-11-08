@@ -1,6 +1,47 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 14:39: 2408 BUILT - THE RESET PANTHOR DOES, BEFORE ANYTHING ELSE <<<
+## >>> ACTIVE 2026-11-08 14:46: 2408 RAN - THE RESET COMPLETES, DBG_ENABLED DOES NOT CARE <<<
+
+Flew `184d5353...9801`, read-back verified against `de922fdd...f7a8`, normal boot
+reached fastboot at 85.4 s (2407: 85.6 s), `boot_a` restored to `2931647a...86b1`.
+
+**The soft reset works - first completed reset in the series.** `diag_flags` =
+`2047`: bit7 attempted, **bit8 `RESET_COMPLETED` arrived inside 100 ms**, bit9
+`DBG_ENABLED` before, bit10 still set after. Everything else is 2407:
+
+```
+0x000 0xa8620004  0x004 0x07130306  0x00c 0x00000809  0x048 0x07130000
+0x034 0x00000100 -> 0x00000101    0x2c0..0x2cc all zero
+```
+All ten register words and every boot field (`input_va` 2, `groups` 8, `version`
+0, `mcu_status` 1, `error` -53) are bit-identical to 2407, before and after. The
+ladder is 2406's byte for byte: read 1 `0x0100E400` returns `0x0f10f857`, read 2
+`0x0604E400` dies on the bit-9 L3 descriptor. `reset_raw` `0x200` /
+`reset_completed` 0 - cleanup's post-MCU reset behaved the same in 2407.
+
+**What this settles.** The "reset never really ran" branch is dead - it ran and
+completed. A completed soft reset changed no sampled word, `DBG_ENABLED`
+included, so bit 8 is not a reset-cleared halt state left behind by LK/GPUEB; it
+behaves like a static strap (panthor names it; r32p1's `mali_kbase_gpu_regmap_csf.h`
+does not name a single `GPU_STATUS` bit). **The bit-9 wall is independent of the
+reset state**, and the debug-state lead loses its mechanism.
+
+**New asymmetry worth one line.** The same sequence completes *before*
+`MCU_CONTROL` and times out *after* the MCU was started and halted, in both 2407
+and 2408. Every reset this project ever issued went through the cleanup path, so
+"reset never completes" was a property of when it was asked, not of the block.
+
+**Next: 2409, the out-of-arena page** (`docs/matisse-gpu-upstream-audit.md` §9.2).
+Reset is out of the queue. Needs the new primitive: map `0x0100D000` to a page
+outside the arena (framebuffer `0x9c000000`), read `0x0100D200` (VA/PA bit9=1) and
+`0x0100D400` (bit9=0).
+
+Decode note: the kernel was still tagged `SWEET_BUILD_ID 0x2407` (not rebuilt for
+this trial), so the capture decodes with `--build 0x2408 --mark 0x2407`; the image
+sha identifies the run. `gpu-result.json` is written under
+`shim2408-prestartreset-trials/gpu-normal/`.
+
+## >>> PREVIOUS 2026-11-08 14:39: 2408 BUILT - THE RESET PANTHOR DOES, BEFORE ANYTHING ELSE <<<
 
 **2408 is a reset, not a memory experiment.** The new re-audit
 (`docs/matisse-gpu-upstream-audit.md`) reordered the queue: before spending a
