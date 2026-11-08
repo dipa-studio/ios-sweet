@@ -1859,8 +1859,10 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 verdict = ('+0x600, with bit 9 = 1 and bit 10 = 1, stalled exactly as +0x200 does, '
                            'after +0x400 (bit 9 = 0, bit 10 = 1) answered with %#x. Bit 10 changes '
                            'nothing, so the rule is PA bit 9 alone and the 512-byte alternation '
-                           'holds: +0x000 answers, +0x200 stalls, +0x400 answers, +0x600 stalls. '
-                           'The wall is a 512-byte sector property, not a page-table one'
+                           'holds: +0x200 stalls, +0x400 answers, +0x600 stalls - the offset\'s '
+                           'bit 9 decides and bit 10 does not. +0x000 was not read; it shares bit '
+                           '9 = 0 with +0x400. The wall is a 512-byte sector property, not a '
+                           'page-table one'
                            % csf['output_va'])
             elif marker == 2:
                 outcome = 'control-lost'

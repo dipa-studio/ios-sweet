@@ -3162,3 +3162,59 @@ rebuild byte for byte (`333acd79`, `aed0b399`, `42385e94`), so the new gate
 `SWEET_CSF_OOA_SHAPE` leaks into nothing older. Runner
 `shim2415-shape-trials-run-once.py`, partition hash `f94f9002...839b`, preflight
 passed, **not flown**.
+
+## 71. 2415 ran: the wall is 512 bytes wide, and bit 9 is the whole of it
+
+Flew `4eebf393...78bf`, restored to `2931647a...86b1` in the same run (no rescue
+needed - Recovery came up on the first reboot). Report fresh (marks differ:
+`a09099...` -> `c0a654...`), fastboot at 121.04 s, the normal timeout path.
+`input_va` 3, `output_va` `0x2415a400`, `mcu_status` 1, `as_fault` 0,
+`diag_flags` `0x7F` (no glue bits: this build never touches the MFG page).
+
+**Marker 3, and the value names the offset.**
+
+| read | offset | bit 9 | bit 10 | outcome |
+|---|---|---|---|---|
+| 1 | `0x0100C400` arena leaf | 0 | 0 | returned |
+| 2 | `0x0100D400` | 0 | 1 | returned `0x2415a400` |
+| 3 | `0x0100D600` | 1 | 1 | **never returned** |
+| 4 | `0x0100D200` | 1 | 0 | not reached (asked last) |
+
+`0x2415a400` is the word *this* shim planted at `+0x400` - a value no earlier
+build carries - so the four-sentinel scheme worked and read 2 really is `+0x400`.
+Read 3 then stalled with bit 9 = 1 **and bit 10 = 1**, in the same page, through
+the same leaf, with the same tag 6.
+
+**The shape, stated exactly.** `+0x200` stalls (2412), `+0x400` answers (2412,
+2415), `+0x600` stalls (2415). Bit 10 changes nothing; the offset's bit 9 decides.
+That is a 512-byte alternation, and a 4 KiB leaf has no field that can express a
+512-byte granule - not attributes, not AP, not PBHA. So the wall is not a
+page-table property at all, which is what 2400, 2409, 2411 and 2412 had already
+implied one variable at a time, and what this run pins down as a *shape* rather
+than an inference.
+
+It also kills the last two page-level stories that were still standing:
+
+* "the second 512 bytes of every 1 KiB" - `+0x400` answers, so the second half is
+  not uniformly dead;
+* "any address with bit 9 set" *because of a 1 KiB structure* - `+0x600` shows the
+  rule survives with bit 10 set, so the period is 512 bytes, not 1 KiB.
+
+**What is left.** Exactly one thing on the SoC side has never been read: the SLC
+group's own window, `0x13FBF740/0x744` (base and limit). The shim has sampled
+`0x748` (policy) since 2407 and nothing else. If the group's window is programmed
+in 512-byte units, or covers only the even sectors of the range the arena sits in,
+that would be the first mechanism in this series that can produce a 512-byte
+boundary from outside the MMU without contradicting any earlier measurement. That
+is a read-only measurement: sample `0x740/0x744/0x74C` before and after the MCU
+start and compare with the arena's physical span. No new ladder, no new mapping,
+no flight risk beyond the one page the shim already reads.
+
+Build: image `4eebf393...78bf`, payload `5c4dac2a...d51a`, kernel
+`c01dcbea...d5ea`, 305 tests / 3 skipped, `boot_a` restored.
+
+One timing note, recorded because it is visible: fastboot arrival has drifted
+upward across the last four runs (81.4, 83.4, 89.6, 121.0 s). Nothing in 2415
+changes a timeout, the run took the normal path (report published, no crash, both
+restores verified), and the ladder this build executes is one read longer than
+2412's - but the drift is environmental until proven otherwise.
