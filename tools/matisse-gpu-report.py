@@ -1278,10 +1278,15 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 outcome = 'alias-stalls'
                 csf['cold_boot_start'] = 'alias-0x0300E200'
                 verdict = ('0x0300E200 stalled while 0x0100E400 returned. The alias carries the '
-                           'identical L2 entry, L3 page, leaf descriptor and physical word as '
-                           '0x0100E200, so the VA prefix 0x0100xxxx is not what refuses: the wall '
-                           'travels with the page, the leaf or bit 9 itself, not with the virtual '
-                           'range')
+                           'identical L2 entry, L3 page, leaf word and physical word as '
+                           '0x0100E200, so the VA prefix 0x0100xxxx is out: neither the virtual '
+                           'range nor the leaf encoding that rode on it decides. This boot also '
+                           'cleared PBHA on every leaf, so cached + PBHA 0 is now the third '
+                           'attribute cell measured dead at bit 9 = 1; only uncached + PBHA 0 is '
+                           'still unmeasured')
+                if csf.get('value_verified'):
+                    verdict += ('. The word read from 0x0100E400 was the vendor word 0x0f10f857, '
+                                'so the bytes came back intact')
             elif marker == 3:
                 outcome = 'uncached-pbha0-stalls'
                 csf['cold_boot_start'] = 'code-0x01001200'

@@ -738,8 +738,11 @@ class ReportDecodeTests(unittest.TestCase):
 
     # 2403: code page (PBHA cleared), the alias that must equal it, the uncached
     # page, and the stack page published for the attribute comparison.
-    LEAVES_2403 = (0x00000000401b24c3, 0x00000000401b24c3,
-                   0x00000000401a54d7, 0x0060000040090443)
+    # The stack word is the value the 2026-11-08 flight read back
+    # (0x0060000040091443), not the host rebuild's guess: the arena moved with
+    # this build, so 0x02000000 lands on 0x40091000.
+    LEAVES_2403 = (0x00000000401b34c3, 0x00000000401b34c3,
+                   0x00000000401a64d7, 0x0060000040091443)
 
     def test_2403_alias_splits_the_va_from_the_leaf(self):
         """2403: the same leaf and PA through a second VA, plus a data check."""
@@ -752,7 +755,8 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertTrue(csf['value_verified'])
         self.assertEqual(csf['cold_boot_outcome'], 'alias-stalls')
         self.assertEqual(csf['cold_boot_target'], 0x0100E000)
-        self.assertIn('not with the virtual range', csf['instrument_verdict'])
+        self.assertIn('VA prefix 0x0100xxxx is out', csf['instrument_verdict'])
+        self.assertIn('bytes came back intact', csf['instrument_verdict'])
 
         for marker, outcome in ((1, 'bit9-zero-regressed'),
                                 (3, 'uncached-pbha0-stalls'),

@@ -1,63 +1,92 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 12:20: 2403 BUILT - DOES THE 0x01 VA PREFIX DECIDE, OR THE LEAF/PA? <<<
+## >>> ACTIVE 2026-11-08 12:21: 2403 RAN - THE VA PREFIX IS OUT; THE WALL IS THE ADDRESS BIT ITSELF <<<
 
-**The question 2402 left open.** 2402 proved bit 9 decides inside one 4 KiB page.
-It could not say whether the refusal is keyed on the virtual address
-(`0x0100xxxx` above the MMU) or on the page that address lands on. 2403 answers
-that with an L2 alias that costs no page: slot 24 receives slot 8's entry
-verbatim, so `0x0300E200` walks the identical L3 page, the identical leaf
-descriptor and the identical physical word as `0x0100E200` - only the VA differs.
+**RESULT: `input_va = 2`.** Three reads returned, the fourth never did:
 
-```
-marker 1  read 0x0100E400   bit9 0, the page we run from; the word goes to
-                            shared+12 and must equal 0x0f10f857 (data check)
-marker 2  read 0x0300E200   bit9 1, the alias: same leaf, same PA
-marker 3  read 0x01001200   bit9 1, page 0x01001000 non-cacheable + PBHA 0
-marker 4  read 0x0100E200   bit9 1, 2402's own address, same boot as read 2
-marker 5  all four returned
-```
+| marker | read | VA | bit 9 | leaf | outcome |
+|---|---|---|---|---|---|
+| 1 | `0x0100E400` | code `0x0100xxxx` | 0 | `0x401b34c3` | **returned, word = `0x0f10f857`** |
+| 2 | `0x0300E200` | alias `0x0300xxxx` | 1 | **same word** | **never returned** |
+| 3 | `0x01001200` | code, uncached+PBHA0 | 1 | `0x401a64d7` | never issued |
+| 4 | `0x0100E200` | code, 2402's address | 1 | same as 1 | never issued |
 
-Read 2 is the question: returned => the wall is keyed on the VA above the MMU;
-stalled => it travels with the page, the leaf or bit 9 itself, and the 0x01
-range is out. Reads 3 and 4 only run if read 2 returned.
+`groups = 8`, no `0xE3`, `as_fault = 0`, `mcu_status = 1`, `error = -53`. No fault,
+no response, exactly like 2402.
 
-**Correction to the plan recorded below.** An earlier sketch put the store test
-in this build and ordered the reads differently; that is dropped, because a
-stall ends the run and the store question is worth less than either the VA split
-or the attribute cell. The store/load split moves to 2404 if it still matters.
-
-**Also fixed a premise that was wrong in the analysis.** "2399 showed the stack
-at bit 9 = 1 works" is not true: the 2396..2400 ladder encoded both control
-reads as `f8d4 0200` / `f8d6 0200` (`bmi` + `movs r2,r0`), so reads 1 and 2 never
-executed in that whole series. `input_va = 3` there only ever meant read 3
-(`0x01001200`) stalled. No bit-9 = 1 access in the shared or stack section has
-ever been issued, so "the stack leaf's attributes make the difference" had no
-evidence behind it. 2403 does not depend on that claim any more.
-
-**What the build carries.** PBHA is cleared on every leaf (memory group 0) and
-`0x01001000` is made non-cacheable, so read 3 is the first access with neither
-the group tag nor cacheability - the one cell the attribute matrix never tested
-(2398 cleared PBHA only, 2400 cleared cacheability only, and both stalled).
+**The alias travelled and is byte-identical.** The live leaves prove the image is
+what it claimed:
 
 ```
-image      83372fdc...0a63  26,714,112 B  arena 0x78000 (one page higher than 2402)
-kernel     eb555c22...4cae  SWEET_BUILD_ID 0x2403, patch 0199
-relocated  0x401a5000  <- 2402's 0x401a4000 + 0x1000, because the arena moved
-container  108 B changed: 68 B ladder at 0x0100E000, 40 B fault entry, vector, 0x01000200
-leaves     0x0100E000 and 0x0300E000 must be the same word (PBHA 0, AttrIdx 0, RO)
-           0x01001000 must end 0x4d7, 0x02000000 is published for comparison
-tests      289 ran, 3 skipped
+0x0100E000  0x00000000401b34c3   PBHA 0  cached  RO   <- code page
+0x0300E000  0x00000000401b34c3   PBHA 0  cached  RO   <- slot 24 copied slot 8
+0x01001000  0x00000000401a64d7   PBHA 0  AttrIdx 5    <- the uncached page
+0x02000000  0x0060000040091443   PBHA 0  cached  RW
 ```
 
-**Trap checked before flying:** the alias build puts the arena at `0x40078000`,
-so the relocated code section is `0x401a5000`, not 2402's `0x401a4000`. The
-decoder and the tests pin the new value; the pre-flight check already caught one
-wrong-PA decode in 2402.
+`alias_applied`, `uncached_page_applied`, `pbha_cleared`, `relocation_observed`
+all true; `firmware_probe_pa = 0x401a5000`, i.e. the arena page shift was
+anticipated correctly.
 
-**Status: built, unit-tested, statically verified, preflight passed; not flown.**
-`boot_a` is the baseline `2931647a...86b1`; flashing needs explicit approval of
-image SHA `83372fdc...0a63`.
+**Three things die with this run.**
+
+1. **"The `0x0100xxxx` VA window is special."** The alias walks the identical L2
+   entry, L3 page, leaf word and physical word through `0x0300xxxx` and stalls
+   anyway. The refusal is not keyed on the virtual range. This was the last
+   surviving form of the window theory.
+2. **"Some leaf encoding is the lever."** With PBHA cleared on every leaf the
+   code page became cached + PBHA 0 - a cell never measured before - and bit
+   9 = 1 still stalls. Measured cells at bit 9 = 1: cached+PBHA 6 (2402),
+   uncached+PBHA 6 (2400), cached+PBHA 0 (this run). All dead. The matrix is
+   3/4, not 1/4.
+3. **"Maybe the returned bytes were wrong all along."** They are not. Read 1
+   returned the vendor word `0x0f10f857` from `0x0100E400` - the first data
+   verification in this whole series - so every earlier "returned" now rests on a
+   measured data path, not an assumption.
+
+**What is left.** Across 2401..2403 the stall now has one invariate: the MCU
+access carries address bit 9 = 1. It has been observed with fetches and data
+reads, in five virtual ranges, three sections, at least four physical pages, and
+every leaf encoding tried. Reads at bit 9 = 0 return correct data. Nothing in the
+page table moves it, and per `AS_TRANSCFG = 0x42000006` (`ADRMODE 6 =
+AARCH64_4K`) nothing in the page table *can* move it: `PA[11:0] == VA[11:0]`
+always.
+
+**2404: the two dimensions never touched - direction, and the last matrix cell.**
+
+```
+1 read  0x0100E400 (b9 0)  -> shared+12   baseline + data check 0x0f10f857
+2 read  0x04000000 (b9 0)  -> shared+16   the shared page at an even 512B block
+3 read  0x04000200 (b9 1)  -> shared+20   uncached + PBHA 0: the 4th cell
+4 store 0x5a5a5a5a -> 0x04000200 (b9 1)   does a WRITE complete where the read
+                                          in 2401 did not? same address, other
+                                          direction
+5 read  0x04000200 (b9 1)  -> shared+24   read-after-write, and is it 5a5a5a5a
+6 read  0x01001200 (b9 1)  -> shared+28   the 4th cell on the code page too
+7 all six returned
+```
+
+Read 3 comes before the store on purpose: it is a read, so if it returns we learn
+the last attribute cell works *and* the run continues; if it stalls it costs one
+marker and the store still gets issued. The store and read 5 use the same address
+2401 stalled on, in a page that is RW, so the store tests the bus, not the MMU's
+AP bits. `5a5a5a5a` in `shared+24` would be proven by comparing it in the decoder.
+
+**Reading it.** Store stalls (3) => the odd 512 B blocks are dead in both
+directions: an address-decode/route problem, and no page-table or attribute
+change will ever boot the stock firmware. Store passes, read 5 stalls => the
+address decodes and accepts writes, only the read response never returns - a
+different bug class with a different owner. Read 3 returns => uncached + PBHA 0
+is the working corner and every leaf the firmware touches must be built that way.
+Read 3 returns *and* read 5 returns `5a5a5a5a` => the block heals once written,
+which would point at cache/tag state rather than decode.
+
+```
+image      83372fdc...0a63  partition written and read back
+fastboot   85.6 s (2401 82.5 s, 2402 101.1 s); runner finished the restore itself
+boot_a     restored and verified 2931647a...86b1, no manual step needed
+kernel     0x2403, patch 0199, 289 tests / 3 skipped
+```
 
 ## >>> PREVIOUS 2026-11-07 23:52: 2402 RAN - BIT 9 IS THE WALL, AND IT IS THE ONLY MOVING PART <<<
 

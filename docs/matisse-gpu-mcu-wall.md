@@ -2006,3 +2006,84 @@ Built, unit-tested, statically verified and preflighted, **not flown**. `boot_a`
 is `2931647a...86b1`. The arena/PA shift is the trap this class of build keeps
 setting: any build that writes a second L2 slot lands one page higher, and a
 decoder pinned to the previous PA would throw the capture away.
+
+## 52. 2403 ran: the VA prefix is out, and the returned bytes are finally verified
+
+Image `83372fdc...0a63`, kernel `0x2403`. `input_va = 2`, `groups = 8`,
+`as_fault = 0`, `mcu_status = 1`, `error = -53`: no fault, no response.
+
+| marker | read | VA | bit 9 | leaf | outcome |
+|---|---|---|---|---|---|
+| 1 | `0x0100E400` | `0x0100xxxx` | 0 | `0x401b34c3` | returned, word `0x0f10f857` |
+| 2 | `0x0300E200` | `0x0300xxxx` | 1 | same word | never returned |
+| 3 | `0x01001200` | `0x0100xxxx` | 1 | `0x401a64d7` | never issued |
+| 4 | `0x0100E200` | `0x0100xxxx` | 1 | `0x401b34c3` | never issued |
+
+**The alias is byte-identical and it still stalls.** L2 slot 24 received slot 8's
+entry verbatim, so `0x0300E200` walks the same L2 entry, the same L3 page, the
+same leaf word and the same physical word as `0x0100E200`, and it never
+completes. The live leaves confirm the image:
+
+```
+0x0100E000  0x00000000401b34c3  PBHA 0  cached  RO
+0x0300E000  0x00000000401b34c3  PBHA 0  cached  RO   identical, as designed
+0x01001000  0x00000000401a64d7  PBHA 0  AttrIdx 5    uncached page
+0x02000000  0x0060000040091443  PBHA 0  cached  RW
+```
+
+`alias_applied`, `uncached_page_applied`, `pbha_cleared` and
+`relocation_observed` are all true, and `firmware_probe_pa = 0x401a5000`, so the
+arena page shift this build introduced was pinned correctly.
+
+**Three readings die here.**
+
+- *The `0x0100xxxx` window is special.* It is not: the identical mapping through
+  `0x0300xxxx` stalls the same way. That was the last surviving form of the
+  window theory, and 2393..2402 had already shown the stall with a fetch and with
+  a data read.
+- *Some leaf encoding is the lever.* With PBHA cleared everywhere the code page
+  became **cached + PBHA 0**, a cell never measured before, and bit 9 = 1 still
+  stalls. The measured cells at bit 9 = 1 are now cached+PBHA 6 (2402),
+  uncached+PBHA 6 (2400) and cached+PBHA 0 (this run): three of four.
+- *The returned bytes may have been wrong all along.* They were not. Read 1
+  returned the vendor word `0x0f10f857` from `0x0100E400` - the first data
+  verification in the series - so every earlier "returned" now rests on a
+  measured data path.
+
+**Where the model stands.** One invariate remains over 2401..2403: the MCU access
+carries address bit 9 = 1. It holds for fetches and data reads, five virtual
+ranges, three sections, at least four physical pages, and every leaf encoding
+tried; reads at bit 9 = 0 return correct data. `AS_TRANSCFG = 0x42000006`
+(`ADRMODE 6 = AARCH64_4K`) means `PA[11:0] == VA[11:0]` for every mapping the AS
+can hold, so this is not something the page table can express, let alone fix.
+
+**2404: direction, and the last matrix cell.**
+
+```
+1 read  0x0100E400 (b9 0) -> shared+12   baseline + data check
+2 read  0x04000000 (b9 0) -> shared+16   shared page on an even 512 B block
+3 read  0x04000200 (b9 1) -> shared+20   uncached + PBHA 0 - the 4th cell
+4 store 0x5a5a5a5a -> 0x04000200 (b9 1)  a write at 2401's stalling address
+5 read  0x04000200 (b9 1) -> shared+24   read-after-write
+6 read  0x01001200 (b9 1) -> shared+28   the 4th cell on the code page too
+7 all six returned
+```
+
+Read 3 precedes the store deliberately: it is a read, so a return both answers the
+attribute question and lets the run continue, while a stall costs one marker and
+the store is still issued. The store and read 5 sit in a page that is RW, so the
+store tests the bus and not the MMU's AP bits, and `5a5a5a5a` landing in
+`shared+24` is decidable offline.
+
+Store stalls => the odd 512 B blocks are dead in both directions, an address
+decode/route problem that no leaf change can ever work around. Store passes and
+read 5 stalls => the address decodes and accepts writes, only the read response
+never arrives, which is a different bug with a different owner. Read 3 returns =>
+uncached + PBHA 0 is the working corner. Read 3 and 5 both return `5a5a5a5a` =>
+the block heals once written, pointing at cache/tag state rather than decode.
+
+```
+fastboot 85.6 s; the runner completed its own restore this time
+boot_a restored and verified 2931647a...86b1
+289 tests / 3 skipped
+```
