@@ -3276,3 +3276,66 @@ Build: image `4cd9c920...c5a2`, payload `78cfc9e9...d8de`, kernel
 `c01dcbea...d5ea`, 305 tests / 3 skipped. Runner
 `shim2416-slcwin-trials-run-once.py`, partition hash `1bae2362...462e`, preflight
 passed, **not flown**.
+
+## 73. 2416 ran: the group window is not the vendor's value, and it is not a window
+
+Flew `4cd9c920...c5a2`, restored to `2931647a...86b1` in the same run, fastboot
+86.52 s. `input_va` 3, `output_va` `0x2412a400`, `mcu_status` 1, `as_fault` 0:
+the wall reproduced exactly as 2412, which is the control this build needed
+before its register read could mean anything.
+
+**What the five words actually are** (before and after identical, so nothing here
+is a side effect of the run):
+
+| offset | value | note |
+|---|---|---|
+| `0x13FBF700` | `0x00000000` | group 0's default word - matches what the vendor writes |
+| `0x13FBF740` | `0x113F0F81` | group 6 base? |
+| `0x13FBF744` | `0x107F3F81` | group 6 limit? |
+| `0x13FBF748` | `0x06002006` | group 6 policy - the same word sampled since 2407 |
+| `0x13FBF74C` | `0x00000014` | group 7 base |
+
+The policy and the group 0 word land exactly on the vendor's values, so the page
+and the offsets are right. The other two do not: the vendor writes `0xFFFFFFFF`,
+this boot holds `0x113F0F81` and `0x107F3F81`.
+
+**Why this is not yet an answer.** Read as base/limit, the pair is inverted
+(`0x113F...` > `0x107F...`). Read in the other order it is a 12 MiB window
+`[0x107F3000, 0x113F0000]` - and the arena, at `0x40078000`, is nowhere near it,
+while the leaves tagged group 6 into that arena translate and read every day. So
+either the low 12 bits are attributes and the field order is the reverse of the
+vendor's comment, or these registers are not a plain base/limit pair at all. The
+three upstream trees contain no other use of `0x740/0x744` (only the vendor's
+write and a `MMU_AS13` constant at the same number in the DDK regmap, which is a
+different block), and the SLC driver does not exist in this kernel at all - SLC is
+run by GPUEB, not Linux. So the encoding has no source of truth in hand.
+
+What the run does establish, and it is not nothing:
+
+* the group 6 window is **not** the vendor's full range, so "the boot chain
+  programmed the vendor table verbatim" is false for these two words;
+* the words are **stable** across the MCU start (`before == after`), so they are
+  configuration, not activity;
+* group 0 is `0` and group 6's policy is the vendor's, so this is not an
+  unclocked or unprogrammed page - a garbage read would not reproduce two known
+  constants;
+* a window that excludes the arena cannot be what gates arena access, so **this
+  pair cannot be the 512-byte wall either** - unless the encoding means something
+  quite different from a window, which is exactly what the inverted pair hints at.
+
+**A decoding bug this run caught, again on the reading side.** The 2416 branch
+labelled the ten words in a different order than the struct declares them, so the
+first decode printed the group 0 word as the group 6 base. The struct order is
+`base, limit, ctl, group0, group7`; the decoder had assumed `group0` first. Fixed;
+the values above are the corrected ones. Second time in three builds that the
+instrument, not the device, was the thing to fix - the captures were always right.
+
+Build: image `4cd9c920...c5a2`, payload `78cfc9e9...d8de`, kernel
+`c01dcbea...d5ea`, 305 tests / 3 skipped, `boot_a` restored.
+
+**Next, and it is cheap.** Read the base word of groups 0..9 (`0x700`, `0x704`,
+`0x710`, `0x71C`, `0x728`, `0x734`, `0x740`, `0x74C`, `0x758`, `0x764`) in one
+pass. If every group holds a similarly shaped descriptor with a different window,
+the encoding is a descriptor table and group 6 is ordinary. If group 6 is the only
+one that is not `0xFFFFFFFF`, the boot chain special-cased it - which would make
+the value's meaning worth chasing in LK rather than in another flight.

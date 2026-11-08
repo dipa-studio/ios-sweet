@@ -359,7 +359,8 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             # build never reads.
             order = ('reg_000', 'reg_004', 'reg_00c', 'reg_034', 'reg_048',
                      'reg_04c', 'reg_2c0', 'reg_2c4', 'reg_2c8', 'reg_2cc')
-            names = ('g0_word', 'g6_base', 'g6_limit', 'g6_ctl', 'g7_base')
+            # Field order follows the struct in mali_csf_boot.h: base, limit, ctl, group0, group7.
+            names = ('g6_base', 'g6_limit', 'g6_ctl', 'g0_word', 'g7_base')
             for i, label in enumerate(('before', 'after')):
                 values = [csf['gpu_regs_' + label][key] for key in order[i * 5:i * 5 + 5]]
                 csf['slc_window_' + label] = dict(zip(names, values))

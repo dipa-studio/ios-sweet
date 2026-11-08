@@ -1,6 +1,50 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 16:28: 2416 BUILT - READ THE SLC GROUP WINDOW, CHANGE NOTHING ELSE <<<
+## >>> ACTIVE 2026-11-08 16:32: 2416 RAN - THE GROUP WINDOW IS NOT THE VENDOR VALUE, AND NOT A WINDOW <<<
+
+2416 flew (`4cd9c920...c5a2`), restored `2931647a...86b1` in the same run, fastboot
+86.52 s. `input_va` 3, `output_va` `0x2412a400`, `mcu_status` 1, `as_fault` 0 - the
+wall reproduced, which is the control the register read needed.
+
+Five words, before and after identical:
+
+| offset | value |
+|---|---|
+| `0x13FBF700` | `0x00000000` (group 0 default - matches the vendor) |
+| `0x13FBF740` | `0x113F0F81` |
+| `0x13FBF744` | `0x107F3F81` |
+| `0x13FBF748` | `0x06002006` (group 6 policy - matches since 2407) |
+| `0x13FBF74C` | `0x00000014` |
+
+Two words match known constants, so the page and offsets are right; the other two
+are **not** the vendor's `0xFFFFFFFF`. Read as base/limit the pair is inverted; read
+in the other order it is a 12 MiB window `[0x107F3000,0x113F0000]` that does not
+contain the arena at `0x40078000` - and group-6-tagged leaves into that arena
+translate and read every run. So either the low 12 bits are attributes and the
+order is reversed, or these are not a base/limit pair at all. No source of truth in
+the three trees: the only other use of `0x740/0x744` is the vendor's write, the
+`MMU_AS13` hit in the DDK regmap is a different block, and SLC has no Linux driver
+in this kernel (GPUEB owns it).
+
+Established anyway: the window is not the vendor's full range; it is stable across
+the MCU start (configuration, not activity); the page is live (two known constants
+reproduce); and a window that excludes the arena cannot be what gates arena
+access, so this pair cannot be the 512-byte wall either.
+
+**Decoder bug caught on the reading side**: the 2416 branch labelled the ten words
+in a different order than the struct declares (`base, limit, ctl, group0, group7`),
+so the first decode printed the group 0 word as the base. Fixed; values above are
+corrected. Second time in three builds that the instrument, not the device, needed
+fixing.
+
+Next, cheap: read the base word of groups 0..9 in one pass (`0x700/0x704/0x710/
+0x71C/0x728/0x734/0x740/0x74C/0x758/0x764`). All-groups-descriptors means the
+encoding is a table and group 6 is ordinary; group-6-only-non-FFFFFF means the boot
+chain special-cased it and the meaning is an LK question, not a flight question.
+
+`boot_a` `2931647a...86b1`, device in Recovery. Docs §73.
+
+## >>> PREVIOUS 2026-11-08 16:28: 2416 BUILT - READ THE SLC GROUP WINDOW, CHANGE NOTHING ELSE <<<
 
 2415 closed the shape, so the last unread SoC-side object is the SLC group
 *window*: group 6's base and limit at `0x13FBF740/0x744`. The shim has sampled the
