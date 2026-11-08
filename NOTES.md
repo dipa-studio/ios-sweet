@@ -1,6 +1,42 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 15:34: 2409 BUILT - FIRST ACCESS OUTSIDE THE ARENA, TAG AS A CONTROL <<<
+## >>> ACTIVE 2026-11-08 15:20: 2410 CRASHED THE BOOT; 2411 REMOVES THE FAR PAGE <<<
+
+**2410 did not publish anything.** `after-marks.bin` is byte-identical to
+`before-marks.bin` (`9e1bdb11...`), and that content is 2409's report - the
+kernel never wrote the marks page. Boot reached fastboot at **73.41 s** against
+85.4 s for 2408: twelve seconds of CSF timeout never happened. The phone showed
+the REDMI logo and reset. `boot_a` was restored to `2931647a...86b1` and the
+device is in Recovery; ramoops holds an older Android boot, not this one.
+
+**Diagnosis.** 2410 added one CPU read that must never happen: the witness
+dereferenced `platform->firmware_memory + 0x1000`, i.e. the 20 MiB allocation LK
+leaves for the GPU, whose own comment in `mtk_gpueb_boot.c` reads "never
+dereference or overwrite that allocation". The shim runs with the MMU off, so
+that load is a raw physical read of a carveout the CPU does not own; it died
+there, before `sweet_csf_boot()`, which is exactly the shape of the evidence:
+no report, no 12 s of MCU timeout, a reset at the logo.
+
+**2411 removes the page, not the question.** One remapped leaf only
+(`0x0100D000` -> a page of the shim's own BSS at `0x40279000`, one page past the
+arena, tag 6), and `0x0100C000` keeps the firmware's own leaf into the arena as
+an **instrument control**: read it first, and a stall at marker 1 says the image
+is broken rather than anything about memory. Three reads: arena control
+(`0x0100C400`, bit 9 = 0), past-arena (`0x0100D400`, bit 9 = 0), past-arena
+(`0x0100D200`, bit 9 = 1). Nothing outside the shim image is touched by the CPU.
+
+**Build.** Image `c8d0b033...b233`, payload `a72b45cc...9083`, kernel
+`c01dcbea...d5ea`; arena `0x40078000`, code `0x401a5000`, near page
+`0x40279000`. 303 tests / 3 skipped. Runner
+`shim2411-ooa3-trials-run-once.py`, partition hash `d830862c...c0c3`.
+**Not flown**, `boot_a` still `2931647a...86b1`.
+
+Reading: marker 1 -> instrument dead, nothing to read into. Marker 2 -> the page
+past the arena is unreachable even at bit 9 = 0 (the wall is about which pages
+the GPU may read). Marker 3 -> bit 9 is the address bit, not the allocation.
+Marker 4 -> the wall is a property of the arena allocation.
+
+## >>> PREVIOUS 2026-11-08 15:34: 2409 BUILT - FIRST ACCESS OUTSIDE THE ARENA, TAG AS A CONTROL <<<
 
 **The question 2401..2408 could not ask.** Every access that ever stopped the MCU
 lies inside `[0x40078000, 0x40278000)`, so "bit 9 has no responder" and "this

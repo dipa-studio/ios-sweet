@@ -2697,3 +2697,68 @@ means the opposite of marker 3 - the untagged bit-9 read returned and the tagged
 one did not. Marker 5 means the wall is a property of the arena allocation.
 
 **Not flown.** `boot_a` is still `2931647a...86b1`.
+
+## 63. 2409 and 2410 both failed to ask the question, and 2410 crashed the boot
+
+Two flights, neither of which says anything about bit 9. They are recorded
+together because the second one is a direct consequence of the first.
+
+**2409: the target page was never a page.** `diag_flags` 127, `input_va` 1, the
+MCU never returned the first read. The leaves show the remap did work -
+`0x0100D000 -> 0x0000ffffd4c3` (tag 0) and `0x0100C000 ->
+0x30000000ffffe4c3` (tag 6), PAs differing by exactly 0x1000 with attributes
+`0x4c3` identical to `leaf_0x0100e000`. The PA came from
+`brd.fb_base + brd.fb_size`, and on this board those are `matisse_defaults`:
+`0xfcb3f000 + 0x034c0000 = 0xfffff000`, "the last page under 4 GiB". The ADT has
+no `videolfb`, `vramSize` or `splash` property at all, so the value was never
+device-derived. The MCU did not answer even at bit 9 = 0, which is a statement
+about that address, not about the bit.
+
+The decoder also lied, and that is fixed: `ooa_remap_observed` compared the two
+leaves including bits 59..62, which this build varies on purpose, so a correctly
+applied remap was reported as `remap-not-applied`. Comparison now masks PA and
+tag (`keep = ~(page | 15 << 59)`); 2409's capture re-decodes as
+`ooa_remap_observed: true`, `cold_boot_outcome: outside-arena-unreachable`.
+
+**2410: the CPU read memory it does not own.** 2410 moved the target pages to a
+page of the shim's own BSS and to `platform->firmware_memory + 0x1000`, the
+20 MiB allocation LK leaves for the GPU. Its CPU witness read both. The boot
+never published a report - `after-marks.bin` is byte-identical to
+`before-marks.bin` and still holds 2409's content - reached fastboot at 73.41 s
+against 85.4 s for 2408 (the twelve seconds of CSF timeout never happened), and
+the phone reset at the REDMI logo.
+
+The cause is in the source it was taken from. `mtk_gpueb_boot.c` reads that
+address out of GPUEB register `0x1fd34` and says, in the same breath: *"Actual LK
+stores extra firmware allocation PA>>12 at this register. It allocates 20 MiB;
+never dereference or overwrite that allocation."* The shim runs with the MMU
+off, so the witness load was a raw physical read of a carveout the CPU does not
+own, issued before `sweet_csf_boot()`. Everything about the observation fits:
+no report, no timeout, a reset before the kernel.
+
+`boot_a` was restored to `2931647a...86b1` on both flights, the device returned
+to Recovery, and the pstore entry left behind is from an older Android boot, so
+no shim backtrace exists.
+
+**2411 removes the page, not the question.** One remapped leaf
+(`0x0100D000` -> a page of the shim's own BSS at `0x40279000`, one page past the
+arena, tag 6) and one untouched leaf as an instrument control: `0x0100C000`
+still walks the firmware's own mapping into the arena, so the ladder reads it
+first and a stall at marker 1 indicts the image rather than the memory.
+
+| marker | read | what it is | bit 9 |
+|---|---|---|---|
+| 1 | `0x0100C400` | firmware leaf into the arena, control | 0 |
+| 2 | `0x0100D400` | page past the arena | 0 |
+| 3 | `0x0100D200` | page past the arena | 1 |
+| 4 | - | every access returned | - |
+
+Marker 1 only: the instrument is dead and the run says nothing. Marker 2: a page
+one past the arena is unreachable even at bit 9 = 0, so the wall is about which
+physical pages the GPU may read at all. Marker 3: bit 9 is the address bit and
+not this allocation. Marker 4: the wall is a property of the arena allocation.
+
+Build: image `c8d0b033...b233`, payload `a72b45cc...9083`, kernel
+`c01dcbea...d5ea`, arena `0x40078000`, code `0x401a5000`, 303 tests.
+**Not flown** - 2410 already cost one boot, and the next flash is a separate
+decision.

@@ -131,7 +131,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -197,7 +197,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             names = (('leaf_0x0100e000','leaf_0x0604e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406, 0x2407, 0x2408) else
                      ('leaf_0x0100d000','leaf_0x0100c000',
-                      'leaf_0x0100e000','leaf_0x01001000') if expected_build == 0x2409 else
+                      'leaf_0x0100e000','leaf_0x01001000') if expected_build in (0x2409, 0x2410, 0x2411) else
                      ('leaf_0x0100e000','leaf_0x0300e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
                      ('leaf_0x03000000','leaf_0x03001000',
@@ -1580,10 +1580,14 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['ooa_leaf_group6'] = leaf_g6
             csf['ooa_pa_untagged'] = pa0
             csf['ooa_pa_group6'] = pa6
+            # The tag is meant to differ, so compare everything except PA and
+            # bits59..62. Comparing the raw words made a correctly applied remap
+            # look unapplied on the 2409 run.
+            keep = ~(page | (15 << 59))
             csf['ooa_remap_observed'] = bool(
                 pa0 is not None and pa6 is not None and pa0 >= 0x80000000 and
                 pa6 == pa0 + 0x1000 and (leaf_g0 >> 59) & 15 == 0 and
-                (leaf_g6 >> 59) & 15 == 6 and (leaf_g0 & ~page) == (leaf_g6 & ~page))
+                (leaf_g6 >> 59) & 15 == 6 and (leaf_g0 & keep) == (leaf_g6 & keep))
             csf['ooa_note'] = (
                 'The two leaves keep the code section attribute, AP, SH and AF bits and differ '
                 'in PA and bits59..62 only. The target is the top of the splash reservation, '
@@ -1643,6 +1647,178 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                            '%#x. The stall of 2401..2408 does not reproduce on a page the arena does '
                            'not back, so the wall is a property of that allocation - its SLC group '
                            'policy or its physical placement - and not of PA bit 9' % csf['output_va'])
+            else:
+                outcome = 'no-marker'
+                verdict = ('no marker was written, so the stub at 0x0100E000 never ran; check the '
+                           'entry leaf and the reset vector before reading anything into this run')
+            csf['cold_boot_start'] = None if outcome == 'no-marker' else csf['cold_boot_ladder'].get(
+                hex(marker), None)
+            csf['cold_boot_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2411:
+            # One remapped leaf, one untouched arena leaf as the instrument
+            # control, three reads. 2410's far page is gone: the CPU witness read
+            # LK's GPU firmware allocation and the shim never published.
+            leaf_near = csf.get('leaf_0x0100d000')
+            leaf_ctl  = csf.get('leaf_0x0100c000')
+            page = 0x0000fffffffff000
+            keep = ~(page | (15 << 59))
+            pa_near = None if leaf_near is None else leaf_near & page
+            pa_ctl  = None if leaf_ctl  is None else leaf_ctl & page
+            root = csf.get('transtab_lo')
+            csf['ooa_leaf_near'] = leaf_near
+            csf['ooa_leaf_control'] = leaf_ctl
+            csf['ooa_pa_near'] = pa_near
+            csf['ooa_pa_control'] = pa_ctl
+            csf['ooa_remap_observed'] = bool(
+                pa_near is not None and pa_ctl is not None and pa_near != pa_ctl and
+                (leaf_near >> 59) & 15 == 6 and (leaf_ctl >> 59) & 15 == 6 and
+                (leaf_near & keep) == (leaf_ctl & keep) and
+                not (root is not None and root <= pa_near < root + 0x100000) and
+                (root is None or root <= pa_ctl < root + 0x100000))
+            csf['ooa_note'] = (
+                '0x0100D000 is repointed at a page of the shim BSS past the arena; '
+                '0x0100C000 keeps the firmware leaf into the arena and is the control that '
+                'says the instrument itself still works. Both leaves keep the code section '
+                'attributes and tag 6, so bit 9 is the only variable.')
+            marker = csf['input_va']
+            csf['cold_boot_counter'] = marker
+            csf['cold_boot_target'] = 0x0100E000
+            csf['cold_boot_marker_present'] = marker in (1, 2, 3, 4)
+            csf['cold_boot_ladder'] = {
+                '0x1': 'stopped reading 0x0100C400 (arena leaf, bit 9 = 0, instrument control)',
+                '0x2': 'stopped reading 0x0100D400 (past the arena, bit 9 = 0)',
+                '0x3': 'stopped reading 0x0100D200 (past the arena, bit 9 = 1)',
+                '0x4': 'every access returned',
+                '0xe3': 'a Cortex-M7 fault entry ran; input_va carries 0xE3'}
+            if not csf['ooa_remap_observed']:
+                outcome = 'remap-not-applied'
+                verdict = ('the leaves do not describe what this build installs (0x0100D000 -> '
+                           '%s tag %s, 0x0100C000 -> %s tag %s, arena root %s)' %
+                           (None if leaf_near is None else hex(leaf_near),
+                            None if leaf_near is None else (leaf_near >> 59) & 15,
+                            None if leaf_ctl is None else hex(leaf_ctl),
+                            None if leaf_ctl is None else (leaf_ctl >> 59) & 15,
+                            None if root is None else hex(root)))
+            elif marker == 1:
+                outcome = 'instrument-dead'
+                verdict = ('the MCU never returned the arena leaf at 0x0100C400, which it has '
+                           'read since 2333 and which this build does not touch. Nothing here is '
+                           'about bit 9: the entry or the AS is broken in this image')
+            elif marker == 2:
+                outcome = 'past-arena-unreachable'
+                verdict = ('the arena control returned %#x and the page immediately past the '
+                           'arena did not answer even at bit 9 = 0, with the same tag and the '
+                           'same attributes. So the MCU cannot read that page at all, and bit 9 '
+                           'was never asked: the wall is about which physical pages the GPU may '
+                           'read, not about the address bit' % csf['output_va'])
+            elif marker == 3:
+                outcome = 'bit9-not-arena-shaped'
+                verdict = ('the arena control returned %#x and so did the page past the arena at '
+                           'bit 9 = 0, while its bit-9 = 1 half stalled. A page the arena does '
+                           'not back still refuses its second 512-byte half, so bit 9 is not a '
+                           'property of this allocation: it is the address bit, and the wall '
+                           'sits below the page table and above DRAM' % csf['output_va'])
+            elif marker == 4:
+                outcome = 'arena-allocation-shaped'
+                verdict = ('both halves of a page the arena does not back answered, and shared+12 '
+                           'holds %#x. With the same tag and the same attributes as every arena '
+                           'leaf, the stall of 2401..2408 does not reproduce here, so the wall is '
+                           'a property of the arena allocation - its placement or its SLC group '
+                           'policy - and not of PA bit 9' % csf['output_va'])
+            else:
+                outcome = 'no-marker'
+                verdict = ('no marker was written, so the stub at 0x0100E000 never ran; check the '
+                           'entry leaf and the reset vector before reading anything into this run')
+            csf['cold_boot_start'] = None if outcome == 'no-marker' else csf['cold_boot_ladder'].get(
+                hex(marker), None)
+            csf['cold_boot_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2410:
+            # 2409's ladder, two new pages. Both leaves carry the firmware's own
+            # tag (group 6), so the tag is no longer a variable: bit 9 is.
+            leaf_near = csf.get('leaf_0x0100d000')
+            leaf_far  = csf.get('leaf_0x0100c000')
+            page = 0x0000fffffffff000
+            keep = ~(page | (15 << 59))
+            pa_near = None if leaf_near is None else leaf_near & page
+            pa_far  = None if leaf_far  is None else leaf_far & page
+            root = csf.get('transtab_lo')
+            csf['ooa_leaf_near'] = leaf_near
+            csf['ooa_leaf_far'] = leaf_far
+            csf['ooa_pa_near'] = pa_near
+            csf['ooa_pa_far'] = pa_far
+            csf['ooa_remap_observed'] = bool(
+                pa_near is not None and pa_far is not None and pa_near != pa_far and
+                (leaf_near >> 59) & 15 == 6 and (leaf_far >> 59) & 15 == 6 and
+                (leaf_near & keep) == (leaf_far & keep) and
+                # both pages must be outside the arena the root describes
+                not (root is not None and root <= pa_near < root + 0x100000) and
+                not (root is not None and root <= pa_far < root + 0x100000))
+            csf['ooa_note'] = (
+                'near is a page of the shim BSS beside the arena, far is a page inside the '
+                '20 MiB GPU firmware allocation the GPUEB reports; both leaves keep the code '
+                'section attributes and the firmware tag 6, so bit 9 is the only variable. '
+                'The CPU read of the same four words is on the shim console.')
+            marker = csf['input_va']
+            csf['cold_boot_counter'] = marker
+            csf['cold_boot_target'] = 0x0100E000
+            csf['cold_boot_marker_present'] = marker in (1, 2, 3, 4, 5)
+            csf['cold_boot_ladder'] = {
+                '0x1': 'stopped reading 0x0100D400 (near, bit 9 = 0)',
+                '0x2': 'stopped reading 0x0100C400 (far, bit 9 = 0)',
+                '0x3': 'stopped reading 0x0100D200 (near, bit 9 = 1)',
+                '0x4': 'stopped reading 0x0100C200 (far, bit 9 = 1)',
+                '0x5': 'every access returned',
+                '0xe3': 'a Cortex-M7 fault entry ran; input_va carries 0xE3'}
+            if not csf['ooa_remap_observed']:
+                outcome = 'remap-not-applied'
+                verdict = ('the two leaves do not describe what this build installs (0x0100D000 -> '
+                           '%s tag %s, 0x0100C000 -> %s tag %s, arena root %s). Without the remap '
+                           'the ladder read the firmware again, so the run says nothing about '
+                           'bit 9' %
+                           (None if leaf_near is None else hex(leaf_near),
+                            None if leaf_near is None else (leaf_near >> 59) & 15,
+                            None if leaf_far is None else hex(leaf_far),
+                            None if leaf_far is None else (leaf_far >> 59) & 15,
+                            None if root is None else hex(root)))
+            elif marker == 1:
+                outcome = 'near-page-unreachable'
+                verdict = ('the MCU never returned the bit-9 = 0 control at 0x0100D400, whose leaf '
+                           'points at a page of this shim beside the arena and carries the same tag '
+                           '6 as every other leaf. So the MCU cannot read even a page 4 KiB outside '
+                           'the arena, and bit 9 was never asked: the wall is about which physical '
+                           'pages the GPU may read at all, not about the address bit. Next is '
+                           "SLC/MGM/GMPU coverage and the GPU's decode window, not another page "
+                           'inside DRAM at large')
+            elif marker == 2:
+                outcome = 'far-page-unreachable'
+                verdict = ('the near control returned %#x and the far control at 0x0100C400 never '
+                           'did, so the 20 MiB allocation the GPUEB reports is not readable by the '
+                           'MCU. Bit 9 stays untested at distance; the next step is to ask why the '
+                           "GPU firmware allocation is outside the MCU's reach before spending "
+                           'another page on it' % csf['output_va'])
+            elif marker == 3:
+                outcome = 'bit9-not-arena-shaped'
+                verdict = ('both controls returned (near %#x, far %#x) and the near bit-9 read at '
+                           '0x0100D200 stalled. A page the arena does not back still refuses its '
+                           'second 512-byte half with the same tag as every other leaf, so bit 9 '
+                           'is not a property of this allocation: it is the address bit, and the '
+                           'wall sits below the page table and above DRAM' %
+                           (csf['output_va'], csf['output_va']))
+            elif marker == 4:
+                outcome = 'bit9-follows-the-allocation'
+                verdict = ('the near bit-9 read at 0x0100D200 returned %#x and the far one at '
+                           '0x0100C200 stalled. Bit 9 is harmless on a page beside the arena and '
+                           'fatal inside the GPU firmware allocation, with identical tags and '
+                           'attributes, so the wall follows the allocation - its SLC group policy '
+                           'or its physical placement - and not the address bit' % csf['output_va'])
+            elif marker == 5:
+                outcome = 'every-page-answered'
+                verdict = ('every read returned, both bit-9 reads included, and shared+12 holds '
+                           '%#x. Outside the arena the stall of 2401..2408 does not reproduce at '
+                           'all, so the wall is a property of that allocation and nothing else' %
+                           csf['output_va'])
             else:
                 outcome = 'no-marker'
                 verdict = ('no marker was written, so the stub at 0x0100E000 never ran; check the '

@@ -4,14 +4,7 @@ struct shim_csf_context {
     uint64_t xnu_base,xnu_bytes,shared_base,shared_bytes;
     const struct sweet_gpu_boot_report *platform;
 };
-#if SWEET_CSF_OUT_OF_ARENA
-/*2409: two pages at the top of the bootloader's splash reservation, i.e. DRAM
- *the arena does not back. A setter rather than a context field on purpose:
- *adding a member moved `platform` and changed every older build's .text, and
- *"2401..2408 still rebuild byte for byte" is a property this series relies on.
- *Zero is the default and fails the trial closed. */
-void shim_csf_set_out_of_arena(uint64_t pa);
-#endif
+
 extern struct sweet_csf_boot_report shim_csf_report;
 #if SWEET_CSF_GLOBAL_INIT
 extern struct sweet_csf_global_evidence shim_csf_global_evidence;

@@ -26,8 +26,21 @@
 #define SWEET_CSF_OUT_OF_ARENA 0
 #endif
 #if SWEET_CSF_OUT_OF_ARENA
-static uint64_t shim_csf_ooa;
-void shim_csf_set_out_of_arena(uint64_t pa) { shim_csf_ooa = pa; }
+/*2411: one page the CSF arena does not back, carrying the tag the firmware puts
+ *on every other leaf (group 6), so bit 9 is the only variable.
+ *
+ * It is a page of this shim's own BSS, immediately past the arena. The CPU MMU
+ * is off, so its address is its physical address; the MCU already reads the
+ * arena out of the same image, so reachability costs no assumption; and the CPU
+ * may read and write it freely, which is what 2410's far page was not - the CPU
+ * witness dereferenced LK's GPU firmware allocation and the shim died before it
+ * could hand the report back, so that build answered nothing.
+ *
+ * The page is written with 0x2411a400 at +0x400 and 0x2411a200 at +0x200, so
+ * the word the MCU returns names the offset by itself. 0x0100C000 keeps the
+ * firmware's own leaf into the arena and serves as the instrument control.
+ */
+static uint8_t ooa_near[4096] __attribute__((aligned(4096)));
 #endif
 
 static uint8_t arena[2u<<20] __attribute__((aligned(4096)));
@@ -114,30 +127,31 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
     /* Pinned mali_mgm helper defaults to leaf group6 (bits59..62).
      * Isolate this tag: retain2327 PTE low bits, AS attributes and startup. */
 #if SWEET_CSF_OUT_OF_ARENA
-    /*2409: two leaves of the code section are pointed outside the arena. The
-     *low page keeps the firmware's tag (6) and the high page drops it to 0, so
-     *one boot separates "outside the arena" from "tagged group 6". Both VAs are
-     *inside the 64 KiB R-X section and neither holds a byte the stub runs. */
-    struct sweet_csf_remap remaps[2]={
-        {0x0100C000u,shim_csf_ooa+4096u,SWEET_CSF_LEAF_GROUP},
-        {0x0100D000u,shim_csf_ooa,0}};
-    if(!shim_csf_ooa||(shim_csf_ooa&4095)) {
+    /*2411: one leaf of the R-X section points past the arena. The other VA the
+     *ladder reads is left alone, so it still walks the firmware's own leaf into
+     *the arena and proves the instrument works before the new page is asked. */
+    uint64_t pa_near=(uint64_t)(uintptr_t)ooa_near;
+    struct sweet_csf_remap remaps[1]={{0x0100D000u,pa_near,SWEET_CSF_LEAF_GROUP}};
+    ((volatile uint32_t *)ooa_near)[0x400/4]=0x2411a400u;
+    ((volatile uint32_t *)ooa_near)[0x200/4]=0x2411a200u;
+    /* Fail closed rather than fly a page whose backing is unknown. */
+    if(!pa_near||(pa_near&4095)||(pa_near>=pa&&pa_near<pa+sizeof(arena))) {
         shim_csf_report.error=SWEET_CSF_BOOT_ARGUMENT;return shim_csf_report.error;
     }
 #endif
     if(!rc)rc=sweet_csf_memory_build_group(sweet_csf_blob_start,fw_bytes,&memory,arena,sizeof(arena),pa,(mmu>>8)&255,SWEET_CSF_LEAF_GROUP,&root);
 #if SWEET_CSF_OUT_OF_ARENA
-    if(!rc)rc=sweet_csf_memory_remap_leaves(arena,sizeof(arena),pa,(mmu>>8)&255,remaps,2);
+    if(!rc)rc=sweet_csf_memory_remap_leaves(arena,sizeof(arena),pa,(mmu>>8)&255,remaps,1);
 #endif
     if(rc) {shim_csf_report.error=rc;return rc;}
 #if SWEET_CSF_OUT_OF_ARENA
     /* CPU witness: the shim runs with the MMU off, so these are the same
-     * physical words the MCU will read through the remapped leaves. */
+     * physical words the MCU will read through the remapped leaf. Only this
+     * shim's own page is touched - 2410 dereferenced LK's firmware allocation
+     * here and did not survive it. */
     {
-        const volatile uint32_t *g0=(const volatile uint32_t *)(uintptr_t)shim_csf_ooa;
-        const volatile uint32_t *g6=(const volatile uint32_t *)(uintptr_t)(shim_csf_ooa+4096u);
-        con_hex2("CSF ooa g0","b9=0",g0[0x400/4],"b9=1",g0[0x200/4]);
-        con_hex2("CSF ooa g6","b9=0",g6[0x400/4],"b9=1",g6[0x200/4]);
+        const volatile uint32_t *near=(const volatile uint32_t *)(uintptr_t)pa_near;
+        con_hex2("CSF ooa near","b9=0",near[0x400/4],"b9=1",near[0x200/4]);
     }
 #endif
 #if SWEET_CSF_LEAF_PROBE
