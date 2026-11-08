@@ -1,6 +1,39 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 17:20: 2419 BUILT - WRITE `0x800`, THEN READ THE WORDS BACK <<<
+## >>> ACTIVE 2026-11-08 17:25: 2419 RAN - THE WRITE LANDS, THE FIELD IS STILL NOT THE WALL <<<
+
+Four in-words read `0xFFC855` before and `0x00000800` after - all four, exactly the
+word written, upper 20 bits cleared too. `diag_flags` `0x387F` (bit11 ran, bit12
+already `0x855`, bit13 all read back `0x800`, bit14 clear). **Writes to
+`0x13FBF000` land from this context** - so 2413/2414/2418 were writing a live
+register, their conclusions stand on evidence now, and 2413's flaw is closed one
+level down.
+
+Wall unchanged: marker 3, `output_va` `0x2412a400`, `mcu_status` 1, `as_fault` 0,
+610 MHz / 65 mV, identical to 2412. The bit-9 = 0 rungs answering after a
+full-width zeroing also says the write did not disturb the in path.
+
+Three codes have now held in the read dispatch mode without moving anything:
+`0x855` (vendor), `0xAAA` (2414), `0x800` (pattern `0x00`, bit 11 kept). As
+nibbles that is mode 5 / A / 0 on both halves plus bit 11. Mode 0 would have sent
+every slot to port 0 and did not. **The MFG top page and the AXI 1-to-2 bridge are
+excluded as levers, with the write proven.** Everything `gpufreq_mt6983.c` touches
+in that page - AXCOHERENCE, the eight dispatch words, the SLC group table, the GPM
+protector - has now been read, written, or both, and none of it moves the wall.
+
+Restated because it constrains what is left: a **store** to a bit-9 = 1 slot
+completes (2402/2404) while the **read back hangs**. So the next question is not
+which register - it is whether that store's *data* ever reaches DRAM. If it does,
+the odd 512-byte slots are real memory with a broken read return path. If it does
+not, they are a hole in the GPU's address map and "the write completed" only means
+a posted write needs no response.
+
+Next (not built): the ladder stores a magic to `shared+0x200` (bit 9 = 1), the MCU
+stalls on the read as always, and the **CPU reads `shared+0x200` afterwards** and
+puts it in a report slot. Magic present -> hole ruled out, read path only. Magic
+absent -> the odd slots are a hole and the whole shape is decode, not return.
+
+## >>> PREVIOUS 2026-11-08 17:20: 2419 BUILT - WRITE `0x800`, THEN READ THE WORDS BACK <<<
 
 2418's two readings: `0x000` was never the minimal "all to one port" value (it
 zeroed the 512-byte pattern *and* bit 11), or nothing has ever reached

@@ -3668,3 +3668,50 @@ Build: image `2f8f3789...eda8`, payload `fb0a2b7c...08c2`, kernel
 readback), 2418 rebuilt byte for byte from the changed sources before 2419 was
 built. Runner `shim2419-disp-readback-run-once.py`, partition hash
 `cd212200...1e6a`, preflight passed, **not flown**.
+
+## 79. 2419 ran: the write lands, and the field is still not the wall
+
+2419 flew (`2f8f3789...eda8`), restored `2931647a...86b1` in the same run,
+fastboot at 87.51 s, marks fresh.
+
+**The readback is unambiguous.** The four in-direction words read `0xFFC855`
+before the write and `0x00000800` after it - all four, exactly the word written,
+upper twenty bits cleared too. `diag_flags` `0x387F` = baseline + bit 11 (block
+ran) + bit 12 (already at `0x855`) + bit 13 (all four read back `0x800`), and bit
+14 clear. **Writes to `0x13FBF000` land from this context.** 2413, 2414 and 2418
+were writing a live register all along; their conclusions stand, now on evidence
+instead of assumption, and 2413's original flaw is finally closed one level down.
+
+**And the wall still does not move.** Marker 3: `0x0100C400` returned,
+`0x0100D400` returned, `0x0100D200` stalled. `output_va` `0x2412a400`,
+`mcu_status` 1, `as_fault` 0, 610 MHz / 65 mV - every control identical to 2412.
+The bit-9 = 0 rungs answering *after* the full-width zeroing also says the write
+did not disturb the in path: the bridge still carries reads, and still refuses
+the odd 512-byte slots.
+
+**So the read dispatch mode has now held three different codes without moving
+anything:** `0x855` (vendor, 2413), `0xAAA` (2414) and `0x800` (pattern `0x00`,
+bit 11 kept). Read as nibbles, `0x855` is mode `5` on both halves plus bit 11,
+`0xAAA` is mode `A` on both, `0x800` is mode `0` with bit 11. Three codes, one
+outcome. If `[3:0]`/`[7:4]` were the read-path port map, mode `0` would have sent
+every slot to port 0; it did not. **The MFG top page and the AXI 1-to-2 bridge
+are excluded as levers for this wall, with the write proven.**
+
+That matters for what is left. Everything the vendor's `gpufreq` driver touches
+in this page - `AXCOHERENCE`, the eight dispatch words, the whole SLC group table,
+the GPM protector - has now been read, written, or both, and none of it changes
+which addresses answer. The remaining difference between this boot and a working
+one is therefore not in that page at all.
+
+**One property of the wall is worth restating, because it constrains the search.**
+2402/2404 established that a *store* to a bit-9 = 1 slot completes and the read
+back hangs: the address decodes, the write is accepted, only the read response
+never arrives. 2419 adds that the read dispatch field is writable and inert. A
+read data path that is missing for every odd 512-byte slot, on any page, with the
+write path intact and every SoC-side knob at the vendor value, is not a
+configuration this shim can find by writing registers in `0x13FBF000`.
+
+**Not built.** Next has to come from a different object: the GPU's own side of
+the bus, where panthor's own register list is the only grounded source left, or a
+measurement that separates "the GPU never issues the read" from "the read leaves
+and nothing comes back" - the two remaining explanations for the same silence.
