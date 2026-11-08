@@ -82,7 +82,25 @@ static void platform_state(const struct sweet_csf_boot_config *c,const struct sw
     s->mfg_pll_con1=rd(io,0x13fa000c);s->mfgsc_pll_con1=rd(io,0x13fa0c0c);
     s->topckgen_sel=rd(io,0x100001f0);s->rpc_slp_protect=rd(io,0x13f91048);
     r->platform_sample_flags|=after?2:1;
-#if SWEET_CSF_GPU_REGS
+#if SWEET_CSF_GPU_REGS && SWEET_CSF_SLC_WINDOW
+    /*2416: the SLC group window, read only. 0x740/0x744 are group6's base and
+     *limit and 0x748 its policy - the three words __gpufreq_slc_control()
+     *writes for the group the firmware tags every leaf with. 0x700 is group0's
+     *default word and 0x74C group7's base: the neighbours that make an
+     *off-by-one group index visible. Nothing here is written by this build, so
+     *before and after should agree; a difference is the finding. */
+    {struct sweet_csf_gpu_regs *g=after?&r->gpu_regs_after:&r->gpu_regs_before;
+     uint32_t b0=rd(io,SWEET_CSF_MFG_BASE+0x700);
+     uint32_t b1=rd(io,SWEET_CSF_MFG_BASE+0x740);
+     uint32_t b2=rd(io,SWEET_CSF_MFG_BASE+0x744);
+     uint32_t b3=rd(io,SWEET_CSF_MFG_BASE+0x748);
+     uint32_t b4=rd(io,SWEET_CSF_MFG_BASE+0x74c);
+     if(after) {g->g0_after=b0;g->g6_base_after=b1;g->g6_limit_after=b2;
+                g->g6_ctl_after=b3;g->g7_base_after=b4;}
+     else      {g->g0_before=b0;g->g6_base_before=b1;g->g6_limit_before=b2;
+                g->g6_ctl_before=b3;g->g7_base_before=b4;}
+     r->gpu_regs_flags|=after?2:1;}
+#elif SWEET_CSF_GPU_REGS
     /*2407: raw GPU words, offsets only. 0x048 is the L2 config the dual-slice
      *hypothesis hangs on;0x2c0.. is what the vendor dump reads beside it. Read
      *both states so a value that only exists while powered is visible. */

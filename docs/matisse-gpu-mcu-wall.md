@@ -3218,3 +3218,61 @@ upward across the last four runs (81.4, 83.4, 89.6, 121.0 s). Nothing in 2415
 changes a timeout, the run took the normal path (report published, no crash, both
 restores verified), and the ladder this build executes is one read longer than
 2412's - but the drift is environmental until proven otherwise.
+
+## 72. 2416 built: read the SLC group window, change nothing else
+
+2415 closed the shape question: `+0x200` stalls, `+0x400` answers, `+0x600`
+stalls, so the rule is the offset's bit 9 and a 4 KiB leaf cannot carry a 512-byte
+granule. What has never been read on the SoC side is the SLC group *window*. The
+shim has sampled the group 6 policy at `0x13FBF748` since 2407 and never the base
+and limit at `0x13FBF740/0x744`.
+
+The vendor layout, from `__gpufreq_slc_control()`: group N is a triplet, group 6
+at `0x740/0x744/0x748` and group 7 at `0x74C/0x750/0x754`. So `0x74C` is group 7's
+base, not a fourth word of group 6 - worth knowing before reading a neighbour and
+calling it part of the answer.
+
+**2416 reads five words before the MCU start and the same five after:** `0x700`
+(group 0's default word), `0x740` and `0x744` (group 6 base and limit), `0x748`
+(policy, the cross-check) and `0x74C` (group 7 base, the off-by-one witness). It
+writes nothing in that page, so before and after must agree; a difference is the
+finding, an agreement is a baseline.
+
+**The ABI does not move.** The 784-byte report's 40-byte register block is reused
+with different labels through `SWEET_CSF_SLC_WINDOW`: same ten words at the same
+offsets, five before and five after. The `_Static_assert(sizeof(...)==784)` in
+`csf.c` still holds, and the decoder picks the view by kernel build id, exactly
+the way the 2407 block was versioned.
+
+Everything else is 2412: same container, arena `0x40078000`, code `0x401a5000`,
+both leaves, arena control, sentinels and ladder (`tools/matisse-csf-ladder2412.S`),
+so the run still re-establishes the wall it is trying to explain.
+
+**Static check.** `csf_boot.o` shows the five reads at `0x13fbf700`, then
+`orr #0x40` / `#0x44` / `#0x48` / `#0x4c` on the same base - `0x740/0x744/0x748/
+0x74C` - and stores them into the block. 2412, 2413, 2414 and 2415 all still
+rebuild byte for byte (`333acd79`, `aed0b399`, `42385e94`, `4eebf393`).
+
+**Reading:**
+
+* base and limit both `0xffffffff` -> the group covers everything, the last
+  register-level explanation of a 512-byte boundary dies, and the mechanism is the
+  interconnect's sector handling. This is also what the vendor writes for every
+  group, so it is the likely answer;
+* anything else -> the window's extent becomes the thing to compare with the
+  arena's physical span, and a window that is not 512-byte aligned or that ends
+  inside the arena would be the first SoC-side object in this series that can
+  produce the boundary.
+
+**A regression this build caught, worth recording.** Adding 2415's branch left a
+bare `else` hanging off the 2413/2414 sub-chain, so decoding 2412, 2413 or 2414
+silently returned `no-marker` instead of the conclusion each had actually reached.
+Nothing in the images changed - only the reading of them - and the fix is to
+require the marker to be genuinely absent before saying so. The lesson is the same
+one 2413 taught: a decoder that cannot fail is not a check, so every new branch has
+to be re-run against the older captures, which is now part of the recipe.
+
+Build: image `4cd9c920...c5a2`, payload `78cfc9e9...d8de`, kernel
+`c01dcbea...d5ea`, 305 tests / 3 skipped. Runner
+`shim2416-slcwin-trials-run-once.py`, partition hash `1bae2362...462e`, preflight
+passed, **not flown**.

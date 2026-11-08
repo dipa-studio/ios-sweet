@@ -1,6 +1,40 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 16:22: 2415 RAN - THE WALL IS 512 BYTES WIDE, AND BIT 9 IS ALL OF IT <<<
+## >>> ACTIVE 2026-11-08 16:28: 2416 BUILT - READ THE SLC GROUP WINDOW, CHANGE NOTHING ELSE <<<
+
+2415 closed the shape, so the last unread SoC-side object is the SLC group
+*window*: group 6's base and limit at `0x13FBF740/0x744`. The shim has sampled the
+policy at `0x748` since 2407 and never those two. Vendor layout from
+`__gpufreq_slc_control()`: group 6 is `0x740/0x744/0x748`, group 7 starts at
+`0x74C`, so `0x74C` is group 7's base and not a fourth group-6 word.
+
+2416 reads five words before the MCU start and the same five after - `0x700`
+(group 0 default), `0x740`, `0x744`, `0x748`, `0x74C` - and writes nothing in that
+page, so before and after must agree; a difference would be the finding. The
+784-byte report's 40-byte register block is reused with different labels via
+`SWEET_CSF_SLC_WINDOW`, so the ABI does not move (the size assert still holds) and
+the decoder picks the view by kernel build id. Everything else is 2412: ladder,
+both leaves, arena control, sentinels, arena `0x40078000`, code `0x401a5000`.
+
+Likely reading: base and limit both `0xffffffff` (what the vendor writes for every
+group), which would kill the last register-level explanation of a 512-byte
+boundary and leave the interconnect. Anything else makes the window's extent the
+thing to compare with the arena's physical span.
+
+**Also fixed a decoder regression this build exposed**: adding 2415's branch left a
+bare `else` hanging off the 2413/2414 sub-chain, so decoding 2412/2413/2414
+silently returned `no-marker`. Images were unaffected, only the reading. The four
+older captures now decode to their own conclusions again - 2412
+`bit9-not-arena-shaped`, 2413 `glue-changed-nothing`, 2414
+`axi-dispatch-not-the-wall`, 2415 `bit9-512-period-confirmed` - and that
+re-run is now part of the build recipe.
+
+Static: `csf_boot.o` reads `0x13fbf700` then `orr #0x40/#0x44/#0x48/#0x4c`.
+2412/2413/2414/2415 still rebuild byte for byte. Image `4cd9c920...c5a2`, payload
+`78cfc9e9...d8de`, partition hash `1bae2362...462e`, 305 tests / 3 skipped,
+preflight passed, `boot_a` `2931647a...86b1`, device in Recovery. **Not flown.**
+
+## >>> PREVIOUS 2026-11-08 16:22: 2415 RAN - THE WALL IS 512 BYTES WIDE, AND BIT 9 IS ALL OF IT <<<
 
 2415 flew (`4eebf393...78bf`) and restored to `2931647a...86b1` in the same run -
 no rescue needed, Recovery came up on the first reboot. Marks differ

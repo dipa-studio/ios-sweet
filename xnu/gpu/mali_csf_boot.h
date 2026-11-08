@@ -98,10 +98,22 @@ struct sweet_csf_access_snapshot {
  *Raw offsets only - naming bits nobody documented is how a sample turns into an
  *assumption. Guarded so every earlier build still compiles to its old size. */
 #if SWEET_CSF_GPU_REGS
+#if SWEET_CSF_SLC_WINDOW
+/*2416 asks a different question in the same40 bytes: the MFG top SLC group
+ *window, five words before the MCU start and five after. Same size, same
+ *offsets, different labels - the decoder picks the view by kernel build id,
+ *the way every other appended block is versioned. The size assert in csf.c is
+ *unchanged, so the784-byte ABI cannot drift. */
+struct sweet_csf_gpu_regs {
+    uint32_t g6_base_before, g6_limit_before, g6_ctl_before, g0_before, g7_base_before;
+    uint32_t g6_base_after, g6_limit_after, g6_ctl_after, g0_after, g7_base_after;
+};
+#else
 struct sweet_csf_gpu_regs {
     uint32_t reg_000, reg_004, reg_00c, reg_034, reg_048;
     uint32_t reg_04c, reg_2c0, reg_2c4, reg_2c8, reg_2cc;
 };
+#endif
 #endif
 struct sweet_csf_path_snapshot {
     uint32_t rpc_enable, rpc_status, infra_enable, infra_status;
@@ -229,6 +241,11 @@ enum sweet_csf_boot_error {
 #endif
 /*2407: sample the GPU ID/config block and the0x2c0 words. 0 keeps every earlier
  *build byte identical, which is how the 2404/2406 rebuild checks stay honest. */
+/*0 = the2407 GPU register block, 1 = the2416 SLC group window. Both are40
+ *bytes at the same offsets in the784-byte report. */
+#ifndef SWEET_CSF_SLC_WINDOW
+#define SWEET_CSF_SLC_WINDOW 0
+#endif
 #ifndef SWEET_CSF_GPU_REGS
 #define SWEET_CSF_GPU_REGS 0
 #endif

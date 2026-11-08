@@ -131,7 +131,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415,0x2416):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -197,7 +197,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             names = (('leaf_0x0100e000','leaf_0x0604e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406, 0x2407, 0x2408) else
                      ('leaf_0x0100d000','leaf_0x0100c000',
-                      'leaf_0x0100e000','leaf_0x01001000') if expected_build in (0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414, 0x2415) else
+                      'leaf_0x0100e000','leaf_0x01001000') if expected_build in (0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414, 0x2415, 0x2416) else
                      ('leaf_0x0100e000','leaf_0x0300e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
                      ('leaf_0x03000000','leaf_0x03001000',
@@ -352,6 +352,33 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['platform_path_note'] = ('Original MT6983 scpsys MFG1 masks: RPC bits16..19, '
                 'INFRA bits0..3, EMI0/1 bits18..19; enable and status are separate registers. '
                 'PDC/SLC words are raw observations, not power or reachability proof.')
+        if expected_build == 0x2416:
+            # The same 40 bytes the 2407 block samples, asked a different
+            # question: the MFG top SLC group window. Re-label the ten words and
+            # drop the 2407 slice inference, which belongs to GPU registers this
+            # build never reads.
+            order = ('reg_000', 'reg_004', 'reg_00c', 'reg_034', 'reg_048',
+                     'reg_04c', 'reg_2c0', 'reg_2c4', 'reg_2c8', 'reg_2cc')
+            names = ('g0_word', 'g6_base', 'g6_limit', 'g6_ctl', 'g7_base')
+            for i, label in enumerate(('before', 'after')):
+                values = [csf['gpu_regs_' + label][key] for key in order[i * 5:i * 5 + 5]]
+                csf['slc_window_' + label] = dict(zip(names, values))
+            for key in ('gpu_regs_before', 'gpu_regs_after', 'gpu_regs_block_live',
+                        'gpu_regs_slice_signal', 'gpu_regs_note'):
+                csf.pop(key, None)
+            window = csf['slc_window_after']
+            csf['slc_window_agree'] = csf['slc_window_before'] == window
+            # A full-range window (0xffffffff/0xffffffff) is what the vendor
+            # writes for group 6, and it means the group covers everything: no
+            # 512-byte boundary can come from a window like that.
+            csf['slc_window_full_range'] = window['g6_base'] == 0xffffffff and                 window['g6_limit'] == 0xffffffff
+            csf['slc_window_note'] = (
+                'MFG top group registers, read only and never written by this build: '
+                '0x700 group0 default, 0x740/0x744 group6 base and limit, 0x748 group6 '
+                'policy, 0x74C group7 base. Before and after the MCU start, so a value '
+                'that only exists while powered is visible. Naming follows the vendor '
+                'per-group triplets in __gpufreq_slc_control(); nothing here is a '
+                'readback of what the MCU actually did.')
         if expected_build >= 0x2408:
             # 2408 issues the soft reset panthor issues on its reset/resume path
             # and records four facts instead of a verdict. Completion means
@@ -1659,7 +1686,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 hex(marker), None)
             csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
-        if expected_build in (0x2412, 0x2413, 0x2414):
+        if expected_build in (0x2412, 0x2413, 0x2414, 0x2416):
             # 2411's ladder with the shared+0x200 store removed: that store, at
             # bit 9 = 1, is what stopped 2411 before it could ask about the page.
             leaf_near = csf.get('leaf_0x0100d000')
@@ -1784,10 +1811,24 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                                'MCU data path, so they are load-bearing and 0x855 matters; the '
                                'next step is to find which value lets bit 9 = 1 answer. %s'
                                % (marker, was))
-            else:
+            elif marker not in (1, 2, 3, 4):
+                # Only a genuinely absent marker is 'no-marker'. This used to be a
+                # bare else hanging off the 2413/2414 sub-chain, so every other
+                # build fell into it and lost the conclusion it had just reached.
                 outcome = 'no-marker'
                 verdict = ('no marker was written, so the stub at 0x0100E000 never ran; check the '
                            'entry leaf and the reset vector before reading anything into this run')
+            if expected_build == 0x2416 and outcome == 'bit9-not-arena-shaped':
+                verdict += (' This build also read the SLC group window: group6 base %#x, '
+                            'limit %#x, policy %#x, before and after identical=%s. %s'
+                            % (csf['slc_window_after']['g6_base'],
+                               csf['slc_window_after']['g6_limit'],
+                               csf['slc_window_after']['g6_ctl'],
+                               csf['slc_window_agree'],
+                               'A full-range window cannot produce a 512-byte boundary.'
+                               if csf['slc_window_full_range'] else
+                               'The window is not full range, so its extent is now the '
+                               'first thing to compare with the arena span.'))
             csf['cold_boot_start'] = None if outcome == 'no-marker' else csf['cold_boot_ladder'].get(
                 hex(marker), None)
             csf['cold_boot_outcome'] = outcome
