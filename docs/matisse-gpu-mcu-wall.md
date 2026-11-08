@@ -2929,3 +2929,51 @@ build is untouched. Runner `shim2413-mfgglue-trials-run-once.py`, partition hash
 Readings, unchanged from 2412's table:
 `input_va` 4 + `output_va` `0x2412a200` -> the glue removed the wall;
 `input_va` 3 + `output_va` `0x2412a400` -> the glue is not it.
+
+## 67. 2413 ran: the MFG glue does not move the wall - and the treatment is unverified
+
+Flew `aed0b399...3688` on 2026-11-08 15:50, restored to `2931647a...86b1` in the
+same run. Report fresh (marks differ), fastboot at 83.37 s - the normal
+full-timeout path. `input_va` 3, `output_va` `0x2412a400`, `mcu_status` 1,
+`as_fault` 0, `groups` 8, `diag_flags` `0x87F`.
+
+**The wall did not move.** Marker 3 again: the arena control returned, the page
+past the arena answered at bit 9 = 0, and its bit-9 = 1 half never came back -
+exactly 2412's reading, with the glue applied. `diag_flags` bit 11 is set, so the
+kernel did execute the eleven read-modify-writes before `MCU_CONTROL`.
+
+**But this run cannot say the dispatch words changed.** `path_before.slc_group6`
+and `path_after.slc_group6` are both `0x06002006`: the register already carried
+the vendor's group 6 word *before* the write. The treatment was therefore a
+no-op for the SLC policy on this boot, and the eight dispatch words have no
+before/after witness at all - the console text the shim prints does not reach any
+capture (`after-console.txt` contains no `CSF` line, not even 2412's
+`CSF ooa near`), so `diag_flags` bit 11 is the only proof the block ran.
+
+Two things follow.
+
+* **The vendor MFG glue, as a block, is not the wall.** That much is measured:
+  with it applied the bit-9 half still stalls, in an image that is otherwise 2412.
+* **The AXI-dispatch half of the lead is neither confirmed nor refuted**, because
+  the eight words may already have been at the vendor values. The one word we can
+  see was already correct, which makes "already correct" the likely state for the
+  others too - and that reading, if true, would refute the lead outright (a
+  correctly programmed bridge still refused the second 512 bytes).
+
+**How to settle it in one flight.** Stop trying to observe the value and
+*perturb* it instead. Write the in-dispatch words to a value the hardware cannot
+already hold (`0xAAA`), leave the out-dispatch at the vendor `0x055`, keep 2412's
+ladder byte for byte, and record three "already at the vendor value" bits in
+`diag_flags` (bits 12/13/14 for in-dispatch, out-dispatch, group 6) so even a
+no-op is visible:
+
+* marker 1 missing or the whole ladder dead -> those words govern the MCU's data
+  path and `0x855` is load-bearing: the mechanism is the bridge, and the job
+  becomes finding the value that makes bit 9 = 1 answer;
+* marker 3 with the same `output_va` -> the bridge is not the wall under any
+  setting tried, the lead closes, and what remains is the group table LK builds
+  before handoff (not in the three upstream trees).
+
+The mistake this run makes explicit is worth keeping: 2413 was built to *apply*
+a configuration, not to *prove it differed*. A control that cannot fail is not a
+control.

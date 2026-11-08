@@ -1,6 +1,31 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 15:50: 2413 BUILT - THE VENDOR'S MFG GLUE, NOT FLOWN <<<
+## >>> ACTIVE 2026-11-08 15:53: 2413 RAN - THE VENDOR GLUE DID NOT MOVE THE WALL, AND THE TREATMENT WAS UNVERIFIED <<<
+
+2413 flew and restored. `input_va` 3, `output_va` `0x2412a400`, `mcu_status` 1,
+`diag_flags` `0x87F` (bit 11 set, so the eleven writes ran), fastboot at 83.37 s.
+**The reading is 2412's, exactly**: with the vendor's MFG top glue applied before
+`MCU_CONTROL`, the bit-9 = 1 half still never returns.
+
+The caveat is what matters for the next build: `path_before.slc_group6` and
+`path_after.slc_group6` are **both** `0x06002006`, i.e. group 6 already carried
+the vendor word before the write, and the eight dispatch words have no witness at
+all - the shim's console text does not reach any capture (2412's `CSF ooa near`
+is absent from its own log too). So the glue is a no-op as a *treatment*: the
+build applied a configuration without proving it differed.
+
+What is settled: the vendor glue as a block is not the wall. What is not: whether
+the AXI 1-to-2 dispatch words were already `0x855/0x055`. The next flight must
+perturb, not apply - write the in-dispatch words to `0xAAA` (a value hardware
+cannot already hold), keep the out-dispatch at `0x055`, keep 2412's ladder, and
+record "already at the vendor value" bits in `diag_flags` 12/13/14. Dead ladder
+= the bridge governs the data path; marker 3 again = the lead closes and only
+LK's group table is left.
+
+`docs/matisse-gpu-mcu-wall.md` §67. `boot_a` restored to `2931647a...86b1`,
+device in Recovery.
+
+## >>> PREVIOUS 2026-11-08 15:50: 2413 BUILT - THE VENDOR'S MFG GLUE, NOT FLOWN <<<
 
 2413 is 2412 byte for byte except one block written before `MCU_CONTROL`:
 `AXCOHERENCE |= 0xF` at `0x13FBF168`, the eight `MFG_1TO2AXI` read-dispatch words
