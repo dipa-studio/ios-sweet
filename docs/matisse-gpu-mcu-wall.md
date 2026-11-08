@@ -2350,8 +2350,8 @@ series that has to fetch a table the core has not touched, so "cold fetch" and
 "bit 9" arrive together. They can be separated because the boot's own first walk
 is cold too and it works: the reset vector is `0x0100E001`, so the core's very
 first fetch walks `0x40077000` -> `0x40078000` -> `0x4007b040` -> `0x4007b070`,
-four cold descriptors, all bit-9 = 0, and it executes the ladder. Fourteen builds
-have now started that way. Cold table fetches at bit-9 = 0 are therefore not the
+four cold descriptors, all bit-9 = 0, and it executes the ladder. Every build in
+this series that reached the ladder started that way. Cold table fetches at bit-9 = 0 are therefore not the
 problem, and the L2 descriptor read 2 needs is at `0x4007f180`, bit 9 = 0.
 
 **What this changes.** Until now the wall looked like a data-path defect: bit 9

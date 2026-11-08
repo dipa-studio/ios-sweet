@@ -27,7 +27,8 @@ which is why `as_fault` stays 0 and `mcu_status` stays 1.
 table fetch, so "cold" and "bit 9" arrive together - but the reset vector
 `0x0100E001` makes the core's very first fetch a cold walk through
 `0x40077000` -> `0x40078000` -> `0x4007b040` -> `0x4007b070`, all bit 9 = 0, and
-it executes the ladder. Fourteen builds have started that way.
+it executes the ladder. Every build in this series that reached the ladder
+started that way.
 
 Consequences: a page is walkable only if `(VA >> 18) & 1 == 0`. The code section
 `0x01000000..0x0100ffff` satisfies it for all sixteen pages, which is why the
