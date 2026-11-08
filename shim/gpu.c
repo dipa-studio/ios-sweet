@@ -248,9 +248,12 @@ int shim_gpu_publish(uintptr_t adt, uint32_t bytes,
     char *b = (char *)property(adt, bytes, "system-firmware-version", 128);
     if (!raw || !a || !b || sizeof(*r) > 128) return -1;
 #ifdef SHIM_CSF_PROBE
-    uint8_t *csf=property(adt, bytes, "sweet-csf-report", 696);
-    if (!csf || sizeof(shim_csf_report)!=696) return -1;
-    for (unsigned i=0;i<696;i++) csf[i]=0;
+    /*2407: the struct grew to 784 for the GPU register block, so the required
+     *property size comes from sizeof instead of a literal. The builder and the
+     *kernel read the same number out of the same property. */
+    uint8_t *csf=property(adt, bytes, "sweet-csf-report", sizeof(shim_csf_report));
+    if (!csf) return -1;
+    for (unsigned i=0;i<sizeof(shim_csf_report);i++) csf[i]=0;
     for (unsigned i=0;i<sizeof(shim_csf_report);i++) csf[i]=((const uint8_t *)&shim_csf_report)[i];
 #if SWEET_CSF_GLOBAL_INIT
     /*2381: fixed96-byte block in its own property. Absent means the builder

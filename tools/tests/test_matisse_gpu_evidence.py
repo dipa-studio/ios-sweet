@@ -264,6 +264,14 @@ class ReportDecodeTests(unittest.TestCase):
                 for i,key in enumerate(self.module.CSF_PATH_KEYS):
                     words[i]=changes.get('path_'+prefix+'_'+key,words[i])
                 raw+=struct.pack('<16I',*words)
+        if build>=0x2407:
+            raw+=struct.pack('<2I',changes.get('gpu_regs_flags',3),
+                             changes.get('gpu_regs_reserved',0))
+            for prefix in ('before','after'):
+                words=[0]*10
+                for i,key in enumerate(self.module.CSF_GPU_REG_KEYS):
+                    words[i]=changes.get('gpu_regs_'+prefix+'_'+key,words[i])
+                raw+=struct.pack('<10I',*words)
         count=struct.unpack_from('<I',data,12)[0]
         for i in range(len(raw)//8):
             if i==omit:continue
@@ -748,6 +756,10 @@ class ReportDecodeTests(unittest.TestCase):
     # uncached page, and the stack page for reference.
     LEAVES_2404 = (0x00000000401C34C3, 0x00000000401B34C3,
                    0x00000000401B64D7, 0x0060000040091443)
+    # 2407: the report grew 88 bytes, the shim's .bss crossed a page and the
+    # arena anchor moved 0x77000 -> 0x78000. Every PA is one page higher and no
+    # attribute bit moves, because the shift is bit 12.
+    LEAVES_2407 = tuple(leaf + 0x1000 for leaf in LEAVES_2404)
 
     def test_2404_asks_whether_the_walk_survives_bit9(self):
         """2404: a descriptor fetch at PA bit 9 = 1, then the store direction."""
@@ -865,6 +877,26 @@ class ReportDecodeTests(unittest.TestCase):
                                output_va=0x0F10F857, leaf=self.LEAVES_2404)['csf']
         self.assertTrue(csf['mirror_mapped'])
         self.assertEqual(csf['cold_boot_outcome'], 'walk-dies-at-bit9')
+
+    def test_2407_samples_registers_without_calling_them_a_cause(self):
+        """2407 is 2406 plus a read-only register block; the verdict must not move."""
+        csf = self.cold_report(build=0x2407, input_va=2,
+                               firmware_probe_pa_lo=0x401B6000,
+                               output_va=0x0F10F857, leaf=self.LEAVES_2407,
+                               gpu_regs_before_reg_048=0x01028000,
+                               gpu_regs_after_reg_048=0x01028000)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'walk-dies-at-bit9')
+        self.assertEqual(csf['gpu_regs_sample_flags'], 3)
+        self.assertEqual(csf['gpu_regs_before']['reg_048'], 0x01028000)
+        self.assertIn('lead, not a mechanism', csf['gpu_regs_note'])
+        # A register word is an observation, never a claim about the wall.
+        self.assertNotIn('0x01028000', csf['instrument_verdict'])
+
+    def test_2407_refuses_a_register_block_it_did_not_sample(self):
+        with self.assertRaises(ValueError):
+            self.cold_report(build=0x2407, input_va=2, firmware_probe_pa_lo=0x401B6000,
+                             output_va=0x0F10F857, leaf=self.LEAVES_2407,
+                             gpu_regs_flags=1, gpu_regs_after_reg_048=1)
 
     def test_2403_alias_splits_the_va_from_the_leaf(self):
         """2403: the same leaf and PA through a second VA, plus a data check."""

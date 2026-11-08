@@ -63,6 +63,11 @@ CSF_PATH_KEYS = ['rpc_enable','rpc_status','infra_enable','infra_status',
     'emi0_enable','emi0_status','emi1_enable','emi1_status','pdc_cg','pdc_st0',
     'pdc_st1','pdc_st2','pdc_st4','pdc_st5','pdc_st6','slc_group6']
 CSF_PATH_MASKS = dict(rpc=0x000f0000, infra=0xf, emi0=0xc0000, emi1=0xc0000)
+#2407 samples raw GPU words by offset. 0x048 is the L2 config the dual-slice
+#hypothesis hangs on; 0x2c0.. is the block the vendor KMD dump reads beside it.
+#No field names: naming an undocumented bit is how a sample becomes a belief.
+CSF_GPU_REG_KEYS = ['reg_000','reg_004','reg_00c','reg_034','reg_048',
+                    'reg_04c','reg_2c0','reg_2c4','reg_2c8','reg_2cc']
 # Cortex-M CFSR bits the 2383 fault entry can report (SCB->CFSR, 0xE000ED28).
 CFSR_BITS = ((0, 'IACCVIOL'), (1, 'DACCVIOL'), (3, 'MUNSTKERR'), (4, 'MSTKERR'),
              (5, 'MLSPERR'), (7, 'MMARVALID'), (8, 'IBUSERR'), (9, 'PRECISERR'),
@@ -126,7 +131,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -175,7 +180,8 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
         fields['gpu_id'] >> 28 == 10 and fields['as_present'] not in (0,0xffffffff) and
         fields['reset_rawstat'] & 0x100 != 0)
     if expected_build >= 0x2322:
-        count = 87 if expected_build >= 0x2333 else 70 if expected_build >= 0x2332 else (55 if expected_build >= 0x2331 else (38 if expected_build >= 0x2328 else (37 if expected_build == 0x2327 else (36 if expected_build == 0x2326 else (24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11))))))
+        count = (98 if expected_build >= 0x2407 else
+                 87 if expected_build >= 0x2333 else 70 if expected_build >= 0x2332 else (55 if expected_build >= 0x2331 else (38 if expected_build >= 0x2328 else (37 if expected_build == 0x2327 else (36 if expected_build == 0x2326 else (24 if expected_build == 0x2325 else (16 if expected_build >= 0x2323 else 11)))))))
         raw = report_bytes(records,320,count,mark,'CSF')
         csf = dict(zip(CSF_KEYS,struct.unpack('<I2i19I',raw[:88])))
         if expected_build >= 0x2388 and (require_leaf or
@@ -189,7 +195,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             # windows: the mirror's own section and page, the shared-L3 alias,
             # and the original code page.
             names = (('leaf_0x0100e000','leaf_0x0604e000',
-                      'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406) else
+                      'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406, 0x2407) else
                      ('leaf_0x0100e000','leaf_0x0300e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
                      ('leaf_0x03000000','leaf_0x03001000',
@@ -309,6 +315,21 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['platform_path_released'] = flags == 3 and not any(
                 value for name in ('before', 'after')
                 for value in csf['path_' + name + '_blocked'].values())
+        if expected_build >= 0x2407:
+            flags, reserved = struct.unpack_from('<2I', raw, 696)
+            if flags & ~3 or flags == 2 or reserved:
+                raise ValueError('invalid CSF GPU register sample flags/reserved word')
+            csf['gpu_regs_sample_flags'] = flags
+            for name, offset in (('before', 704), ('after', 744)):
+                sample = dict(zip(CSF_GPU_REG_KEYS, struct.unpack_from('<10I', raw, offset)))
+                csf['gpu_regs_' + name] = sample
+                if not flags & (1 if name == 'before' else 2) and any(sample.values()):
+                    raise ValueError('unsampled GPU register block contains data')
+            # Read-only observation: this can show a masked L2 slice, it cannot
+            # show that the slice is why bit 9 = 1 has no responder.
+            csf['gpu_regs_note'] = ('Raw words sampled by the shim. A bit set here is a '
+                                    'lead, not a mechanism; nothing in this build writes '
+                                    'a GPU register or a power domain.')
             csf['platform_path_note'] = ('Original MT6983 scpsys MFG1 masks: RPC bits16..19, '
                 'INFRA bits0..3, EMI0/1 bits18..19; enable and status are separate registers. '
                 'PDC/SLC words are raw observations, not power or reachability proof.')
@@ -1340,7 +1361,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             else:
                 csf['instrument_verdict'] = verdict
             csf['cold_boot_outcome'] = outcome
-        if expected_build in (0x2405, 0x2406):
+        if expected_build in (0x2405, 0x2406, 0x2407):
             # 2404's accesses with the instrument repaired: a DSB SY after every
             # marker store and every result store, and shared+12 seeded with
             # 0xdeadbeef by the kernel before MCU_CONTROL. Marker 1 written and
@@ -1350,9 +1371,14 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             code_leaf = csf.get('leaf_0x0100e000')
             mirror_leaf = csf.get('leaf_0x0604e000')
             page = 0x0000fffffffff000
+            # 2407's report grew 88 bytes, the shim's .bss crossed a page and the
+            # arena anchor moved 0x77000 -> 0x78000. Every PA shifts by 0x1000,
+            # i.e. bit 12, so nothing about bit 9 moves; naming the shift once is
+            # cheaper than another literal that drifts with the next build.
+            base = 0x401B5000 + (0x1000 if expected_build >= 0x2407 else 0)
             csf['relocation_observed'] = (
-                csf['firmware_probe_pa'] == 0x401B5000 and
-                code_leaf is not None and (code_leaf & page) == 0x401C3000)
+                csf['firmware_probe_pa'] == base and
+                code_leaf is not None and (code_leaf & page) == base + 0xE000)
             csf['cold_boot_target'] = 0x0100E000
             csf['cold_boot_ladder'] = {
                 '0x1': 'stopped reading 0x0100E400 (bit 9 = 0, warm)',
@@ -1369,8 +1395,8 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['mirror_mapped'] = bool(mirror_leaf is not None and mirror_leaf & 3 == 3)
             csf['mirror_applied'] = bool(
                 code_leaf is not None and mirror_leaf is not None and
-                (code_leaf & page) == 0x401C3000 and
-                (mirror_leaf & page) == 0x401B3000 and
+                (code_leaf & page) == base + 0xE000 and
+                (mirror_leaf & page) == base - 0x2000 and
                 (mirror_leaf & ~page) == (code_leaf & ~page))
             marker = csf['input_va']
             fault = marker == 0xE3
@@ -2696,7 +2722,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2406)')
+                   help='expected kernel/report build (0x2321 through 0x2407)')
     p.add_argument('--allow-missing-leaf',action='store_true',
                    help='decode a build >=0x2388 whose image shipped without the '
                         'sweet-csf-leaf property (2389 did); leaf fields stay absent')

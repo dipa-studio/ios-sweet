@@ -79,6 +79,16 @@ struct sweet_csf_access_snapshot {
     uint32_t l2_ready_lo, l2_ready_hi, l2_transition_lo, l2_transition_hi;
     uint32_t firmware_word0, version;
 };
+/*2407 samples the GPU register words that could explain a PA bit-9 wall: the
+ *ID/config cluster at0x000..0x04c and the0x2c0 block the vendor KMD dumps.
+ *Raw offsets only - naming bits nobody documented is how a sample turns into an
+ *assumption. Guarded so every earlier build still compiles to its old size. */
+#if SWEET_CSF_GPU_REGS
+struct sweet_csf_gpu_regs {
+    uint32_t reg_000, reg_004, reg_00c, reg_034, reg_048;
+    uint32_t reg_04c, reg_2c0, reg_2c4, reg_2c8, reg_2cc;
+};
+#endif
 struct sweet_csf_path_snapshot {
     uint32_t rpc_enable, rpc_status, infra_enable, infra_status;
     uint32_t emi0_enable, emi0_status, emi1_enable, emi1_status;
@@ -148,6 +158,13 @@ struct sweet_csf_boot_report {
     /*2333 appends136B;696B total. Exact MFG1 masks,not a whole-word zero test. */
     uint32_t path_sample_flags, path_reserved;
     struct sweet_csf_path_snapshot path_before, path_after;
+#if SWEET_CSF_GPU_REGS
+    /*2407 appends88B;784B total. 0x048 is the L2 config the dual-slice
+     *hypothesis hangs on; the0x2c0 words are what the vendor dump reads next
+     *to it. Flags bit0 before MCU_CONTROL, bit1 after the experiment. */
+    uint32_t gpu_regs_flags, gpu_regs_reserved;
+    struct sweet_csf_gpu_regs gpu_regs_before, gpu_regs_after;
+#endif
 };
 enum sweet_csf_boot_stage {
     SWEET_CSF_BOOT_CONFIG=1, SWEET_CSF_BOOT_L2=2, SWEET_CSF_BOOT_AS=3,
@@ -182,6 +199,11 @@ enum sweet_csf_boot_error {
  * identical. */
 #ifndef SWEET_CSF_SHARED_SENTINEL
 #define SWEET_CSF_SHARED_SENTINEL 0
+#endif
+/*2407: sample the GPU ID/config block and the0x2c0 words. 0 keeps every earlier
+ *build byte identical, which is how the 2404/2406 rebuild checks stay honest. */
+#ifndef SWEET_CSF_GPU_REGS
+#define SWEET_CSF_GPU_REGS 0
 #endif
 #define SWEET_CSF_SHARED_SENTINEL_WORD 0xdeadbeefu
 /* Called ONLY while the caller owns exactly one powered/reset GPU reference.

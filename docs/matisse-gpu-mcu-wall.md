@@ -2388,3 +2388,74 @@ from `chip_spec(build_id, mirror_code)`; 2404 still rebuilds byte for byte
 manifest changed. 298 tests pass, 3 skipped.
 
 `boot_a` is back at `2931647a...86b1`.
+
+## 58. 2407 built: the same four accesses, plus the registers that could explain bit 9
+
+2406 left the wall at a single address - the L3 descriptor at PA `0x4007f270`, the
+only bit-9 = 1 address in either walk. The next question is not *where* but *why*
+that address has no responder. 2407 answers it with a read-only sample, not with
+another probe of the same wall.
+
+**Nothing about the experiment moves.** The ladder, the `0xdeadbeef` seed and the
+four accesses are 2406's bytes. Ten GPU words are sampled before `MCU_CONTROL`
+and again after the attempt:
+
+| offset | why it is in the list |
+|---|---|
+| `0x000`, `0x004`, `0x00c` | the ID/config cluster |
+| `0x034` | `GPU_STATUS`, the only word that says the block is clocked |
+| `0x048`, `0x04c` | the L2 config the dual-slice hypothesis hangs on |
+| `0x2c0`, `0x2c4`, `0x2c8`, `0x2cc` | what the vendor KMD dump reads beside it |
+
+They are published raw and named by offset. Naming an undocumented bit is how a
+sample turns into a belief, and this build is only allowed to produce a lead.
+
+**The report grew 88 bytes and the arena moved a page.** The block is 2 + 10 + 10
+`uint32`, so `sizeof(struct sweet_csf_boot_report)` went from 696 to 784, the
+shim's `.bss` crossed a page boundary, and the arena anchor went `0x77000` ->
+`0x78000`. Every PA in this build is therefore `0x1000` higher:
+
+| item | 2406 | 2407 |
+|---|---|---|
+| firmware base (VA `0x01000000`) | `0x401b5000` | `0x401b6000` |
+| code leaf | `0x30000000401c34c3` | `0x30000000401c44c3` |
+| mirror leaf | `0x30000000401b34c3` | `0x30000000401b44c3` |
+| uncached leaf | `0x30000000401b64d7` | `0x30000000401b74d7` |
+| read 1 L3 descriptor | `0x4007b070` (bit 9 = 0) | `0x4007c070` (bit 9 = 0) |
+| read 2 L3 descriptor | `0x4007f270` (bit 9 = 1) | `0x40080270` (bit 9 = 1) |
+| read 1 / read 2 data | `0x401c3400` / `0x401b3400` | `0x401c4400` / `0x401b4400` |
+
+The shift is `0x1000`, i.e. bit 12, so **no bit-9 relation in the build changes**.
+That is the one thing that had to be true for the run to stay comparable, and it
+was checked by rebuilding the page table, not by assuming it.
+
+**Three copies of "696" had to go.** Growing the struct would have failed
+silently in three places, so all three now read one number:
+
+* `shim/gpu.c` looked up the ADT property with a literal 696 and refused to
+  publish if `sizeof` disagreed; it now asks for `sizeof(shim_csf_report)`.
+* `shim/csf.c`'s `_Static_assert` pins 696 or 784, chosen by the same macro that
+  compiles the block in.
+* the kernel's forwarder copied 696 bytes and emitted 87 marks - a hardcoded
+  count that would have dropped the new block without a word. It now forwards
+  `size / 8` marks for any 696..1024-byte property (`xnu/patches/0204`). A
+  register block nobody can read is worse than no block.
+
+| item | value |
+|---|---|
+| image | `c124e536...1781`, 26,714,112 B, arena `0x78000` |
+| kernel | `c01dcbea...d5ea`, `SWEET_BUILD_ID 0x2407`, patches 0203 + 0204 |
+| section / probe | `0x401b6000` / `0x0100E000` -> `0x401c4000` |
+| mirror | `0x401b4000`, entry `0x0604E000` |
+| ladder | unchanged, 120 B, 2406's four accesses |
+| tests | 300 ran, 3 skipped |
+
+2404 still rebuilds byte for byte (`3c58fb31...cecd`) with the register block
+compiled out, so the guard is honest. Built, unit-tested and preflighted,
+**not flown**; `boot_a` is still `2931647a...86b1`.
+
+| reading | state |
+|---|---|
+| `0x048` shows a slice masked off | a lead: the bit-9 address may belong to an L2 slice that is not configured |
+| `0x048` symmetric while bit 9 still dies | the slice story is wrong and the address decode or the EMI channel is next |
+| the block is all zeros | the GPU block was not clocked when it was sampled; say so, do not read it |

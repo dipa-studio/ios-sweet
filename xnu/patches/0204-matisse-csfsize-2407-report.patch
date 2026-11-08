@@ -1,0 +1,24 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -903,11 +903,16 @@
+ 		uint64_t a = (uint64_t)words[2 * i] | (uint64_t)words[2 * i + 1] << 32;
+ 		sweet_mark(300 + i, a, SWEET_BUILD_ID);
+ 	}
++	/* 2407: forward whatever the shim published instead of a fixed 696 bytes.
++	 * The report grew to 784 for the GPU register block, and a hardcoded 87
++	 * marks would have dropped it silently - the same shape of bug as a
++	 * hardcoded build id. Bounded so a corrupt property cannot run away. */
+ 	if (SecureDTGetProperty(chosen, "sweet-csf-report",
+-	    (void const **)&report, &size) == kSuccess && size == 696) {
+-		uint32_t csf[174];
+-		memcpy(csf, report, sizeof(csf));
+-		for (uint32_t i = 0; i < 87; i++) {
++	    (void const **)&report, &size) == kSuccess &&
++	    size >= 696 && size <= 1024 && size % 8 == 0) {
++		uint32_t csf[256];
++		memcpy(csf, report, size);
++		for (uint32_t i = 0; i < size / 8; i++) {
+ 			uint64_t a = (uint64_t)csf[2 * i] | (uint64_t)csf[2 * i + 1] << 32;
+ 			sweet_mark(320 + i, a, SWEET_BUILD_ID);
+ 		}
+

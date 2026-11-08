@@ -1453,6 +1453,15 @@ TRACE_PROBE[0x2406] = dict(
     TRACE_PROBE[0x2405], patches={0x010019b0: FAULT_ENTRY_2401,
                                   0x01000200: ('01340a2c', '00bf7047'),
                                   0x0100E000: COLD_BOOT_2405})
+# 2407 asks why, not where. 2406 put the wall at the only PA bit 9 = 1 address in
+# the walk - the L3 descriptor - so the ladder, the seed and every VA stay
+# identical and the only new thing is a register sample: 0x000..0x04c and the
+# 0x2c0 block the vendor KMD dumps, read before MCU_CONTROL and after the run.
+# SWEET_CSF_GPU_REGS is guarded so 2404/2406 still rebuild byte for byte.
+TRACE_PROBE[0x2407] = dict(
+    TRACE_PROBE[0x2406], patches={0x010019b0: FAULT_ENTRY_2401,
+                                  0x01000200: ('01340a2c', '00bf7047'),
+                                  0x0100E000: COLD_BOOT_2405})
 
 
 
@@ -1776,7 +1785,7 @@ def fault_vector_probe(path, expected, build_id):
                 '0 or 8': 'the read neither faulted nor completed'})
     if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
                     0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402,
-                    0x2403, 0x2404, 0x2405, 0x2406):
+                    0x2403, 0x2404, 0x2405, 0x2406, 0x2407):
         target = {0x2385: '0x100e000', 0x2386: '0x1000200',
                   0x2387: '0x1000600', 0x2388: '0x1001200',
                   0x2389: '0x1001000', 0x2390: '0x10018ec',
@@ -1786,7 +1795,8 @@ def fault_vector_probe(path, expected, build_id):
                   0x2398: '0x100e000', 0x2399: '0x100e000',
                   0x2400: '0x100e000', 0x2401: '0x300e000',
                   0x2402: '0x100e000', 0x2403: '0x100e000',
-                  0x2404: '0x100e000', 0x2405: '0x100e000', 0x2406: '0x100e000'}[build_id]
+                  0x2404: '0x100e000', 0x2405: '0x100e000', 0x2406: '0x100e000',
+                  0x2407: '0x100e000'}[build_id]
         patch['cold_boot'] = dict(
             target=target, marker_value=target, marker_field='input_va',
             counter_field='groups', counter_seed=8, counter_meanings={
@@ -1951,7 +1961,7 @@ def fault_vector_probe(path, expected, build_id):
                     '0x4': 'the store completed and the read back hung: writes land, reads do not',
                     '0x5': 'everything returned; shared+20 must hold 0x5a5a5a5a',
                     '0xe3': 'the core took a synchronous fault; input_va carries 0xE3'})
-        if build_id in (0x2405, 0x2406):
+        if build_id in LADDER_2405_BUILDS:
             # 2404's four accesses, with the instrument repaired: a DSB SY after
             # every marker and after every result store, and shared+12 seeded
             # with 0xdeadbeef by the kernel before MCU_CONTROL. Without the
@@ -2167,10 +2177,11 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
 # closed at decode time, which is the right failure but a wasted trial.
 LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
                     0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402, 0x2403,
-                    0x2404, 0x2405, 0x2406)
+                    0x2404, 0x2405, 0x2406, 0x2407)
 
 
-def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False):
+def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False,
+                   csf_report_bytes=696):
     root, end = adt.parse(data)
     if end != len(data):
         raise ValueError('trailing ADT bytes')
@@ -2186,8 +2197,11 @@ def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=F
     chosen.props = [(n, f, ('sweet-shim/gpu%x' % build_id).encode().ljust(128, b'\0')
                      if n in ('firmware-version', 'system-firmware-version') else v)
                     for n, f, v in chosen.props]
+    # 2407 grows the CSF report struct to 784 for the GPU register block. The
+    # placeholder size is what the shim's property() lookup checks, so it has to
+    # match sizeof(struct sweet_csf_boot_report) or the shim fails closed.
     chosen.props += [('sweet-gpu-report', 0, bytes(128)),
-                     ('sweet-csf-report', 0, bytes(696)),
+                     ('sweet-csf-report', 0, bytes(csf_report_bytes)),
                      ('sweet-gpu-autorecovery-seconds', 0, struct.pack('<I', 60))]
     if global_property:
         #2381: fixed96-byte global-interface evidence, separate from the696-byte ABI.
@@ -2234,6 +2248,18 @@ def chip_definitions(build_id, mirror_code):
     return mirror_define, leaf_define
 
 
+# Builds that carry the 2401 mirror, the 2404 wiring or the 2405 ladder, named by
+# property instead of repeating the tuple at nine call sites. 2405 shipped with
+# its mirror at 0x03000000 because one of those tuples still said 0x2404; adding
+# a build is now one edit per property rather than nine guesses.
+MIRROR_BUILDS = (0x2401, 0x2404, 0x2405, 0x2406, 0x2407)
+LEAF_GROUP0_BUILDS = (0x2398, 0x2403, 0x2404, 0x2405, 0x2406, 0x2407)
+UNCACHED_PAGE_BUILDS = (0x2400, 0x2403, 0x2404, 0x2405, 0x2406, 0x2407)
+SENTINEL_BUILDS = (0x2405, 0x2406, 0x2407)
+LADDER_2405_BUILDS = (0x2405, 0x2406, 0x2407)
+GPU_REG_BUILDS = (0x2407,)
+
+
 def build(a):
     out = Path(a.out).resolve()
     out.relative_to(ROOT / 'research')
@@ -2260,24 +2286,24 @@ def build(a):
     # leaf AttrIdx 0/5, vendor MEMATTR, no nG, read-only code. The entry and
     # its fetch target are the only other things that move.
     if a.build_id in (0x2393, 0x2394, 0x2395, 0x2396, 0x2397, 0x2398, 0x2399,
-                      0x2400, 0x2401, 0x2402, 0x2403, 0x2404, 0x2405, 0x2406):
+                      0x2400, 0x2401, 0x2402, 0x2403, 0x2404, 0x2405, 0x2406, 0x2407):
         if not (a.trace_probe and a.vendor_leaves and a.relocate_code and a.mcu_control == '2'):
             raise ValueError('build%x requires --trace-probe --vendor-leaves --relocate-code --mcu-control 2' % a.build_id)
         if a.uncached_code != (a.build_id == 0x2395):
             raise ValueError('build%x requires --uncached-code exactly when it is 2395' % a.build_id)
         if a.xn_page != (a.build_id == 0x2397):
             raise ValueError('build%x requires --xn-page exactly when it is 2397' % a.build_id)
-        if a.leaf_group != (0 if a.build_id in (0x2398, 0x2403, 0x2404, 0x2405, 0x2406) else 6):
+        if a.leaf_group != (0 if a.build_id in LEAF_GROUP0_BUILDS else 6):
             raise ValueError('build%x requires --leaf-group %d' %
-                             (a.build_id, 0 if a.build_id in (0x2398, 0x2403, 0x2404, 0x2405, 0x2406) else 6))
+                             (a.build_id, 0 if a.build_id in LEAF_GROUP0_BUILDS else 6))
         if a.alias_page != (a.build_id == 0x2399):
             raise ValueError('build%x requires --alias-page exactly when it is 2399' % a.build_id)
-        if a.uncached_page != (a.build_id in (0x2400, 0x2403, 0x2404, 0x2405, 0x2406)):
-            raise ValueError('build%x requires --uncached-page exactly when it is 2400, 2403, 2404, 2405 or 2406'
+        if a.uncached_page != (a.build_id in UNCACHED_PAGE_BUILDS):
+            raise ValueError('build%x requires --uncached-page exactly when it is 2400, 2403, 2404, 2405, 2406 or 2407'
                              % a.build_id)
-        if (a.mirror_code != (a.build_id in (0x2401, 0x2404, 0x2405, 0x2406)) or
+        if (a.mirror_code != (a.build_id in MIRROR_BUILDS) or
                 a.share_code_l3 != (a.build_id in (0x2401, 0x2403))):
-            raise ValueError('build%x requires --mirror-code exactly when it is 2401, 2404, 2405 or 2406 and '
+            raise ValueError('build%x requires --mirror-code exactly when it is 2401 or 2404..2407 and '
                              '--share-code-l3 exactly when it is 2401 or 2403' % a.build_id)
         if (a.ro_as_rw or a.vendor_memattr or a.global_init or a.fault_probe or
                 a.entry_probe or a.reset_store_stub or a.inline_entry or
@@ -2325,7 +2351,8 @@ def build(a):
     command = command.replace('sweettrial=2317', 'sweettrial=%x' % a.build_id)
     command = command.replace('rootrw=1', 'rootrw=0').replace('ufsrw=1', 'ufsrw=0')
     tree = diagnostic_adt(original_adt, a.build_id, a.global_init,
-                          a.build_id in LEAF_PROBE_BUILDS)
+                          a.build_id in LEAF_PROBE_BUILDS,
+                          csf_report_bytes=784 if a.build_id in GPU_REG_BUILDS else 696)
     out.mkdir(parents=True)
     (out / (label + '.adt')).write_bytes(tree)
     payload, _ = mkpayload.build(Path(a.kernel), out / (label + '.adt'), command,
@@ -2356,7 +2383,8 @@ def build(a):
                    '-DSWEET_CSF_ALIAS_TO_VA=' + ('0x02000000u' if a.alias_page else '0'),
                    '-DSWEET_CSF_UNCACHED_VA=' + ('0x01001000u' if a.uncached_page else '0'),
                    '-DSWEET_CSF_GLOBAL_INIT=' + ('1' if a.global_init else '0'),
-                   '-DSWEET_CSF_SHARED_SENTINEL=' + ('1' if a.build_id in (0x2405, 0x2406) else '0'),
+                   '-DSWEET_CSF_SHARED_SENTINEL=' + ('1' if a.build_id in SENTINEL_BUILDS else '0'),
+                   '-DSWEET_CSF_GPU_REGS=' + ('1' if a.build_id in GPU_REG_BUILDS else '0'),
                    '-DSWEET_CSF_RELOCATE_CODE=' + ('1' if a.relocate_code else '0'),
                    '-DSWEET_CSF_MIRROR_CODE_VA=' + mirror_define,
                    '-DSWEET_CSF_SHARE_CODE_L3_VA=' +
@@ -2520,7 +2548,11 @@ def build(a):
         # writes a second L2 slot gets an extra table page from the plan.
         # 2404 mirrors the section but does not alias L2, so it lands on 2402's
         # arena; only mirror+share (2401) or share alone (2403) push a page on.
-        expected_arena = (0x78000 if a.build_id in (0x2399, 0x2401, 0x2403)
+        # 2407 adds 88 bytes of report for the GPU register block; that pushed
+        # the shim's .bss over a page boundary and the arena anchor moved to
+        # 0x78000. The shift is 0x1000 = bit 12, so no bit-9 relation in the
+        # build changes - only every absolute PA in the evidence does.
+        expected_arena = (0x78000 if a.build_id in (0x2399, 0x2401, 0x2403, 0x2407)
                           else 0x77000)
         if arena != expected_arena:
             raise ValueError('fault probe builds must keep their measured pre-probe arena '
@@ -2551,7 +2583,7 @@ def build(a):
                 for name in ('tools/matisse-csf-fault-entry-e3.S',
                              'tools/matisse-csf-ladder2404.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
-            if a.build_id in (0x2405, 0x2406):
+            if a.build_id in LADDER_2405_BUILDS:
                 for name in ('tools/matisse-csf-fault-entry-e3.S',
                              'tools/matisse-csf-ladder2405.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
@@ -2622,7 +2654,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',

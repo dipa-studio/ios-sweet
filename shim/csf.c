@@ -26,7 +26,11 @@
 static uint8_t arena[2u<<20] __attribute__((aligned(4096)));
 extern const uint8_t sweet_csf_blob_start[],sweet_csf_blob_end[];
 struct sweet_csf_boot_report shim_csf_report;
+#if SWEET_CSF_GPU_REGS
+_Static_assert(sizeof(struct sweet_csf_boot_report)==784, "CSF2407 GPU register block");
+#else
 _Static_assert(sizeof(struct sweet_csf_boot_report)==696, "CSF2333 platform path ABI");
+#endif
 #if SWEET_CSF_GLOBAL_INIT
 /*2381 evidence carrier. Published through its own ADT property, so the
  *696-byte report above stays byte-identical. */

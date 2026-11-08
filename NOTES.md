@@ -1,6 +1,32 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 13:36: 2406 RAN - THE WALL IS THE PAGE-TABLE WALK, NOT THE DATA PATH <<<
+## >>> ACTIVE 2026-11-08 14:05: 2407 BUILT - SAME WALL, PLUS THE REGISTERS THAT COULD EXPLAIN IT <<<
+
+2406 put the wall at one address: the L3 descriptor at `0x4007f270`, the only
+bit-9 = 1 address in either walk. 2407 does not probe that wall again; it samples
+the ten GPU words that could say why the address has no responder - `0x000`,
+`0x004`, `0x00c`, `0x034`, `0x048`, `0x04c`, `0x2c0`, `0x2c4`, `0x2c8`, `0x2cc` -
+before `MCU_CONTROL` and again after the attempt. Raw and named by offset: a
+register word is a lead, and the build is not allowed to convert one into a claim.
+
+The ladder, the seed and the four accesses are 2406's bytes exactly. The 88-byte
+block pushed the shim's `.bss` over a page, so the arena anchor moved `0x77000` ->
+`0x78000` and every PA is `0x1000` higher (base `0x401b6000`, code leaf
+`0x401c44c3`, mirror `0x401b44c3`). `0x1000` is bit 12, so **no bit-9 relation
+moves** - checked by rebuilding the page table, not assumed.
+Descriptor: read 1 `0x4007c070` (bit 9 = 0), read 2 `0x40080270` (bit 9 = 1).
+
+Three hardcoded 696s had to go with it, or the block would have vanished without
+a word: the shim's property lookup, its `_Static_assert`, and the kernel
+forwarder, which copied 696 bytes and emitted 87 marks. The forwarder now takes
+`size / 8` marks for any 696..1024-byte property (patch 0204).
+
+Image `c124e536...1781`, kernel `c01dcbea...d5ea` (`SWEET_BUILD_ID 0x2407`,
+patches 0203/0204), partition `3388fa8c...f35e`, 300 tests / 3 skipped, preflight
+passed, `boot_a` still `2931647a...86b1`. 2404 still rebuilds byte-identically
+with the block compiled out. **Not flown.**
+
+## >>> PREVIOUS 2026-11-08 13:36: 2406 RAN - THE WALL IS THE PAGE-TABLE WALK, NOT THE DATA PATH <<<
 
 Flew `38389ecf...c0f9`, `boot_a` restored to `2931647a...86b1` in the same run.
 `input_va` 2, `shared+12` `0x0f10f857`, seed gone, `error` -53, `as_fault` 0,

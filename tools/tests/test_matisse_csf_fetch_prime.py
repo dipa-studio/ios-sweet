@@ -597,7 +597,7 @@ class FetchPrimeTests(unittest.TestCase):
         self.assertIn(0x2398, self.builder.LEAF_PROBE_BUILDS)
         self.assertIn(0x2388, self.builder.LEAF_PROBE_BUILDS)
         source = (ROOT / 'tools/matisse-shim-gpu-image.py').read_text()
-        self.assertIn('a.build_id in LEAF_PROBE_BUILDS)', source)
+        self.assertIn('a.build_id in LEAF_PROBE_BUILDS,', source)
         self.assertIn("('1' if a.build_id in LEAF_PROBE_BUILDS else '0')", source)
         self.assertNotIn('a.build_id == 0x2388', source)
 

@@ -82,6 +82,18 @@ static void platform_state(const struct sweet_csf_boot_config *c,const struct sw
     s->mfg_pll_con1=rd(io,0x13fa000c);s->mfgsc_pll_con1=rd(io,0x13fa0c0c);
     s->topckgen_sel=rd(io,0x100001f0);s->rpc_slp_protect=rd(io,0x13f91048);
     r->platform_sample_flags|=after?2:1;
+#if SWEET_CSF_GPU_REGS
+    /*2407: raw GPU words, offsets only. 0x048 is the L2 config the dual-slice
+     *hypothesis hangs on;0x2c0.. is what the vendor dump reads beside it. Read
+     *both states so a value that only exists while powered is visible. */
+    {struct sweet_csf_gpu_regs *g=after?&r->gpu_regs_after:&r->gpu_regs_before;
+     g->reg_000=rd(io,c->gpu+0x000);g->reg_004=rd(io,c->gpu+0x004);
+     g->reg_00c=rd(io,c->gpu+0x00c);g->reg_034=rd(io,c->gpu+0x034);
+     g->reg_048=rd(io,c->gpu+0x048);g->reg_04c=rd(io,c->gpu+0x04c);
+     g->reg_2c0=rd(io,c->gpu+0x2c0);g->reg_2c4=rd(io,c->gpu+0x2c4);
+     g->reg_2c8=rd(io,c->gpu+0x2c8);g->reg_2cc=rd(io,c->gpu+0x2cc);
+     r->gpu_regs_flags|=after?2:1;}
+#endif
 }
 static void access_state(const struct sweet_csf_boot_config *c,const struct sweet_gpu_io *io,
                          struct sweet_csf_boot_report *r,int after)
