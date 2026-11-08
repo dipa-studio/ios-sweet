@@ -1530,6 +1530,23 @@ TRACE_PROBE[0x2414] = dict(
     stub=bytes.fromhex(COLD_BOOT_2412[1]),
     mirror_code=0, share_code_l3=0, uncached_page=0, leaf_group=6,
     leaf_probe_va=(0x0100D000, 0x0100C000, 0x0100E000, 0x01001000))
+# 2415 asks the only question 2412-2414 left standing: the shape of the wall.
+# Every read so far sampled +0x000, +0x200 and +0x400 of a page, and those three
+# cannot separate "PA bit 9" from "the second 512 bytes of every 1 KiB" - a
+# translation preserves the 12-bit offset, so no mapping can tell them apart.
+# +0x600 has bit 9 = 1 and bit 10 = 1: if it returns while +0x200 stalls, no
+# 512-byte period can explain the wall and bit 9 is not the rule on its own.
+# 2412's image and leaves are kept, the shim writes four sentinels (one per
+# offset) and the ladder reads +0xC400, +0xD400, +0xD600, +0xD200 in that order.
+COLD_BOOT_2415 = (COLD_BOOT_2409[0],
+                  '40f20002c0f2004240f20006c0f200164df20007c0f2001701209060bff34f8f4cf2004856f80800d060bff34f8f02209060bff34f8fd7f80004d060bff34f8f03209060bff34f8fd7f80006d060bff34f8f04209060bff34f8fd7f80002d060bff34f8f05209060bff34f8ffee700bf00bf00bf00bf00bf00bf00bf00bf00bf00bf00bf00bf00bf')
+TRACE_PROBE[0x2415] = dict(
+    TRACE_PROBE[0x2407], patches={0x010019b0: FAULT_ENTRY_2401,
+                                  0x01000200: ('01340a2c', '00bf7047')},
+    stub_original=bytes.fromhex(COLD_BOOT_2415[0]),
+    stub=bytes.fromhex(COLD_BOOT_2415[1]),
+    mirror_code=0, share_code_l3=0, uncached_page=0, leaf_group=6,
+    leaf_probe_va=(0x0100D000, 0x0100C000, 0x0100E000, 0x01001000))
 # 2411 answers 2410's crash: the far page is gone. One leaf is repointed at a
 # page of this shim's BSS just past the arena, the other keeps the firmware's own
 # arena leaf as the instrument control, and nothing outside this image is ever
@@ -1884,7 +1901,7 @@ def fault_vector_probe(path, expected, build_id):
     if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
                     0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402,
                     0x2403, 0x2404, 0x2405, 0x2406, 0x2407, 0x2408, 0x2409, 0x2410, 0x2411, 0x2412,
-                    0x2413, 0x2414):
+                    0x2413, 0x2414, 0x2415):
         target = {0x2385: '0x100e000', 0x2386: '0x1000200',
                   0x2387: '0x1000600', 0x2388: '0x1001200',
                   0x2389: '0x1001000', 0x2390: '0x10018ec',
@@ -1897,7 +1914,8 @@ def fault_vector_probe(path, expected, build_id):
                   0x2404: '0x100e000', 0x2405: '0x100e000', 0x2406: '0x100e000',
                   0x2407: '0x100e000', 0x2408: '0x100e000',
                   0x2409: '0x100e000', 0x2410: '0x100e000', 0x2411: '0x100e000', 0x2412: '0x100e000',
-                  0x2413: '0x100e000', 0x2414: '0x100e000'}[build_id]
+                  0x2413: '0x100e000', 0x2414: '0x100e000',
+                  0x2415: '0x100e000'}[build_id]
         patch['cold_boot'] = dict(
             target=target, marker_value=target, marker_field='input_va',
             counter_field='groups', counter_seed=8, counter_meanings={
@@ -2193,6 +2211,43 @@ def fault_vector_probe(path, expected, build_id):
                              'not show the words had differed. This build perturbs the four '
                              'in-dispatch words to 0xAAA and records in diag_flags 12/13/14 '
                              'whether each group already held the vendor value before the write')
+        if build_id == 0x2415:
+            # 2412's leaves, 2412's control, 2412's result slot - only the ladder
+            # and the sentinels move. Four reads, so five markers: the page is
+            # asked +0x400 and +0x200 exactly as 2412 did, then +0x600 (bit 9 = 1,
+            # bit 10 = 1) before +0x200 is asked again last.
+            patch['cold_boot'] = dict(
+                target='0x100e000', marker_field='input_va', marker_value='0x1..0x5',
+                counter_field='groups', counter_seed=8,
+                out_of_arena_page='a page of the shim BSS immediately past the arena'
+                                  ' (CPU MMU off, so its address is its PA)',
+                remap=[dict(va='0x0100D000', page='near', group=6)],
+                control=dict(va='0x0100C000', note='untouched firmware leaf into the arena'),
+                entry_program='tools/matisse-csf-ladder2415.S',
+                barrier='dsb sy after every marker and every result store',
+                sentinel=dict(va='0x0400000c', value='0xdeadbeef', writer='shim csf_boot'),
+                sentinels=dict(note='one word per offset, written by the shim before MCU_CONTROL',
+                               values=['+0x000 = 0x2415a000', '+0x200 = 0x2415a200',
+                                       '+0x400 = 0x2415a400', '+0x600 = 0x2415a600']),
+                result_slot=dict(va='0x0400000c',
+                                 note='rewritten after every completed read, so output_va names '
+                                      'the last offset that answered'),
+                shape=dict(question='PA bit 9, or a 512-byte period?',
+                           reads=['+0x400 (bit 9 = 0, bit 10 = 1)',
+                                  '+0x600 (bit 9 = 1, bit 10 = 1)',
+                                  '+0x200 (bit 9 = 1, bit 10 = 0)']),
+                counter_meanings={
+                    '0x1': 'the MCU never read the arena leaf it has read since 2333: the run says '
+                           'nothing, check the entry before reading anything into it',
+                    '0x2': 'the arena control returned but +0x400 did not, where 2412 with the same '
+                           'leaf answered: this build is not comparable, check the remap',
+                    '0x3': '+0x400 returned and +0x600 stalled: bit 10 changed nothing, so the rule '
+                           'is PA bit 9 alone and the 512-byte alternation holds',
+                    '0x4': '+0x600 returned and +0x200 stalled: bit 9 alone is not the rule, the '
+                           'difference between them is bit 10, and no 512-byte period explains it',
+                    '0x5': 'all four offsets answered: nothing in this page stalls and the wall '
+                           'measured since 2401 was not reproduced',
+                    '0xe3': 'the core took a synchronous fault; input_va carries 0xE3'})
         if build_id in LADDER_2405_BUILDS:
             # 2404's four accesses, with the instrument repaired: a DSB SY after
             # every marker and after every result store, and shared+12 seeded
@@ -2410,7 +2465,7 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
 LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
                     0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402, 0x2403,
                     0x2404, 0x2405, 0x2406, 0x2407, 0x2408, 0x2409, 0x2410, 0x2411,
-                    0x2412, 0x2413, 0x2414)
+                    0x2412, 0x2413, 0x2414, 0x2415)
 
 
 def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False,
@@ -2489,9 +2544,10 @@ MIRROR_BUILDS = (0x2401, 0x2404, 0x2405, 0x2406, 0x2407, 0x2408)
 LEAF_GROUP0_BUILDS = (0x2398, 0x2403, 0x2404, 0x2405, 0x2406, 0x2407, 0x2408)
 UNCACHED_PAGE_BUILDS = (0x2400, 0x2403, 0x2404, 0x2405, 0x2406, 0x2407, 0x2408)
 SENTINEL_BUILDS = (0x2405, 0x2406, 0x2407, 0x2408, 0x2409, 0x2410, 0x2411, 0x2412,
-                   0x2413, 0x2414)
+                   0x2413, 0x2414, 0x2415)
 LADDER_2405_BUILDS = (0x2405, 0x2406, 0x2407, 0x2408)
-GPU_REG_BUILDS = (0x2407, 0x2408, 0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414)
+GPU_REG_BUILDS = (0x2407, 0x2408, 0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414,
+                 0x2415)
 # 2413 writes the vendor's power-on glue into the MFG top page before the MCU is
 # started; nothing else about it differs from 2412.
 # 2413 writes the vendor values, 2414 perturbs the in-dispatch words instead.
@@ -2529,7 +2585,7 @@ def build(a):
     if a.build_id in (0x2393, 0x2394, 0x2395, 0x2396, 0x2397, 0x2398, 0x2399,
                       0x2400, 0x2401, 0x2402, 0x2403, 0x2404, 0x2405, 0x2406, 0x2407,
                       0x2408, 0x2409, 0x2410, 0x2411, 0x2412,
-                      0x2413, 0x2414):
+                      0x2413, 0x2414, 0x2415):
         if not (a.trace_probe and a.vendor_leaves and a.relocate_code and a.mcu_control == '2'):
             raise ValueError('build%x requires --trace-probe --vendor-leaves --relocate-code --mcu-control 2' % a.build_id)
         if a.uncached_code != (a.build_id == 0x2395):
@@ -2629,7 +2685,8 @@ def build(a):
                    '-DSWEET_CSF_SHARED_SENTINEL=' + ('1' if a.build_id in SENTINEL_BUILDS else '0'),
                    '-DSWEET_CSF_GPU_REGS=' + ('1' if a.build_id in GPU_REG_BUILDS else '0'),
                    '-DSWEET_CSF_PRESTART_RESET=' + ('1' if a.build_id in PRESTART_RESET_BUILDS else '0'),
-                   '-DSWEET_CSF_OUT_OF_ARENA=' + ('1' if a.build_id in (0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414) else '0'),
+                   '-DSWEET_CSF_OUT_OF_ARENA=' + ('1' if a.build_id in (0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414, 0x2415) else '0'),
+                   '-DSWEET_CSF_OOA_SHAPE=' + ('1' if a.build_id == 0x2415 else '0'),
                    '-DSWEET_CSF_MFG_GLUE=' + str(MFG_GLUE_BUILDS.get(a.build_id, 0)),
                    '-DSWEET_CSF_RELOCATE_CODE=' + ('1' if a.relocate_code else '0'),
                    '-DSWEET_CSF_MIRROR_CODE_VA=' + mirror_define,
@@ -2803,7 +2860,7 @@ def build(a):
         # 2410 owns its target pages inside csf.c, so gpu.c is untouched and the
         # shim shrank back to 2408's prefix; the 4 KiB probe page lives in .bss
         # after the arena and does not move the anchor.
-        expected_arena = (0x78000 if a.build_id in (0x2410, 0x2411, 0x2412, 0x2413, 0x2414) else
+        expected_arena = (0x78000 if a.build_id in (0x2410, 0x2411, 0x2412, 0x2413, 0x2414, 0x2415) else
                           0x79000 if a.build_id == 0x2409 else
                           0x78000 if a.build_id in (0x2399, 0x2401, 0x2403, 0x2407, 0x2408)
                           else 0x77000)
@@ -2857,6 +2914,9 @@ def build(a):
                 # variable is the SoC-side glue written before MCU_CONTROL.
                 info['trace_probe']['source_sha256']['tools/matisse-csf-ladder2412.S'] = \
                     digest((ROOT / 'tools/matisse-csf-ladder2412.S').read_bytes())
+            if a.build_id == 0x2415:
+                info['trace_probe']['source_sha256']['tools/matisse-csf-ladder2415.S'] = \
+                    digest((ROOT / 'tools/matisse-csf-ladder2415.S').read_bytes())
             if a.build_id == 0x2403:
                 for name in ('tools/matisse-csf-fault-entry-e3.S',
                              'tools/matisse-csf-ladder2403.S'):
@@ -2924,7 +2984,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',

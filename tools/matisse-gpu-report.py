@@ -131,7 +131,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -197,7 +197,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             names = (('leaf_0x0100e000','leaf_0x0604e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406, 0x2407, 0x2408) else
                      ('leaf_0x0100d000','leaf_0x0100c000',
-                      'leaf_0x0100e000','leaf_0x01001000') if expected_build in (0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414) else
+                      'leaf_0x0100e000','leaf_0x01001000') if expected_build in (0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414, 0x2415) else
                      ('leaf_0x0100e000','leaf_0x0300e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
                      ('leaf_0x03000000','leaf_0x03001000',
@@ -1784,6 +1784,95 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                                'MCU data path, so they are load-bearing and 0x855 matters; the '
                                'next step is to find which value lets bit 9 = 1 answer. %s'
                                % (marker, was))
+            else:
+                outcome = 'no-marker'
+                verdict = ('no marker was written, so the stub at 0x0100E000 never ran; check the '
+                           'entry leaf and the reset vector before reading anything into this run')
+            csf['cold_boot_start'] = None if outcome == 'no-marker' else csf['cold_boot_ladder'].get(
+                hex(marker), None)
+            csf['cold_boot_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
+        if expected_build == 0x2415:
+            # Same two leaves and the same instrument control as 2412; only the
+            # ladder moves. Four reads, five markers, and the result slot is
+            # rewritten after every completed read, so output_va names the last
+            # offset that answered: 0x2415a400 (+0x400), 0x2415a600 (+0x600) or
+            # 0x2415a200 (+0x200).
+            leaf_near = csf.get('leaf_0x0100d000')
+            leaf_ctl  = csf.get('leaf_0x0100c000')
+            page = 0x0000fffffffff000
+            keep = ~(page | (15 << 59))
+            pa_near = None if leaf_near is None else leaf_near & page
+            pa_ctl  = None if leaf_ctl  is None else leaf_ctl & page
+            root = csf.get('transtab_lo')
+            csf['ooa_leaf_near'] = leaf_near
+            csf['ooa_leaf_control'] = leaf_ctl
+            csf['ooa_pa_near'] = pa_near
+            csf['ooa_pa_control'] = pa_ctl
+            csf['ooa_remap_observed'] = bool(
+                pa_near is not None and pa_ctl is not None and pa_near != pa_ctl and
+                (leaf_near >> 59) & 15 == 6 and (leaf_ctl >> 59) & 15 == 6 and
+                (leaf_near & keep) == (leaf_ctl & keep) and
+                not (root is not None and root <= pa_near < root + 0x200000) and
+                (root is None or root <= pa_ctl < root + 0x200000))
+            csf['ooa_note'] = (
+                '0x0100D000 is repointed at a page of the shim BSS past the arena, 0x0100C000 '
+                'keeps the firmware leaf into the arena; the shim plants 0x2415a000/a200/a400/a600 '
+                'at +0x000/+0x200/+0x400/+0x600, so the word the MCU returns names the offset. '
+                'The ladder reads +0x400 and +0x200 as 2412 did, then +0x600 (bit 9 = 1 and bit '
+                '10 = 1), then +0x200 again last.')
+            marker = csf['input_va']
+            csf['cold_boot_counter'] = marker
+            csf['cold_boot_target'] = 0x0100E000
+            csf['cold_boot_marker_present'] = marker in (1, 2, 3, 4, 5)
+            csf['cold_boot_ladder'] = {
+                '0x1': 'stopped reading 0x0100C400 (arena leaf, bit 9 = 0, instrument control)',
+                '0x2': 'stopped reading 0x0100D400 (bit 9 = 0, bit 10 = 1) - 2412 not reproduced',
+                '0x3': 'stopped reading 0x0100D600 (bit 9 = 1, bit 10 = 1) - the shape question',
+                '0x4': 'stopped reading 0x0100D200 (bit 9 = 1, bit 10 = 0) - +0x600 had answered',
+                '0x5': 'every access returned',
+                '0xe3': 'a Cortex-M7 fault entry ran; input_va carries 0xE3'}
+            if not csf['ooa_remap_observed']:
+                outcome = 'remap-not-applied'
+                verdict = ('the leaves do not describe what this build installs (0x0100D000 -> '
+                           '%s tag %s, 0x0100C000 -> %s tag %s, arena root %s)'
+                           % (pa_near, (leaf_near >> 59) & 15 if leaf_near else None,
+                              pa_ctl, (leaf_ctl >> 59) & 15 if leaf_ctl else None, root))
+            elif marker == 5:
+                outcome = 'no-wall-reproduced'
+                verdict = ('all four offsets answered - +0x000 is not read, but +0x200, +0x400 '
+                           'and +0x600 all did, and shared+12 holds %#x. Nothing in this page '
+                           'stalls, so the wall the series measured since 2401 was not '
+                           'reproduced and this run says nothing about its shape; check the '
+                           'sentinels and the remap before drawing anything from it'
+                           % csf['output_va'])
+            elif marker == 4:
+                outcome = 'bit10-decides'
+                verdict = ('+0x600 answered and +0x200 stalled in the same page, through the same '
+                           'leaf, with the same tag - and shared+12 holds %#x, the word planted '
+                           'at +0x600. The only difference between those two offsets is bit 10, '
+                           'so PA bit 9 alone is not the rule and no 512-byte period can explain '
+                           'the wall: the stall depends on the low address bits in a way a 4 KiB '
+                           'leaf cannot express' % csf['output_va'])
+            elif marker == 3:
+                outcome = 'bit9-512-period-confirmed'
+                verdict = ('+0x600, with bit 9 = 1 and bit 10 = 1, stalled exactly as +0x200 does, '
+                           'after +0x400 (bit 9 = 0, bit 10 = 1) answered with %#x. Bit 10 changes '
+                           'nothing, so the rule is PA bit 9 alone and the 512-byte alternation '
+                           'holds: +0x000 answers, +0x200 stalls, +0x400 answers, +0x600 stalls. '
+                           'The wall is a 512-byte sector property, not a page-table one'
+                           % csf['output_va'])
+            elif marker == 2:
+                outcome = 'control-lost'
+                verdict = ('the arena control returned but +0x400 did not, where 2412 answered '
+                           'through the same leaf with %#x: this build is not comparable to '
+                           '2412/2413/2414, check the remap and the sentinels before reading '
+                           'the shape question' % csf['output_va'])
+            elif marker == 1:
+                outcome = 'instrument-dead'
+                verdict = ('the MCU never returned from the arena leaf it has read since 2333: '
+                           'nothing in this run is about memory, check the entry and the reset '
+                           'vector')
             else:
                 outcome = 'no-marker'
                 verdict = ('no marker was written, so the stub at 0x0100E000 never ran; check the '

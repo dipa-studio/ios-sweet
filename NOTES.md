@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 16:05: 2414 RAN - THE GLUE WAS ALREADY PROGRAMMED, AND PERTURBING IT CHANGES NOTHING <<<
+## >>> PREVIOUS 2026-11-08 16:05: 2414 RAN - THE GLUE WAS ALREADY PROGRAMMED, AND PERTURBING IT CHANGES NOTHING <<<
 
 2414 flew (`42385e94...938f`, fastboot 89.57 s) and the measurement is complete.
 The run was interrupted during the restore, so the first pass only wrote the

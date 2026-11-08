@@ -25,6 +25,12 @@
 #ifndef SWEET_CSF_OUT_OF_ARENA
 #define SWEET_CSF_OUT_OF_ARENA 0
 #endif
+/*0 = two sentinels (2411-2414), 1 = four, one per 512-byte offset of the page
+ *(2415). The extra two exist so the value the MCU returns names the offset that
+ *answered without any extra bookkeeping. */
+#ifndef SWEET_CSF_OOA_SHAPE
+#define SWEET_CSF_OOA_SHAPE 0
+#endif
 #if SWEET_CSF_OUT_OF_ARENA
 /*2411: one page the CSF arena does not back, carrying the tag the firmware puts
  *on every other leaf (group 6), so bit 9 is the only variable.
@@ -132,8 +138,18 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
      *the arena and proves the instrument works before the new page is asked. */
     uint64_t pa_near=(uint64_t)(uintptr_t)ooa_near;
     struct sweet_csf_remap remaps[1]={{0x0100D000u,pa_near,SWEET_CSF_LEAF_GROUP}};
+#if SWEET_CSF_OOA_SHAPE
+    /*2415: four offsets, four words. +0x000 has bit 9 = 0 and bit 10 = 0,
+     *+0x200 has bit 9 = 1, +0x400 has bit 10 = 1 and +0x600 has both, so the
+     *returned word is the shape measurement by itself. */
+    ((volatile uint32_t *)ooa_near)[0x000/4]=0x2415a000u;
+    ((volatile uint32_t *)ooa_near)[0x200/4]=0x2415a200u;
+    ((volatile uint32_t *)ooa_near)[0x400/4]=0x2415a400u;
+    ((volatile uint32_t *)ooa_near)[0x600/4]=0x2415a600u;
+#else
     ((volatile uint32_t *)ooa_near)[0x400/4]=0x2412a400u;
     ((volatile uint32_t *)ooa_near)[0x200/4]=0x2412a200u;
+#endif
     /* Fail closed rather than fly a page whose backing is unknown. */
     if(!pa_near||(pa_near&4095)||(pa_near>=pa&&pa_near<pa+sizeof(arena))) {
         shim_csf_report.error=SWEET_CSF_BOOT_ARGUMENT;return shim_csf_report.error;

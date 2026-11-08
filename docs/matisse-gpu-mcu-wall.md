@@ -3083,3 +3083,82 @@ What is left, in the order the evidence supports:
 2. **The group table LK builds before handoff** - the MGM node is empty in DT and
    the table is not in any of the three trees. 2409 excluded the tag itself, but
    not the group's base/limit, which the shim has never read.
+
+## 70. 2415 built: the shape, in one page, with four sentinels
+
+2412-2414 closed every "which" question - allocation, read side, VA range, tag,
+reset, SoC glue. What they left is geometry. Every read in the series sampled
+only `+0x000`, `+0x200` and `+0x400` of a page, and those three cannot separate
+"PA bit 9" from "the second 512 bytes of every 1 KiB", because a translation
+preserves the 12-bit offset: no mapping can tell them apart. A fourth offset can.
+`+0x600` has bit 9 = 1 **and** bit 10 = 1.
+
+2415 is 2412 in container, arena (`0x40078000`), code (`0x401a5000`), both leaves
+(`0x0100D000` -> `0x40279000` tag 6, `0x0100C000` -> the firmware's arena leaf)
+and result slot. Two things change.
+
+**Four sentinels instead of two.** The shim plants one word per offset, so the
+value the MCU returns names the offset by itself - no second result slot, no
+bookkeeping:
+
+| offset | bit 9 | bit 10 | word |
+|---|---|---|---|
+| `+0x000` | 0 | 0 | `0x2415a000` |
+| `+0x200` | 1 | 0 | `0x2415a200` |
+| `+0x400` | 0 | 1 | `0x2415a400` |
+| `+0x600` | 1 | 1 | `0x2415a600` |
+
+**A four-read ladder**, `tools/matisse-csf-ladder2415.S`, one marker each, still
+136 bytes because that is the whole stub it replaces:
+
+| marker | read | question |
+|---|---|---|
+| 1 | `0x0100C400` (arena leaf, bit 9 = 0) | instrument alive |
+| 2 | `0x0100D400` (bit 9 = 0, bit 10 = 1) | 2412 reproduced |
+| 3 | `0x0100D600` (bit 9 = 1, bit 10 = 1) | the shape |
+| 4 | `0x0100D200` (bit 9 = 1, bit 10 = 0) | the wall, asked last |
+| 5 | - | every access returned |
+
+The order is the experiment: every earlier answer is re-established before the
+new question, so a surprise is localised by the marker alone. `+0x200` moves to
+last on purpose - 2412 showed it stalls, so putting it last costs nothing and
+keeps the one known-stalling access from hiding the new one.
+
+Reading:
+
+* **marker 3** -> `+0x600` stalled with bit 10 set, so bit 10 changes nothing:
+  the rule is PA bit 9 alone and the 512-byte alternation holds
+  (`+0x000` answers, `+0x200` stalls, `+0x400` answers, `+0x600` stalls). The wall
+  is a 512-byte sector property, and since a 4 KiB leaf cannot carry it, it lives
+  outside the MMU - in whatever the group base/limit actually covers;
+* **marker 4** -> `+0x600` answered and `+0x200` did not: bit 9 alone is not the
+  rule and no 512-byte period explains it. The decisive difference between the
+  two is bit 10, which no page-table field can express either;
+* marker 2 -> 2412 did not reproduce, this build is not comparable;
+* marker 5 -> nothing in the page stalls, the wall was not reproduced: a
+  regression, not a result.
+
+`output_va` names the last offset that answered, because the single result slot
+is rewritten after each completed read: `0x2415a400` at marker 3,
+`0x2415a600` at marker 4, `0x2415a200` only at marker 5.
+
+**Static checks.** The assembled ladder is exactly 136 bytes and appears once in
+the patched `csf.bin` (`0xee94`); the old 2412 ladder does not appear at all.
+`csf.o` writes the four words as one base plus `orr #0x200/#0x400/#0x600`, which
+is the compiler folding the four stores - the values and the order are right.
+`tools/matisse-shim-gpu-image.py` refuses the build if the stub length differs
+from the original, so a ladder that outgrows 136 bytes cannot ship.
+
+**The runner gained the rescue 2414 needed.** `restore-only` still captures the
+after evidence and verifies `boot_a` by `dd` + `sha256` in Recovery, but if the
+20.87 MiB trim prefix does not produce a Recovery within 15 s, the runner now
+writes the whole 64 MiB backup over the fastboot transport it still holds and
+reboots again - the step that had to be done by hand for 2414. Verification is
+unchanged, so the rescue cannot fake a clean restore.
+
+Build: image `4eebf393...78bf`, payload `5c4dac2a...d51a`, kernel
+`c01dcbea...d5ea`, 305 tests / 3 skipped. 2412, 2413 and 2414 all still
+rebuild byte for byte (`333acd79`, `aed0b399`, `42385e94`), so the new gate
+`SWEET_CSF_OOA_SHAPE` leaks into nothing older. Runner
+`shim2415-shape-trials-run-once.py`, partition hash `f94f9002...839b`, preflight
+passed, **not flown**.
