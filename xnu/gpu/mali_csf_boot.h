@@ -98,7 +98,20 @@ struct sweet_csf_access_snapshot {
  *Raw offsets only - naming bits nobody documented is how a sample turns into an
  *assumption. Guarded so every earlier build still compiles to its old size. */
 #if SWEET_CSF_GPU_REGS
-#if SWEET_CSF_SLC_WINDOW
+#if SWEET_CSF_SLC_GROUPS
+/*2417 asks one question about the whole table instead of five words about one
+ *group: the base word of groups0..9, all ten in one40-byte block, sampled once
+ *after the MCU start. 2416 established that this page is configuration, not
+ *activity - group6's base, limit, policy and group0's word, plus group7's
+ *base, all read identically before and after - so a single post-start snapshot
+ *covers ten groups rather than five words twice. The policy word at0x748 is
+ *still sampled before and after by platform_path(), so the page keeps its live
+ *control. Field order is the read order, low to high: g0, g1..g9. */
+struct sweet_csf_gpu_regs {
+    uint32_t g0_word, g1_base, g2_base, g3_base, g4_base;
+    uint32_t g5_base, g6_base, g7_base, g8_base, g9_base;
+};
+#elif SWEET_CSF_SLC_WINDOW
 /*2416 asks a different question in the same40 bytes: the MFG top SLC group
  *window, five words before the MCU start and five after. Same size, same
  *offsets, different labels - the decoder picks the view by kernel build id,
@@ -161,7 +174,11 @@ struct sweet_csf_boot_report {
      * treatment cannot be a silent no-op. Bits12/13/14 then say that the
      * in-dispatch, out-dispatch and group 6 words already held the vendor value
      * before the write; bit11 still says the block ran.
-     *Bits7..14 are zero on every build that does not do this. */
+     *2417 adds bit15, only when SWEET_CSF_SLC_GROUPS is built in: the group
+     *table was sampled once, after the MCU start. There is no before pass in
+     *that build, so bit15 is the honest counterpart of gpu_regs_flags bit1
+     *being clear.
+     *Bits7..15 are zero on every build that does not do this. */
     uint32_t diag_flags, coherency_features;
     uint32_t coherency_before, coherency_after;
     uint32_t csf_config_before, csf_config_after;
@@ -241,8 +258,12 @@ enum sweet_csf_boot_error {
 #endif
 /*2407: sample the GPU ID/config block and the0x2c0 words. 0 keeps every earlier
  *build byte identical, which is how the 2404/2406 rebuild checks stay honest. */
-/*0 = the2407 GPU register block, 1 = the2416 SLC group window. Both are40
- *bytes at the same offsets in the784-byte report. */
+/*0 = the2407 GPU register block, 1 = the2416 SLC group window, 2 = the2417
+ *group base table. All are40 bytes at the same offsets in the784-byte report,
+ *so the view is chosen by kernel build id and the ABI never moves. */
+#ifndef SWEET_CSF_SLC_GROUPS
+#define SWEET_CSF_SLC_GROUPS 0
+#endif
 #ifndef SWEET_CSF_SLC_WINDOW
 #define SWEET_CSF_SLC_WINDOW 0
 #endif

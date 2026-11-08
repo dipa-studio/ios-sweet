@@ -74,6 +74,18 @@ static uint32_t rd(void *p,uint64_t a) {
  if(a==0x90012000)return m->out_req;
  if(a>=0x90011000 && a<0x90011100)return m->in_page[(a-0x90011000)/4];
  if(a>=0x90012000 && a<0x90012100)return 0;
+#if SWEET_CSF_SLC_GROUPS
+ /*2417: the group table, with the offset encoded in the value. If a read uses
+  *the wrong stride or the report fields are shifted, the assertion below names
+  *the exact word that moved - which is the failure 2416 hit one layer up. */
+ if(a>=0x13fbf000 && a<0x13fc0000)return 0xb0000000u|(uint32_t)(a-0x13fbf700);
+#endif
+#if SWEET_CSF_SLC_GROUPS
+ /*2417: the group table, with the offset encoded in the value. If a read uses
+  *the wrong stride or the report fields are shifted, the assertion below names
+  *the exact word that moved - which is the failure 2416 hit one layer up. */
+ if(a>=0x13fbf000 && a<0x13fc0000)return 0xb0000000u|(uint32_t)(a-0x13fbf700);
+#endif
 #if SWEET_CSF_MFG_GLUE
  /*2413: the MFG top page reads back as zero in this model, so the test can
   *assert the exact word the glue ORs in. glue_already models a boot that
@@ -133,6 +145,10 @@ static void wr(void*p,uint64_t a,uint32_t v) {
  }
  if(a==0x90011000){m->in_req=v;m->global_writes++;return;}
  if(a>=0x90011000 && a<0x90011100){m->in_page[(a-0x90011000)/4]=v;m->global_writes++;return;}
+#if SWEET_CSF_SLC_GROUPS
+ /*2417 is read only in that page; a write here is a bug, not a measurement. */
+ if(a>=0x13fbf000 && a<0x13fc0000)assert(0);
+#endif
 #if SWEET_CSF_MFG_GLUE
  /*2413: the MFG top glue, recorded in order. */
  if(a>=0x13fbf000 && a<0x13fc0000) {
@@ -202,7 +218,35 @@ static struct model model(void){return (struct model){.gpu_mask=0x55,.job_mask=0
 static struct sweet_csf_boot_config cfg(void){return (struct sweet_csf_boot_config){.gpu=0x13000000,.root_pa=0x90000000,.arena_pa=0x90000000,.arena_bytes=0x200000,.shared_offset=0x10000,.shared_bytes=0x20000,.timeout_ms=1,.private_probe_offset=0x5000};}
 static int run(struct model*m,struct sweet_csf_boot_config*c,struct sweet_csf_boot_report*r){struct sweet_gpu_io io={m,rd,wr,ticks,barrier,1000};return sweet_csf_boot(c,&io,r);}
 static void clean(struct model*m,struct sweet_csf_boot_report*r){assert(m->gpu_mask==0x55 && m->job_mask==0xaa && m->mmu_mask==0xbb && m->resets==1+PRESTART_RESETS);assert(r->reset_completed);}
-#if SWEET_CSF_MFG_GLUE == 2
+#if SWEET_CSF_SLC_GROUPS
+/*2417: ten base words, one per group, read once after the MCU start. The model
+ *encodes each offset into the value, so this asserts both the addresses and the
+ *field order: group0's single word at0x700, then 0x704 + 12*(N-1). */
+int main(void) {
+ static const uint32_t expect[10]={0xb0000000u,0xb0000004u,0xb0000010u,0xb000001cu,
+  0xb0000028u,0xb0000034u,0xb0000040u,0xb000004cu,0xb0000058u,0xb0000064u};
+ struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
+ /* The group table lives in platform_path(), which is off unless the config
+  *asks for it - the same gate every 24xx build sets. */
+ c.platform_path=1;c.platform_snapshot=1;c.access_snapshot=1;
+ c.firmware_probe_offset=0x6000;c.firmware_probe_va=0x01000000;
+ c.firmware_probe_expected=0x12345678;m.path_on=1;
+ assert(!run(&m,&c,&r));
+ const uint32_t got[10]={r.gpu_regs_after.g0_word,r.gpu_regs_after.g1_base,
+  r.gpu_regs_after.g2_base,r.gpu_regs_after.g3_base,r.gpu_regs_after.g4_base,
+  r.gpu_regs_after.g5_base,r.gpu_regs_after.g6_base,r.gpu_regs_after.g7_base,
+  r.gpu_regs_after.g8_base,r.gpu_regs_after.g9_base};
+ for(int i=0;i<10;i++)assert(got[i]==expect[i]);
+ /* One snapshot only: bit2 set, bit1 clear, and diag bit15 says so. */
+ assert(r.gpu_regs_flags==2);
+ assert(r.diag_flags==(31|32768));
+ assert(!r.gpu_regs_before.g0_word);
+ assert(r.stage==7 && r.firmware_ready);
+ clean(&m,&r);
+ puts("PASS: 2417 reads the ten group base words in the vendor's stride");
+ return 0;
+}
+#elif SWEET_CSF_MFG_GLUE == 2
 /*2414: the same block, but the in-dispatch words are perturbed to 0xAAA, and the
  *three "already at the vendor value" bits are part of the evidence. */
 int main(void) {
@@ -523,6 +567,12 @@ class CsfBootTests(unittest.TestCase):
 
     def test_vendor_memattr_with_global_interface(self):
         self._run(['-DSWEET_CSF_VENDOR_MEMATTR=1','-DSWEET_CSF_GLOBAL_INIT=1'])
+
+    def test_slc_group_table(self):
+        """2417: ten group base words, in order, one post-start snapshot."""
+        # The group block is a view of the 2407 register block, so both macros
+        # are on in the build this test reproduces.
+        self._run(['-DSWEET_CSF_GPU_REGS=1', '-DSWEET_CSF_SLC_GROUPS=1'])
 
     def test_mfg_perturb(self):
         """2414: in-dispatch at 0xAAA, with the already-set bits visible."""

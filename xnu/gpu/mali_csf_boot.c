@@ -82,7 +82,32 @@ static void platform_state(const struct sweet_csf_boot_config *c,const struct sw
     s->mfg_pll_con1=rd(io,0x13fa000c);s->mfgsc_pll_con1=rd(io,0x13fa0c0c);
     s->topckgen_sel=rd(io,0x100001f0);s->rpc_slp_protect=rd(io,0x13f91048);
     r->platform_sample_flags|=after?2:1;
-#if SWEET_CSF_GPU_REGS && SWEET_CSF_SLC_WINDOW
+#if SWEET_CSF_GPU_REGS && SWEET_CSF_SLC_GROUPS
+    /*2417: the base word of groups0..9, once, after the MCU start. 2416 read
+     *five words of this same page before and after and got identical values,
+     *so the page is configuration and one post-start snapshot buys ten groups
+     *instead of five words twice. The vendor layout is not uniform: group0 is
+     *a single word at0x700, groups1..15 are triplets (base, limit, policy)
+     *from0x704 with a12-byte stride, so the bases are
+     *0x704 + 12*(N-1) for N>=1. Getting that one step wrong is exactly what
+     *this build exists to detect, hence the table below is spelled out rather
+     *than computed. Nothing here is written by this build. */
+    if(after) {
+        struct sweet_csf_gpu_regs *g=&r->gpu_regs_after;
+        static const uint16_t group_word[10]={0x700,0x704,0x710,0x71c,0x728,
+                                              0x734,0x740,0x74c,0x758,0x764};
+        uint32_t v[10];
+        for(unsigned i=0;i<10;i++)v[i]=rd(io,SWEET_CSF_MFG_BASE+group_word[i]);
+        g->g0_word=v[0];g->g1_base=v[1];g->g2_base=v[2];g->g3_base=v[3];
+        g->g4_base=v[4];g->g5_base=v[5];g->g6_base=v[6];g->g7_base=v[7];
+        g->g8_base=v[8];g->g9_base=v[9];
+        /*Bit2 = this snapshot exists; bit1 stays clear because there is no
+         *before pass to claim. diag bit15 says the same thing in the flags
+         *word the decoder already validates. */
+        r->gpu_regs_flags|=2;
+        r->diag_flags|=32768;
+    }
+#elif SWEET_CSF_GPU_REGS && SWEET_CSF_SLC_WINDOW
     /*2416: the SLC group window, read only. 0x740/0x744 are group6's base and
      *limit and 0x748 its policy - the three words __gpufreq_slc_control()
      *writes for the group the firmware tags every leaf with. 0x700 is group0's

@@ -1,6 +1,45 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 16:32: 2416 RAN - THE GROUP WINDOW IS NOT THE VENDOR VALUE, AND NOT A WINDOW <<<
+## >>> ACTIVE 2026-11-08 16:42: 2417 BUILT - READ THE WHOLE GROUP TABLE, ONCE AFTER THE MCU START <<<
+
+2416 answered a narrower question than it was built for: group7's base at `0x74C`
+already reads `0x14`, not the vendor's `0xFFFFFFFF`, so "only group 6 was
+special-cased" was false before the build existed. 2417 spends its 40 bytes on
+breadth: the base word of **groups 0..9**, sampled once, after the MCU start.
+
+The vendor layout from `__gpufreq_slc_control()` is not uniform - group 0 is a
+single word at `0x700` (`// group0: default`), groups 1..15 are triplets from
+`0x704` with a 12-byte stride - so the ten addresses are `0x700`, then
+`0x704/0x710/0x71C/0x728/0x734/0x740/0x74C/0x758/0x764`, spelled out rather than
+computed because an off-by-one group index is what this build must be able to
+catch.
+
+ABI unchanged: the same 40-byte block, ten labels (`SWEET_CSF_SLC_GROUPS`),
+`gpu_regs_flags == 2` (after only) and `diag_flags` bit15 for "no before pass".
+The decoder accepts `flags == 2` only for this build - verified by forcing a 2416
+capture through it, which is now refused with `invalid CSF GPU register sample
+flags/reserved word`. The policy at `0x748` is still sampled before and after by
+`platform_path()`, so the page keeps a live control.
+
+Everything else is 2412: container, arena `0x40078000`, code `0x401a5000`, both
+leaves, sentinels and the 2412 ladder, so the wall must reproduce underneath.
+
+The new test encodes the address into the model's return value
+(`0xB0000000 | (addr - 0x13fbf700)`) and asserts all ten report fields, so a wrong
+stride or a shifted view fails by name - the same class of bug 2416 hit one layer
+up.
+
+Read it: every base `0xFFFFFFFF` except group0 -> no per-group window exists and
+the words cannot be the wall; group 6 the only mismatch -> the value is an LK
+question (already unlikely); several mismatches -> an ordinary descriptor table
+whose encoding is undocumented in the three trees.
+
+Image `cc0f601c...12bf`, payload `641c5862...d556`, kernel `c01dcbea...d5ea`,
+306 tests / 3 skipped, 2412-2416 all still rebuild byte for byte. Runner
+`shim2417-groups-trials-run-once.py`, partition hash `3cf69452...6e48`, preflight
+passed, `boot_a` `2931647a...86b1`, device in Recovery. **Not flown.**
+
+## >>> PREVIOUS 2026-11-08 16:32: 2416 RAN - THE GROUP WINDOW IS NOT THE VENDOR VALUE, AND NOT A WINDOW <<<
 
 2416 flew (`4cd9c920...c5a2`), restored `2931647a...86b1` in the same run, fastboot
 86.52 s. `input_va` 3, `output_va` `0x2412a400`, `mcu_status` 1, `as_fault` 0 - the

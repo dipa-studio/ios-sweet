@@ -3296,8 +3296,12 @@ is a side effect of the run):
 | `0x13FBF74C` | `0x00000014` | group 7 base |
 
 The policy and the group 0 word land exactly on the vendor's values, so the page
-and the offsets are right. The other two do not: the vendor writes `0xFFFFFFFF`,
-this boot holds `0x113F0F81` and `0x107F3F81`.
+and the offsets are right. The other **three** do not: the vendor writes
+`0xFFFFFFFF`, this boot holds `0x113F0F81`, `0x107F3F81` and - at `0x74C`, which
+is group 7's base and not a fourth word of group 6 - `0x00000014`. This paragraph
+said "the other two" until 2417 re-read `__gpufreq_slc_control()` and found the
+vendor's own comment `// group7` on that line; the third mismatch matters, because
+it already kills "only group 6 was special" without another flight.
 
 **Why this is not yet an answer.** Read as base/limit, the pair is inverted
 (`0x113F...` > `0x107F...`). Read in the other order it is a 12 MiB window
@@ -3339,3 +3343,64 @@ pass. If every group holds a similarly shaped descriptor with a different window
 the encoding is a descriptor table and group 6 is ordinary. If group 6 is the only
 one that is not `0xFFFFFFFF`, the boot chain special-cased it - which would make
 the value's meaning worth chasing in LK rather than in another flight.
+
+## 74. 2417 built: read the whole group table, once, after the MCU start
+
+2416 was designed to answer "is group 6 the only group the boot chain
+special-cased?" and the answer was already in its own capture, in a word I had
+labelled as a neighbour: `0x74C` reads `0x14`, and the vendor's source puts
+`// group7` on that line. So at least two groups differ from the vendor's
+`0xFFFFFFFF`, and one flight (2416) proved the page is configuration, not
+activity - group 6 base, limit, policy and group 7's base all read identically
+before and after the MCU start.
+
+2417 therefore spends its 40 bytes on breadth instead of repetition: the base
+word of **groups 0..9**, sampled once, after the MCU start.
+
+**The vendor layout, re-read from `__gpufreq_slc_control()` and not uniform:**
+
+| group | words | base offset |
+|---|---|---|
+| 0 | 1 (`// group0: default`) | `0x700` |
+| 1..15 | 3 (base, limit, policy) | `0x704 + 12*(N-1)` |
+
+so group 6 is `0x740/0x744/0x748`, group 7 `0x74C/0x750/0x754`, group 9
+`0x764/0x768/0x76C`. 2417 reads `0x700/0x704/0x710/0x71C/0x728/0x734/0x740/
+0x74C/0x758/0x764`, spelled out rather than computed, because an off-by-one group
+index is exactly the mistake this build has to be able to catch.
+
+**The ABI still does not move, and the reason is on the record.** The 784-byte
+report's 40-byte register block is reused with ten labels (`SWEET_CSF_SLC_GROUPS`);
+`gpu_regs_flags` is `2` - after only - and `diag_flags` bit 15 says "one snapshot,
+no before pass". The decoder accepts `flags == 2` **only** for this build and
+refuses it everywhere else, which was checked by forcing a 2416 capture through
+it: `invalid CSF GPU register sample flags/reserved word`. The policy word at
+`0x748` is still sampled before and after by `platform_path()`, so the page keeps
+a live control even though the new block does not.
+
+Everything else is 2412: same container, arena `0x40078000`, code `0x401a5000`,
+both leaves, sentinels and the 2412 ladder, so the wall has to reproduce
+underneath the table read.
+
+**A test that pins the addresses, not just the shape.** The model returns
+`0xB0000000 | (addr - 0x13fbf700)` for that page, so the value names the address it
+came from; the test asserts all ten report fields against the expected list. A
+wrong stride, a shifted field or a mislabelled view fails with the exact word that
+moved - which is the class of bug 2416 hit one layer up, in the decoder.
+
+Reading:
+
+* **every base `0xFFFFFFFF` except group0** -> the table carries no per-group
+  window at all; the words are not address bounds and cannot be the 512-byte wall;
+* **group 6 the only mismatch** -> the boot chain singled it out and the value is
+  an LK question, not a flight question (already unlikely: `0x74C`);
+* **several mismatches** -> an ordinary descriptor table with an encoding nobody
+  in the three trees documents, and the next step is decoding it rather than
+  another read.
+
+Build: image `cc0f601c...12bf`, payload `641c5862...d556`, kernel
+`c01dcbea...d5ea`, 306 tests / 3 skipped. 2412, 2413, 2414, 2415 and 2416 all
+still rebuild byte for byte (`333acd79`, `aed0b399`, `42385e94`, `4eebf393`,
+`4cd9c920`), so `SWEET_CSF_SLC_GROUPS` leaks into nothing older. Runner
+`shim2417-groups-trials-run-once.py`, partition hash `3cf69452...6e48`, preflight
+passed, **not flown**.
