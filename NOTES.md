@@ -2,7 +2,7 @@
 
 ## >>> ACTIVE 2026-11-08 12:21: 2403 RAN - THE VA PREFIX IS OUT; THE WALL IS THE ADDRESS BIT ITSELF <<<
 
-**RESULT: `input_va = 2`.** Three reads returned, the fourth never did:
+**RESULT: `input_va = 2`.** One read returned, the second never did:
 
 | marker | read | VA | bit 9 | leaf | outcome |
 |---|---|---|---|---|---|
