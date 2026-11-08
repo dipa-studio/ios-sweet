@@ -1,5 +1,59 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> ACTIVE 2026-11-08 16:22: 2415 RAN - THE WALL IS 512 BYTES WIDE, AND BIT 9 IS ALL OF IT <<<
+
+2415 flew (`4eebf393...78bf`) and restored to `2931647a...86b1` in the same run -
+no rescue needed, Recovery came up on the first reboot. Marks differ
+(`a09099...` -> `c0a654...`), fastboot 121.04 s, the normal timeout path.
+`input_va` 3, `output_va` `0x2415a400`, `mcu_status` 1, `as_fault` 0,
+`diag_flags` `0x7F`.
+
+Marker 3 = stopped at `0x0100D600` (bit 9 = 1, bit 10 = 1). Read 2 returned
+`0x2415a400`, which only this shim plants at `+0x400`, so the four-sentinel
+scheme worked and the offset named itself.
+
+Shape: `+0x200` stalls, `+0x400` answers, `+0x600` stalls. Bit 10 is irrelevant;
+the offset's bit 9 decides. A 512-byte alternation, and no field of a 4 KiB leaf
+can carry a 512-byte granule - so the wall is not a page-table property, now as a
+measured shape instead of an inference. It also kills "the second half of every
+1 KiB" (`+0x400` answers) and "a 1 KiB structure" (`+0x600` stalls with bit 10
+set).
+
+**What is left, and it is one register pair.** The shim has sampled the SLC group
+policy `0x13FBF748` since 2407 but never its window: `0x13FBF740/0x744` (base and
+limit). If that window is programmed in 512-byte units, or covers only the even
+sectors of the arena's span, it is the first SoC-side mechanism that produces a
+512-byte boundary without contradicting a single earlier measurement. The next
+build is read-only: sample those three words before and after the MCU start,
+compare with the arena PA span, no new ladder, no new mapping.
+
+Recorded because it is visible: fastboot arrival drifted 81.4 -> 83.4 -> 89.6 ->
+121.0 s over the last four runs. Nothing in 2415 changes a timeout and the run was
+normal (report published, no crash, both restores verified), so it is
+environmental until proven otherwise.
+
+`boot_a` `2931647a...86b1`, device in Recovery. Docs §71. **Nothing built or
+pending.**
+
+## >>> PREVIOUS 2026-11-08 16:18: 2415 BUILT - THE SHAPE OF THE WALL, FOUR OFFSETS IN ONE PAGE <<<
+
+2412-2414 closed every "which" question, so 2415 asked "what shape". The series
+had only ever read +0x000, +0x200 and +0x400 of a page, and those three cannot
+separate "PA bit 9" from "the second 512 bytes of each 1 KiB" - a translation
+preserves the 12-bit offset, so no mapping can. +0x600 has bit 9 = 1 and bit 10 =
+1, and that is the one offset that can.
+
+It kept 2412's container, arena (`0x40078000`), code (`0x401a5000`), both leaves
+and the single result slot, and moved exactly two things: four sentinels
+(`0x2415a000/a200/a400/a600` at `+0x000/+0x200/+0x400/+0x600`, so the returned
+word names the offset) and a four-read ladder (`tools/matisse-csf-ladder2415.S`,
+still exactly 136 bytes) reading `0xC400`, `0xD400`, `0xD600`, `0xD200` with
+markers 1..4 and marker 5 = all returned. `+0x200` was asked last so the one
+known-stalling access could not hide the new question.
+
+Gated by `SWEET_CSF_OOA_SHAPE`, so 2412/2413/2414 kept their bytes; the runner
+also gained the fastboot full-restore rescue that 2414 had to be done by hand.
+
 ## >>> PREVIOUS 2026-11-08 16:05: 2414 RAN - THE GLUE WAS ALREADY PROGRAMMED, AND PERTURBING IT CHANGES NOTHING <<<
 
 2414 flew (`42385e94...938f`, fastboot 89.57 s) and the measurement is complete.
