@@ -1415,6 +1415,34 @@ TRACE_PROBE[0x2404] = dict(
     patches={0x010019b0: FAULT_ENTRY_2401,
              0x01000200: ('01340a2c', '00bf7047'),
              0x0100E000: COLD_BOOT_2404})
+# 2405 asks 2404's question with an instrument that can answer it. 2404's marker
+# stores were posted and its result slot was never seeded, so "read 1 stalled"
+# and "marker 2 was still in the store buffer when read 2 stalled" produced the
+# same report - and the word it printed (0x04003000) turned out to be arena
+# filler that 2402 reads with a ladder that never writes the slot at all.
+# 2405 keeps the four accesses byte for byte and adds a DSB SY after every
+# marker and after every result store, plus a 0xdeadbeef seed in shared+12
+# written by the kernel before MCU_CONTROL:
+#
+#   marker 1 + sentinel intact   nothing the MCU stored landed: read 1 stalled
+#   marker 2 + 0x0f10f857        read 1 returned, the bit-9 walk is the wall
+#   marker 2 + any other word    read 1 translated to the wrong PA
+#
+# The descriptor question is unchanged: the mirror's L3 entries sit at bytes
+# 0x200..0x278 of a fresh table page, all of them PA bit 9 = 1, while read 1
+# runs out of a warm translation at bit 9 = 0.
+COLD_BOOT_2405 = ('41114ff0000999652b46c0f200070021002527e040f294370021c0f200071de044f220010622c4f20301725044f22003c4f20303191d7258062afcd1f218916f11f4006f01f4a0694ff001011cbf01231365012d02d1fef75cf841e044f22003c4f20303060204221c1d9a513259042afcd1fef74ef8052d',
+                  '40f20002c0f2004240f20006c0f2001640f20007c0f204674ef2004801209060bff34f8f56f80800d060bff34f8f02209060bff34f8f57f80800d060bff34f8f03209060bff34f8f45f65a20c5f65a20c2f80002bff34f8f04209060bff34f8fd2f80002d060bff34f8f05209060bff34f8ffee700bf00bf')
+TRACE_PROBE[0x2405] = dict(
+    TRACE_PROBE[0x2396], kind='cold-boot-fetch',
+    reset_vector=(0x010018ed, 0x0100E001),
+    stub_original=bytes.fromhex(COLD_BOOT_2405[0]),
+    stub=bytes.fromhex(COLD_BOOT_2405[1]),
+    mirror_code=0x06040000, uncached_page=0x01001000, leaf_group=0,
+    leaf_probe_va=(0x0100E000, 0x0604E000, 0x01001000, 0x02000000),
+    patches={0x010019b0: FAULT_ENTRY_2401,
+             0x01000200: ('01340a2c', '00bf7047'),
+             0x0100E000: COLD_BOOT_2405})
 
 
 
@@ -1738,7 +1766,7 @@ def fault_vector_probe(path, expected, build_id):
                 '0 or 8': 'the read neither faulted nor completed'})
     if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
                     0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402,
-                    0x2403, 0x2404):
+                    0x2403, 0x2404, 0x2405):
         target = {0x2385: '0x100e000', 0x2386: '0x1000200',
                   0x2387: '0x1000600', 0x2388: '0x1001200',
                   0x2389: '0x1001000', 0x2390: '0x10018ec',
@@ -1748,7 +1776,7 @@ def fault_vector_probe(path, expected, build_id):
                   0x2398: '0x100e000', 0x2399: '0x100e000',
                   0x2400: '0x100e000', 0x2401: '0x300e000',
                   0x2402: '0x100e000', 0x2403: '0x100e000',
-                  0x2404: '0x100e000'}[build_id]
+                  0x2404: '0x100e000', 0x2405: '0x100e000'}[build_id]
         patch['cold_boot'] = dict(
             target=target, marker_value=target, marker_field='input_va',
             counter_field='groups', counter_seed=8, counter_meanings={
@@ -1912,6 +1940,44 @@ def fault_vector_probe(path, expected, build_id):
                     '0x3': 'the mirror read returned and the store never completed: writes die at bit 9 = 1',
                     '0x4': 'the store completed and the read back hung: writes land, reads do not',
                     '0x5': 'everything returned; shared+20 must hold 0x5a5a5a5a',
+                    '0xe3': 'the core took a synchronous fault; input_va carries 0xE3'})
+        if build_id == 0x2405:
+            # 2404's four accesses, with the instrument repaired: a DSB SY after
+            # every marker and after every result store, and shared+12 seeded
+            # with 0xdeadbeef by the kernel before MCU_CONTROL. Without the
+            # barrier a marker can still be in the store buffer when the next
+            # read stalls; without the seed the slot reads as arena filler and
+            # looks like a data result. Both defects bit 2404.
+            patch['cold_boot'] = dict(
+                target='0x100e000', marker_field='input_va', marker_value='0x1..0x5',
+                counter_field='groups', counter_seed=8,
+                mirror_va='0x6040000', mirror_l3_index='0x4e',
+                mirror_l3_offset='0x270', mirror_l3_offset_bit9=1,
+                entry_program='tools/matisse-csf-ladder2405.S',
+                barrier='dsb sy after every marker and every result store',
+                sentinel=dict(va='0x0400000c', value='0xdeadbeef', writer='kernel'),
+                store=dict(va='0x04000200', value='0x5a5a5a5a', barrier='dsb sy',
+                           page='shared, RW, AttrIdx 5, PBHA 0'),
+                ladder=[dict(marker='0x1', read_va='0x0100E400', bit9=0,
+                             section='code, warm translation',
+                             meaning='baseline; the word must be 0x0f10f857'),
+                        dict(marker='0x2', read_va='0x0604E400', bit9=0,
+                             section='mirror, cold walk, L3 entry at bit 9 = 1',
+                             meaning='present <=> read 1 returned and stored'),
+                        dict(marker='0x3', read_va=None, bit9=1,
+                             section='store to 0x04000200',
+                             meaning='the store to the shared page never completed'),
+                        dict(marker='0x4', read_va='0x04000200', bit9=1,
+                             section='shared, read back after the store',
+                             meaning='the store completed; the read back hung'),
+                        dict(marker='0x5', read_va=None, section='none',
+                             meaning='everything returned, store included')],
+                counter_meanings={
+                    '0x1': 'sentinel still 0xdeadbeef: read 1 never stored, so it stalled',
+                    '0x2': 'read 1 returned; the cold walk died on an L3 entry at bit 9 = 1',
+                    '0x3': 'the mirror read returned and the store never completed',
+                    '0x4': 'the store completed and the read back hung',
+                    '0x5': 'everything returned; shared+12 must hold 0x5a5a5a5a',
                     '0xe3': 'the core took a synchronous fault; input_va carries 0xE3'})
         if build_id == 0x2403:
             # Four reads, no mirror, and an L2 alias so read 2 and read 4 name
@@ -2091,7 +2157,7 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
 # closed at decode time, which is the right failure but a wasted trial.
 LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
                     0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402, 0x2403,
-                    0x2404)
+                    0x2404, 0x2405)
 
 
 def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False):
@@ -2148,24 +2214,24 @@ def build(a):
     # leaf AttrIdx 0/5, vendor MEMATTR, no nG, read-only code. The entry and
     # its fetch target are the only other things that move.
     if a.build_id in (0x2393, 0x2394, 0x2395, 0x2396, 0x2397, 0x2398, 0x2399,
-                      0x2400, 0x2401, 0x2402, 0x2403, 0x2404):
+                      0x2400, 0x2401, 0x2402, 0x2403, 0x2404, 0x2405):
         if not (a.trace_probe and a.vendor_leaves and a.relocate_code and a.mcu_control == '2'):
             raise ValueError('build%x requires --trace-probe --vendor-leaves --relocate-code --mcu-control 2' % a.build_id)
         if a.uncached_code != (a.build_id == 0x2395):
             raise ValueError('build%x requires --uncached-code exactly when it is 2395' % a.build_id)
         if a.xn_page != (a.build_id == 0x2397):
             raise ValueError('build%x requires --xn-page exactly when it is 2397' % a.build_id)
-        if a.leaf_group != (0 if a.build_id in (0x2398, 0x2403, 0x2404) else 6):
+        if a.leaf_group != (0 if a.build_id in (0x2398, 0x2403, 0x2404, 0x2405) else 6):
             raise ValueError('build%x requires --leaf-group %d' %
-                             (a.build_id, 0 if a.build_id in (0x2398, 0x2403, 0x2404) else 6))
+                             (a.build_id, 0 if a.build_id in (0x2398, 0x2403, 0x2404, 0x2405) else 6))
         if a.alias_page != (a.build_id == 0x2399):
             raise ValueError('build%x requires --alias-page exactly when it is 2399' % a.build_id)
-        if a.uncached_page != (a.build_id in (0x2400, 0x2403, 0x2404)):
-            raise ValueError('build%x requires --uncached-page exactly when it is 2400, 2403 or 2404'
+        if a.uncached_page != (a.build_id in (0x2400, 0x2403, 0x2404, 0x2405)):
+            raise ValueError('build%x requires --uncached-page exactly when it is 2400, 2403, 2404 or 2405'
                              % a.build_id)
-        if (a.mirror_code != (a.build_id in (0x2401, 0x2404)) or
+        if (a.mirror_code != (a.build_id in (0x2401, 0x2404, 0x2405)) or
                 a.share_code_l3 != (a.build_id in (0x2401, 0x2403))):
-            raise ValueError('build%x requires --mirror-code exactly when it is 2401 or 2404 and '
+            raise ValueError('build%x requires --mirror-code exactly when it is 2401, 2404 or 2405 and '
                              '--share-code-l3 exactly when it is 2401 or 2403' % a.build_id)
         if (a.ro_as_rw or a.vendor_memattr or a.global_init or a.fault_probe or
                 a.entry_probe or a.reset_store_stub or a.inline_entry or
@@ -2243,6 +2309,7 @@ def build(a):
                    '-DSWEET_CSF_ALIAS_TO_VA=' + ('0x02000000u' if a.alias_page else '0'),
                    '-DSWEET_CSF_UNCACHED_VA=' + ('0x01001000u' if a.uncached_page else '0'),
                    '-DSWEET_CSF_GLOBAL_INIT=' + ('1' if a.global_init else '0'),
+                   '-DSWEET_CSF_SHARED_SENTINEL=' + ('1' if a.build_id == 0x2405 else '0'),
                    '-DSWEET_CSF_RELOCATE_CODE=' + ('1' if a.relocate_code else '0'),
                    '-DSWEET_CSF_MIRROR_CODE_VA=' +
                    ('0x06040000u' if a.build_id == 0x2404 else
@@ -2442,6 +2509,10 @@ def build(a):
                 for name in ('tools/matisse-csf-fault-entry-e3.S',
                              'tools/matisse-csf-ladder2404.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
+            if a.build_id == 0x2405:
+                for name in ('tools/matisse-csf-fault-entry-e3.S',
+                             'tools/matisse-csf-ladder2405.S'):
+                    info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
             if a.build_id == 0x2403:
                 for name in ('tools/matisse-csf-fault-entry-e3.S',
                              'tools/matisse-csf-ladder2403.S'):
@@ -2509,7 +2580,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',

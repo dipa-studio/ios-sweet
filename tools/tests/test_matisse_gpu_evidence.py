@@ -802,6 +802,54 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertEqual(csf['cold_boot_outcome'], 'mirror-not-applied')
         self.assertFalse(csf['cold_boot_marker_present'])
 
+    def test_2405_seeds_the_slot_and_barriers_every_marker(self):
+        """2405: the same accesses, but the ladder's position is now provable."""
+        csf = self.cold_report(build=0x2405, input_va=2,
+                               firmware_probe_pa_lo=0x401B5000,
+                               output_va=0x0F10F857, leaf=self.LEAVES_2404)['csf']
+        self.assertTrue(csf['relocation_observed'])
+        self.assertTrue(csf['mirror_applied'])
+        self.assertFalse(csf['sentinel_intact'])
+        self.assertTrue(csf['value_verified'])
+        self.assertEqual(csf['cold_boot_outcome'], 'walk-dies-at-bit9')
+
+        # Marker 1 with the seed still in place: nothing the ladder stored after
+        # read 1 reached memory, so read 1 is the access that stalled.
+        csf = self.cold_report(build=0x2405, input_va=1,
+                               firmware_probe_pa_lo=0x401B5000,
+                               output_va=0xDEADBEEF, leaf=self.LEAVES_2404)['csf']
+        self.assertTrue(csf['sentinel_intact'])
+        self.assertEqual(csf['cold_boot_outcome'], 'baseline-stalls')
+        self.assertIn('never returned', csf['instrument_verdict'])
+
+        # Marker 1 with the seed overwritten: read 1 returned and stored, and the
+        # core died before marker 2 - a different fault from the one above.
+        csf = self.cold_report(build=0x2405, input_va=1,
+                               firmware_probe_pa_lo=0x401B5000,
+                               output_va=0x0F10F857, leaf=self.LEAVES_2404)['csf']
+        self.assertFalse(csf['sentinel_intact'])
+        self.assertEqual(csf['cold_boot_outcome'], 'stopped-after-read-1')
+
+        # Marker 2 cannot coexist with an untouched seed: refuse the run.
+        csf = self.cold_report(build=0x2405, input_va=2,
+                               firmware_probe_pa_lo=0x401B5000,
+                               output_va=0xDEADBEEF, leaf=self.LEAVES_2404)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'inconsistent')
+
+        # Read 1 returned and stored, but the wrong word: a mapping fault.
+        csf = self.cold_report(build=0x2405, input_va=2,
+                               firmware_probe_pa_lo=0x401B5000,
+                               output_va=0x04003000, leaf=self.LEAVES_2404)['csf']
+        self.assertEqual(csf['cold_boot_outcome'], 'read-1-wrong-pa')
+        self.assertIn('cannot be scored as a walk result', csf['instrument_verdict'])
+
+        csf = self.cold_report(build=0x2405, input_va=5,
+                               firmware_probe_pa_lo=0x401B5000,
+                               output_va=0x5A5A5A5A, leaf=self.LEAVES_2404)['csf']
+        self.assertTrue(csf['store_verified'])
+        self.assertEqual(csf['cold_boot_outcome'], 'all-returned')
+        self.assertNotIn('WARNING', csf['instrument_verdict'])
+
     def test_2403_alias_splits_the_va_from_the_leaf(self):
         """2403: the same leaf and PA through a second VA, plus a data check."""
         csf = self.cold_report(build=0x2403, input_va=2,

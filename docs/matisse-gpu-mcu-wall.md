@@ -2191,3 +2191,68 @@ and the same four accesses as 2404, unchanged, so the result is comparable.
 `0x004`/`0x048`/`0x2C0..0x2CC` stay for the build after that: they answer the
 GPU L2 slice question and cannot be read out of a run whose ladder never got past
 marker 1.
+
+## 55. 2405 built: the same four accesses, with an instrument that can report
+
+2404 answered nothing because its instrument could not. Two defects, both in the
+build rather than in the hardware:
+
+* **markers were posted writes with no barrier.** Marker N is stored before
+  access N, so if access N stalls, marker N can still be in the store buffer
+  when the core dies. "Read 1 stalled" and "read 2 stalled, marker 2 undrained"
+  print the same report.
+* **`shared+12` was never seeded.** 2402's shipped ladder writes markers only -
+  no store to `shared+12` anywhere in its `stub_bytes` - yet its flight read
+  `0x04003000` out of that slot. The arena arrives uninitialised, so the word is
+  filler until the ladder writes it, and 2404's `0x04003000` was filler too.
+
+2405 changes no address. The ladder grows from 88 to 120 bytes and gains nine
+`DSB SY` instructions: one after every marker store and one after every result
+store. `shim/csf_boot` seeds `shared+12` with `0xdeadbeef` immediately before
+`MCU_CONTROL` and fails closed if the seed does not read back - a slot that
+takes no host write cannot report an MCU write.
+
+| marker | access | reads |
+|---|---|---|
+| 1 | read `0x0100E400` | warm, bit 9 = 0; the word must be `0x0f10f857` |
+| 2 | read `0x0604E400` | the same word through the mirror; cold walk, L3 entry at bit 9 = 1 |
+| 3 | store `0x5a5a5a5a` -> `0x04000200` + `DSB SY` | first write at bit 9 = 1 |
+| 4 | read `0x04000200` | read-after-write |
+| 5 | - | everything returned |
+
+| reading | state |
+|---|---|
+| marker 1, seed intact | read 1 never stored: a warm bit-9 = 0 read stalled, a new refusal |
+| marker 1, seed replaced | read 1 returned and stored; the core died before marker 2 |
+| marker 2, `0x0f10f857` | read 1 returned; the bit-9 walk is the wall, below the page table |
+| marker 2, other word | read 1 translated to the wrong PA; the walk stays unmeasured |
+| marker 2, seed intact | impossible by construction; refuse the run |
+
+| item | value |
+|---|---|
+| image | `f53cde64...b8ace`, 26,714,112 B, arena `0x77000` |
+| kernel | `4a289747...fd5`, `SWEET_BUILD_ID 0x2405`, patch 0201 |
+| section | `0x401b5000`; probe VA `0x0100E000` -> `0x401c3000` |
+| mirror | `0x401a5000`; entry `0x0604E000` -> `0x401b3000` |
+| ladder | 120 B, `tools/matisse-csf-ladder2405.S`, 9 x `DSB SY` |
+| tests | 295 ran, 3 skipped |
+
+**The build recipe is recovered and verified.** Rebuilding 2404 from the recorded
+inputs produced `3c58fb31...cecd` byte for byte, so the same command with
+`--build-id 0x2405` is a known-good path rather than a guess:
+
+```
+tools/matisse-shim-gpu-image.py --build-id 0x2405 \
+  --firmware research/matisse/20261031-gpu/shim2333-path-ready/csf.bin \
+  --kernel xnu/out/local/build/xnu.obj/kernel.development.sweet \
+  --template backup/boot_a-stock-trim.img --stock backup/boot_a-stock-trim.img \
+  --adt research/matisse/20261031-hs/matisse-userland-native-keys-2317.adt \
+  --frozen research/matisse/20261031-hs/frozen-shim-2313/shim \
+  --cmdline research/matisse/20261031-gpu/cmdline-2317.txt \
+  --ndk .../ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin \
+  --trace-probe --vendor-leaves --relocate-code --mcu-control 2 \
+  --leaf-group 0 --uncached-page --mirror-code --out <dir>
+```
+
+Built, unit-tested, statically verified and preflighted, **not flown**. `boot_a`
+is still `2931647a...86b1`.

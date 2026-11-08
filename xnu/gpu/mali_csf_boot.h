@@ -174,6 +174,16 @@ enum sweet_csf_boot_error {
 #ifndef SWEET_CSF_GLOBAL_INIT
 #define SWEET_CSF_GLOBAL_INIT 0
 #endif
+/* 2405 only. Seed the firmware's shared output slot with a word no code path
+ * writes, so the report can tell "the core stored a read result" from "the
+ * core died before the store". 2404 printed 0x04003000 out of that slot with a
+ * ladder that never writes it - the arena arrives uninitialised - and the value
+ * was read as a data result it never was. 0 keeps every earlier build byte
+ * identical. */
+#ifndef SWEET_CSF_SHARED_SENTINEL
+#define SWEET_CSF_SHARED_SENTINEL 0
+#endif
+#define SWEET_CSF_SHARED_SENTINEL_WORD 0xdeadbeefu
 /* Called ONLY while the caller owns exactly one powered/reset GPU reference.
  * Uses polled raw IRQs with internal enables; GIC routing is untouched.
  * Always attempts soft reset

@@ -1,6 +1,28 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 13:05: 2404 RAN - MARKER 1 ONLY, AND THE DATA SLOT WAS FILLER <<<
+## >>> ACTIVE 2026-11-08 13:24: 2405 BUILT - THE SAME ACCESSES, AN INSTRUMENT THAT CAN REPORT <<<
+
+2404 could not answer its own question: markers had no barrier behind them and
+`shared+12` was never seeded, so "read 1 stalled" and "marker 2 lost in the store
+buffer" print the same report. 2405 changes no address - it adds `DSB SY` after
+every marker store and every result store (9 in total, ladder 88 -> 120 bytes) and
+has the shim seed `shared+12` with `0xdeadbeef` immediately before `MCU_CONTROL`,
+failing closed if the seed does not read back.
+
+Readings: marker 1 + seed intact means read 1 never stored, i.e. a warm bit-9 = 0
+read stalled; marker 1 + seed replaced means read 1 returned and the core died
+before marker 2; marker 2 + `0x0f10f857` means read 1 returned and the bit-9 walk
+is the wall; marker 2 + any other word means read 1 translated to the wrong PA.
+
+The build recipe is no longer guessed: rebuilding 2404 from the recorded inputs
+reproduced `3c58fb31...cecd` byte for byte, so the same command with
+`--build-id 0x2405` is pinned in `docs/matisse-gpu-mcu-wall.md` section 55.
+
+Image `f53cde64...b8ace`, kernel `4a289747...fd5` (`SWEET_BUILD_ID 0x2405`, patch
+0201), partition `af89e9a8...bfbd`, 295 tests / 3 skipped, preflight passed,
+`boot_a` still `2931647a...86b1`. **Not flown - awaiting approval.**
+
+## >>> PREVIOUS 2026-11-08 13:05: 2404 RAN - MARKER 1 ONLY, AND THE DATA SLOT WAS FILLER <<<
 
 Flew `3c58fb31...cecd`, `boot_a` restored to `2931647a...86b1`. No fault, MCU still
 enabled, `error` -53, `input_va` 1, `output_va` `0x04003000`.

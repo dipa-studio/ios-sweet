@@ -209,6 +209,69 @@ class FetchPrimeTests(unittest.TestCase):
         self.assertEqual(want[0x52:0x54], bytes.fromhex('fee7'))
         self.assertEqual(want[0x54:], bytes.fromhex('00bf00bf'))
 
+    def test_ladder_2405_barriers_every_marker(self):
+        """2405: 2404's accesses, with a DSB after every store in the ladder."""
+        bins = sorted((Path.home() / 'Library/Android/sdk/ndk').glob(
+            '*/toolchains/llvm/prebuilt/darwin-x86_64/bin'))
+        if not bins:
+            self.skipTest('requires ARM linker from Android NDK')
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory)
+            (p / 'ladder.ld').write_text('SECTIONS { '
+                '.text.ladder 0x0100E000 : { *(.text.ladder) } }')
+            subprocess.run([str(bins[-1] / 'clang'), '--target=armv7m-none-eabi',
+                '-mcpu=cortex-m7', '-mthumb', '-nostdlib', '-Wl,--build-id=none',
+                '-Wl,-e,csf_ladder_2405', '-Wl,-T,' + str(p / 'ladder.ld'),
+                str(ROOT / 'tools/matisse-csf-ladder2405.S'), '-o', str(p / 'ladder.elf')],
+                check=True, capture_output=True)
+            elf = (p / 'ladder.elf').read_bytes()
+            shoff, = struct.unpack_from('<I', elf, 32)
+            size, count, names_index = struct.unpack_from('<HHH', elf, 46)
+            sections = [struct.unpack_from('<10I', elf, shoff + i * size) for i in range(count)]
+            names_section = sections[names_index]
+            names = elf[names_section[4]:names_section[4] + names_section[5]]
+            actual = {names[s[0]:].split(b'\0', 1)[0].decode(): elf[s[4]:s[4] + s[5]]
+                      for s in sections}
+        want = bytes.fromhex(self.builder.COLD_BOOT_2405[1])
+        self.assertEqual(actual['.text.ladder'], want)
+        self.assertEqual(len(want), 120)
+        self.assertEqual(len(want), len(bytes.fromhex(self.builder.COLD_BOOT_2405[0])))
+        self.assertEqual(sections[1][3], 0x0100E000)
+        # The accesses are 2404's, byte for byte.
+        self.assertEqual(want[0x24:0x28], bytes.fromhex('56f80800'))
+        self.assertEqual(want[0x36:0x3a], bytes.fromhex('57f80800'))
+        self.assertEqual(want[0x50:0x54], bytes.fromhex('c2f80002'))
+        self.assertEqual(want[0x60:0x64], bytes.fromhex('d2f80002'))
+        # Every marker store is followed by a DSB: 0x1e, 0x30, 0x42, 0x5a, 0x6c.
+        dsb = bytes.fromhex('bff34f8f')
+        self.assertEqual(want.count(dsb), 9)
+        for store in (0x1e, 0x30, 0x42, 0x5a, 0x6c):
+            self.assertEqual(want[store + 2:store + 6], dsb, hex(store))
+        # The result store is barriered before the next marker is written.
+        self.assertEqual(want[0x28:0x2a], bytes.fromhex('d060'))
+        self.assertEqual(want[0x2a:0x2e], dsb)
+        self.assertEqual(want[0x72:0x74], bytes.fromhex('fee7'))
+        self.assertEqual(want[0x74:], bytes.fromhex('00bf00bf'))
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2405_keeps_2404s_mapping_and_moves_only_the_entry(self):
+        embedded_2404, patch_2404 = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2404)
+        embedded_2405, patch_2405 = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2405)
+        config, code = 0x0380, 0x0e94
+        # Same layout inputs, so every table offset and PA must agree: only the
+        # entry program (88 -> 120 bytes) and the vector word may differ.
+        self.assertEqual(patch_2405['mirror_code']['arena_offset'],
+                         patch_2404['mirror_code']['arena_offset'])
+        self.assertEqual(patch_2405['mirror_code']['entry_offset'],
+                         patch_2404['mirror_code']['entry_offset'])
+        allowed = set(range(config + 4, config + 8))
+        allowed |= set(range(code + 0xE000, code + 0xE000 + 120))
+        changed = {i for i, (a, b) in enumerate(zip(embedded_2404, embedded_2405)) if a != b}
+        self.assertTrue(changed)
+        self.assertLessEqual(changed, allowed)
+        self.assertEqual(int.from_bytes(embedded_2405[config + 4:config + 8], 'little'),
+                         0x0100E001)
+
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2404_mirrors_at_0x06040000_and_leaves_the_rest_alone(self):
         embedded_2403, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2403)

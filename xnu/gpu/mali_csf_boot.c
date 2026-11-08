@@ -364,6 +364,17 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     uint64_t shared=c->arena_pa+c->shared_offset;
     io->barrier(io->context);
     r->version_before=rd(io,shared);r->sample_flags|=1;
+#if SWEET_CSF_SHARED_SENTINEL
+    /* 2405: the shared page arrives uninitialised, so the firmware's output_va
+     * slot cannot be scored unless something known was written to it first.
+     * Seed it here - after the page table is live and before the MCU is
+     * started - and fail closed if the seed does not read back: a slot that
+     * accepts no host write cannot report an MCU write either. */
+    wr(io,shared+12,SWEET_CSF_SHARED_SENTINEL_WORD);
+    if(rd(io,shared+12)!=SWEET_CSF_SHARED_SENTINEL_WORD) {
+        r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
+    }
+#endif
     startup_memory(c,io,r,0);
     /* Match the measured r32p1 internal interrupt enables before MCU AUTO.
      * CPU DAIF stays masked and GIC routing is untouched: the host still
