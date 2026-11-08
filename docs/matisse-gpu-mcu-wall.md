@@ -2628,3 +2628,72 @@ address-shaped.
 Decode note: the kernel was still tagged `SWEET_BUILD_ID 0x2407`, because it was
 not rebuilt for this trial, so the capture decodes as
 `--build 0x2408 --mark 0x2407`. The image sha identifies the run.
+
+## 62. 2409 built: the first access outside the arena, with the tag as a control
+
+Every access that has ever stopped the MCU lies inside the 2 MiB arena
+`[0x40078000, 0x40278000)`. "PA bit 9 has no responder" and "the second
+512-byte half of this allocation has no responder" still fit every measurement,
+and nothing in 2401..2408 separates them. 2409 asks the question where the two
+answers differ: the same two 512-byte offsets of a page the arena does not back.
+
+**Which page, and why that one.** `shim/board.c` derives the bootloader's splash
+reservation from `/chosen` (`atag,videolfb-fb_base_l/_h`, `vramSize`) and
+`cont_splash_region` is at `0x9c000000`. 2409 takes the **last two pages of that
+reservation**, for four reasons and no others: it is DRAM the GPU arena does not
+back; the panel is already scanning it, so it is powered and non-secure for the
+CPU (our own console draws into it); `fb_size` exceeds `stride * height`, so the
+last page lies past the visible frame and never reaches the screen; and the
+address comes from the live tree rather than a constant, so a board that reports
+something else fails the build closed instead of testing an unknown page.
+
+**The tag is a controlled variable, not a detail.** The firmware tags every leaf
+with memory group 6 (bits 59..62), and this series has never shown that group 6's
+policy covers anything but the arena. ARM's PBHA documentation is explicit that
+the meaning of those bits is implementation-defined, and that the *same* physical
+page reached through mappings with different PBHA values has unpredictable
+results - so the build must never alias one PA with two tags. 2409 therefore maps
+two different pages, one untagged and one with the firmware's tag, and puts both
+**control** reads before either bit-9 read:
+
+| marker | read | page | tag | bit 9 |
+|---|---|---|---|---|
+| 1 | `0x0100D400` | ooa + 0x0000 | 0 | 0 |
+| 2 | `0x0100C400` | ooa + 0x1000 | 6 | 0 |
+| 3 | `0x0100D200` | ooa + 0x0000 | 0 | 1 |
+| 4 | `0x0100C200` | ooa + 0x1000 | 6 | 1 |
+| 5 | - | - | - | everything returned |
+
+**How the leaf changes.** `sweet_csf_memory_remap_leaves()` walks the table the
+builder just wrote, requires a valid leaf at the VA, replaces bits 47:12 with the
+caller's PA and bits 59..62 with the caller's tag, and leaves AttrIdx, AP, SH, AF,
+nG and XN exactly as the firmware's own leaf had them. It refuses an unaligned VA
+or PA, a tag above 15, a PA outside `pa_bits`, a PA inside the arena, and a VA
+with no valid leaf. It is a separate entry point and is compiled only for this
+build: folding it into the builder changed every older build's object file, and
+`2401..2408 still rebuild byte for byte` is a property this series relies on
+(verified again: 2407 rebuilds to `c124e536...1781` after the change).
+
+**Controls the run carries besides the markers.** The shim reads the same four
+words with the CPU (MMU off, so the same physical words) and prints them as
+`CSF ooa g0/g6`, then prints the four MCU result slots as `CSF b9 g0/g6`. The
+leaf probe publishes the two live leaves, so the report shows PA, tag and the
+untouched attribute bits for both pages; the decoder refuses the run as
+`remap-not-applied` if they do not differ exactly that way.
+
+**Build.** Image `0b35f105...a148` (26,714,112 B), payload `0ddae2ee...1dab`,
+kernel `c01dcbea...d5ea` (unchanged, still tagged `0x2407`, so the capture decodes
+with `--build 0x2409 --mark 0x2407`). The shim grew past one more page: arena
+`0x40079000`, code section `0x401a6000` - different from 2407/2408, which is why
+the decoder compares leaves and tag bits rather than absolute PAs. 303 tests, 3
+skipped, including a new one that pins "PA and PBHA move, every other bit stays"
+and the five refusal cases.
+
+**Reading it.** Marker 1 alone means nothing outside the arena answers even
+untagged - bit 9 was never asked, and the next step is SLC/MGM/GMPU coverage.
+Marker 2 alone means the tag decides. Marker 3 means bit 9 is not arena-shaped:
+a page the arena does not back still refuses its second 512-byte half. Marker 4
+means the opposite of marker 3 - the untagged bit-9 read returned and the tagged
+one did not. Marker 5 means the wall is a property of the arena allocation.
+
+**Not flown.** `boot_a` is still `2931647a...86b1`.

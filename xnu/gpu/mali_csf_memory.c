@@ -11,6 +11,11 @@
 #ifndef SWEET_CSF_RO_LEAVES_WRITABLE
 #define SWEET_CSF_RO_LEAVES_WRITABLE 0
 #endif
+/*2409: one build repoints leaves at pages outside the arena, so the table
+ * walkers below are compiled in for it even when no alias is requested. */
+#ifndef SWEET_CSF_OUT_OF_ARENA
+#define SWEET_CSF_OUT_OF_ARENA 0
+#endif
 
 static int collect(const struct sweet_csf_section *s, void *context)
 {
@@ -36,7 +41,7 @@ static int conflict(uintptr_t a, size_t n, uintptr_t b, size_t m)
 {
     return a < b + m && b < a + n;
 }
-#if (SWEET_CSF_ALIAS_VA && SWEET_CSF_ALIAS_TO_VA) || SWEET_CSF_SHARE_CODE_L3_VA
+#if (SWEET_CSF_ALIAS_VA && SWEET_CSF_ALIAS_TO_VA) || SWEET_CSF_SHARE_CODE_L3_VA || SWEET_CSF_OUT_OF_ARENA
 /* The table entry at `va` after walking `levels` tables from the root: level 0
  * is the L0 entry, level 2 is the L2 entry that names an L3 page, level 3 is
  * the leaf. Every level is bounds-checked against capacity so a malformed
@@ -56,7 +61,7 @@ static uint8_t *table_slot(uint8_t *arena, size_t capacity, uint64_t pa, uint64_
     return table + ((va >> (39 - 9 * levels)) & 511) * 8;
 }
 #endif
-#if SWEET_CSF_ALIAS_VA && SWEET_CSF_ALIAS_TO_VA
+#if (SWEET_CSF_ALIAS_VA && SWEET_CSF_ALIAS_TO_VA) || SWEET_CSF_OUT_OF_ARENA
 static uint8_t *leaf_entry(uint8_t *arena, size_t capacity, uint64_t pa, uint64_t va)
 {
     return table_slot(arena, capacity, pa, va, 3);
@@ -309,6 +314,45 @@ int sweet_csf_memory_build_group(const uint8_t *fw, size_t bytes, const struct s
     *root_pa = pa;
     return 0;
 }
+#if SWEET_CSF_OUT_OF_ARENA
+int sweet_csf_memory_remap_leaves(void *buffer, size_t capacity, uint64_t pa, unsigned pa_bits,
+                                  const struct sweet_csf_remap *remaps, unsigned count)
+{
+    /*2409: the discriminator the bit-9 series needs. A leaf that already walks
+     *an arena page is pointed at a PA outside the arena, keeping every attribute
+     *bit the firmware's own leaf had. Bits47:12 move; bits59..62 take the
+     *caller's group tag, because the firmware's tag is itself a suspect and the
+     *same boot must be able to compare a tagged page with an untagged one.
+     *A separate entry point on purpose: folding this into the builder changed
+     *every older build's object file, and "2401..2408 still rebuild byte for
+     *byte" is a property this series relies on. Built only for the one trial
+     *that asks for it, so nothing else moves.
+     *Anything ambiguous fails closed: a half-applied remap would make a stall
+     *unattributable, which is the one outcome this build cannot afford. */
+    (void)pa_bits;
+    uint8_t *arena = buffer;
+    for (unsigned i = 0; i < count; i++) {
+        const struct sweet_csf_remap *r = &remaps[i];
+        if ((r->va & (SWEET_CSF_PAGE - 1)) || (r->pa & (SWEET_CSF_PAGE - 1)) || r->group > 15)
+            return SWEET_CSF_MEMORY_ARGUMENT;
+        if (!r->pa || r->pa >= (UINT64_C(1) << pa_bits) ||
+            r->pa > (UINT64_C(1) << pa_bits) - SWEET_CSF_PAGE)
+            return SWEET_CSF_MEMORY_PHYSICAL;
+        /* The whole point is a page the arena does not back. */
+        if (r->pa + SWEET_CSF_PAGE > pa && r->pa < pa + capacity)
+            return SWEET_CSF_MEMORY_ARGUMENT;
+        uint8_t *at = leaf_entry(arena, capacity, pa, r->va);
+        if (!at) return SWEET_CSF_MEMORY_ARGUMENT;
+        uint64_t desc = get64(at);
+        if ((desc & 3) != 3) return SWEET_CSF_MEMORY_ARGUMENT;
+        desc = (desc & ~UINT64_C(0x0000fffffffff000)) | r->pa;
+        desc = (desc & ~(UINT64_C(15) << 59)) | ((uint64_t)r->group << 59);
+        put64(at, desc);
+    }
+    return 0;
+}
+#endif
+
 int sweet_csf_memory_build(const uint8_t *fw, size_t bytes, const struct sweet_csf_memory *m,
     void *buffer, size_t capacity, uint64_t pa, unsigned pa_bits, uint64_t *root_pa)
 {

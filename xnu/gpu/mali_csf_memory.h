@@ -153,4 +153,13 @@ int sweet_csf_memory_build(const uint8_t *, size_t, const struct sweet_csf_memor
 int sweet_csf_memory_build_group(const uint8_t *, size_t, const struct sweet_csf_memory *,
     void *arena, size_t arena_bytes, uint64_t arena_pa, unsigned pa_bits,
     unsigned memory_group, uint64_t *root_pa);
+/*2409: repoint already-mapped leaves at pages outside the arena. The leaf keeps
+ * its AttrIdx/AP/SH/AF/nG/XN bits and loses only bits47:12, which are replaced
+ * by the caller's PA; bits59..62 are replaced by the per-remap group tag, so a
+ * page can be tested with the firmware's tag and with no tag at all on the same
+ * boot. Rejected: unaligned VA or PA, group>15, PA outside pa_bits, PA inside
+ * the arena, or a VA with no valid leaf. Nothing else in the table moves. */
+struct sweet_csf_remap { uint64_t va, pa; unsigned group; };
+int sweet_csf_memory_remap_leaves(void *arena, size_t arena_bytes, uint64_t arena_pa,
+    unsigned pa_bits, const struct sweet_csf_remap *, unsigned count);
 #endif

@@ -131,7 +131,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -196,6 +196,8 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             # and the original code page.
             names = (('leaf_0x0100e000','leaf_0x0604e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406, 0x2407, 0x2408) else
+                     ('leaf_0x0100d000','leaf_0x0100c000',
+                      'leaf_0x0100e000','leaf_0x01001000') if expected_build == 0x2409 else
                      ('leaf_0x0100e000','leaf_0x0300e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
                      ('leaf_0x03000000','leaf_0x03001000',
@@ -1563,6 +1565,92 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             else:
                 csf['instrument_verdict'] = verdict
             csf['cold_boot_outcome'] = outcome
+        if expected_build == 0x2409:
+            # The arena is not probed at all: two leaves of the R-X section are
+            # repointed at the top of the bootloader's splash reservation, one
+            # untagged and one carrying the firmware's group 6, and the ladder
+            # reads both 512-byte halves of each page. The two controls come
+            # first, so a stall at marker 2 is about the tag and not about bit 9.
+            leaf_g0 = csf.get('leaf_0x0100d000')
+            leaf_g6 = csf.get('leaf_0x0100c000')
+            page = 0x0000fffffffff000
+            pa0 = None if leaf_g0 is None else leaf_g0 & page
+            pa6 = None if leaf_g6 is None else leaf_g6 & page
+            csf['ooa_leaf_untagged'] = leaf_g0
+            csf['ooa_leaf_group6'] = leaf_g6
+            csf['ooa_pa_untagged'] = pa0
+            csf['ooa_pa_group6'] = pa6
+            csf['ooa_remap_observed'] = bool(
+                pa0 is not None and pa6 is not None and pa0 >= 0x80000000 and
+                pa6 == pa0 + 0x1000 and (leaf_g0 >> 59) & 15 == 0 and
+                (leaf_g6 >> 59) & 15 == 6 and (leaf_g0 & ~page) == (leaf_g6 & ~page))
+            csf['ooa_note'] = (
+                'The two leaves keep the code section attribute, AP, SH and AF bits and differ '
+                'in PA and bits59..62 only. The target is the top of the splash reservation, '
+                'which the GPU arena does not back; the CPU witness for the same words is on '
+                'the shim console, because the report has no field for it.')
+            marker = csf['input_va']
+            csf['cold_boot_counter'] = marker
+            csf['cold_boot_target'] = 0x0100E000
+            csf['cold_boot_marker_present'] = marker in (1, 2, 3, 4, 5)
+            csf['cold_boot_ladder'] = {
+                '0x1': 'stopped reading 0x0100D400 (outside the arena, bit 9 = 0, no tag)',
+                '0x2': 'stopped reading 0x0100C400 (outside the arena, bit 9 = 0, group 6)',
+                '0x3': 'stopped reading 0x0100D200 (outside the arena, bit 9 = 1, no tag)',
+                '0x4': 'stopped reading 0x0100C200 (outside the arena, bit 9 = 1, group 6)',
+                '0x5': 'every access returned',
+                '0xe3': 'a Cortex-M7 fault entry ran; input_va carries 0xE3'}
+            if not csf['ooa_remap_observed']:
+                outcome = 'remap-not-applied'
+                verdict = ('the two leaves do not describe what this build installs (0x0100D000 -> '
+                           '%s tag %s, 0x0100C000 -> %s tag %s). Without the remap the ladder read '
+                           'the firmware again, so the run says nothing about bit 9' %
+                           (None if leaf_g0 is None else hex(leaf_g0),
+                            None if leaf_g0 is None else (leaf_g0 >> 59) & 15,
+                            None if leaf_g6 is None else hex(leaf_g6),
+                            None if leaf_g6 is None else (leaf_g6 >> 59) & 15))
+            elif marker == 1:
+                outcome = 'outside-arena-unreachable'
+                verdict = ('the untagged control read at 0x0100D400 never returned, so nothing '
+                           'outside the arena answers the MCU even with no PBHA tag and with bit 9 '
+                           '= 0. Bit 9 was never asked in this run: the wall is about where the '
+                           'memory is, not about the address bit, and the next step is SLC/MGM/GMPU '
+                           'coverage rather than another page')
+            elif marker == 2:
+                outcome = 'tag-blocks-outside-arena'
+                verdict = ('the untagged control returned %#x and the group-6 control at 0x0100C400 '
+                           'never did. The two leaves differ only in bits59..62 and in which page '
+                           'of the reservation they name, so the firmware\'s memory-group tag - not '
+                           'the address - is what the MCU cannot reach outside the arena. Bit 9 '
+                           'stays untested until the tag is explained' % csf['output_va'])
+            elif marker == 3:
+                outcome = 'bit9-not-arena-shaped'
+                verdict = ('both controls returned (untagged %#x, then group 6) and the untagged '
+                           'bit-9 read at 0x0100D200 stalled. A page the arena does not back still '
+                           'refuses its second 512-byte half, so bit 9 is not a property of this '
+                           'allocation: it is global to the address space, and the wall is below '
+                           'the page table and above DRAM' % csf['output_va'])
+            elif marker == 4:
+                outcome = 'bit9-tracks-the-tag'
+                verdict = ('the untagged bit-9 read at 0x0100D200 returned %#x and the group-6 one '
+                           'at 0x0100C200 stalled. The same address bit is harmless on one leaf and '
+                           'fatal on the other, and the only difference is bits59..62, so the wall '
+                           'is the memory-group tag interacting with bit 9 - not the address space '
+                           'and not the arena' % csf['output_va'])
+            elif marker == 5:
+                outcome = 'outside-arena-answers-everything'
+                verdict = ('every read returned, the tagged bit-9 one included, and shared+12 holds '
+                           '%#x. The stall of 2401..2408 does not reproduce on a page the arena does '
+                           'not back, so the wall is a property of that allocation - its SLC group '
+                           'policy or its physical placement - and not of PA bit 9' % csf['output_va'])
+            else:
+                outcome = 'no-marker'
+                verdict = ('no marker was written, so the stub at 0x0100E000 never ran; check the '
+                           'entry leaf and the reset vector before reading anything into this run')
+            csf['cold_boot_start'] = None if outcome == 'no-marker' else csf['cold_boot_ladder'].get(
+                hex(marker), None)
+            csf['cold_boot_outcome'] = outcome
+            csf['instrument_verdict'] = verdict
         if expected_build == 0x2403:
             # 2402's page, plus an L2 alias: slot 24 carries slot 8's entry, so
             # 0x0300E200 walks the identical L3 page, leaf and physical word as

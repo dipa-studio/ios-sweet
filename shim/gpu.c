@@ -5,6 +5,11 @@
 #include "console.h"
 #ifdef SHIM_CSF_PROBE
 #include "csf.h"
+/*2409 only: the target page comes from the live board description. Guarded so
+ *every earlier build compiles the same object it always did. */
+#if SWEET_CSF_OUT_OF_ARENA
+#include "board.h"
+#endif
 #endif
 
 /* Second half of the vendor power-on sequence: gpufreq_commit after
@@ -182,8 +187,25 @@ int shim_gpu_prepare(uintptr_t dtb, uint64_t xnu_base, uint64_t xnu_bytes,
     const struct sweet_gpu_io io = { .read32 = native_read, .write32 = native_write,
         .ticks = native_ticks, .barrier = native_barrier, .frequency = frequency };
     #ifdef SHIM_CSF_PROBE
+    /*2409: the top two pages of the splash reservation the bootloader left with
+     *the panel, because that is DRAM the GPU arena does not back, the panel is
+     *already scanning it (so it is powered and non-secure), and its last page is
+     *past the visible frame, so neither LK nor our console ever draws there.
+     *Derived from the live tree, never from a constant: board.c rejects a base
+     *that cannot be a framebuffer and zero disables the remap, which fails the
+     *build closed rather than flying an unknown page. */
+#if SWEET_CSF_OUT_OF_ARENA
+    uint64_t ooa = 0;
+    if (brd.fb_base && brd.fb_size >= 0x4000) {
+        uint64_t top = (brd.fb_base + brd.fb_size) & ~(uint64_t)0xfff;
+        if (top >= brd.fb_base + 0x3000) ooa = top - 0x2000;
+    }
+#endif
     struct shim_csf_context probe = { .xnu_base=xnu_base, .xnu_bytes=xnu_bytes,
         .shared_base=c.shared_base, .shared_bytes=c.shared_bytes, .platform=r };
+#if SWEET_CSF_OUT_OF_ARENA
+    shim_csf_set_out_of_arena(ooa);
+#endif
     c.powered_probe=shim_csf_powered; c.probe_context=&probe;
 #endif
     sweet_gpu_boot(&c, &io, r);

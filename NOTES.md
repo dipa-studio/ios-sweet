@@ -1,6 +1,59 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 14:46: 2408 RAN - THE RESET COMPLETES, DBG_ENABLED DOES NOT CARE <<<
+## >>> ACTIVE 2026-11-08 15:34: 2409 BUILT - FIRST ACCESS OUTSIDE THE ARENA, TAG AS A CONTROL <<<
+
+**The question 2401..2408 could not ask.** Every access that ever stopped the MCU
+lies inside `[0x40078000, 0x40278000)`, so "bit 9 has no responder" and "this
+allocation's second 512-byte half has no responder" fit all of it. 2409 reads the
+same two 512-byte offsets of pages the arena does not back.
+
+**Grounded, not guessed.** The target page is the **last two pages of the
+bootloader splash reservation**, which `shim/board.c` already derives from
+`/chosen` (`atag,videolfb-fb_base_l/_h`, `vramSize`; `cont_splash_region` is at
+`0x9c000000`). Reasons on record: the arena does not back it, the panel is already
+scanning it (powered, non-secure for the CPU - our console draws there),
+`fb_size > stride*height` so the last page is past the visible frame, and the
+address comes from the live tree, so a board that reports something else fails
+closed. `panthor` maps ordinary DRAM pages the same way; nothing here is a
+device-specific trick.
+
+**The tag is the confound, so it is a controlled variable.** The firmware tags
+every leaf group 6 (bits59..62) and group 6's policy was never shown to cover
+anything but the arena. ARM's PBHA documentation says the bit meaning is
+implementation-defined and that the *same* PA through mappings with different
+PBHA is unpredictable, so 2409 never aliases one PA with two tags: it maps two
+different pages, `0x0100D000` untagged and `0x0100C000` tagged 6, and reads both
+controls before either bit-9 read.
+
+```
+marker 1  0x0100D400  ooa+0x0000  tag 0  bit9=0   control
+marker 2  0x0100C400  ooa+0x1000  tag 6  bit9=0   control (tag)
+marker 3  0x0100D200  ooa+0x0000  tag 0  bit9=1   the question, untagged
+marker 4  0x0100C200  ooa+0x1000  tag 6  bit9=1   the question, tagged
+marker 5  everything returned
+```
+1 only -> nothing outside answers, bit 9 untested (SLC/MGM/GMPU next). 2 only ->
+the tag decides. 3 -> bit 9 is not arena-shaped. 4 -> bit 9 tracks the tag.
+5 -> the wall is a property of the arena allocation.
+
+**Implementation.** `sweet_csf_memory_remap_leaves()` walks the table the builder
+wrote, requires a valid leaf, replaces bits47:12 and bits59..62, keeps AttrIdx/AP/
+SH/AF/nG/XN, and refuses unaligned VA/PA, tag>15, PA outside pa_bits, PA inside
+the arena, or no leaf. It is a separate entry point **compiled only for 2409**:
+folding it into the builder changed every older object file, and after moving it
+out 2407 rebuilds byte for byte again (`c124e536...1781`, re-verified). The shim
+also prints its own CPU read of the four words (`CSF ooa g0/g6`) and the four MCU
+slots (`CSF b9 g0/g6`).
+
+**Build.** Image `0b35f105...a148`, payload `0ddae2ee...1dab`, kernel
+`c01dcbea...d5ea` (unchanged, still tagged `0x2407` -> decode with
+`--build 0x2409 --mark 0x2407`). Shim grew a page: arena `0x40079000`, code
+`0x401a6000`, so compare leaves/tags, not absolute PAs. 303 tests / 3 skipped,
+including a new remap test (PA+PBHA move, every other bit identical, five refusal
+cases). Runner `shim2409-outofarena-trials-run-once.py`, partition hash
+`80ce929a...d1ae`. **Not flown**, `boot_a` still `2931647a...86b1`.
+
+## >>> PREVIOUS 2026-11-08 14:46: 2408 RAN - THE RESET COMPLETES, DBG_ENABLED DOES NOT CARE <<<
 
 Flew `184d5353...9801`, read-back verified against `de922fdd...f7a8`, normal boot
 reached fastboot at 85.4 s (2407: 85.6 s), `boot_a` restored to `2931647a...86b1`.
