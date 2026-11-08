@@ -122,7 +122,11 @@ struct sweet_csf_boot_report {
     /*2326 appends evidence only, 288 bytes total. diag_flags: bit0 reset
      * register snapshot, bit1 programmed MEMATTR, bit2 memory before AUTO,
      * bit3 memory after AUTO, bit4 post-AUTO register snapshot. Memory
-     * mutations never substitute for fresh IRQ/version readiness checks. */
+     * mutations never substitute for fresh IRQ/version readiness checks.
+     *2408 adds, only when SWEET_CSF_PRESTART_RESET is built in: bit7 the
+     * pre-start soft reset was issued, bit8 its RESET_COMPLETED arrived,
+     * bit9 GPU_STATUS.DBG_ENABLED was set before it, bit10 still set after.
+     *Bits7..10 are zero on every earlier build, which never resets here. */
     uint32_t diag_flags, coherency_features;
     uint32_t coherency_before, coherency_after;
     uint32_t csf_config_before, csf_config_after;

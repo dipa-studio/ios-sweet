@@ -2516,3 +2516,58 @@ allocation and the wall is a window/IOMMU question; hangs means the dead set is
 the address space and the wall is the interconnect.
 
 `boot_a` is back at `2931647a...86b1`.
+
+## 60. 2408 built: the reset panthor performs, before anything else
+
+2407 left two facts it could not explain and did not try to: `GPU_STATUS` reads
+`0x100` before and `0x101` after the attempt, so `DBG_ENABLED` is set the whole
+time, and `INT_RAWSTAT` already carries `RESET_COMPLETED` - a bit this
+transaction never waited for. The audit in `matisse-gpu-upstream-audit.md`
+reorders the queue behind them: the out-of-arena page test moves to 2409, and
+2408 asks only whether this GPU answers a soft reset at all.
+
+**What the reference driver actually does.** `panthor_gpu_soft_reset()` under
+`panthor_device_reset_work()` is preceded by `panthor_fw_pre_reset()` and
+`panthor_mmu_pre_reset()` and followed by `panthor_hw_l2_power_on()`,
+`panthor_mmu_post_reset()` and `panthor_fw_post_reset()`; `panthor_device_resume()`
+reaches the same op through `panthor_gpu_suspend()`. The cold
+`panthor_device_init()` does **not** reset - it trusts the bootloader - so "panthor
+always resets before AS/MCU" is true of its reset semantics, not of its cold init.
+The vendor KMD is the second witness: `GPU_COMMAND_CODE_PAYLOAD(1,1)` is `0x101`,
+the same word panthor's `GPU_CMD_DEF(1,1)` produces, so this is not a
+project-specific encoding.
+
+**The block that was already in the tree could not fly.** Two independent
+reasons: `SWEET_CSF_PRESTART_RESET` was never defined by the builder, so the
+preprocessor removed the whole thing, and the code assigned `r->gpu_status`, a
+member `struct sweet_csf_boot_report` does not have (`gpu_status` lives in
+`sweet_csf_platform_snapshot`). Fixed by passing the define for `0x2408` only and
+by putting the evidence where it costs no ABI: `diag_flags` bit 7 attempt,
+bit 8 completion, bit 9 `DBG_ENABLED` before, bit 10 still set after. `reset_raw`
+and `reset_completed` remain cleanup's, the report stays 784 bytes, and
+`gpu_regs_before.reg_034` samples the same word again once the AS is programmed.
+
+Order copied from panthor, not invented: `INT_CLEAR <- BIT(8)` (write-1-to-clear),
+`GPU_CMD <- 0x101`, poll `INT_RAWSTAT.BIT(8)` for 100 ms, clear on success. It runs
+after the register snapshot and before the coherency write, the L2 power-on and
+any AS command. A timeout does not abort: the ladder runs either way, so one boot
+carries both halves.
+
+**Build.** Image `184d5353...9801` (26,714,112 bytes), payload `6f82e96c...4af0`,
+kernel `c01dcbea...d5ea` - the same kernel as 2407, no new patches. `.text` grew
+`0x118` bytes and the arena anchor did not move, which the builder proves rather
+than assumes: `arena_pa 0x40078000`, code section `0x401b6000`, code leaf
+`0x401c44c3`, mirror `0x401b44c3`, uncached `0x401b74d7` - every
+`csf_relocated_code` field identical to 2407's manifest. 302 tests, 3 skipped; a
+new unit test compiles the block in and drives both outcomes, completion and
+timeout.
+
+**Reading the four bits.** Bit 8 with bit 10: the GPU answers the reset and stays
+in debug - then the halt state came from above (LK/GPUEB) and 2409's page test is
+the right next move. Bit 8 with bit 10 clear: the reset both completed and
+cleared `DBG_ENABLED`, so the earlier stalls happened on a GPU that had never been
+reset. Bit 8 clear: the handshake itself never completes, and the next step is the
+handoff, not memory. Nothing here says the bit-9 wall is gone, and a bit-9 result
+from a timed-out reset describes a GPU that was asked to reset, not one that did.
+
+**Not flown.** `boot_a` is still `2931647a...86b1`.

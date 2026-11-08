@@ -1,6 +1,49 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 14:12: 2407 RAN - BLOCK ALIVE, NO SLICE SIGNAL <<<
+## >>> ACTIVE 2026-11-08 14:39: 2408 BUILT - THE RESET PANTHOR DOES, BEFORE ANYTHING ELSE <<<
+
+**2408 is a reset, not a memory experiment.** The new re-audit
+(`docs/matisse-gpu-upstream-audit.md`) reordered the queue: before spending a
+flight on an out-of-arena page, answer the two facts 2407 left unexplained -
+`GPU_STATUS.DBG_ENABLED` set on every read, and `RESET_COMPLETED` a stale bit
+that never arrived for this transaction. The out-of-arena page test becomes 2409.
+
+**The block as left in the tree could not have flown.** It was gated by
+`SWEET_CSF_PRESTART_RESET`, which no builder passed, so the preprocessor dropped
+it; and it wrote `r->gpu_status`, a member that does not exist - the word lives
+in `sweet_csf_platform_snapshot`. Both are fixed: the builder passes
+`-DSWEET_CSF_PRESTART_RESET=1` for 0x2408 only, and the evidence is four
+`diag_flags` bits (7 attempt, 8 completion, 9 `DBG_ENABLED` before, 10 still set
+after). `reset_raw` / `reset_completed` stay cleanup's own, the report stays 784
+bytes, `gpu_regs_before.reg_034` gives the same word again after the AS setup.
+A timeout is recorded, not fatal: the ladder runs either way.
+
+Order is `panthor_gpu_soft_reset()`'s: `INT_CLEAR` bit 8 (write-1-to-clear),
+`GPU_CMD = 0x101` (`GPU_CMD_DEF(1,1)`, same encoding as the vendor's
+`GPU_COMMAND_CODE_PAYLOAD`), then `RESET_COMPLETED` within 100 ms - issued after
+the register snapshot and before the coherency write, the L2 power-on or any AS
+command. Correction to the audit, applied there: panthor resets on its
+reset/resume path (`panthor_device_reset_work()`, `panthor_device_resume()` via
+`panthor_gpu_suspend()`), **not** in `panthor_device_init()`, which trusts the
+bootloader. "Reset first" is panthor's reset semantics, not its cold-init
+invariant.
+
+**Build.** Image `184d5353...9801` (26,714,112 B), payload `6f82e96c...4af0`,
+kernel `c01dcbea...d5ea` (unchanged from 2407, no kernel patches needed), 302
+tests / 3 skipped. `.text` grew 0x118 bytes and **the layout did not move**:
+arena `0x40078000`, code section `0x401b6000`, code leaf `0x401c44c3`, mirror
+`0x401b44c3`, uncached `0x401b74d7` - identical to 2407 in every manifest field,
+so a difference in the report belongs to the reset.
+
+Runner `shim2408-prestartreset-trials-run-once.py` (partition hash
+`de922fdd...f7a8`). **Not flown**, `boot_a` still `2931647a...86b1`.
+
+Reading: bit8 set + bit10 set -> the reset completes and the GPU is still in
+debug; bit9/bit10 clear -> the reset cleared it and the ladder's next result is
+about memory, not state; bit8 clear -> the handshake itself never completes, and
+the next step is the LK/GPUEB handoff, not another page.
+
+## >>> PREVIOUS 2026-11-08 14:12: 2407 RAN - BLOCK ALIVE, NO SLICE SIGNAL <<<
 
 Flew `c124e536...1781`, `boot_a` restored to `2931647a...86b1`. `input_va` 2,
 `shared+12` `0x0f10f857`, seed gone, no fault, `mcu_status` 1, `error` -53,
@@ -30,10 +73,11 @@ access has ever been made outside it. "bit 9 has no responder" and "this
 allocation's second 512-byte half has no responder" fit every measurement so far,
 and the series has been treating the stronger one as settled.
 
-**2408 should buy that discriminator**: one known word placed by the kernel in a
+**2409 should buy that discriminator**: one known word placed by the kernel in a
 page outside the arena, read by the MCU at bit 9 = 1 through a descriptor at
 bit 9 = 0. Returns the word -> the dead set is allocation-shaped (window/IOMMU);
-hangs -> it is address-shaped (interconnect).
+hangs -> it is address-shaped (interconnect). 2408 was re-scoped to the reset
+after the 2026-11-08 re-audit; see the ACTIVE block above.
 
 ## >>> PREVIOUS 2026-11-08 14:05: 2407 BUILT - SAME WALL, PLUS THE REGISTERS THAT COULD EXPLAIN IT <<<
 

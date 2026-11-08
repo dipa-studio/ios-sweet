@@ -307,6 +307,47 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
         r->error=SWEET_CSF_BOOT_STATE;return r->error;
     }
     init_registers(io,c->gpu,r,0);
+#if SWEET_CSF_PRESTART_RESET
+    /*2408 follows panthor_gpu_soft_reset() on the path where panthor really
+     *does reset before it touches an address space: panthor_device_reset_work()
+     *runs fw_pre_reset -> mmu_pre_reset -> hw_soft_reset -> l2_power_on ->
+     *mmu_post_reset -> fw_post_reset, and panthor_device_resume() reaches the
+     *same op through panthor_gpu_suspend(). (The cold panthor_device_init()
+     *does not reset: it trusts the bootloader. Never cite it as the invariant.)
+     *This transaction never reset at all, and 2407 recorded GPU_STATUS=0x100
+     *both before and after its attempt - DBG_ENABLED(BIT(8),
+     *panthor_gpu_regs.h) never cleared - with a stale RESET_COMPLETED pending.
+     *So the reset is issued here, after the register snapshot and before the
+     *coherency write, the L2 power-on or any AS command.
+     *Order is panthor's own: INT_CLEAR is write-one-to-clear, BIT(8) is cleared
+     *first, then GPU_CMD=GPU_SOFT_RESET(GPU_CMD_DEF(1,1)=0x101), then
+     *RESET_COMPLETED=BIT(8) within 100 ms.
+     *Evidence is diag_flags bit7 attempt, bit8 completion, bit9 DBG_ENABLED
+     *before, bit10 DBG_ENABLED after. The report struct has no gpu_status
+     *word (that name lives in sweet_csf_platform_snapshot), so no field is
+     *invented here: the later 0x34 reads land in gpu_regs_before/after via
+     *platform_state(), which is the same word sampled again after this reset
+     *and after the AS setup. 784-byte ABI, reset_raw and reset_completed
+     *stay exactly as they were.
+     *A timeout is recorded, not swallowed: the transaction runs on so one
+     *boot answers both questions. */
+    {
+        int reset_ok;
+        uint64_t reset_budget=(uint64_t)io->frequency*100/1000;
+        if(!reset_budget)reset_budget=1;
+        if(reset_budget>budget)reset_budget=budget;
+        r->diag_flags|=128;
+        if(rd(io,c->gpu+0x34)&0x100)r->diag_flags|=512;
+        wr(io,c->gpu+0x24,0x100);
+        wr(io,c->gpu+0x30,0x101);
+        reset_ok=(poll(io,c->gpu+0x20,0x100,0x100,reset_budget)==0);
+        if(reset_ok) {
+            r->diag_flags|=256;
+            wr(io,c->gpu+0x24,0x100);
+        }
+        if(rd(io,c->gpu+0x34)&0x100)r->diag_flags|=1024;
+    }
+#endif
     gpu_mask=rd(io,c->gpu+0x28);job_mask=rd(io,c->gpu+0x1008);mmu_mask=rd(io,c->gpu+0x2008);
     wr(io,c->gpu+0x28,0);wr(io,c->gpu+0x1008,0);wr(io,c->gpu+0x2008,0);
     if(c->noncoherent) {

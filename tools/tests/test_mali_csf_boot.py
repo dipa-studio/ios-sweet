@@ -11,6 +11,13 @@ HARNESS=r'''
 #include <stdio.h>
 #include <string.h>
 #include "mali_csf_boot.h"
+/*2408: with the pre-start reset built in, one reset has already happened by
+ *the time the ladder is running; everything else keeps its old expectation. */
+#if SWEET_CSF_PRESTART_RESET
+#define PRESTART_RESETS 1
+#else
+#define PRESTART_RESETS 0
+#endif
 /*2380: the AS_MEMATTR pair the driver must write in each mode. */
 #if SWEET_CSF_VENDOR_MEMATTR
 #define MEMATTR_LO 0x888d8f88u
@@ -28,6 +35,7 @@ struct model {
  uint32_t memattr_lo,memattr_hi,coherency,coherency_writes,control,platform_reads;
  int bad_coherency_readback,vendor_ina0,vendor_cached_memattr,bad_memattr;
  int unpowered,bad_id,bad_bits,as_busy,no_l2,no_fw,fw_fault,reset_fail,bad_iface,stale,stuck_timer,live_table,request_done,disable_fail,bad_readback,bad_irq_mask,clamp_masks,missing_gpu_irq,missing_mmu_irq;
+ unsigned prestart_fail;
  unsigned halted,started,halt_writes,expected_control,halt_fail;
  /*2381 global interface: input page at0x90011000, output page at0x90012000. */
  uint32_t in_page[64],in_req,out_req,in_va,out_va;unsigned doorbell_writes,ack_mode,global_writes;
@@ -39,18 +47,18 @@ static uint32_t rd(void *p,uint64_t a) {
    0x10001c60,0x10001c6c,0x10001c70,0x10001c7c,0x13fbf100,0x13fbf120,
    0x13fbf140,0x13fbf118,0x13fbf0c0,0x13fbf098,0x13fbf1c0,0x13fbf748};
   for(unsigned i=0;i<16;i++)if(a==addresses[i]) {
-   assert(!m->resets && m->as_updates==2 && m->l2);m->path_reads++;
+   assert(m->resets==PRESTART_RESETS && m->as_updates==2 && m->l2);m->path_reads++;
    return m->path[i]|(i==0 && m->enabled?m->path_after_bits:0);
   }
  }
  if(a==0x1c001eb8||a==0x1c001ebc||a==0x1c001ec0||a==0x1c001ec4||
     a==0x13fa000c||a==0x13fa0c0c||a==0x100001f0||a==0x13f91048) {
-  assert(!m->unpowered && !m->resets && m->as_updates==2 && m->l2);
+  assert(!m->unpowered && m->resets==PRESTART_RESETS && m->as_updates==2 && m->l2);
   m->platform_reads++;return (uint32_t)a+(m->enabled?1:0);
  }
  if(a==0x1c001f3c||a==0x1c001f40)return m->unpowered?2:6;
- if(a==0x90010ffc){assert(!m->resets && m->as_updates==2 && m->control==(m->enabled?(m->expected_control?m->expected_control:2):0));m->marker_reads++;return m->enabled?0x53545542:0;}
- if(a==0x90006000){assert(!m->resets && m->as_updates==2);return 0x12345678;}
+ if(a==0x90010ffc){assert(m->resets==PRESTART_RESETS && m->as_updates==2 && m->control==(m->enabled?(m->expected_control?m->expected_control:2):0));m->marker_reads++;return m->enabled?0x53545542:0;}
+ if(a==0x90006000){assert(m->resets==PRESTART_RESETS && m->as_updates==2);return 0x12345678;}
  if(a>=0x90010000 && a<0x90010020) {
   assert(m->as_updates==2);
   switch(a-0x90010000) {case 0:return 0x01020003;case 4:return 0x123;case 8:return m->bad_iface==1?0:(m->in_va?m->in_va:0x4001000);
@@ -101,7 +109,7 @@ static void wr(void*p,uint64_t a,uint32_t v) {
  struct model*m=p;m->writes++;assert(!m->unpowered);
  if(a==0x13080000) {
   /*2381: kernel doorbell. The firmware acks the CFG bits by mirroring REQ. */
-  assert(m->enabled && m->as_updates==2 && !m->resets);
+  assert(m->enabled && m->as_updates==2 && m->resets==PRESTART_RESETS);
   m->doorbell_writes++;m->global_writes++;
   if(!m->ack_mode)m->out_req=m->in_req;
   return;
@@ -155,7 +163,12 @@ static void wr(void*p,uint64_t a,uint32_t v) {
   else if(!m->no_fw)m->job|=0x80000000;
   return;
  case 0x24:m->raw&=~v;return;
- case 0x30:assert(v==0x101);m->resets++;if(!m->reset_fail)m->raw|=0x100;return;
+ case 0x30:
+  assert(v==0x101);
+  /*2408: prestart_fail drops only the transaction's first reset, so the
+   *cleanup reset can still complete and one boot reports both facts. */
+  if(!(m->reset_fail||(m->prestart_fail&&!m->resets)))m->raw|=0x100;
+  m->resets++;return;
  default:assert(0);
  }
 }
@@ -164,7 +177,27 @@ static void barrier(void*p){(void)p;}
 static struct model model(void){return (struct model){.gpu_mask=0x55,.job_mask=0xaa,.mmu_mask=0xbb,.transcfg=1,.coherency=31};}
 static struct sweet_csf_boot_config cfg(void){return (struct sweet_csf_boot_config){.gpu=0x13000000,.root_pa=0x90000000,.arena_pa=0x90000000,.arena_bytes=0x200000,.shared_offset=0x10000,.shared_bytes=0x20000,.timeout_ms=1,.private_probe_offset=0x5000};}
 static int run(struct model*m,struct sweet_csf_boot_config*c,struct sweet_csf_boot_report*r){struct sweet_gpu_io io={m,rd,wr,ticks,barrier,1000};return sweet_csf_boot(c,&io,r);}
-static void clean(struct model*m,struct sweet_csf_boot_report*r){assert(m->gpu_mask==0x55 && m->job_mask==0xaa && m->mmu_mask==0xbb && m->resets==1);assert(r->reset_completed);}
+static void clean(struct model*m,struct sweet_csf_boot_report*r){assert(m->gpu_mask==0x55 && m->job_mask==0xaa && m->mmu_mask==0xbb && m->resets==1+PRESTART_RESETS);assert(r->reset_completed);}
+#if SWEET_CSF_PRESTART_RESET
+/*2408: the reset panthor performs on its reset/resume path, issued before the
+ *coherency write, the L2 power-on and any AS command. Four bits say what
+ *happened, and a timeout must not stop the rest of the transaction. */
+int main(void) {
+ struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
+ assert(!run(&m,&c,&r));
+ assert(r.diag_flags&128 && r.diag_flags&256);
+ assert(r.diag_flags&512 && r.diag_flags&1024);
+ assert(r.reset_completed && m.resets==2);
+ clean(&m,&r);
+ /* The model keeps DBG_ENABLED set, so bit10 is the honest reading here. */
+ m=model();m.prestart_fail=1;
+ assert(!run(&m,&c,&r));
+ assert(r.diag_flags&128 && !(r.diag_flags&256));
+ assert(r.diag_flags&512 && r.diag_flags&1024);
+ assert(r.reset_completed && m.resets==2);
+ puts("PASS: 2408 pre-start soft reset, completed and timed-out");return 0;
+}
+#else
 int main(void) {
  struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
  assert(sizeof(r)==696);assert(!run(&m,&c,&r));assert(r.stage==7 && r.firmware_ready && r.version==0x01020003);clean(&m,&r);
@@ -394,6 +427,7 @@ int main(void) {
  m=model();m.stuck_timer=1;m.no_fw=1;assert(run(&m,&c,&r)==-53 && !r.firmware_ready);clean(&m,&r);
  puts("PASS: MMU/L2/MCU ordering, stale IRQ, fault, timeout, interface, reset cleanup");return 0;
 }
+#endif
 '''
 @unittest.skipUnless(shutil.which('cc'),'requires C compiler')
 class CsfBootTests(unittest.TestCase):
@@ -420,4 +454,8 @@ class CsfBootTests(unittest.TestCase):
 
     def test_vendor_memattr_with_global_interface(self):
         self._run(['-DSWEET_CSF_VENDOR_MEMATTR=1','-DSWEET_CSF_GLOBAL_INIT=1'])
+
+    def test_prestart_soft_reset(self):
+        """2408: reset before AS/MCU, and keep going when it times out."""
+        self._run(['-DSWEET_CSF_PRESTART_RESET=1'])
 if __name__=='__main__':unittest.main()

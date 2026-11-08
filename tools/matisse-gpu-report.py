@@ -131,7 +131,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -195,7 +195,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             # windows: the mirror's own section and page, the shared-L3 alias,
             # and the original code page.
             names = (('leaf_0x0100e000','leaf_0x0604e000',
-                      'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406, 0x2407) else
+                      'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406, 0x2407, 0x2408) else
                      ('leaf_0x0100e000','leaf_0x0300e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
                      ('leaf_0x03000000','leaf_0x03001000',
@@ -216,7 +216,8 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 raise ValueError('invalid CSF IRQ gate state')
         if expected_build >= 0x2326:
             csf.update(zip(CSF_STARTUP_KEYS,struct.unpack('<24I',raw[192:288])))
-            if csf['diag_flags'] & ~(127 if expected_build >= 0x2327 else 31):
+            allowed_diag = 2047 if expected_build >= 0x2408 else (127 if expected_build >= 0x2327 else 31)
+            if csf['diag_flags'] & ~allowed_diag:
                 raise ValueError('invalid CSF startup diagnostic flags')
             before,after=bool(csf['diag_flags'] & 4),bool(csf['diag_flags'] & 8)
             page=csf['private_page_hi'] << 32 | csf['private_page_lo']
@@ -346,6 +347,23 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['platform_path_note'] = ('Original MT6983 scpsys MFG1 masks: RPC bits16..19, '
                 'INFRA bits0..3, EMI0/1 bits18..19; enable and status are separate registers. '
                 'PDC/SLC words are raw observations, not power or reachability proof.')
+        if expected_build >= 0x2408:
+            # 2408 issues the soft reset panthor issues on its reset/resume path
+            # and records four facts instead of a verdict. Completion means
+            # RESET_COMPLETED arrived inside the 100 ms budget; it says nothing
+            # about DBG_ENABLED, and a timeout is reported, not inferred.
+            csf['prestart_reset_attempted'] = bool(csf['diag_flags'] & 128)
+            csf['prestart_reset_completed'] = bool(csf['diag_flags'] & 256)
+            csf['dbg_enabled_before_reset'] = bool(csf['diag_flags'] & 512)
+            csf['dbg_enabled_after_reset'] = bool(csf['diag_flags'] & 1024)
+            if csf['prestart_reset_completed'] and not csf['prestart_reset_attempted']:
+                raise ValueError('reset completion without an attempt')
+            if csf['dbg_enabled_after_reset'] and not csf['dbg_enabled_before_reset']:
+                raise ValueError('DBG_ENABLED appeared across a soft reset')
+            csf['prestart_reset_note'] = (
+                'Attempted/completed/DBG_ENABLED-before/DBG_ENABLED-after. A timeout '
+                'still let the rest of the transaction run, so a bit-9 result from this '
+                'boot describes a GPU that was asked to reset, not one that did.')
         end = 0x4094000  # shared VA + measured pinned firmware shared size
         ready = (csf['firmware_ready'] == 1 and csf['mcu_status'] == 1 and
                  csf['job_raw'] & 0x80000000 != 0 and csf['mmu_raw'] & 0xffff == 0 and
@@ -398,7 +416,11 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             else:
                 expected_memattr = (0x4c4c9f4c, 0x4c4c4c4c)
             if expected_build >= 0x2326:
-                ready = (ready and csf['diag_flags'] == (127 if expected_build >= 0x2327 else 31) and
+                #2408 owns bits7..10; the readiness claim still rests on the
+                #seven sampling bits every earlier build had.
+                diag_low = (csf['diag_flags'] & 127 if expected_build >= 0x2408
+                            else csf['diag_flags'])
+                ready = (ready and diag_low == (127 if expected_build >= 0x2327 else 31) and
                     (csf['memattr_lo'], csf['memattr_hi']) == expected_memattr and
                     csf['private_memory_sampled'])
             if expected_build >= 0x2327:
@@ -1374,7 +1396,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             else:
                 csf['instrument_verdict'] = verdict
             csf['cold_boot_outcome'] = outcome
-        if expected_build in (0x2405, 0x2406, 0x2407):
+        if expected_build in (0x2405, 0x2406, 0x2407, 0x2408):
             # 2404's accesses with the instrument repaired: a DSB SY after every
             # marker store and every result store, and shared+12 seeded with
             # 0xdeadbeef by the kernel before MCU_CONTROL. Marker 1 written and
