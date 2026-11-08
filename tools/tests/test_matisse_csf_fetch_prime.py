@@ -253,6 +253,23 @@ class FetchPrimeTests(unittest.TestCase):
         self.assertEqual(want[0x72:0x74], bytes.fromhex('fee7'))
         self.assertEqual(want[0x74:], bytes.fromhex('00bf00bf'))
 
+    def test_mirror_definitions_follow_the_spec_not_a_build_id(self):
+        """2405 shipped the mirror at 0x03000000 while its ladder read 0x0604E400."""
+        leaves_2404 = '{0x0100e000u,0x0604e000u,0x01001000u,0x02000000u}'
+        for build in (0x2404, 0x2405, 0x2406):
+            self.assertEqual(self.builder.chip_definitions(build, True),
+                             ('0x06040000u', leaves_2404), hex(build))
+        self.assertEqual(self.builder.chip_definitions(0x2401, True),
+                         ('0x03000000u',
+                          '{0x03000000u,0x03001000u,0x05001000u,0x01001000u}'))
+        self.assertEqual(self.builder.chip_definitions(0x2403, False),
+                         ('0', '{0x0100e000u,0x0300e000u,0x01001000u,0x02000000u}'))
+        self.assertEqual(self.builder.chip_definitions(0x2402, False),
+                         ('0', '{0x01000000u,0x01001000u,0x0100e000u,0x0100f000u}'))
+        # The shim and the page-table plan may not disagree about the mirror.
+        with self.assertRaises(ValueError):
+            self.builder.chip_definitions(0x2406, False)
+
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2405_keeps_2404s_mapping_and_moves_only_the_entry(self):
         embedded_2404, patch_2404 = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2404)

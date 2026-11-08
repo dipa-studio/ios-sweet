@@ -2256,3 +2256,60 @@ tools/matisse-shim-gpu-image.py --build-id 0x2405 \
 
 Built, unit-tested, statically verified and preflighted, **not flown**. `boot_a`
 is still `2931647a...86b1`.
+
+## 56. 2405 ran: the instrument works, and it caught a build defect instead of the wall
+
+Flew `f53cde64...b8ace` on 2026-11-08 13:26, restored to `2931647a...86b1`.
+`input_va` 2, `shared+12` `0x0f10f857`, seed gone, `error` -54, `as_fault`
+`0x0604e400`, `mcu_status` 1.
+
+**Two things are now measured, not argued.**
+
+* Marker 2 exists, which with a `DSB` behind it means read 1 completed.
+* `shared+12` holds the vendor word `0x0f10f857` and the `0xdeadbeef` seed is
+  gone, so read 1 returned *the right bytes* and stored them. The warm
+  bit-9 = 0 read of the executing page is confirmed by data for the first time.
+
+**And the run still could not ask the walk question**, because the shim had the
+mirror at a different VA than the ladder read. The AS faulted at `0x0604e400`
+with `error -54`: an unmapped VA, not a stall. The cause was in the builder, not
+in the hardware:
+
+```
+2405 shim.elf:  mov w10, #0x3000000     <- SWEET_CSF_MIRROR_CODE_VA
+2406 shim.elf:  mov w10, #0x6040000     <- what the ladder reads
+```
+
+`SWEET_CSF_MIRROR_CODE_VA` and `SWEET_CSF_LEAF_VA_LIST` were still chosen by
+hardcoded `build == 0x2404` tests, so 2405 fell through to the 2401 branch: the
+mirror went to `0x03000000` and the four published leaf VAs were the 2401 list.
+`TRACE_PROBE[0x2405]` had said `0x06040000` all along; nothing read it. The
+leaf-0 VA table in `Image-bare` is the second witness - 2405 carries
+`{0x03000000, 0x03001000, 0x05001000, 0x01001000}`, 2406 carries
+`{0x0100e000, 0x0604e000, 0x01001000, 0x02000000}`.
+
+Both values now come from one function, `chip_definitions(build_id,
+mirror_code)`, which reads the same `TRACE_PROBE` dict the header patch is built
+from and raises when `--mirror-code` and the spec disagree. A unit test pins
+2401/2402/2403/2404/2405/2406, and 2404 still rebuilds byte for byte
+(`3c58fb31...cecd`), so the refactor is behaviour-preserving.
+
+The decoder was wrong in the same direction: it called this run `not-relocated`
+because the four words it read were mislabelled by build id. It now checks
+`mirror_mapped` first - a zero leaf at `0x0604E000` means the image never mapped
+the VA the ladder reads - and reports `mirror-not-mapped` instead of blaming the
+layout.
+
+| item | 2406 |
+|---|---|
+| image | `38389ecf...c0f9`, 26,714,112 B, arena `0x77000` |
+| kernel | `2805ae74...e4d`, `SWEET_BUILD_ID 0x2406`, patch 0202 |
+| mirror | `0x06040000` -> `0x401b3000`, L3 entry at offset `0x270` (bit 9 = 1) |
+| section | `0x401b5000`; probe VA `0x0100E000` -> `0x401c3000` |
+| ladder | unchanged, 120 B, same four accesses, 9 x `DSB SY` |
+| tests | 297 ran, 3 skipped |
+
+Built, unit-tested, statically verified and preflighted, **not flown**. `boot_a`
+is still `2931647a...86b1`. The readings are 2405's table: marker 1 with the seed
+intact is a stalled baseline, marker 2 with `0x0f10f857` is the bit-9 walk, marker
+2 with anything else is a bad translation.

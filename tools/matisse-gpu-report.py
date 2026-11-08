@@ -126,7 +126,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -189,7 +189,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             # windows: the mirror's own section and page, the shared-L3 alias,
             # and the original code page.
             names = (('leaf_0x0100e000','leaf_0x0604e000',
-                      'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405) else
+                      'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406) else
                      ('leaf_0x0100e000','leaf_0x0300e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
                      ('leaf_0x03000000','leaf_0x03001000',
@@ -1338,7 +1338,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             else:
                 csf['instrument_verdict'] = verdict
             csf['cold_boot_outcome'] = outcome
-        if expected_build == 0x2405:
+        if expected_build in (0x2405, 0x2406):
             # 2404's accesses with the instrument repaired: a DSB SY after every
             # marker store and every result store, and shared+12 seeded with
             # 0xdeadbeef by the kernel before MCU_CONTROL. Marker 1 written and
@@ -1361,6 +1361,10 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 '0xe3': 'a Cortex-M7 fault entry ran; input_va carries 0xE3'}
             csf['code_leaf'] = code_leaf
             csf['mirror_leaf'] = mirror_leaf
+            # A VA whose leaf is zero was never mapped. 2405 shipped with the
+            # mirror wired to 0x03000000 while the ladder read 0x0604E400, and
+            # the resulting translation fault was decoded as a layout failure.
+            csf['mirror_mapped'] = bool(mirror_leaf is not None and mirror_leaf & 3 == 3)
             csf['mirror_applied'] = bool(
                 code_leaf is not None and mirror_leaf is not None and
                 (code_leaf & page) == 0x401C3000 and
@@ -1383,7 +1387,17 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['store_verified'] = marker == 5 and csf['output_va'] == 0x5A5A5A5A
             csf['value_verified'] = (marker in (2, 3, 4) and
                                      csf['output_va'] == 0x0F10F857)
-            if not csf['relocation_observed']:
+            if not csf['mirror_mapped']:
+                outcome = 'mirror-not-mapped'
+                csf['cold_boot_marker_present'] = False
+                csf['cold_boot_start'] = None
+                fault_va = csf['as_fault_hi'] << 32 | csf['as_fault_lo']
+                verdict = ('the leaf for 0x0604E000 reads %s, i.e. nothing is mapped at the VA '
+                           'the ladder reads, and the AS faulted at %#x. The image mapped its '
+                           'second copy somewhere else, so read 2 never asked about a page walk. '
+                           'Check the mirror VA the shim was compiled with, not the hardware' %
+                           ('0' if mirror_leaf is None else hex(mirror_leaf), fault_va))
+            elif not csf['relocation_observed']:
                 outcome = 'not-relocated'
                 verdict = ('the firmware base or the code leaf is not where this build put it '
                            '(base %#x, base + 0xE000 expected 0x401c3000); this is not the mirror '
@@ -2678,7 +2692,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2405)')
+                   help='expected kernel/report build (0x2321 through 0x2406)')
     p.add_argument('--allow-missing-leaf',action='store_true',
                    help='decode a build >=0x2388 whose image shipped without the '
                         'sweet-csf-leaf property (2389 did); leaf fields stay absent')

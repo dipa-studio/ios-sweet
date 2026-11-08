@@ -1,6 +1,31 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 13:24: 2405 BUILT - THE SAME ACCESSES, AN INSTRUMENT THAT CAN REPORT <<<
+## >>> ACTIVE 2026-11-08 13:31: 2406 BUILT - 2405 WORKED, BUT ITS MIRROR WAS AT THE WRONG VA <<<
+
+**2405 answered the instrument question and nothing else.** `input_va` 2,
+`shared+12` `0x0f10f857`, `0xdeadbeef` gone: marker 2 with a DSB behind it means
+read 1 completed, and its word landed. The warm bit-9 = 0 read of the executing
+page is now confirmed by data, in the same boot as a bit-9 experiment.
+
+**It could not ask the walk question.** `error` -54, `as_fault` `0x0604e400`:
+the ladder read an unmapped VA. The shim had been compiled with
+`SWEET_CSF_MIRROR_CODE_VA` = `0x03000000` (`mov w10, #0x3000000`) because the
+builder still chose it with a hardcoded `build == 0x2404` test, while
+`TRACE_PROBE[0x2405]` said `0x06040000`. The leaf-VA table in `Image-bare` was
+the 2401 list for the same reason.
+
+Both values now come from `chip_definitions(build_id, mirror_code)`, which reads
+`TRACE_PROBE` and raises when `--mirror-code` disagrees with it; a unit test pins
+2401/2402/2403/2404/2405/2406 and 2404 still rebuilds byte for byte. The decoder
+now checks the leaf at `0x0604E000` first and reports `mirror-not-mapped` instead
+of `not-relocated`.
+
+2406 = 2405's program, ladder and addresses, with the wiring fixed: image
+`38389ecf...c0f9`, kernel `2805ae74...e4d` (`SWEET_BUILD_ID 0x2406`, patch 0202),
+partition `9f3c5f90...8f85`, mirror `0x06040000` -> `0x401b3000`, 297 tests /
+3 skipped, preflight passed, `boot_a` still `2931647a...86b1`. **Not flown.**
+
+## >>> PREVIOUS 2026-11-08 13:24: 2405 BUILT - THE SAME ACCESSES, AN INSTRUMENT THAT CAN REPORT <<<
 
 2404 could not answer its own question: markers had no barrier behind them and
 `shared+12` was never seeded, so "read 1 stalled" and "marker 2 lost in the store

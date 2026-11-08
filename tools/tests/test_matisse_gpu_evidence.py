@@ -850,6 +850,22 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertEqual(csf['cold_boot_outcome'], 'all-returned')
         self.assertNotIn('WARNING', csf['instrument_verdict'])
 
+    def test_2406_refuses_an_unmapped_mirror(self):
+        """2405's failure mode: the leaf at 0x0604E000 read zero, the AS faulted."""
+        unmapped = (self.LEAVES_2404[0], 0, self.LEAVES_2404[2], self.LEAVES_2404[3])
+        csf = self.cold_report(build=0x2406, input_va=2,
+                               firmware_probe_pa_lo=0x401B5000,
+                               output_va=0x0F10F857, leaf=unmapped)['csf']
+        self.assertFalse(csf['mirror_mapped'])
+        self.assertEqual(csf['cold_boot_outcome'], 'mirror-not-mapped')
+        self.assertIn('never asked about a page walk', csf['instrument_verdict'])
+
+        csf = self.cold_report(build=0x2406, input_va=2,
+                               firmware_probe_pa_lo=0x401B5000,
+                               output_va=0x0F10F857, leaf=self.LEAVES_2404)['csf']
+        self.assertTrue(csf['mirror_mapped'])
+        self.assertEqual(csf['cold_boot_outcome'], 'walk-dies-at-bit9')
+
     def test_2403_alias_splits_the_va_from_the_leaf(self):
         """2403: the same leaf and PA through a second VA, plus a data check."""
         csf = self.cold_report(build=0x2403, input_va=2,
