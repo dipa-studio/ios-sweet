@@ -3541,3 +3541,75 @@ Build: image `555c10e7...aef7`, payload `93b27ab6...2e21`, kernel
 zero-writes and both `diag` states). 2412 through 2417 all still rebuild byte for
 byte. Runner `shim2418-disp-trials-run-once.py`, partition hash `33f1c7c3...a367`,
 preflight passed, **not flown**.
+
+## 77. 2418 ran: the zero did not move the wall - and `0x855` spells the wall's shape
+
+2418 flew (`555c10e7...aef7`, partition `33f1c7c3...a367` written and read back),
+restored `2931647a...86b1` in the same run, fastboot at 96.93 s, marks fresh.
+
+**Control intact.** `input_va` 3, `output_va` `0x2412a400`, `mcu_status` 1,
+`as_fault` 0, `coherency_features` 1, `firmware_cpu_readback_matches` true,
+`gpufreq` 610 MHz / 65 mV. `diag_flags` `0x183F` = bit 11 (the block ran) + bit 12
+(the four in-words already read `0x855` before the write) + the six baseline bits.
+
+**Marker 3.** `0x0100C400` returned, `0x0100D400` returned, `0x0100D200` stalled.
+The arena control answered `0x2412a400`, the page past the arena answered at
+bit 9 = 0, and its bit-9 = 1 half did not answer with the four in-dispatch words
+at zero. **The wall did not move.** The bit-9 = 0 rungs answering *after* the
+write also says the write did not disable the in path - whatever `0x000` means,
+the MCU still read through that bridge.
+
+**The eight words, full 32 bits, for the first time.**
+
+| direction | words | value |
+|---|---|---|
+| in | `0x8E0/0x8E8/0x910/0x918` | `0xFFC855` x4 |
+| out | `0x900/0x908/0x920/0x928` | `0xFFC055` x4 |
+
+Bits 31:12 are **not** zero - they read `0xFFC000` on all eight. The vendor driver
+does `val |= 0x855` on a value it just read and never reads it back, so in eight
+years of shipping this field it has never observed those twenty bits. They are
+either a tie-off or state nobody in the vendor tree writes; either way 2418's
+`wr(..., 0)` cleared them along with the low 12.
+
+**The low 12 now read as a pattern, and it is the pattern 2415 measured.**
+`0x055` = `0101 0101`: eight bits, alternating, one bit per 512-byte slot of a
+4 KiB page. That is exactly the geometry 2415 established by hand - `+0x000` and
+`+0x400` answer, `+0x200` and `+0x600` stall. The vendor's literal for
+`mfg_axi1to2_R_dispatch_mode` is an 8-slot port map, and the port it selects for
+the odd slots is the one with no responder. On the read path the same field
+carries one extra bit: `0x855 = 0x800 | 0x055`; the write path has none
+(`0x055`).
+
+So `0x000` was **not** the minimal "everything to one port" value. It asked for
+pattern `0x00` *and* cleared bit 11 at the same time. This build therefore cannot
+separate two readings:
+
+* bit 11 is a mode/enable bit, and clearing it kept the bridge in a splitting
+  mode while the pattern was ignored - the untested value is `0x800`;
+* the write never landed, and the whole block is inert.
+
+**And that second reading is now the live one, because nothing has ever read the
+words back.** 2413 applied the vendor values (invisible against values that were
+already there), 2414 wrote `0xAAA`, 2418 wrote `0x000` - three builds, three
+writes, zero read-backs. If writes to `0x13FBF000` are ignored from the AP, all
+three measured nothing and 2413/2414 are retroactively void. That is 2413's
+original flaw one level down: it proved the *value* differed, never that the
+*word* changed.
+
+The page is not obviously write-protected: `+0x748` reads `0x06002006`, the exact
+word the vendor's `__gpufreq_slc_control()` writes, so somebody's write to this
+page survived into this boot. But "somebody" may have been LK, and the vendor
+kernel's own writes may pass through a state (MFG power/clocks up, `scpsys` MFG1
+masks clear) that this shim reaches only part of.
+
+**Not built, not flown.** Next: write `0x800` - pattern `0x00`, bit 11 preserved,
+the smallest delta from the vendor's own literal - and then **read the four words
+back** in the same block. One boot then discriminates all three:
+
+* readback `0x00000800` and the wall is gone -> the field is the wall, and the
+  value is `0x800`;
+* readback `0x00000800` and the wall stays -> the field is writable and is not a
+  read-path selector;
+* readback `0xFFC855` -> the writes are inert, 2413/2414/2418 are void, and the
+  question becomes how the AP is supposed to reach this page at all.

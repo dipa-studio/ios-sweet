@@ -1,6 +1,36 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 16:56: 2418 BUILT - ASK THE 1-TO-2 BRIDGE TO ROUTE EVERYTHING TO ONE PORT <<<
+## >>> ACTIVE 2026-11-08 17:01: 2418 RAN - THE ZERO DID NOT MOVE THE WALL; `0x055` SPELLS ITS SHAPE AND NO WRITE HAS EVER BEEN READ BACK <<<
+
+2418 flew (`555c10e7...aef7`), restored `2931647a...86b1` in the same run, fastboot
+96.93 s, marks fresh. `diag_flags` `0x183F` = bit 11 (block ran) + bit 12 (in-words
+already `0x855`). **Marker 3**: `0xC400` answered, `0xD400` answered, `0xD200`
+stalled - the wall did not move. The bit-9 = 0 rungs still answering *after* the
+write also says `0x000` did not disable the in path.
+
+Two new facts, one of them large:
+
+1. The eight words read `0xFFC855` (in x4) / `0xFFC055` (out x4) - bits 31:12 are
+   `0xFFC000`, not zero. The vendor does `val |= 0x855` on a just-read value and
+   never reads back, so those twenty bits have never been observed.
+2. `0x055` = `0101 0101` is an **8-slot port map, alternating every 512 bytes** -
+   exactly the geometry 2415 measured by hand (`+0x000`/`+0x400` answer,
+   `+0x200`/`+0x600` stall). The odd-slot port is the one with no responder. The
+   read path carries one extra bit (`0x855 = 0x800 | 0x055`), the write path none.
+
+So `0x000` was not the minimal "all to one port" value: it asked for pattern `0x00`
+*and* cleared bit 11. The untested value is `0x800`. But the deeper hole is that
+**2413, 2414 and 2418 all wrote and never read back** - if writes to `0x13FBF000`
+are ignored from the AP, all three measured nothing. `+0x748` does read
+`0x06002006`, the vendor's own literal, so some write to that page survived into
+this boot - possibly LK's, not the vendor kernel's.
+
+Next (not built): write `0x800` and read the four words back in the same block.
+Readback `0x800` + wall gone -> the field is the wall; readback `0x800` + wall
+stays -> writable, not a read selector; readback `0xFFC855` -> writes inert and
+2413/2414/2418 are void.
+
+## >>> PREVIOUS 2026-11-08 16:56: 2418 BUILT - ASK THE 1-TO-2 BRIDGE TO ROUTE EVERYTHING TO ONE PORT <<<
 
 2413 applied the vendor's dispatch values (a no-op if already there) and 2414 wrote
 `0xAAA` (arbitrary). Neither asked the bridge for the setting that would *remove* a
