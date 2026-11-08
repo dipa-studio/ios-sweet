@@ -46,8 +46,9 @@ anticipated correctly.
 
 **What is left.** Across 2401..2403 the stall now has one invariate: the MCU
 access carries address bit 9 = 1. It has been observed with fetches and data
-reads, in five virtual ranges, three sections, at least four physical pages, and
-every leaf encoding tried. Reads at bit 9 = 0 return correct data. Nothing in the
+reads, in three virtual ranges (`0x0100`, `0x0300`, `0x0400`), two sections (code
+and shared - the stack has never been probed at bit 9 = 1), at least four
+physical pages, and every leaf encoding tried. Reads at bit 9 = 0 return correct data. Nothing in the
 page table moves it, and per `AS_TRANSCFG = 0x42000006` (`ADRMODE 6 =
 AARCH64_4K`) nothing in the page table *can* move it: `PA[11:0] == VA[11:0]`
 always.

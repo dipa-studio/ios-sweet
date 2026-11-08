@@ -2051,9 +2051,10 @@ arena page shift this build introduced was pinned correctly.
   measured data path.
 
 **Where the model stands.** One invariate remains over 2401..2403: the MCU access
-carries address bit 9 = 1. It holds for fetches and data reads, five virtual
-ranges, three sections, at least four physical pages, and every leaf encoding
-tried; reads at bit 9 = 0 return correct data. `AS_TRANSCFG = 0x42000006`
+carries address bit 9 = 1. It holds for fetches and data reads, three virtual
+ranges (`0x0100`, `0x0300`, `0x0400`), two sections (code and shared - the stack
+has never been probed at bit 9 = 1), at least four physical pages, and every leaf
+encoding tried; reads at bit 9 = 0 return correct data. `AS_TRANSCFG = 0x42000006`
 (`ADRMODE 6 = AARCH64_4K`) means `PA[11:0] == VA[11:0]` for every mapping the AS
 can hold, so this is not something the page table can express, let alone fix.
 
