@@ -2459,3 +2459,60 @@ compiled out, so the guard is honest. Built, unit-tested and preflighted,
 | `0x048` shows a slice masked off | a lead: the bit-9 address may belong to an L2 slice that is not configured |
 | `0x048` symmetric while bit 9 still dies | the slice story is wrong and the address decode or the EMI channel is next |
 | the block is all zeros | the GPU block was not clocked when it was sampled; say so, do not read it |
+
+## 59. 2407 ran: the register block is alive, and it does not show a masked slice
+
+Flew `c124e536...1781` on 2026-11-08 14:10, restored to `2931647a...86b1` in the
+same run. `input_va` 2, `shared+12` `0x0f10f857`, seed gone, no fault,
+`mcu_status` 1, `error` -53, `gpu_regs_sample_flags` 3, `firmware_probe_pa`
+`0x401b6000`, code leaf `0x401c44c3`, mirror `0x401b44c3`.
+
+**It reproduced 2406 exactly.** Same marker, same vendor word, same silent stop
+at the bit-9 descriptor. That is the first time a result in this series has been
+repeated by an independent build, and it retires the possibility that 2406 was a
+one-off.
+
+**The register block is live, so the zeros mean something.**
+
+| offset | before | after | |
+|---|---|---|---|
+| `0x000` | `0xa8620004` | `0xa8620004` | GPU ID, unchanged |
+| `0x004` | `0x07130306` | `0x07130306` | |
+| `0x00c` | `0x00000809` | `0x00000809` | |
+| `0x034` | `0x00000100` | `0x00000101` | GPU_STATUS: bit 0 appeared during the attempt |
+| `0x048` | `0x07130000` | `0x07130000` | **low half zero: no slice mask** |
+| `0x04c` | `0` | `0` | |
+| `0x2c0`..`0x2cc` | `0` | `0` | all four zero, both sides |
+
+The block answers: four words are non-zero and `GPU_STATUS` changes across the
+run, so this is not an unclocked block returning zeroes. That matters, because
+it makes the `0x2c0` zeros a fact rather than an artefact.
+
+**What the words do not support.** The hypothesis was that `0x048` would show one
+L2 slice masked off, which would explain why a bit-9 = 1 address has no
+responder. `0x048` reads `0x07130000`: the low sixteen bits - where a per-slice
+enable or mask would sit - are zero, before and after. The `0x2c0` block, which
+the vendor dump reads next to it, is zero in all four words. Neither word set
+carries a slice-disable signal, so **the dual-slice story is not confirmed by
+this build**, and the `0x2c0` offsets say nothing either way: zero is what an
+unimplemented or unclocked register also returns.
+
+That is a negative result and it is worth stating plainly: ten words were spent
+on the hypothesis and none of them moved it forward.
+
+**The sharper question this run exposes.** Every address that has ever killed the
+MCU - the data page behind `0x0100E200` in 2402, the vendor firmware's first
+read `0x401b6bc4`, the descriptors at `0x4007f270` and `0x40080270` - lies
+inside the 2 MiB arena,
+`[0x40078000, 0x40278000)`. Not one bit-9 = 1 access has ever been made outside
+it. So "bit 9 has no responder" and "the second 512-byte half of this
+allocation has no responder" fit every measurement equally well, and the series
+has been treating the stronger of the two as established.
+
+That is the discriminator 2408 should buy: one known word, placed by the kernel
+in a page outside the arena, read by the MCU at bit 9 = 1 through a descriptor
+at bit 9 = 0. Returns the word means the dead set is a property of that
+allocation and the wall is a window/IOMMU question; hangs means the dead set is
+the address space and the wall is the interconnect.
+
+`boot_a` is back at `2931647a...86b1`.

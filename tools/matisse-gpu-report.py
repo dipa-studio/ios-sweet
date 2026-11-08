@@ -330,6 +330,19 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['gpu_regs_note'] = ('Raw words sampled by the shim. A bit set here is a '
                                     'lead, not a mechanism; nothing in this build writes '
                                     'a GPU register or a power domain.')
+            # Two different facts, and 2407 needed both. An all-zero block is not
+            # "no slice is masked", it is "this block told me nothing" - an
+            # unimplemented or unclocked register reads zero too. And a live block
+            # whose slice words are all zero carries no slice signal at all, which
+            # is weaker than "the slice is fine".
+            csf['gpu_regs_block_live'] = any(
+                value for name in ('before', 'after') for value in csf['gpu_regs_' + name].values())
+            slice_words = [csf['gpu_regs_' + name][key]
+                           for name in ('before', 'after')
+                           for key in ('reg_2c0', 'reg_2c4', 'reg_2c8', 'reg_2cc')]
+            l2_low = [csf['gpu_regs_' + name]['reg_048'] & 0xffff
+                      for name in ('before', 'after')]
+            csf['gpu_regs_slice_signal'] = any(slice_words) or any(l2_low)
             csf['platform_path_note'] = ('Original MT6983 scpsys MFG1 masks: RPC bits16..19, '
                 'INFRA bits0..3, EMI0/1 bits18..19; enable and status are separate registers. '
                 'PDC/SLC words are raw observations, not power or reachability proof.')

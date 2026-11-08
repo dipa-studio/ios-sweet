@@ -1,6 +1,41 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 14:05: 2407 BUILT - SAME WALL, PLUS THE REGISTERS THAT COULD EXPLAIN IT <<<
+## >>> ACTIVE 2026-11-08 14:12: 2407 RAN - BLOCK ALIVE, NO SLICE SIGNAL <<<
+
+Flew `c124e536...1781`, `boot_a` restored to `2931647a...86b1`. `input_va` 2,
+`shared+12` `0x0f10f857`, seed gone, no fault, `mcu_status` 1, `error` -53,
+`firmware_probe_pa` `0x401b6000`, code leaf `0x401c44c3`, mirror `0x401b44c3`.
+
+**2406 reproduced exactly** - same marker, same word, same silent stop at the
+bit-9 descriptor. First independent repeat in the series.
+
+**Registers: alive, and silent about slices.**
+
+```
+0x000 0xa8620004   0x004 0x07130306   0x00c 0x00000809
+0x034 0x00000100 -> 0x00000101 (bit 0 appeared during the attempt)
+0x048 0x07130000   0x04c 0
+0x2c0 0x2c4 0x2c8 0x2cc = 0 before and after
+```
+
+The block is clocked - four words non-zero, `GPU_STATUS` moves - so the zeros are
+a fact, not an artefact. But `0x048`'s low half is zero, where a per-slice mask
+would sit, and the `0x2c0` words the vendor dump reads beside it are all zero.
+**The dual-slice story is not supported.** A negative result, stated as one.
+
+**The sharper question.** Every address that has ever killed the MCU lies inside
+the 2 MiB arena `[0x40078000, 0x40278000)` - the 2402 data page, the vendor's
+first read `0x401b6bc4`, the descriptors `0x4007f270` / `0x40080270`. No bit-9 = 1
+access has ever been made outside it. "bit 9 has no responder" and "this
+allocation's second 512-byte half has no responder" fit every measurement so far,
+and the series has been treating the stronger one as settled.
+
+**2408 should buy that discriminator**: one known word placed by the kernel in a
+page outside the arena, read by the MCU at bit 9 = 1 through a descriptor at
+bit 9 = 0. Returns the word -> the dead set is allocation-shaped (window/IOMMU);
+hangs -> it is address-shaped (interconnect).
+
+## >>> PREVIOUS 2026-11-08 14:05: 2407 BUILT - SAME WALL, PLUS THE REGISTERS THAT COULD EXPLAIN IT <<<
 
 2406 put the wall at one address: the L3 descriptor at `0x4007f270`, the only
 bit-9 = 1 address in either walk. 2407 does not probe that wall again; it samples

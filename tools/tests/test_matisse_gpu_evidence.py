@@ -80,9 +80,12 @@ class PersistentReportPatchTests(unittest.TestCase):
         begin = source.index('static void\nsweet_gpu_report_marks(void)\n{')
         end = source.index('\n}\n',begin)
         report = source[begin:end]
-        self.assertIn('size == 696',report)
-        self.assertIn('uint32_t csf[174];',report)
-        self.assertIn('i < 87;',report)
+        # 2407 replaced the fixed 696-byte copy and its 87 marks with a bounded
+        # size-driven forwarder, so the CSF block grows with the report struct
+        # instead of being silently truncated.
+        self.assertIn('size >= 696 && size <= 1024 && size % 8 == 0',report)
+        self.assertIn('uint32_t csf[256];',report)
+        self.assertIn('i < size / 8;',report)
         self.assertIn('sweet_mark(320 + i, a, SWEET_BUILD_ID);',report)
         # 2338 widens the GPU report to 112 bytes without touching the CSF ABI.
         self.assertIn('uint32_t words[28];',report)
@@ -889,8 +892,27 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertEqual(csf['gpu_regs_sample_flags'], 3)
         self.assertEqual(csf['gpu_regs_before']['reg_048'], 0x01028000)
         self.assertIn('lead, not a mechanism', csf['gpu_regs_note'])
+        self.assertTrue(csf['gpu_regs_block_live'])
+        # 0x01028000 has a non-zero low half, so this one does carry a slice word.
+        self.assertTrue(csf['gpu_regs_slice_signal'])
         # A register word is an observation, never a claim about the wall.
         self.assertNotIn('0x01028000', csf['instrument_verdict'])
+
+    def test_2407_separates_a_live_block_from_a_slice_signal(self):
+        """2407 as flown: block alive, 0x2c0 all zero, so no slice signal."""
+        csf = self.cold_report(build=0x2407, input_va=2,
+                               firmware_probe_pa_lo=0x401B6000,
+                               output_va=0x0F10F857, leaf=self.LEAVES_2407,
+                               gpu_regs_before_reg_000=0xA8620004,
+                               gpu_regs_before_reg_048=0x07130000)['csf']
+        self.assertTrue(csf['gpu_regs_block_live'])
+        self.assertFalse(csf['gpu_regs_slice_signal'])
+        # An entirely zero block is not a clean block either.
+        csf = self.cold_report(build=0x2407, input_va=2,
+                               firmware_probe_pa_lo=0x401B6000,
+                               output_va=0x0F10F857, leaf=self.LEAVES_2407)['csf']
+        self.assertFalse(csf['gpu_regs_block_live'])
+        self.assertFalse(csf['gpu_regs_slice_signal'])
 
     def test_2407_refuses_a_register_block_it_did_not_sample(self):
         with self.assertRaises(ValueError):
