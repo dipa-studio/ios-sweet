@@ -736,6 +736,61 @@ class ReportDecodeTests(unittest.TestCase):
                                firmware_probe_pa_lo=0x401b6000, leaf=self.LEAVES)['csf']
         self.assertEqual(csf['cold_boot_outcome'], 'not-relocated')
 
+    # 2403: code page (PBHA cleared), the alias that must equal it, the uncached
+    # page, and the stack page published for the attribute comparison.
+    LEAVES_2403 = (0x00000000401b24c3, 0x00000000401b24c3,
+                   0x00000000401a54d7, 0x0060000040090443)
+
+    def test_2403_alias_splits_the_va_from_the_leaf(self):
+        """2403: the same leaf and PA through a second VA, plus a data check."""
+        csf = self.cold_report(build=0x2403, input_va=2,
+                               firmware_probe_pa_lo=0x401a5000,
+                               output_va=0x0f10f857, leaf=self.LEAVES_2403)['csf']
+        self.assertTrue(csf['alias_applied'])
+        self.assertTrue(csf['uncached_page_applied'])
+        self.assertTrue(csf['pbha_cleared'])
+        self.assertTrue(csf['value_verified'])
+        self.assertEqual(csf['cold_boot_outcome'], 'alias-stalls')
+        self.assertEqual(csf['cold_boot_target'], 0x0100E000)
+        self.assertIn('not with the virtual range', csf['instrument_verdict'])
+
+        for marker, outcome in ((1, 'bit9-zero-regressed'),
+                                (3, 'uncached-pbha0-stalls'),
+                                (4, 'va-prefix-decides'),
+                                (5, 'all-reads-returned')):
+            csf = self.cold_report(build=0x2403, input_va=marker,
+                                   firmware_probe_pa_lo=0x401a5000,
+                                   output_va=0x0f10f857, leaf=self.LEAVES_2403)['csf']
+            self.assertEqual(csf['cold_boot_outcome'], outcome, marker)
+
+        # The word that came back is not the vendor word: every "returned" in
+        # this run has to be re-read with that in mind.
+        csf = self.cold_report(build=0x2403, input_va=4,
+                               firmware_probe_pa_lo=0x401a5000,
+                               output_va=0xdeadbeef, leaf=self.LEAVES_2403)['csf']
+        self.assertFalse(csf['value_verified'])
+        self.assertIn('WARNING', csf['instrument_verdict'])
+
+        # A leaf at 0x0300E000 that is not the code page's means the alias did
+        # not travel and read 2 asked nothing.
+        split = (self.LEAVES_2403[0], self.LEAVES_2403[3],
+                 self.LEAVES_2403[2], self.LEAVES_2403[3])
+        csf = self.cold_report(build=0x2403, input_va=2,
+                               firmware_probe_pa_lo=0x401a5000,
+                               output_va=0x0f10f857, leaf=split)['csf']
+        self.assertFalse(csf['alias_applied'])
+        self.assertEqual(csf['cold_boot_outcome'], 'alias-not-applied')
+        self.assertFalse(csf['cold_boot_marker_present'])
+
+        # An unpatched 0x01001200 leaf: the attribute check must fail loudly
+        # rather than let a stale image read as the 2x2 corner.
+        stale = (self.LEAVES_2403[0], self.LEAVES_2403[1],
+                 0x00000000401a54c3, self.LEAVES_2403[3])
+        csf = self.cold_report(build=0x2403, input_va=3,
+                               firmware_probe_pa_lo=0x401a5000,
+                               output_va=0x0f10f857, leaf=stale)['csf']
+        self.assertFalse(csf['uncached_page_applied'])
+
     def test_2399_aliases_one_page_onto_the_stack(self):
         csf = self.cold_report(build=0x2399, input_va=4, firmware_probe_pa_lo=0x401a5000,
                                leaf=self.LEAVES_ALIAS)['csf']

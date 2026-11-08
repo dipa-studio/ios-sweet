@@ -164,6 +164,76 @@ class FetchPrimeTests(unittest.TestCase):
         # No branch before the terminal loop: every access is a plain read.
         self.assertEqual(want[-2:], bytes.fromhex('fee7'))
 
+    def test_ladder_2403_assembly_matches_the_pinned_bytes(self):
+        """2403's four-read ladder with the alias and the value sample."""
+        bins = sorted((Path.home() / 'Library/Android/sdk/ndk').glob(
+            '*/toolchains/llvm/prebuilt/darwin-x86_64/bin'))
+        if not bins:
+            self.skipTest('requires ARM linker from Android NDK')
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory)
+            (p / 'ladder.ld').write_text('SECTIONS { '
+                '.text.ladder 0x0100E000 : { *(.text.ladder) } }')
+            subprocess.run([str(bins[-1] / 'clang'), '--target=armv7m-none-eabi',
+                '-mcpu=cortex-m7', '-mthumb', '-nostdlib', '-Wl,--build-id=none',
+                '-Wl,-e,csf_ladder_2403', '-Wl,-T,' + str(p / 'ladder.ld'),
+                str(ROOT / 'tools/matisse-csf-ladder2403.S'), '-o', str(p / 'ladder.elf')],
+                check=True, capture_output=True)
+            elf = (p / 'ladder.elf').read_bytes()
+            shoff, = struct.unpack_from('<I', elf, 32)
+            size, count, names_index = struct.unpack_from('<HHH', elf, 46)
+            sections = [struct.unpack_from('<10I', elf, shoff + i * size) for i in range(count)]
+            names_section = sections[names_index]
+            names = elf[names_section[4]:names_section[4] + names_section[5]]
+            actual = {names[s[0]:].split(b'\0', 1)[0].decode(): elf[s[4]:s[4] + s[5]]
+                      for s in sections}
+        want = bytes.fromhex(self.builder.COLD_BOOT_2403[1])
+        self.assertEqual(actual['.text.ladder'], want)
+        self.assertEqual(len(want), 68)
+        self.assertEqual(len(want), len(bytes.fromhex(self.builder.COLD_BOOT_2403[0])))
+        self.assertEqual(sections[1][3], 0x0100E000)
+        # read 1 is 0x0100E400 through r9, and its word goes to shared+12.
+        self.assertEqual(want[0x1e:0x22], bytes.fromhex('56f80900'))
+        self.assertEqual(want[0x22:0x24], bytes.fromhex('e060'))
+        # read 2 goes through r7 = 0x03000000, read 4 through r6 = 0x01000000,
+        # both with r8 = 0xE200: the same offset, the same leaf, a different VA.
+        self.assertEqual(want[0x28:0x2c], bytes.fromhex('57f80800'))
+        self.assertEqual(want[0x38:0x3c], bytes.fromhex('56f80800'))
+        # read 3 is the uncached page window 0x01001200 through r3.
+        self.assertEqual(want[0x30:0x34], bytes.fromhex('56f80300'))
+        self.assertEqual(want[-4:-2], bytes.fromhex('fee7'))
+        self.assertEqual(want[-2:], bytes.fromhex('00bf'))
+
+    @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
+    def test_2403_aliases_the_code_l3_without_moving_the_page(self):
+        embedded_2402, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2402)
+        embedded_2403, patch = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2403)
+        config, code = 0x0380, 0x0e94
+        stub = bytes.fromhex(self.builder.COLD_BOOT_2403[1])
+        # Only the entry program moves: the vector word, the fault entry and the
+        # 0x01000200 patch are 2402's. 2402's ladder was 72 bytes and this one
+        # is 68, so the tail of that window differs too.
+        allowed = set(range(code + 0xE000, code + 0xE000 + 72))
+        changed = {i for i, (a, b) in enumerate(zip(embedded_2402, embedded_2403))
+                   if a != b}
+        self.assertTrue(changed)
+        self.assertLessEqual(changed, allowed)
+        self.assertEqual(int.from_bytes(embedded_2403[config + 4:config + 8], 'little'),
+                         0x0100E001)
+        alias = patch['alias_check']
+        self.assertEqual(alias['va'], '0x3000000')
+        self.assertTrue(alias['same_leaf'])
+        self.assertTrue(alias['same_pa'])
+        self.assertEqual(alias['code_leaf_attributes'], '0x4c3')
+        self.assertEqual(alias['uncached_leaf_attributes'], '0x4d7')
+        cold = patch['cold_boot']
+        self.assertEqual(cold['target'], '0x100e000')
+        self.assertEqual([step['read_va'] for step in cold['ladder']],
+                         ['0x0100E400', '0x0300E200', '0x01001200', '0x0100E200', None])
+        self.assertEqual(cold['sampled_word']['expected'], 0x0f10f857)
+        self.assertEqual(patch['leaf_probe']['va'],
+                         ['0x100e000', '0x300e000', '0x1001000', '0x2000000'])
+
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2402_moves_only_the_vector_and_the_ladder(self):
         embedded_2400, _ = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2400)

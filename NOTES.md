@@ -1,6 +1,65 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-07 23:52: 2402 RAN - BIT 9 IS THE WALL, AND IT IS THE ONLY MOVING PART <<<
+## >>> ACTIVE 2026-11-08 12:20: 2403 BUILT - DOES THE 0x01 VA PREFIX DECIDE, OR THE LEAF/PA? <<<
+
+**The question 2402 left open.** 2402 proved bit 9 decides inside one 4 KiB page.
+It could not say whether the refusal is keyed on the virtual address
+(`0x0100xxxx` above the MMU) or on the page that address lands on. 2403 answers
+that with an L2 alias that costs no page: slot 24 receives slot 8's entry
+verbatim, so `0x0300E200` walks the identical L3 page, the identical leaf
+descriptor and the identical physical word as `0x0100E200` - only the VA differs.
+
+```
+marker 1  read 0x0100E400   bit9 0, the page we run from; the word goes to
+                            shared+12 and must equal 0x0f10f857 (data check)
+marker 2  read 0x0300E200   bit9 1, the alias: same leaf, same PA
+marker 3  read 0x01001200   bit9 1, page 0x01001000 non-cacheable + PBHA 0
+marker 4  read 0x0100E200   bit9 1, 2402's own address, same boot as read 2
+marker 5  all four returned
+```
+
+Read 2 is the question: returned => the wall is keyed on the VA above the MMU;
+stalled => it travels with the page, the leaf or bit 9 itself, and the 0x01
+range is out. Reads 3 and 4 only run if read 2 returned.
+
+**Correction to the plan recorded below.** An earlier sketch put the store test
+in this build and ordered the reads differently; that is dropped, because a
+stall ends the run and the store question is worth less than either the VA split
+or the attribute cell. The store/load split moves to 2404 if it still matters.
+
+**Also fixed a premise that was wrong in the analysis.** "2399 showed the stack
+at bit 9 = 1 works" is not true: the 2396..2400 ladder encoded both control
+reads as `f8d4 0200` / `f8d6 0200` (`bmi` + `movs r2,r0`), so reads 1 and 2 never
+executed in that whole series. `input_va = 3` there only ever meant read 3
+(`0x01001200`) stalled. No bit-9 = 1 access in the shared or stack section has
+ever been issued, so "the stack leaf's attributes make the difference" had no
+evidence behind it. 2403 does not depend on that claim any more.
+
+**What the build carries.** PBHA is cleared on every leaf (memory group 0) and
+`0x01001000` is made non-cacheable, so read 3 is the first access with neither
+the group tag nor cacheability - the one cell the attribute matrix never tested
+(2398 cleared PBHA only, 2400 cleared cacheability only, and both stalled).
+
+```
+image      83372fdc...0a63  26,714,112 B  arena 0x78000 (one page higher than 2402)
+kernel     eb555c22...4cae  SWEET_BUILD_ID 0x2403, patch 0199
+relocated  0x401a5000  <- 2402's 0x401a4000 + 0x1000, because the arena moved
+container  108 B changed: 68 B ladder at 0x0100E000, 40 B fault entry, vector, 0x01000200
+leaves     0x0100E000 and 0x0300E000 must be the same word (PBHA 0, AttrIdx 0, RO)
+           0x01001000 must end 0x4d7, 0x02000000 is published for comparison
+tests      289 ran, 3 skipped
+```
+
+**Trap checked before flying:** the alias build puts the arena at `0x40078000`,
+so the relocated code section is `0x401a5000`, not 2402's `0x401a4000`. The
+decoder and the tests pin the new value; the pre-flight check already caught one
+wrong-PA decode in 2402.
+
+**Status: built, unit-tested, statically verified, preflight passed; not flown.**
+`boot_a` is the baseline `2931647a...86b1`; flashing needs explicit approval of
+image SHA `83372fdc...0a63`.
+
+## >>> PREVIOUS 2026-11-07 23:52: 2402 RAN - BIT 9 IS THE WALL, AND IT IS THE ONLY MOVING PART <<<
 
 **RESULT: `input_va = 4`.** The ladder ran from `0x0100E000` and wrote all four
 markers, so three reads returned and the fourth never did:
@@ -62,9 +121,9 @@ boot_a restored and verified 2931647a...86b1 (capture 23:49)
 kernel 0x2402 (patch 0198), 286 tests
 ```
 
-**Next, 2403: split load from store at bit 9, and check the data.** Read 3's
-returning word has never been compared to what the image actually holds. One
-ladder can do both, in the same page:
+**Next, 2403 (superseded design).** This section originally proposed splitting
+load from store at bit 9. The build that was actually made is the VA-alias test
+described in the ACTIVE section above; the store/load split is queued for 2404.
 
 ```
 1 read  0x0100E000 (b9 0)  -> store the word to shared+16   value check

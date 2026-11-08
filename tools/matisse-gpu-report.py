@@ -126,7 +126,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -188,7 +188,9 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             # 2401 publishes the four descriptors that distinguish its three
             # windows: the mirror's own section and page, the shared-L3 alias,
             # and the original code page.
-            names = (('leaf_0x03000000','leaf_0x03001000',
+            names = (('leaf_0x0100e000','leaf_0x0300e000',
+                      'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
+                     ('leaf_0x03000000','leaf_0x03001000',
                       'leaf_0x05001000','leaf_0x01001000') if expected_build == 0x2401 else
                      ('leaf_0x01000000','leaf_0x01001000',
                       'leaf_0x0100e000','leaf_0x0100f000'))
@@ -1193,6 +1195,126 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                            'fault entry either (it would leave 0xE3 in input_va)' % csf['groups'])
             csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
+        if expected_build == 0x2403:
+            # 2402's page, plus an L2 alias: slot 24 carries slot 8's entry, so
+            # 0x0300E200 walks the identical L3 page, leaf and physical word as
+            # 0x0100E200. The ladder runs at 0x0100E000 again, read 1 is 2402's
+            # known-good read, and its word lands in output_va as a data check.
+            csf['cold_boot_counter'] = csf['groups']
+            # The alias build puts the arena one page higher (0x40078000), so the
+            # relocated section starts at 0x401a5000 - 2402's 0x401a4000 plus the
+            # same 0x1000.
+            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401a5000
+            csf['cold_boot_target'] = 0x0100E000
+            csf['cold_boot_ladder'] = {
+                '0x1': 'stopped reading 0x0100E400 (bit 9 = 0)',
+                '0x2': 'stopped reading alias 0x0300E200 (bit 9 = 1)',
+                '0x3': 'stopped reading 0x01001200 (bit 9 = 1, uncached + PBHA 0)',
+                '0x4': 'stopped reading 0x0100E200 (bit 9 = 1, 2402\'s address)',
+                '0x5': 'all four reads returned',
+                '0xe3': 'a Cortex-M7 fault entry ran; input_va carries 0xE3'}
+            code_leaf = csf.get('leaf_0x0100e000')
+            alias_leaf = csf.get('leaf_0x0300e000')
+            uncached_leaf = csf.get('leaf_0x01001000')
+            stack_leaf = csf.get('leaf_0x02000000')
+            page = 0x0000fffffffff000
+            # The alias must carry the code page's descriptor word for word: same
+            # L3 page, same leaf, same physical page.
+            csf['alias_applied'] = bool(code_leaf is not None and alias_leaf == code_leaf)
+            csf['alias_leaf'] = alias_leaf
+            csf['code_leaf'] = code_leaf
+            if uncached_leaf is not None:
+                csf['uncached_leaf_attr'] = '%#x' % (uncached_leaf & ~page)
+                csf['uncached_page_applied'] = ((uncached_leaf >> 2) & 7 == 5 and
+                                                (uncached_leaf >> 59) & 0xF == 0)
+            else:
+                csf['uncached_page_applied'] = False
+            csf['pbha_cleared'] = all(
+                leaf is not None and ((leaf >> 59) & 0xF) == 0
+                for leaf in (code_leaf, alias_leaf, uncached_leaf, stack_leaf))
+            # output_va carries the word read from 0x0100E400 in a non-fault run.
+            csf['sampled_word'] = csf['output_va']
+            csf['sampled_word_expected'] = 0x0f10f857
+            csf['value_verified'] = csf['output_va'] == 0x0f10f857
+            marker = csf['input_va']
+            fault = marker == 0xE3
+            csf['m7_fault_taken'] = fault
+            if fault:
+                csf['m7_stacked_pc'] = csf['output_va']
+                csf['m7_cfsr'] = csf['group_stride']
+                csf['m7_cfsr_flags'] = cfsr_flags(csf['group_stride'])
+            csf['cold_boot_marker_present'] = (not fault) and marker in (1, 2, 3, 4, 5)
+            if not csf['relocation_observed']:
+                outcome = 'not-relocated'
+                verdict = ('the executable probe PA is not 0x401a5000; this is not the '
+                           'layout the alias was built on')
+            elif csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault']:
+                outcome = 'cold-boot-refused'
+                verdict = ('the MMU refused something before any marker appeared (AS_FAULT %#x at '
+                           '%#x), so the ladder never reached its first read' %
+                           (csf['as_fault'], csf['as_fault_hi'] << 32 | csf['as_fault_lo']))
+            elif fault:
+                outcome = 'm7-fault-taken'
+                csf['cold_boot_start'] = 'fault-0xe3'
+                verdict = ('the core took a synchronous fault at stacked PC %#x with CFSR %#x '
+                           '(%s), so this run is not an AXI stall' %
+                           (csf['output_va'], csf['group_stride'],
+                            ', '.join(csf['m7_cfsr_flags']) or 'no named bit'))
+            elif not csf['alias_applied']:
+                outcome = 'alias-not-applied'
+                csf['cold_boot_marker_present'] = False
+                csf['cold_boot_start'] = None
+                verdict = ('the live leaf at 0x0300E000 is %s, not the code page descriptor %s, so '
+                           'the L2 alias did not travel with the image and read 2 asked nothing' %
+                           (None if alias_leaf is None else hex(alias_leaf),
+                            None if code_leaf is None else hex(code_leaf)))
+            elif marker == 1:
+                outcome = 'bit9-zero-regressed'
+                csf['cold_boot_start'] = 'code-0x0100E400'
+                verdict = ('0x0100E400 stalled - a bit-9 = 0 read in the executing page that '
+                           'returned in 2402. This build is not 2402\'s baseline: it also clears '
+                           'PBHA and needs the alias, so nothing below can be read')
+            elif marker == 2:
+                outcome = 'alias-stalls'
+                csf['cold_boot_start'] = 'alias-0x0300E200'
+                verdict = ('0x0300E200 stalled while 0x0100E400 returned. The alias carries the '
+                           'identical L2 entry, L3 page, leaf descriptor and physical word as '
+                           '0x0100E200, so the VA prefix 0x0100xxxx is not what refuses: the wall '
+                           'travels with the page, the leaf or bit 9 itself, not with the virtual '
+                           'range')
+            elif marker == 3:
+                outcome = 'uncached-pbha0-stalls'
+                csf['cold_boot_start'] = 'code-0x01001200'
+                verdict = ('the alias returned - the VA prefix is out - and 0x01001200 stalled on '
+                           'the one attribute cell never tried: non-cacheable and PBHA 0 at once '
+                           '(2398 cleared PBHA only, 2400 cleared cacheability only). With all four '
+                           'cells now measured and all four stalling, no leaf attribute in this '
+                           'set is the lever')
+            elif marker == 4:
+                outcome = 'va-prefix-decides'
+                csf['cold_boot_start'] = 'code-0x0100E200'
+                verdict = ('the alias 0x0300E200 returned and 0x0100E200 stalled, in one boot, on '
+                           'one leaf and one physical word: the refusal is keyed on the virtual '
+                           'address above the MMU - 0x0100xxxx and bit 9 together - not on the page '
+                           'table. Moving the firmware\'s own VA is the lever the stock boot needs')
+            elif marker == 5:
+                outcome = 'all-reads-returned'
+                csf['cold_boot_start'] = 'all-four-returned'
+                verdict = ('all four reads returned, 0x0100E200 included. With PBHA cleared and the '
+                           'alias in place, 2402\'s stall did not reproduce, so the trigger is in the '
+                           'leaf encoding rather than the address')
+            else:
+                outcome = 'no-marker'
+                csf['cold_boot_start'] = None
+                verdict = ('the core never wrote a marker, so 0x0100E000 did not start; check the '
+                           'entry leaf before reading the ladder. groups = %#x' % csf['groups'])
+            if csf['cold_boot_marker_present'] and not csf.get('value_verified'):
+                csf['instrument_verdict'] = verdict + (' WARNING: the word read from 0x0100E400 is '
+                    '%#x, not the vendor word 0x0f10f857, so "returned" here does not mean the '
+                    'right bytes came back' % csf['sampled_word'])
+            else:
+                csf['instrument_verdict'] = verdict
+            csf['cold_boot_outcome'] = outcome
         if expected_build == 0x2398:
             # 2396's container and ladder with the leaf's memory group tag at 0.
             # Every earlier build published 6, which no driver ever writes.
@@ -2262,7 +2384,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2402)')
+                   help='expected kernel/report build (0x2321 through 0x2403)')
     p.add_argument('--allow-missing-leaf',action='store_true',
                    help='decode a build >=0x2388 whose image shipped without the '
                         'sweet-csf-leaf property (2389 did); leaf fields stay absent')

@@ -1961,3 +1961,48 @@ series.
 fastboot 101.14 s; fbraw reboot-recovery -> Recovery in 18 s
 boot_a restored and verified 2931647a...86b1; capture 23:49
 ```
+
+## 51. 2403 built: an L2 alias splits the VA from the leaf
+
+2402 left one question: is the refusal keyed on the virtual address above the
+MMU, or on the page that address lands on? 2403 separates them with an alias
+that allocates nothing - L2 slot 24 receives slot 8's entry verbatim, so
+`0x0300E200` walks the identical L3 page, leaf descriptor and physical word as
+`0x0100E200`. The ladder stays at `0x0100E000`, so its first read is 2402's
+known-good one.
+
+| marker | read | bit 9 | why |
+|---|---|---|---|
+| 1 | `0x0100E400` | 0 | baseline; the word goes to `shared+12`, must equal `0x0f10f857` |
+| 2 | `0x0300E200` | 1 | the alias: same leaf, same PA, different VA |
+| 3 | `0x01001200` | 1 | page `0x01001000` non-cacheable **and** PBHA 0 |
+| 4 | `0x0100E200` | 1 | 2402's own address, in the same boot as its alias |
+| 5 | - | - | all four returned |
+
+Read 2 decides: returned => the wall is keyed on the VA above the MMU; stalled
+=> it travels with the page, the leaf or bit 9 itself. Reads 3 and 4 only run if
+read 2 returned, and 3 is the one cell of the attribute matrix that was never
+measured - 2398 cleared PBHA with cacheability on, 2400 cleared cacheability
+with PBHA 6, and both stalled at bit 9 = 1.
+
+**A premise this build no longer uses.** "2399 showed the stack works at
+bit 9 = 1" is false: the 2396..2400 ladder encoded both control reads as
+`f8d4 0200` / `f8d6 0200`, which decode to `bmi` + `movs r2,r0`. Reads 1 and 2
+never executed in that series; `input_va = 3` only ever meant read 3 stalled. No
+bit-9 = 1 access has ever been issued in the shared or stack section.
+
+| item | value |
+|---|---|
+| image | `83372fdc...0a63`, 26,714,112 B |
+| kernel | `eb555c22...4cae`, `SWEET_BUILD_ID 0x2403`, patch 0199 |
+| arena | `0x78000` (one page above 2402) |
+| relocated | `0x401a5000` - 2402's `0x401a4000` plus that page |
+| container | 108 B: 68 B ladder, 40 B fault entry, vector word, `0x01000200` |
+| alias | slot 24 <- slot 8; `0x0300E000` leaf must equal `0x0100E000` word for word |
+| leaves | PBHA 0 everywhere; `0x01001000` must end `0x4d7`; `0x02000000` published too |
+| tests | 289 ran, 3 skipped |
+
+Built, unit-tested, statically verified and preflighted, **not flown**. `boot_a`
+is `2931647a...86b1`. The arena/PA shift is the trap this class of build keeps
+setting: any build that writes a second L2 slot lands one page higher, and a
+decoder pinned to the previous PA would throw the capture away.
