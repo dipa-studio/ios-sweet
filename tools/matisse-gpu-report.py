@@ -131,7 +131,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -197,7 +197,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             names = (('leaf_0x0100e000','leaf_0x0604e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406, 0x2407, 0x2408) else
                      ('leaf_0x0100d000','leaf_0x0100c000',
-                      'leaf_0x0100e000','leaf_0x01001000') if expected_build in (0x2409, 0x2410, 0x2411, 0x2412) else
+                      'leaf_0x0100e000','leaf_0x01001000') if expected_build in (0x2409, 0x2410, 0x2411, 0x2412, 0x2413) else
                      ('leaf_0x0100e000','leaf_0x0300e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
                      ('leaf_0x03000000','leaf_0x03001000',
@@ -218,7 +218,9 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 raise ValueError('invalid CSF IRQ gate state')
         if expected_build >= 0x2326:
             csf.update(zip(CSF_STARTUP_KEYS,struct.unpack('<24I',raw[192:288])))
-            allowed_diag = 2047 if expected_build >= 0x2408 else (127 if expected_build >= 0x2327 else 31)
+            allowed_diag = (4095 if expected_build >= 0x2413 else
+                            2047 if expected_build >= 0x2408 else
+                            (127 if expected_build >= 0x2327 else 31))
             if csf['diag_flags'] & ~allowed_diag:
                 raise ValueError('invalid CSF startup diagnostic flags')
             before,after=bool(csf['diag_flags'] & 4),bool(csf['diag_flags'] & 8)
@@ -418,8 +420,9 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             else:
                 expected_memattr = (0x4c4c9f4c, 0x4c4c4c4c)
             if expected_build >= 0x2326:
-                #2408 owns bits7..10; the readiness claim still rests on the
-                #seven sampling bits every earlier build had.
+                #2408 owns bits7..10, 2413 bit11 (MFG glue); the readiness
+                #claim still rests on the seven sampling bits every earlier
+                #build had.
                 diag_low = (csf['diag_flags'] & 127 if expected_build >= 0x2408
                             else csf['diag_flags'])
                 ready = (ready and diag_low == (127 if expected_build >= 0x2327 else 31) and
@@ -1655,7 +1658,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 hex(marker), None)
             csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
-        if expected_build == 0x2412:
+        if expected_build in (0x2412, 0x2413):
             # 2411's ladder with the shared+0x200 store removed: that store, at
             # bit 9 = 1, is what stopped 2411 before it could ask about the page.
             leaf_near = csf.get('leaf_0x0100d000')
@@ -1725,6 +1728,27 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                            'leaf, the stall of 2401..2408 does not reproduce here, so the wall is '
                            'a property of the arena allocation - its placement or its SLC group '
                            'policy - and not of PA bit 9' % csf['output_va'])
+            if expected_build == 0x2413:
+                # 2413 is 2412 plus the vendor's MFG top glue, so markers 3 and
+                # 4 now answer a different question: does that block move the
+                # wall? Nothing else about the image or the ladder changed.
+                csf['mfg_glue_build'] = True
+                if marker == 4:
+                    outcome = 'glue-removed-the-wall'
+                    verdict = ('every access returned and shared+12 holds %#x, the word this shim '
+                               'planted at PA 0x40279200 - the half that stalled in 2412. The '
+                               'image, the addresses and the ladder are 2412 bytes, so the MFG '
+                               'top glue written before MCU_CONTROL is what changed: the AXI '
+                               '1-to-2 read dispatch is the wall, and the page tables were '
+                               'never the problem' % csf['output_va'])
+                elif marker == 3:
+                    outcome = 'glue-changed-nothing'
+                    verdict = ('the arena control returned %#x and the page past the arena '
+                               'answered at bit 9 = 0, but its bit-9 = 1 half stalled exactly as '
+                               'in 2412, with the glue applied. So the MFG top page is not the '
+                               'wall either: what is left is the group table LK builds before '
+                               'handoff, which the three upstream trees do not contain'
+                               % csf['output_va'])
             else:
                 outcome = 'no-marker'
                 verdict = ('no marker was written, so the stub at 0x0100E000 never ran; check the '

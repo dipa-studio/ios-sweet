@@ -2877,3 +2877,55 @@ the transaction.
 
 Build: image `333acd79...a3e72`, payload `156b7f6c...2e9d`, kernel
 `c01dcbea...d5ea`, arena `0x40078000`, code `0x401a5000`, 303 tests.
+
+## 66. 2413 built: the vendor's MFG glue, and nothing else
+
+2412 closed the memory side, so 2413 changes the other side of the same page
+table: the SoC glue the vendor writes on every GPU power-on. Nothing else moves.
+Same container, same arena (`0x40078000`), same code section (`0x401a5000`), same
+remapped leaf (`0x0100D000` -> `0x40279000`, tag 6), same arena control leaf
+(`0x0100C000`), same three reads, same single result slot, same ladder file
+(`tools/matisse-csf-ladder2412.S`).
+
+The block, in `__gpufreq_acp_control()`'s order:
+
+| register | write | vendor source |
+|---|---|---|
+| `0x13FBF168` | `val \|= 0xF` | `MFG_AXCOHERENCE`, M0..M3 coherence enable |
+| `0x13FBF8E0/8E8/910/918` | `val \|= 0x855` | `MFG_1TO2AXI_CON_00/02/04/06`, R dispatch |
+| `0x13FBF900/908/920/928` | `val \|= 0x055` | `MFG_OUT_1TO2AXI_*`, R dispatch |
+| `0x13FBF740/744` | `0xffffffff` | SLC group 6 base/limit |
+| `0x13FBF748` | `0x06002006` | SLC group 6 policy (W-alloc, R cache, no spec) |
+
+A "1 to 2 AXI" bridge splits one stream between two downstream ports by an
+address bit and has no other dimension to split on; the wall is exactly "the
+upper 512 bytes of every 1 KiB never answers". And the page is measurably
+unprogrammed: `0x13FBF748` has read back `0x06000006` on every build since 2407,
+which is the vendor word with bit 13 ("R cache") clear.
+
+**Static verification before any flight.** `llvm-objdump` on the built
+`shim.elf` shows the eleven read-modify-writes immediately after
+`platform_path(...,0)` (the "before" sample) and before the MCU halt:
+`+0xf168` OR `0xf`, then `+0x8e0/0x8e8/0x910/0x918` OR `0x855`, then
+`+0x900/0x908/0x920/0x928` OR `0x055`, then `+0x740/+0x744 = -1` and
+`+0x748 = 0x06002006`. The offsets the compiler folded are the vendor's.
+
+Two pieces of evidence come for free, without touching the 784-byte ABI:
+
+* `slc_group6` in the report is sampled by `platform_path()` before and after,
+  so a 2413 capture carries `path_before.slc_group6 = 0x06000006` and
+  `path_after.slc_group6 = 0x06002006` if the writes landed;
+* `diag_flags` bit 11 says the block ran at all.
+
+The console gains `CSF mfg in/out` lines with `coh/dsp0/dsp2/out0/slc6` on both
+sides of the transaction.
+
+Build: image `aed0b399...3688`, payload `82ddc442...20d0`, kernel
+`c01dcbea...d5ea`, 304 tests / 3 skipped (one new: the glue's exact order and
+masks). 2412 still rebuilds to `333acd79...a3e72` byte for byte, so every older
+build is untouched. Runner `shim2413-mfgglue-trials-run-once.py`, partition hash
+`1abc5d81...6f77`, preflight passed, **not flown**.
+
+Readings, unchanged from 2412's table:
+`input_va` 4 + `output_va` `0x2412a200` -> the glue removed the wall;
+`input_va` 3 + `output_va` `0x2412a400` -> the glue is not it.

@@ -1501,6 +1501,21 @@ TRACE_PROBE[0x2412] = dict(
     stub=bytes.fromhex(COLD_BOOT_2412[1]),
     mirror_code=0, share_code_l3=0, uncached_page=0, leaf_group=6,
     leaf_probe_va=(0x0100D000, 0x0100C000, 0x0100E000, 0x01001000))
+# 2413 asks what 2412 could not: whether the wall is the SoC side of the GPU.
+# The image, the addresses and the ladder are 2412's byte for byte; the only new
+# variable is a block of vendor power-on glue written into the MFG top page
+# (0x13fbf000) before MCU_CONTROL - AXCOHERENCE |= 0xF, the eight AXI 1-to-2
+# read-dispatch words, and group 6's SLC policy. gpufreq_mt6983.c does exactly
+# this on every power-on and panthor never touches that page, so the MCU has
+# been started with it unprogrammed: 0x13fbf748 reads 0x06000006 where the
+# vendor writes 0x06002006. Same three reads, same single result slot.
+TRACE_PROBE[0x2413] = dict(
+    TRACE_PROBE[0x2407], patches={0x010019b0: FAULT_ENTRY_2401,
+                                  0x01000200: ('01340a2c', '00bf7047')},
+    stub_original=bytes.fromhex(COLD_BOOT_2412[0]),
+    stub=bytes.fromhex(COLD_BOOT_2412[1]),
+    mirror_code=0, share_code_l3=0, uncached_page=0, leaf_group=6,
+    leaf_probe_va=(0x0100D000, 0x0100C000, 0x0100E000, 0x01001000))
 # 2411 answers 2410's crash: the far page is gone. One leaf is repointed at a
 # page of this shim's BSS just past the arena, the other keeps the firmware's own
 # arena leaf as the instrument control, and nothing outside this image is ever
@@ -1854,7 +1869,8 @@ def fault_vector_probe(path, expected, build_id):
                 '0 or 8': 'the read neither faulted nor completed'})
     if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
                     0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402,
-                    0x2403, 0x2404, 0x2405, 0x2406, 0x2407, 0x2408, 0x2409, 0x2410, 0x2411, 0x2412):
+                    0x2403, 0x2404, 0x2405, 0x2406, 0x2407, 0x2408, 0x2409, 0x2410, 0x2411, 0x2412,
+                    0x2413):
         target = {0x2385: '0x100e000', 0x2386: '0x1000200',
                   0x2387: '0x1000600', 0x2388: '0x1001200',
                   0x2389: '0x1001000', 0x2390: '0x10018ec',
@@ -1866,7 +1882,8 @@ def fault_vector_probe(path, expected, build_id):
                   0x2402: '0x100e000', 0x2403: '0x100e000',
                   0x2404: '0x100e000', 0x2405: '0x100e000', 0x2406: '0x100e000',
                   0x2407: '0x100e000', 0x2408: '0x100e000',
-                  0x2409: '0x100e000', 0x2410: '0x100e000', 0x2411: '0x100e000', 0x2412: '0x100e000'}[build_id]
+                  0x2409: '0x100e000', 0x2410: '0x100e000', 0x2411: '0x100e000', 0x2412: '0x100e000',
+                  0x2413: '0x100e000'}[build_id]
         patch['cold_boot'] = dict(
             target=target, marker_value=target, marker_field='input_va',
             counter_field='groups', counter_seed=8, counter_meanings={
@@ -2116,9 +2133,12 @@ def fault_vector_probe(path, expected, build_id):
                     '0x4': 'both halves of a page the arena does not back answered: the wall is a '
                            'property of the arena allocation',
                     '0xe3': 'the core took a synchronous fault; input_va carries 0xE3'})
-        if build_id == 0x2412:
+        if build_id in (0x2412, 0x2413):
             # 2411's ladder without the shared+0x200 result store, which is the
             # access that stopped 2411 before it could ask about the page.
+            # 2413 keeps that ladder and adds one thing before MCU_CONTROL: the
+            # vendor's MFG top glue. Same marker meanings, so 2412 and 2413 are
+            # read side by side and the only difference is that block.
             patch['cold_boot'] = dict(
                 target='0x100e000', marker_field='input_va', marker_value='0x1..0x4',
                 counter_field='groups', counter_seed=8,
@@ -2141,6 +2161,17 @@ def fault_vector_probe(path, expected, build_id):
                     '0x4': 'both halves of a page the arena does not back answered: the wall is a '
                            'property of the arena allocation',
                     '0xe3': 'the core took a synchronous fault; input_va carries 0xE3'})
+            if build_id == 0x2413:
+                patch['cold_boot']['mfg_glue'] = dict(
+                    base='0x13fbf000',
+                    source='gpufreq_mt6983.c __gpufreq_acp_control() and the group 6 '
+                           'word of __gpufreq_slc_control(), run on every vendor power-on',
+                    axcoherence='+0x168 |= 0xf',
+                    dispatch_in='+0x8e0/+0x8e8/+0x910/+0x918 |= 0x855',
+                    dispatch_out='+0x900/+0x908/+0x920/+0x928 |= 0x055',
+                    slc_group6='+0x740/+0x744 = 0xffffffff, +0x748 = 0x06002006',
+                    note='the same page read 0x06000006 for group 6 on every build '
+                         'since 2407, so this block has never been programmed here')
         if build_id in LADDER_2405_BUILDS:
             # 2404's four accesses, with the instrument repaired: a DSB SY after
             # every marker and after every result store, and shared+12 seeded
@@ -2358,7 +2389,7 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
 LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
                     0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402, 0x2403,
                     0x2404, 0x2405, 0x2406, 0x2407, 0x2408, 0x2409, 0x2410, 0x2411,
-                    0x2412)
+                    0x2412, 0x2413)
 
 
 def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False,
@@ -2436,9 +2467,13 @@ def chip_definitions(build_id, mirror_code):
 MIRROR_BUILDS = (0x2401, 0x2404, 0x2405, 0x2406, 0x2407, 0x2408)
 LEAF_GROUP0_BUILDS = (0x2398, 0x2403, 0x2404, 0x2405, 0x2406, 0x2407, 0x2408)
 UNCACHED_PAGE_BUILDS = (0x2400, 0x2403, 0x2404, 0x2405, 0x2406, 0x2407, 0x2408)
-SENTINEL_BUILDS = (0x2405, 0x2406, 0x2407, 0x2408, 0x2409, 0x2410, 0x2411, 0x2412)
+SENTINEL_BUILDS = (0x2405, 0x2406, 0x2407, 0x2408, 0x2409, 0x2410, 0x2411, 0x2412,
+                   0x2413)
 LADDER_2405_BUILDS = (0x2405, 0x2406, 0x2407, 0x2408)
-GPU_REG_BUILDS = (0x2407, 0x2408, 0x2409, 0x2410, 0x2411, 0x2412)
+GPU_REG_BUILDS = (0x2407, 0x2408, 0x2409, 0x2410, 0x2411, 0x2412, 0x2413)
+# 2413 writes the vendor's power-on glue into the MFG top page before the MCU is
+# started; nothing else about it differs from 2412.
+MFG_GLUE_BUILDS = (0x2413,)
 # 2408 is 2407 plus one reset, so it keeps the same GPU register sample and
 # the same 784-byte report; the reset is the only new variable.
 PRESTART_RESET_BUILDS = (0x2408,)
@@ -2471,7 +2506,8 @@ def build(a):
     # its fetch target are the only other things that move.
     if a.build_id in (0x2393, 0x2394, 0x2395, 0x2396, 0x2397, 0x2398, 0x2399,
                       0x2400, 0x2401, 0x2402, 0x2403, 0x2404, 0x2405, 0x2406, 0x2407,
-                      0x2408, 0x2409, 0x2410, 0x2411, 0x2412):
+                      0x2408, 0x2409, 0x2410, 0x2411, 0x2412,
+                      0x2413):
         if not (a.trace_probe and a.vendor_leaves and a.relocate_code and a.mcu_control == '2'):
             raise ValueError('build%x requires --trace-probe --vendor-leaves --relocate-code --mcu-control 2' % a.build_id)
         if a.uncached_code != (a.build_id == 0x2395):
@@ -2571,7 +2607,8 @@ def build(a):
                    '-DSWEET_CSF_SHARED_SENTINEL=' + ('1' if a.build_id in SENTINEL_BUILDS else '0'),
                    '-DSWEET_CSF_GPU_REGS=' + ('1' if a.build_id in GPU_REG_BUILDS else '0'),
                    '-DSWEET_CSF_PRESTART_RESET=' + ('1' if a.build_id in PRESTART_RESET_BUILDS else '0'),
-                   '-DSWEET_CSF_OUT_OF_ARENA=' + ('1' if a.build_id in (0x2409, 0x2410, 0x2411, 0x2412) else '0'),
+                   '-DSWEET_CSF_OUT_OF_ARENA=' + ('1' if a.build_id in (0x2409, 0x2410, 0x2411, 0x2412, 0x2413) else '0'),
+                   '-DSWEET_CSF_MFG_GLUE=' + ('1' if a.build_id in MFG_GLUE_BUILDS else '0'),
                    '-DSWEET_CSF_RELOCATE_CODE=' + ('1' if a.relocate_code else '0'),
                    '-DSWEET_CSF_MIRROR_CODE_VA=' + mirror_define,
                    '-DSWEET_CSF_SHARE_CODE_L3_VA=' +
@@ -2744,7 +2781,7 @@ def build(a):
         # 2410 owns its target pages inside csf.c, so gpu.c is untouched and the
         # shim shrank back to 2408's prefix; the 4 KiB probe page lives in .bss
         # after the arena and does not move the anchor.
-        expected_arena = (0x78000 if a.build_id in (0x2410, 0x2411, 0x2412) else
+        expected_arena = (0x78000 if a.build_id in (0x2410, 0x2411, 0x2412, 0x2413) else
                           0x79000 if a.build_id == 0x2409 else
                           0x78000 if a.build_id in (0x2399, 0x2401, 0x2403, 0x2407, 0x2408)
                           else 0x77000)
@@ -2791,6 +2828,11 @@ def build(a):
                 info['trace_probe']['source_sha256']['tools/matisse-csf-ladder2411.S'] = \
                     digest((ROOT / 'tools/matisse-csf-ladder2411.S').read_bytes())
             if a.build_id == 0x2412:
+                info['trace_probe']['source_sha256']['tools/matisse-csf-ladder2412.S'] = \
+                    digest((ROOT / 'tools/matisse-csf-ladder2412.S').read_bytes())
+            if a.build_id == 0x2413:
+                # 2413 runs 2412's ladder byte for byte: the only new variable is
+                # the SoC-side glue written before MCU_CONTROL.
                 info['trace_probe']['source_sha256']['tools/matisse-csf-ladder2412.S'] = \
                     digest((ROOT / 'tools/matisse-csf-ladder2412.S').read_bytes())
             if a.build_id == 0x2403:
@@ -2860,7 +2902,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',

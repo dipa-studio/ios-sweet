@@ -1,6 +1,32 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 15:32: 2412 ANSWERED - BIT 9 IS THE ADDRESS, NOT THE ARENA; THE WALL IS DATA-SIDE <<<
+## >>> ACTIVE 2026-11-08 15:50: 2413 BUILT - THE VENDOR'S MFG GLUE, NOT FLOWN <<<
+
+2413 is 2412 byte for byte except one block written before `MCU_CONTROL`:
+`AXCOHERENCE |= 0xF` at `0x13FBF168`, the eight `MFG_1TO2AXI` read-dispatch words
+(`0x855` in, `0x055` out), and SLC group 6 (`0x740/0x744 = 0xffffffff`,
+`0x748 = 0x06002006`). That is exactly `__gpufreq_acp_control()` plus the group 6
+word of `__gpufreq_slc_control()` from `gpufreq_mt6983.c`, which the vendor runs
+on **every** GPU power-on and which has provably never run here: the same page
+has read back `0x06000006` for group 6 since 2407, i.e. bit 13 ("R cache") clear.
+panthor owns `0x13000000` only; the DDK assumes the platform did `0x13fbf000`.
+
+Verified statically, no flight: the disassembly of `shim.elf` shows the eleven
+read-modify-writes in the vendor's order immediately after `platform_path(...)`
+samples "before", and `0x748` written as `0x06002006`. The report's `slc_group6`
+field therefore carries a before/after pair (0x06000006 -> 0x06002006) without
+touching the 784-byte ABI, and `diag_flags` bit 11 records that the block ran.
+
+Read it exactly as 2412: `input_va` 4 = the glue removed the wall; `input_va` 3
+with `output_va` `0x2412a400` = the glue is not it, and the only remaining
+candidate is the group table LK builds before handoff (not in the three trees).
+
+Image `aed0b399...3688`, payload `82ddc442...20d0`, kernel `c01dcbea...d5ea`,
+arena `0x40078000`, code `0x401a5000`, 304 tests / 3 skipped, runner
+`shim2413-mfgglue-trials-run-once.py` (`1abc5d81...6f77`), preflight passed.
+`boot_a` still `2931647a...86b1`; **nothing flown since 2412**.
+
+## >>> PREVIOUS 2026-11-08 15:32: 2412 ANSWERED - BIT 9 IS THE ADDRESS, NOT THE ARENA; THE WALL IS DATA-SIDE <<<
 
 2412 asked one question and got a clean two-line answer. All three control
 selections held: the arena leaf `0x0100C400` (bit 9 = 0) returned the firmware's

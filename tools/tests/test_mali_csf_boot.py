@@ -39,6 +39,8 @@ struct model {
  unsigned halted,started,halt_writes,expected_control,halt_fail;
  /*2381 global interface: input page at0x90011000, output page at0x90012000. */
  uint32_t in_page[64],in_req,out_req,in_va,out_va;unsigned doorbell_writes,ack_mode,global_writes;
+ /*2413: every write into the MFG top page, in order. */
+ unsigned glue_writes;uint64_t glue_addr[16];uint32_t glue_value[16];
 };
 static uint32_t rd(void *p,uint64_t a) {
  struct model*m=p;m->reads++;
@@ -72,6 +74,11 @@ static uint32_t rd(void *p,uint64_t a) {
  if(a==0x90012000)return m->out_req;
  if(a>=0x90011000 && a<0x90011100)return m->in_page[(a-0x90011000)/4];
  if(a>=0x90012000 && a<0x90012100)return 0;
+#if SWEET_CSF_MFG_GLUE
+ /*2413: the MFG top page reads back as zero in this model, so the test can
+  *assert the exact word the glue ORs in. */
+ if(a>=0x13fbf000 && a<0x13fc0000)return 0;
+#endif
  assert(a>=0x13000000 && a<0x13002500);assert(!m->unpowered);
  switch(a-0x13000000) {
  case 0:return m->bad_id?0xa0020001:0xa8620004;
@@ -116,6 +123,13 @@ static void wr(void*p,uint64_t a,uint32_t v) {
  }
  if(a==0x90011000){m->in_req=v;m->global_writes++;return;}
  if(a>=0x90011000 && a<0x90011100){m->in_page[(a-0x90011000)/4]=v;m->global_writes++;return;}
+#if SWEET_CSF_MFG_GLUE
+ /*2413: the MFG top glue, recorded in order. */
+ if(a>=0x13fbf000 && a<0x13fc0000) {
+  if(m->glue_writes<16){m->glue_addr[m->glue_writes]=a;m->glue_value[m->glue_writes]=v;}
+  m->glue_writes++;return;
+ }
+#endif
  switch(a-0x13000000) {
  case 0x304:
   assert(v==31 && !m->l2 && !m->as_updates && !m->enabled);
@@ -178,7 +192,25 @@ static struct model model(void){return (struct model){.gpu_mask=0x55,.job_mask=0
 static struct sweet_csf_boot_config cfg(void){return (struct sweet_csf_boot_config){.gpu=0x13000000,.root_pa=0x90000000,.arena_pa=0x90000000,.arena_bytes=0x200000,.shared_offset=0x10000,.shared_bytes=0x20000,.timeout_ms=1,.private_probe_offset=0x5000};}
 static int run(struct model*m,struct sweet_csf_boot_config*c,struct sweet_csf_boot_report*r){struct sweet_gpu_io io={m,rd,wr,ticks,barrier,1000};return sweet_csf_boot(c,&io,r);}
 static void clean(struct model*m,struct sweet_csf_boot_report*r){assert(m->gpu_mask==0x55 && m->job_mask==0xaa && m->mmu_mask==0xbb && m->resets==1+PRESTART_RESETS);assert(r->reset_completed);}
-#if SWEET_CSF_PRESTART_RESET
+#if SWEET_CSF_MFG_GLUE
+/*2413: the MFG top glue, in the vendor's order and with the vendor's masks.
+ *gpufreq_mt6983.c __gpufreq_acp_control() and the group6 word of
+ *__gpufreq_slc_control(); nothing else in the transaction changes. */
+int main(void) {
+ static const uint64_t expect_addr[12]={0x13fbf168,0x13fbf8e0,0x13fbf8e8,0x13fbf910,
+  0x13fbf918,0x13fbf900,0x13fbf908,0x13fbf920,0x13fbf928,0x13fbf740,0x13fbf744,0x13fbf748};
+ static const uint32_t expect_value[12]={0xf,0x855,0x855,0x855,0x855,0x55,0x55,0x55,0x55,
+  0xffffffffu,0xffffffffu,0x06002006u};
+ struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
+ assert(!run(&m,&c,&r));
+ assert(m.glue_writes==12);
+ for(int i=0;i<12;i++){assert(m.glue_addr[i]==expect_addr[i]);assert(m.glue_value[i]==expect_value[i]);}
+ assert(r.diag_flags==(31|2048));
+ assert(r.stage==7 && r.firmware_ready);
+ clean(&m,&r);
+ puts("PASS: 2413 MFG glue writes the vendor power-on words");return 0;
+}
+#elif SWEET_CSF_PRESTART_RESET
 /*2408: the reset panthor performs on its reset/resume path, issued before the
  *coherency write, the L2 power-on and any AS command. Four bits say what
  *happened, and a timeout must not stop the rest of the transaction. */
@@ -454,6 +486,10 @@ class CsfBootTests(unittest.TestCase):
 
     def test_vendor_memattr_with_global_interface(self):
         self._run(['-DSWEET_CSF_VENDOR_MEMATTR=1','-DSWEET_CSF_GLOBAL_INIT=1'])
+
+    def test_mfg_glue(self):
+        """2413: the vendor's power-on glue, in order, before MCU_CONTROL."""
+        self._run(['-DSWEET_CSF_MFG_GLUE=1'])
 
     def test_prestart_soft_reset(self):
         """2408: reset before AS/MCU, and keep going when it times out."""

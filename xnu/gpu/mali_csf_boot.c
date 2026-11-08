@@ -454,6 +454,44 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     if(platform_path(c,io,r,0)) {
         r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
     }
+#if SWEET_CSF_MFG_GLUE
+    /*2413: the SoC side of the GPU, before the MCU is started. The vendor
+     *kernel runs __gpufreq_acp_control() on every power-on (gpufreq_mt6983.c):
+     *  MFG_AXCOHERENCE            0x168 |= 0xF   M0..M3 coherence enable
+     *  MFG_1TO2AXI_CON_00/02/04/06 0x8e0/0x8e8/0x910/0x918 |= 0x855
+     *  MFG_OUT_1TO2AXI_CON_00/02/04/06 0x900/0x908/0x920/0x928 |= 0x055
+     *and __gpufreq_slc_control() sets group6's base/limit/policy to
+     *0xffffffff/0xffffffff/0x06002006 (W-alloc, R cache, no spec).
+     *A "1 to 2 AXI" bridge splits a stream by an address bit and by nothing
+     *else, and the wall is exactly that shape: the upper 512 bytes of every
+     *1 KiB never answered, on any page, through any leaf. The same page read
+     *back 0x06000006 for group6 since 2407 - bit13, the vendor's "R cache",
+     *was never set - so this block has provably never been programmed here.
+     *panthor owns 0x13000000 only; the DDK assumes the platform did this.
+     *Order and masks are the vendor's. Only group6 of the SLC table is
+     *written, because group6 is the tag this shim's leaves carry.
+     *platform_path() sampled this page as "before" and samples it again as
+     *"after", so the report's slc_group6 field carries the before/after pair
+     *without touching the 784-byte ABI. */
+    {
+        static const uint16_t in_dispatch[4]={0x8e0,0x8e8,0x910,0x918};
+        static const uint16_t out_dispatch[4]={0x900,0x908,0x920,0x928};
+        uint32_t v=rd(io,SWEET_CSF_MFG_BASE+0x168);
+        wr(io,SWEET_CSF_MFG_BASE+0x168,v|0xfu);
+        for(unsigned i=0;i<4;i++) {
+            v=rd(io,SWEET_CSF_MFG_BASE+in_dispatch[i]);
+            wr(io,SWEET_CSF_MFG_BASE+in_dispatch[i],v|0x855u);
+        }
+        for(unsigned i=0;i<4;i++) {
+            v=rd(io,SWEET_CSF_MFG_BASE+out_dispatch[i]);
+            wr(io,SWEET_CSF_MFG_BASE+out_dispatch[i],v|0x055u);
+        }
+        wr(io,SWEET_CSF_MFG_BASE+0x740,0xffffffffu);
+        wr(io,SWEET_CSF_MFG_BASE+0x744,0xffffffffu);
+        wr(io,SWEET_CSF_MFG_BASE+0x748,0x06002006u);
+        r->diag_flags|=2048;
+    }
+#endif
     /* Drive the MCU to a halt we measured ourselves before starting it. The
      * entry check above already required MCU_STATUS==0, but that is a state
      * this transaction inherited; the vendor driver halts the MCU explicitly

@@ -3,6 +3,19 @@
 #include "mtk_gpueb_boot.h"
 #include "mali_csf_memory.h"
 
+/*2413: MTK's "MFG top" block, the SoC side of the GPU that panthor never
+ *touches. The vendor kernel programs it on every power-on
+ *(gpufreq_mt6983.c __gpufreq_acp_control / __gpufreq_slc_control); the DDK
+ *assumes the platform already did, so a shim that powers the GPU itself
+ *starts the MCU on a block whose AXI dispatch and SLC policy are whatever
+ *the bootloader left. One 4 KiB page holds every register used here.
+ *Only compiled in when SWEET_CSF_MFG_GLUE is1; zero keeps older builds
+ *byte-identical. */
+#define SWEET_CSF_MFG_BASE 0x13fbf000u
+#ifndef SWEET_CSF_MFG_GLUE
+#define SWEET_CSF_MFG_GLUE 0
+#endif
+
 struct sweet_csf_global_evidence;
 struct sweet_csf_boot_config {
     uint64_t gpu, root_pa, arena_pa, arena_bytes;
@@ -126,7 +139,10 @@ struct sweet_csf_boot_report {
      *2408 adds, only when SWEET_CSF_PRESTART_RESET is built in: bit7 the
      * pre-start soft reset was issued, bit8 its RESET_COMPLETED arrived,
      * bit9 GPU_STATUS.DBG_ENABLED was set before it, bit10 still set after.
-     *Bits7..10 are zero on every earlier build, which never resets here. */
+     *2413 adds, only when SWEET_CSF_MFG_GLUE is built in: bit11 the SoC-side
+     * MFG glue was written before MCU_CONTROL - AXCOHERENCE |= 0xF, the eight
+     * AXI 1-to-2 read-dispatch words and group 6's SLC policy, in the vendor's
+     * own order. Bits7..11 are zero on every build that does not do this. */
     uint32_t diag_flags, coherency_features;
     uint32_t coherency_before, coherency_after;
     uint32_t csf_config_before, csf_config_after;

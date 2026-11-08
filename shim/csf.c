@@ -213,7 +213,26 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
     if(!c.private_probe_offset||!c.firmware_probe_offset) {
         shim_csf_report.error=SWEET_CSF_BOOT_ARGUMENT;return shim_csf_report.error;
     }
+#if SWEET_CSF_MFG_GLUE
+    /*2413: the MFG top page on the way in. These are plain reads of a block
+     *the CPU already samples since 2407 (0x748 lands in path_before), so the
+     *witness adds no new register access - it only prints the words the
+     *glue is about to change. The after-line below is the same four words
+     *read back once the write has happened. */
+    con_hex2("CSF mfg in","coh=",io->read32(io->context,SWEET_CSF_MFG_BASE+0x168),
+             "dsp0=",io->read32(io->context,SWEET_CSF_MFG_BASE+0x8e0));
+    con_hex2("CSF mfg in","dsp2=",io->read32(io->context,SWEET_CSF_MFG_BASE+0x910),
+             "out0=",io->read32(io->context,SWEET_CSF_MFG_BASE+0x900));
+    con_hex("CSF mfg in slc6",io->read32(io->context,SWEET_CSF_MFG_BASE+0x748));
+#endif
     rc=sweet_csf_boot(&c,io,&shim_csf_report);
+#if SWEET_CSF_MFG_GLUE
+    con_hex2("CSF mfg out","coh=",io->read32(io->context,SWEET_CSF_MFG_BASE+0x168),
+             "dsp0=",io->read32(io->context,SWEET_CSF_MFG_BASE+0x8e0));
+    con_hex2("CSF mfg out","dsp2=",io->read32(io->context,SWEET_CSF_MFG_BASE+0x910),
+             "out0=",io->read32(io->context,SWEET_CSF_MFG_BASE+0x900));
+    con_hex("CSF mfg out slc6",io->read32(io->context,SWEET_CSF_MFG_BASE+0x748));
+#endif
 #if SWEET_CSF_OUT_OF_ARENA
     /* The ladder's four result slots, read back through the CPU's view of the
      * arena. Marker semantics live in the ladder header; the slots are the only
