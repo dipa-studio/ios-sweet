@@ -2198,28 +2198,39 @@ def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=F
         chosen.props.append(('sweet-csf-leaf', 0, bytes(32)))
     return adt.serialize(root)
 
-def chip_definitions(build_id, mirror_code):
-    """The mirror VA and the published leaf VAs, taken from TRACE_PROBE.
+def chip_spec(build_id, mirror_code):
+    """(mirror VA, four leaf VAs) as the shim will be compiled, from TRACE_PROBE.
 
     2405 shipped these as hardcoded `build == 0x2404` tests in the argument
     list: its spec said 0x06040000, the shim was compiled with 0x03000000, and
     the ladder's mirror read faulted on an unmapped VA. Anything that has to
-    agree with the page-table plan comes from one dict.
+    agree with the page-table plan comes from one dict - and so does the
+    manifest, which used to record 0x03000000 and the 2401 leaf list whatever
+    the build actually carried.
     """
     spec = TRACE_PROBE.get(build_id, {})
     if mirror_code != bool(spec.get('mirror_code')):
         raise ValueError('build%x: --mirror-code and the TRACE_PROBE mirror VA disagree'
                          % build_id)
     if spec.get('mirror_code'):
-        mirror_define = '0x%08xu' % spec['mirror_code']
+        mirror_va = spec['mirror_code']
+    elif mirror_code:
+        mirror_va = 0x03000000
     else:
-        mirror_define = '0x03000000u' if mirror_code else '0'
+        mirror_va = 0
     if spec.get('leaf_probe_va'):
-        leaf_define = '{%s}' % ','.join('0x%08xu' % va for va in spec['leaf_probe_va'])
+        leaves = tuple(spec['leaf_probe_va'])
     else:
-        leaf_define = ('{0x0100e000u,0x0300e000u,0x01001000u,0x02000000u}'
-                       if build_id == 0x2403 else
-                       '{0x01000000u,0x01001000u,0x0100e000u,0x0100f000u}')
+        leaves = ((0x0100E000, 0x0300E000, 0x01001000, 0x02000000) if build_id == 0x2403
+                  else (0x01000000, 0x01001000, 0x0100E000, 0x0100F000))
+    return mirror_va, leaves
+
+
+def chip_definitions(build_id, mirror_code):
+    """The same two values as -D arguments for the shim build."""
+    mirror_va, leaves = chip_spec(build_id, mirror_code)
+    mirror_define = '0x%08xu' % mirror_va if mirror_va else '0'
+    leaf_define = '{%s}' % ','.join('0x%08xu' % va for va in leaves)
     return mirror_define, leaf_define
 
 
@@ -2456,12 +2467,14 @@ def build(a):
     info['csf_alias_page'] = (dict(from_va='0x1001000', to_va='0x2000000') if a.alias_page
                               else None)
     info['csf_uncached_page'] = '0x1001000' if a.uncached_page else None
-    info['csf_mirror_code'] = ('0x3000000' if a.mirror_code else None)
+    # Both of these used to be literal 2401 values whenever --mirror-code was
+    # set, so 2404/2405/2406 manifests claimed the mirror sat at 0x03000000 and
+    # that the four sampled leaves were the 2401 list. Read them out of the
+    # same spec the shim is compiled from instead.
+    manifest_mirror, manifest_leaves = chip_spec(a.build_id, a.mirror_code)
+    info['csf_mirror_code'] = ('%#x' % manifest_mirror) if manifest_mirror else None
     info['csf_share_code_l3'] = ('0x5000000' if a.share_code_l3 else None)
-    info['csf_leaf_probe_va'] = ['%#x' % va for va in
-                                 ((0x03000000, 0x03001000, 0x05001000, 0x01001000)
-                                  if a.mirror_code else
-                                  (0x01000000, 0x01001000, 0x0100e000, 0x0100f000))]
+    info['csf_leaf_probe_va'] = ['%#x' % va for va in manifest_leaves]
     # The shim publishes the96-byte block, but sweet_ufs.c does not forward it
     # into SWEETMRK yet, so2381 evidence is console-only until that lands.
     info['csf_global_init'] = (dict(enabled=True, report_bytes=96, kernel_marks_wired=False)

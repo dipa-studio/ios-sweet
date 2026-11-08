@@ -758,7 +758,7 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertTrue(csf['relocation_observed'])
         self.assertTrue(csf['value_verified'])
         self.assertEqual(csf['cold_boot_outcome'], 'walk-dies-at-bit9')
-        self.assertIn('dead for the MMU too', csf['instrument_verdict'])
+        self.assertIn('walk itself is what dies', csf['instrument_verdict'])
 
         for marker, outcome in ((1, 'stopped-before-mirror'), (3, 'store-stalls'),
                                 (4, 'store-lands-read-hangs'), (5, 'all-returned')):

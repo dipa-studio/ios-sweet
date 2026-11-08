@@ -270,6 +270,15 @@ class FetchPrimeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.builder.chip_definitions(0x2406, False)
 
+    def test_manifest_records_the_effective_mirror_and_leaves(self):
+        """The manifest used to claim 0x03000000 for every --mirror-code build."""
+        self.assertEqual(self.builder.chip_spec(0x2406, True),
+                         (0x06040000, (0x0100E000, 0x0604E000, 0x01001000, 0x02000000)))
+        self.assertEqual(self.builder.chip_spec(0x2404, True)[0], 0x06040000)
+        self.assertEqual(self.builder.chip_spec(0x2401, True),
+                         (0x03000000, (0x03000000, 0x03001000, 0x05001000, 0x01001000)))
+        self.assertEqual(self.builder.chip_spec(0x2402, False)[0], 0)
+
     @unittest.skipUnless(FIRMWARE.exists(), 'requires pinned local firmware')
     def test_2405_keeps_2404s_mapping_and_moves_only_the_entry(self):
         embedded_2404, patch_2404 = self.builder.fault_vector_probe(FIRMWARE, SHA, 0x2404)

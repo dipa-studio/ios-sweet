@@ -1,6 +1,51 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 13:31: 2406 BUILT - 2405 WORKED, BUT ITS MIRROR WAS AT THE WRONG VA <<<
+## >>> ACTIVE 2026-11-08 13:36: 2406 RAN - THE WALL IS THE PAGE-TABLE WALK, NOT THE DATA PATH <<<
+
+Flew `38389ecf...c0f9`, `boot_a` restored to `2931647a...86b1` in the same run.
+`input_va` 2, `shared+12` `0x0f10f857`, seed gone, `error` -53, `as_fault` 0,
+`mmu_raw` 0, `mcu_status` 1.
+
+**Read 1 returned, read 2 never did.** The wiring fix held: the mirror leaf at
+`0x0604E000` is `0x401b34c3`, a real mapping with the same attribute bits as the
+code leaf `0x401c34c3`.
+
+**Every address on both paths was enumerated; read 2 has exactly one bit 9 = 1:**
+
+```
+read 1  L0 0x40077000  L1 0x40078000  L2 0x4007b040  L3 0x4007b070  data 0x401c3400   all 0
+read 2  L0 0x40077000  L1 0x40078000  L2 0x4007f180  L3 0x4007f270  data 0x401b3400   one 1
+```
+
+The `1` is the L3 descriptor that turns `VA 0x0604E400` into a page - an address
+no data access ever names. So bit 9 does not only kill loads (2402's
+`0x0100E200`, the vendor's first read at `0x01001BC4` -> PA `0x401b6bc4`); it
+kills the table walk too. The transaction never completes and never errors,
+which is why `as_fault` stays 0 and `mcu_status` stays 1.
+
+**Cold fetch is not the explanation.** Read 2 is the series' first uncached
+table fetch, so "cold" and "bit 9" arrive together - but the reset vector
+`0x0100E001` makes the core's very first fetch a cold walk through
+`0x40077000` -> `0x40078000` -> `0x4007b040` -> `0x4007b070`, all bit 9 = 0, and
+it executes the ladder. Fourteen builds have started that way.
+
+Consequences: a page is walkable only if `(VA >> 18) & 1 == 0`. The code section
+`0x01000000..0x0100ffff` satisfies it for all sixteen pages, which is why the
+ladder runs. The mirror at `0x06040000..0x0604ffff` does not - every page there has
+`(VA >> 18) & 1 == 1`, so no offset in it would have worked, `0x0400` or not.
+
+**Manifest fixed.** `csf_mirror_code` said `0x3000000` and `csf_leaf_probe_va`
+listed the 2401 four for every `--mirror-code` build - 2404/2405/2406 all carried
+the wrong values, i.e. the 2405 mistake frozen into the evidence record. Both now
+come from `chip_spec()`; 2404 and 2406 still rebuild byte for byte, 298 tests.
+
+**Next (2407, not built): sample the registers that would explain it** -
+`c->gpu+0x004`, `+0x048` (L2_CONFIG), `+0x0c`, `+0x100..0x11c`, `+0x2c0..0x2cc` -
+through the existing `platform_state` path. If bit 9 selects an L2 slice and one
+slice is masked off, `0x048` says so; if it is symmetric, the slice theory dies
+and the EMI/address-decode direction is next.
+
+## >>> PREVIOUS 2026-11-08 13:31: 2406 BUILT - 2405 WORKED, BUT ITS MIRROR WAS AT THE WRONG VA <<<
 
 **2405 answered the instrument question and nothing else.** `input_va` 2,
 `shared+12` `0x0f10f857`, `0xdeadbeef` gone: marker 2 with a DSB behind it means

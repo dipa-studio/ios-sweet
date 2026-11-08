@@ -1296,11 +1296,13 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             elif marker == 2:
                 outcome = 'walk-dies-at-bit9'
                 csf['cold_boot_start'] = 'mirror-0x0604E400'
-                verdict = ('0x0100E400 returned and 0x0604E400 never did. The two reads name the '
-                           'same physical word through the same leaf encoding; the only new cost '
-                           'in the second one is a descriptor fetch at PA bit 9 = 1. The address '
-                           'is therefore dead for the MMU too, which puts the wall below the page '
-                           'table and above the DRAM: no leaf, attribute or VA can reach it')
+                verdict = ('0x0100E400 returned and 0x0604E400 never did. Both pages hold the '
+                           'same copy and their leaves differ only in the physical address, so the '
+                           'encoding, the attributes and the VA range are out of the picture. Read '
+                           '2 adds exactly one address - the L3 descriptor that turns VA '
+                           '0x0604E400 into a page - and it is the only one in either path with '
+                           'bit 9 = 1. The walk itself is what dies, which puts the wall below the '
+                           'page table and above the DRAM')
             elif marker == 3:
                 outcome = 'store-stalls'
                 csf['cold_boot_start'] = 'store-0x04000200'
@@ -1451,11 +1453,12 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 outcome = 'walk-dies-at-bit9'
                 csf['cold_boot_start'] = 'mirror-0x0604E400'
                 verdict = ('0x0100E400 returned 0x0f10f857 and was stored, and 0x0604E400 never did. '
-                           'The two reads name the same physical word through the same leaf '
-                           'encoding; the only new cost in the second one is a descriptor fetch at '
-                           'PA bit 9 = 1. The address is therefore dead for the MMU too, which puts '
-                           'the wall below the page table and above the DRAM: no leaf, attribute or '
-                           'VA can reach it')
+                           'Both pages hold the same 64 KiB copy and their leaves differ only in the '
+                           'physical address, so the encoding, the attributes and the VA range are '
+                           'all out of the picture. Read 2 names one address more than read 1 - the '
+                           'L3 descriptor that turns VA 0x0604E400 into a page - and that descriptor '
+                           'is the only address in either path with bit 9 = 1. The walk itself is '
+                           'what dies, which puts the wall below the page table and above the DRAM')
             elif marker == 2:
                 outcome = 'read-1-wrong-pa'
                 csf['cold_boot_start'] = 'mirror-0x0604E400'

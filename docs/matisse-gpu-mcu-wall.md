@@ -2313,3 +2313,78 @@ Built, unit-tested, statically verified and preflighted, **not flown**. `boot_a`
 is still `2931647a...86b1`. The readings are 2405's table: marker 1 with the seed
 intact is a stalled baseline, marker 2 with `0x0f10f857` is the bit-9 walk, marker
 2 with anything else is a bad translation.
+
+## 57. 2406 ran: the wall is the page-table walk itself
+
+Flew `38389ecf...c0f9` on 2026-11-08 13:33, restored to `2931647a...86b1` in the
+same run. `input_va` 2, `shared+12` `0x0f10f857`, seed gone, `error` -53, no
+fault (`as_fault` 0, `mmu_raw` 0), `mcu_status` 1, `groups` 8.
+
+**The wiring fix worked and the instrument held.** The mirror leaf reads
+`0x401b34c3` at VA `0x0604E000` - a real mapping with the same attribute bits as
+the code leaf `0x401c34c3` - and the ladder's marker 2 with a `DSB` behind it
+means read 1 completed and stored the vendor word. Read 2 never came back: no
+marker 3, no fault entry, the MCU still enabled.
+
+**Every address on both paths, and their bit 9:**
+
+| access | step | PA | bit 9 |
+|---|---|---|---|
+| read 1 | L0 descriptor | `0x40077000` | 0 |
+| read 1 | L1 descriptor | `0x40078000` | 0 |
+| read 1 | L2 descriptor | `0x4007b040` | 0 |
+| read 1 | L3 descriptor | `0x4007b070` | 0 |
+| read 1 | data word | `0x401c3400` | 0 |
+| read 2 | L0 descriptor | `0x40077000` | 0 |
+| read 2 | L1 descriptor | `0x40078000` | 0 |
+| read 2 | L2 descriptor | `0x4007f180` | 0 |
+| **read 2** | **L3 descriptor** | **`0x4007f270`** | **1** |
+| read 2 | data word | `0x401b3400` | 0 |
+
+Read 1's five addresses are all bit-9 = 0 and it returns. Read 2 has exactly one
+bit-9 = 1 address in its whole path - the last descriptor, the one that turns VA
+`0x0604E400` into a page - and the core stops there.
+
+**Why this is not the cold-walk confound.** Read 2 is the first walk in the
+series that has to fetch a table the core has not touched, so "cold fetch" and
+"bit 9" arrive together. They can be separated because the boot's own first walk
+is cold too and it works: the reset vector is `0x0100E001`, so the core's very
+first fetch walks `0x40077000` -> `0x40078000` -> `0x4007b040` -> `0x4007b070`,
+four cold descriptors, all bit-9 = 0, and it executes the ladder. Fourteen builds
+have now started that way. Cold table fetches at bit-9 = 0 are therefore not the
+problem, and the L2 descriptor read 2 needs is at `0x4007f180`, bit 9 = 0.
+
+**What this changes.** Until now the wall looked like a data-path defect: bit 9
+of a *data* address killed the access (2402's `0x0100E200`, the vendor
+firmware's first read at `0x01001BC4` -> PA `0x401b6bc4`). 2406 shows the same
+bit killing a *descriptor* fetch, at an address no data access ever names. The
+fault is not in the leaf encoding, not in the VA, not in the attributes, not in
+one bad page: the MCU's DRAM path has no responder for addresses with bit 9 = 1,
+whether the transaction is a load or a table walk. The transaction never
+completes and never errors, which is why `as_fault` stays 0 and `mcu_status`
+stays 1.
+
+Three consequences worth stating, all testable:
+
+* a page is reachable only if its L3 descriptor sits at a bit-9 = 0 offset, i.e.
+  `(VA >> 18) & 1 == 0`. The code section `0x01000000`..`0x0100ffff` satisfies
+  this for all sixteen of its pages, which is why the ladder runs at all.
+* the mirror at `0x06040000`..`0x0604ffff` does not: every page there has
+  `(VA >> 18) & 1 == 1`, so its descriptor offset is >= 0x200 and every one of
+  them is unwalkable. A mirror read would not have worked at any offset, not
+  just at `0x0400`.
+* a 512-byte interleave is the obvious suspect: bit 9 selects the half of each
+  1 KiB granule, and a channel that is gated would swallow the transaction
+  exactly this way. That is a hypothesis about *why*; the measurement is only
+  that the address is dead.
+
+**Also fixed: the manifest was lying about this build.** `csf_mirror_code` read
+`0x3000000` and `csf_leaf_probe_va` listed the 2401 four for every
+`--mirror-code` build, because both fields were literal 2401 values rather than
+the spec. 2404/2405/2406 manifests all carried the wrong values, i.e. exactly the
+mistake that cost 2405 a flight, frozen into the evidence record. Both now come
+from `chip_spec(build_id, mirror_code)`; 2404 still rebuilds byte for byte
+(`3c58fb31...cecd`) and 2406 rebuilds to the flown `38389ecf...c0f9`, so only the
+manifest changed. 298 tests pass, 3 skipped.
+
+`boot_a` is back at `2931647a...86b1`.
