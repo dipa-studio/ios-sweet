@@ -2208,7 +2208,7 @@ build rather than in the hardware:
 
 2405 changes no address. The ladder grows from 88 to 120 bytes and gains nine
 `DSB SY` instructions: one after every marker store and one after every result
-store. `shim/csf_boot` seeds `shared+12` with `0xdeadbeef` immediately before
+store. `xnu/gpu/mali_csf_boot.c`, linked into `shim.elf`, seeds `shared+12` with `0xdeadbeef` immediately before
 `MCU_CONTROL` and fails closed if the seed does not read back - a slot that
 takes no host write cannot report an MCU write.
 

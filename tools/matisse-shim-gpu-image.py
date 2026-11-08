@@ -1955,7 +1955,7 @@ def fault_vector_probe(path, expected, build_id):
                 mirror_l3_offset='0x270', mirror_l3_offset_bit9=1,
                 entry_program='tools/matisse-csf-ladder2405.S',
                 barrier='dsb sy after every marker and every result store',
-                sentinel=dict(va='0x0400000c', value='0xdeadbeef', writer='kernel'),
+                sentinel=dict(va='0x0400000c', value='0xdeadbeef', writer='shim csf_boot'),
                 store=dict(va='0x04000200', value='0x5a5a5a5a', barrier='dsb sy',
                            page='shared, RW, AttrIdx 5, PBHA 0'),
                 ladder=[dict(marker='0x1', read_va='0x0100E400', bit9=0,
