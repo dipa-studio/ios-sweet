@@ -1,6 +1,48 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 16:42: 2417 BUILT - READ THE WHOLE GROUP TABLE, ONCE AFTER THE MCU START <<<
+## >>> ACTIVE 2026-11-08 16:50: 2417 RAN - THE GROUP TABLE IS NOT TEN WINDOWS; THE LAST REGISTER LEAD CLOSES <<<
+
+2417 flew (`cc0f601c...12bf`), restored `2931647a...86b1` in the same run, fastboot
+93.71 s, marks fresh. Control intact: `input_va` 3, `output_va` `0x2412a400`,
+`mcu_status` 1, `as_fault` 0, `diag_flags` `0x807F` (bit15 set, no glue bits).
+
+Ten base words collapse to **four distinct values**:
+
+| group | value |
+|---|---|
+| 0 | `0x00000000` |
+| 1, 7 | `0x00000014` |
+| 2, 3, 4, 5, 8, 9 | `0x113F0F95` |
+| 6 | `0x113F0F81` |
+
+Group 6's word is byte-identical to 2416's `0x740`, group 7's to 2416's `0x74C`.
+
+**It is not a window table.** `0x113F0F95 ^ 0x113F0F81` = `0x14`, exactly what
+groups 1 and 7 hold alone (bits 2 and 4, no address above them). Six identical
+values plus a seventh differing by precisely the flag bits two others consist of
+is a shared descriptor plus flags, not ten bounds. So it cannot be the 512-byte
+wall, and it is not an access filter either - group-6-tagged leaves read memory far
+outside `0x113F0000` every run.
+
+**Leading explanation now**: the 2415 shape (bit 9 decides, bit 10 irrelevant,
+hangs rather than faults) is what an address-bit 1-to-2 split with no responder on
+the second port looks like. 2414 already showed the dispatch words arrive at
+vendor values and that overwriting them changes nothing.
+
+**Correction forced by this run**: §65's "rungs at 0x010019xx, every one at bit 9
+= 1" is wrong - `0x1b0`/`0x1e2`/`0x1f6`, `0x010018ec` and `0x0100E000` all have bit
+9 = 0. The data-side conclusion survives on `0x01000200` (bit 9 = 1, patched to
+`nop; bx lr` every run and followed by a working ladder), which is a stronger
+witness: same page, opposite side of the boundary.
+
+**Last stone**: read the 1-to-2 cluster `0x13FBF800..0x13FBF9FC` read-only for an
+enable/bypass word. If there is none, the upper 512 bytes of every 1 KiB have no
+responder on this board and no GPU register fixes it - then the decision is to
+document the wall as physical and stop chasing the real firmware on this device.
+
+`boot_a` `2931647a...86b1`, device in Recovery. Docs §75. **Nothing pending.**
+
+## >>> PREVIOUS 2026-11-08 16:42: 2417 BUILT - READ THE WHOLE GROUP TABLE, ONCE AFTER THE MCU START <<<
 
 2416 answered a narrower question than it was built for: group7's base at `0x74C`
 already reads `0x14`, not the vendor's `0xFFFFFFFF`, so "only group 6 was
@@ -281,10 +323,13 @@ read side (2411), not the VA range (code, mirror, shared, BSS page), not the tag
 Two things this run pins down beyond the answer:
 
 * **The wall is data-side.** Instruction fetch at bit 9 = 1 has always worked:
-  the firmware's reset handler is at `0x010018ec` and 2358-2362 watched rungs at
-  `0x010019b0/0x010019e2/0x010019f0/0x010019f6` run. Loads and stores are what
-  never complete. The firmware therefore does not fail because it cannot be
-  fetched; it fails on its first data access past the 512-byte boundary.
+  `0x01000200` has bit 9 set, and every run since 2401 patches the two
+  instructions there to `nop; bx lr` before going on to execute the ladder - a
+  patch that only makes sense if that code runs. Loads and stores are what never
+  complete. The firmware therefore does not fail because it cannot be fetched; it
+  fails on its first data access past the 512-byte boundary.
+  *(Corrected by 2417: this used to cite the 2358-2362 rungs at 0x010019xx, but
+  every one of those offsets has bit 9 = 0. The conclusion stands on 0x01000200.)*
 * **The offset is not separable from the PA bit.** A translation preserves the
   12-bit offset, so "PA bit 9" and "second 512 B of the 1 KiB" are the same bit
   and no mapping can tell them apart. The series has only sampled offsets

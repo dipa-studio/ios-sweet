@@ -2860,12 +2860,21 @@ The pattern is consistent with a 512-byte sector that does not complete, but the
 *shape* (periodic at 512 B vs. a single boundary) is not yet measured.
 
 **And the wall is data-side.** Instruction fetch at bit 9 = 1 has demonstrably
-worked: the firmware's own reset handler is at `0x010018ec` and 2358-2362 put
-rungs at `0x010019b0`/`0x010019e2`/`0x010019f0`/`0x010019f6` and watched them run,
-every one of them at bit 9 = 1. So the MCU fetches fine through the same AS and
-the same leaves; it is *loads and stores* that never complete. That matters for
-the goal: the firmware does not fail because it cannot be fetched, it fails
-because its first data access on the wrong side of the boundary hangs.
+worked, and the witness is the reset path, not the rungs: `0x01000200` has bit
+9 = 1 (offset `0x200`), and every run since 2401 patches the two instructions
+there to `nop; bx lr` and then goes on to execute the ladder - a patch that only
+makes sense if the code at that address runs. So the MCU fetches through the same
+AS, the same leaf and the same page offset that stalls a load and a store. It is
+*loads and stores* that never complete. That matters for the goal: the firmware
+does not fail because it cannot be fetched, it fails because its first data access
+on the wrong side of the boundary hangs.
+
+*Correction (2417).* This paragraph used to cite the 2358-2362 rungs at
+`0x010019b0`/`0x010019e2`/`0x010019f0`/`0x010019f6` as fetch at bit 9 = 1. They
+are not: every one of those offsets has bit 9 = 0 (`0x1b0`, `0x1e2`, `0x1f6` all
+clear it), and so do `0x010018ec` and the stub at `0x0100E000`. The conclusion
+survives on `0x01000200` alone, which is a cleaner witness anyway - same 4 KiB
+page as the fetch the firmware does at `+0x000`, opposite side of the boundary.
 
 **Where the mechanism has to be.** A 512-byte granule is not a page-table
 property - attributes and PBHA are per 4 KiB leaf. Anything that splits a page in
@@ -3404,3 +3413,75 @@ still rebuild byte for byte (`333acd79`, `aed0b399`, `42385e94`, `4eebf393`,
 `4cd9c920`), so `SWEET_CSF_SLC_GROUPS` leaks into nothing older. Runner
 `shim2417-groups-trials-run-once.py`, partition hash `3cf69452...6e48`, preflight
 passed, **not flown**.
+
+## 75. 2417 ran: the group table is not ten windows - and the last register-level lead closes
+
+Flew `cc0f601c...12bf`, restored to `2931647a...86b1` in the same run, fastboot at
+93.71 s. Report fresh (marks differ `9459de...` -> `6a569f...`). Control intact:
+`input_va` 3, `output_va` `0x2412a400`, `mcu_status` 1, `as_fault` 0,
+`diag_flags` `0x807F` (bit 15 set, no glue bits) - so the wall reproduced
+underneath the table read, which is what makes the table readable at all.
+
+**Four distinct values, ten groups.**
+
+| group | base word | note |
+|---|---|---|
+| 0 | `0x00000000` | the vendor's `// group0: default` |
+| 1 | `0x00000014` | flags only |
+| 2, 3, 4, 5 | `0x113F0F95` | the shared default |
+| 6 | `0x113F0F81` | default - `0x14` |
+| 7 | `0x00000014` | flags only |
+| 8, 9 | `0x113F0F95` | the shared default |
+
+Group 6's value is byte-identical to what 2416 read from `0x740`, and group 7
+matches 2416's `0x74C`, so the two builds agree about the same page.
+
+**Why this is not a window table.** `0x113F0F95 ^ 0x113F0F81` is exactly `0x14`,
+and `0x14` is precisely what groups 1 and 7 hold on their own - bits 2 and 4, with
+no address above them. A per-group address bound cannot produce that: six groups
+would have to share one byte-identical value *and* differ from a seventh by
+exactly the flag bits two other groups consist of. What the words look like is
+a shared descriptor plus two flag bits: `{address field} | {bit 2, bit 4}`, with
+groups 1 and 7 carrying the flags and a zero address.
+
+Two consequences, and they point the same way:
+
+* this cannot be the 512-byte wall, because a page-table leaf already cannot carry
+  a 512-byte granule and these words turn out not to be per-group bounds either;
+* it is not an access filter either. Leaves tagged group 6 read and write memory
+  far outside `0x113F0000`, every run, and one of them answered `0x2412a400` in
+  this very capture.
+
+**So what is the wall?** The shape from 2415 - `+0x200` stalls, `+0x400` answers,
+`+0x600` stalls, bit 10 irrelevant - is exactly what an address-bit 1-to-2 split
+produces: one downstream port serves bit 9 = 0, the other is supposed to serve bit
+9 = 1. The transaction does not fault (`as_fault` 0); it never completes, which is
+what a port with no responder looks like from the master side. 2414 already showed
+the dispatch words arrive holding the vendor values (`0x855` in, `0x055` out) and
+that overwriting them with `0xAAA` changes nothing, so the split is not something
+this shim mis-programmed - it is how the GPU is wired on this board, or how
+GPUEB left it.
+
+**A correction this run forces, on the reading side again.** §65 justified "the
+wall is data-side" with the 2358-2362 rungs at `0x010019b0/e2/f0/f6`, "every one
+of them at bit 9 = 1". They are not: `0x1b0`, `0x1e2`, `0x1f6` all have bit 9
+clear, and so do `0x010018ec` and `0x0100E000`. The conclusion survives on a
+better witness - `0x01000200`, bit 9 set, patched to `nop; bx lr` on every run
+since 2401 and then followed by a ladder that executes, which only makes sense if
+that instruction is fetched. Same 4 KiB page as the `+0x000` fetch, opposite side
+of the boundary: one side fetches, both sides are the same leaf, and a load there
+hangs. §65 and NOTES are corrected in place.
+
+**What is left, and it is the last stone.** The 1-to-2 cluster itself:
+`0x13FBF800..0x13FBF9FC`, read only, to see whether any word in it is an enable or
+a bypass rather than a dispatch value. If the eight dispatch words are the only
+writable controls and they are already at the vendor values, then the second 512
+bytes of every 1 KiB have no responder on this board and no register in the GPU
+will change that. That is worth one read-only build and a decision afterwards:
+either the wall is documented as physical and the real firmware is out of reach on
+this device, or that cluster holds a switch the vendor driver never touches
+because its own platform never needed to.
+
+Build: image `cc0f601c...12bf`, payload `641c5862...d556`, kernel
+`c01dcbea...d5ea`, 306 tests / 3 skipped, `boot_a` restored to
+`2931647a...86b1`, device in Recovery.
