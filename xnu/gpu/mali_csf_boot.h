@@ -12,6 +12,7 @@
  *Only compiled in when SWEET_CSF_MFG_GLUE is1; zero keeps older builds
  *byte-identical. */
 #define SWEET_CSF_MFG_BASE 0x13fbf000u
+/*0 = do not touch the page, 1 = vendor values (2413), 2 = perturb (2414). */
 #ifndef SWEET_CSF_MFG_GLUE
 #define SWEET_CSF_MFG_GLUE 0
 #endif
@@ -139,10 +140,16 @@ struct sweet_csf_boot_report {
      *2408 adds, only when SWEET_CSF_PRESTART_RESET is built in: bit7 the
      * pre-start soft reset was issued, bit8 its RESET_COMPLETED arrived,
      * bit9 GPU_STATUS.DBG_ENABLED was set before it, bit10 still set after.
-     *2413 adds, only when SWEET_CSF_MFG_GLUE is built in: bit11 the SoC-side
+     *2413 adds, only when SWEET_CSF_MFG_GLUE == 1 is built in: bit11 the SoC-side
      * MFG glue was written before MCU_CONTROL - AXCOHERENCE |= 0xF, the eight
      * AXI 1-to-2 read-dispatch words and group 6's SLC policy, in the vendor's
-     * own order. Bits7..11 are zero on every build that does not do this. */
+     * own order.
+     *2414 uses SWEET_CSF_MFG_GLUE == 2 instead: the same block, but the four
+     * in-dispatch words are set to 0xAAA rather than the vendor's 0x855, so the
+     * treatment cannot be a silent no-op. Bits12/13/14 then say that the
+     * in-dispatch, out-dispatch and group 6 words already held the vendor value
+     * before the write; bit11 still says the block ran.
+     *Bits7..14 are zero on every build that does not do this. */
     uint32_t diag_flags, coherency_features;
     uint32_t coherency_before, coherency_after;
     uint32_t csf_config_before, csf_config_after;

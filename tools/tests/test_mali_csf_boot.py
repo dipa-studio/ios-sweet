@@ -40,7 +40,7 @@ struct model {
  /*2381 global interface: input page at0x90011000, output page at0x90012000. */
  uint32_t in_page[64],in_req,out_req,in_va,out_va;unsigned doorbell_writes,ack_mode,global_writes;
  /*2413: every write into the MFG top page, in order. */
- unsigned glue_writes;uint64_t glue_addr[16];uint32_t glue_value[16];
+ unsigned glue_writes;uint64_t glue_addr[16];uint32_t glue_value[16];int glue_already;
 };
 static uint32_t rd(void *p,uint64_t a) {
  struct model*m=p;m->reads++;
@@ -76,8 +76,18 @@ static uint32_t rd(void *p,uint64_t a) {
  if(a>=0x90012000 && a<0x90012100)return 0;
 #if SWEET_CSF_MFG_GLUE
  /*2413: the MFG top page reads back as zero in this model, so the test can
-  *assert the exact word the glue ORs in. */
- if(a>=0x13fbf000 && a<0x13fc0000)return 0;
+  *assert the exact word the glue ORs in. glue_already models a boot that
+  *arrives with the vendor values already programmed, which is what 2413
+  *actually met. */
+ if(a>=0x13fbf000 && a<0x13fc0000) {
+  if(!m->glue_already)return 0;
+  switch(a) {
+  case 0x13fbf8e0:case 0x13fbf8e8:case 0x13fbf910:case 0x13fbf918:return 0x855u;
+  case 0x13fbf900:case 0x13fbf908:case 0x13fbf920:case 0x13fbf928:return 0x55u;
+  case 0x13fbf748:return 0x06002006u;
+  default:return 0;
+  }
+ }
 #endif
  assert(a>=0x13000000 && a<0x13002500);assert(!m->unpowered);
  switch(a-0x13000000) {
@@ -192,7 +202,34 @@ static struct model model(void){return (struct model){.gpu_mask=0x55,.job_mask=0
 static struct sweet_csf_boot_config cfg(void){return (struct sweet_csf_boot_config){.gpu=0x13000000,.root_pa=0x90000000,.arena_pa=0x90000000,.arena_bytes=0x200000,.shared_offset=0x10000,.shared_bytes=0x20000,.timeout_ms=1,.private_probe_offset=0x5000};}
 static int run(struct model*m,struct sweet_csf_boot_config*c,struct sweet_csf_boot_report*r){struct sweet_gpu_io io={m,rd,wr,ticks,barrier,1000};return sweet_csf_boot(c,&io,r);}
 static void clean(struct model*m,struct sweet_csf_boot_report*r){assert(m->gpu_mask==0x55 && m->job_mask==0xaa && m->mmu_mask==0xbb && m->resets==1+PRESTART_RESETS);assert(r->reset_completed);}
-#if SWEET_CSF_MFG_GLUE
+#if SWEET_CSF_MFG_GLUE == 2
+/*2414: the same block, but the in-dispatch words are perturbed to 0xAAA, and the
+ *three "already at the vendor value" bits are part of the evidence. */
+int main(void) {
+ static const uint64_t expect_addr[12]={0x13fbf168,0x13fbf8e0,0x13fbf8e8,0x13fbf910,
+  0x13fbf918,0x13fbf900,0x13fbf908,0x13fbf920,0x13fbf928,0x13fbf740,0x13fbf744,0x13fbf748};
+ static const uint32_t expect_value[12]={0xf,0xaaa,0xaaa,0xaaa,0xaaa,0x55,0x55,0x55,0x55,
+  0xffffffffu,0xffffffffu,0x06002006u};
+ struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
+ assert(!run(&m,&c,&r));
+ assert(m.glue_writes==12);
+ for(int i=0;i<12;i++){assert(m.glue_addr[i]==expect_addr[i]);assert(m.glue_value[i]==expect_value[i]);}
+ /* Nothing was at the vendor value on the way in: none of bits12..14 may be set. */
+ assert(r.diag_flags==(31|2048));
+ assert(r.stage==7 && r.firmware_ready);
+ clean(&m,&r);
+ /* Second run: the page already carries the vendor values, which is what 2413
+  *met. All three bits must appear and the in-dispatch write must OR 0xAAA over
+  *0x855, i.e. 0xF55. */
+ {struct model m2=model();m2.glue_already=1;struct sweet_csf_boot_report r2;
+  assert(!run(&m2,&c,&r2));
+  assert(m2.glue_writes==12);
+  assert(m2.glue_value[1]==((0x855u&~0xfffu)|0xaaau));
+  assert(r2.diag_flags==(31|2048|4096|8192|16384));
+  clean(&m2,&r2);}
+ puts("PASS: 2414 perturbs the in-dispatch words and reports what was already set");return 0;
+}
+#elif SWEET_CSF_MFG_GLUE == 1
 /*2413: the MFG top glue, in the vendor's order and with the vendor's masks.
  *gpufreq_mt6983.c __gpufreq_acp_control() and the group6 word of
  *__gpufreq_slc_control(); nothing else in the transaction changes. */
@@ -486,6 +523,10 @@ class CsfBootTests(unittest.TestCase):
 
     def test_vendor_memattr_with_global_interface(self):
         self._run(['-DSWEET_CSF_VENDOR_MEMATTR=1','-DSWEET_CSF_GLOBAL_INIT=1'])
+
+    def test_mfg_perturb(self):
+        """2414: in-dispatch at 0xAAA, with the already-set bits visible."""
+        self._run(['-DSWEET_CSF_MFG_GLUE=2'])
 
     def test_mfg_glue(self):
         """2413: the vendor's power-on glue, in order, before MCU_CONTROL."""

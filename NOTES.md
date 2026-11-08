@@ -1,6 +1,31 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 15:53: 2413 RAN - THE VENDOR GLUE DID NOT MOVE THE WALL, AND THE TREATMENT WAS UNVERIFIED <<<
+## >>> ACTIVE 2026-11-08 15:59: 2414 BUILT - PERTURB THE AXI DISPATCH (0xAAA), NOT FLOWN <<<
+
+2413 proved the vendor glue as a block is not the wall but could not prove its
+treatment differed from the control. 2414 fixes the method: the four in-dispatch
+words (`0x8E0/8E8/910/918`) are written outright as `(val & ~0xfff) | 0xAAA`
+instead of `|= 0x855`; the out-dispatch stays at the vendor `0x055`; group 6 stays
+`0xffffffff/0xffffffff/0x06002006`. `diag_flags` gains bits 12/13/14 = "the
+in-dispatch / out-dispatch / group 6 word already held the vendor value before
+the write", so even a no-op is now visible. Image, arena, code section, both
+leaves, three reads, result slot and ladder file are 2412's byte for byte.
+
+Read it: marker 1 or 2 only -> those words govern the MCU data path and 0x855 is
+load-bearing (the mechanism is the bridge, next find the value); marker 3 with
+`output_va` `0x2412a400` -> 0xAAA changes nothing, the AXI 1-to-2 dispatch is not
+the wall and that lead closes; marker 4 -> the wall is gone and 0x855 was simply
+the wrong value for this MCU.
+
+Image `42385e94...938f`, payload `43c75828...99de`, kernel `c01dcbea...d5ea`,
+305 tests / 3 skipped (both glue modes covered, including a model that arrives
+with the vendor values already in place). 2412 still rebuilds `333acd79...`,
+2413 still `aed0b399...`. Runner `shim2414-perturb-trials-run-once.py`,
+partition hash `957d5e65...c7cb`, preflight passed. `boot_a` still
+`2931647a...86b1`; **not flown**. Statically confirmed: `mov w2,w0; bfxil
+w2,w28,#0,#12` with `w28 = 0xAAA` at `+0x8e0`.
+
+## >>> PREVIOUS 2026-11-08 15:53: 2413 RAN - THE VENDOR GLUE DID NOT MOVE THE WALL, AND THE TREATMENT WAS UNVERIFIED <<<
 
 2413 flew and restored. `input_va` 3, `output_va` `0x2412a400`, `mcu_status` 1,
 `diag_flags` `0x87F` (bit 11 set, so the eleven writes ran), fastboot at 83.37 s.

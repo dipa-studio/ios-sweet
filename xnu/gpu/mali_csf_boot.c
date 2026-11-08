@@ -454,7 +454,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     if(platform_path(c,io,r,0)) {
         r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
     }
-#if SWEET_CSF_MFG_GLUE
+#if SWEET_CSF_MFG_GLUE == 1
     /*2413: the SoC side of the GPU, before the MCU is started. The vendor
      *kernel runs __gpufreq_acp_control() on every power-on (gpufreq_mt6983.c):
      *  MFG_AXCOHERENCE            0x168 |= 0xF   M0..M3 coherence enable
@@ -490,6 +490,46 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
         wr(io,SWEET_CSF_MFG_BASE+0x744,0xffffffffu);
         wr(io,SWEET_CSF_MFG_BASE+0x748,0x06002006u);
         r->diag_flags|=2048;
+    }
+#endif
+#if SWEET_CSF_MFG_GLUE == 2
+    /*2414: perturb the same block instead of applying it. 2413 wrote the vendor
+     *values and the wall did not move, but it could not show the dispatch words
+     *had been different before the write - group 6 already read 0x06002006 on
+     *the way in. So this build sets the four in-dispatch words to 0xAAA, a value
+     *the hardware cannot already hold, leaves the out-dispatch at the vendor
+     *0x055, and records whether each group was already at the vendor value so a
+     *no-op is visible instead of silent. Bits 12/13/14 mean "in-dispatch,
+     *out-dispatch, group 6 were already 0x855/0x055/0x06002006 before the write";
+     *bit 11 still means the block ran.
+     *Reading: a dead ladder (no marker 1) means those words govern the MCU's
+     *data path and 0x855 is load-bearing; marker 3 with the same result word
+     *means the AXI bridge is not the wall under any setting tried. */
+    {
+        static const uint16_t in_dispatch[4]={0x8e0,0x8e8,0x910,0x918};
+        static const uint16_t out_dispatch[4]={0x900,0x908,0x920,0x928};
+        uint32_t v,in_already=1,out_already=1,slc_already=1;
+        v=rd(io,SWEET_CSF_MFG_BASE+0x168);
+        wr(io,SWEET_CSF_MFG_BASE+0x168,v|0xfu);
+        for(unsigned i=0;i<4;i++) {
+            v=rd(io,SWEET_CSF_MFG_BASE+in_dispatch[i]);
+            if((v&0xfffu)!=0x855u)in_already=0;
+            wr(io,SWEET_CSF_MFG_BASE+in_dispatch[i],(v&~0xfffu)|0xaaau);
+        }
+        for(unsigned i=0;i<4;i++) {
+            v=rd(io,SWEET_CSF_MFG_BASE+out_dispatch[i]);
+            if((v&0xfffu)!=0x055u)out_already=0;
+            wr(io,SWEET_CSF_MFG_BASE+out_dispatch[i],v|0x055u);
+        }
+        v=rd(io,SWEET_CSF_MFG_BASE+0x748);
+        if(v!=0x06002006u)slc_already=0;
+        wr(io,SWEET_CSF_MFG_BASE+0x740,0xffffffffu);
+        wr(io,SWEET_CSF_MFG_BASE+0x744,0xffffffffu);
+        wr(io,SWEET_CSF_MFG_BASE+0x748,0x06002006u);
+        r->diag_flags|=2048;
+        if(in_already)r->diag_flags|=4096;
+        if(out_already)r->diag_flags|=8192;
+        if(slc_already)r->diag_flags|=16384;
     }
 #endif
     /* Drive the MCU to a halt we measured ourselves before starting it. The

@@ -2977,3 +2977,44 @@ no-op is visible:
 The mistake this run makes explicit is worth keeping: 2413 was built to *apply*
 a configuration, not to *prove it differed*. A control that cannot fail is not a
 control.
+
+## 68. 2414 built: perturb the dispatch words instead of applying them
+
+2413's flaw was experimental, not physical: it wrote the vendor values and could
+not show they differed from what was already there. 2414 keeps everything and
+changes the *method*.
+
+| item | 2412 | 2413 | 2414 |
+|---|---|---|---|
+| in-dispatch `0x8E0/8E8/910/918` | untouched | `\|= 0x855` | `(val & ~0xfff) \| 0xAAA` |
+| out-dispatch `0x900/908/920/928` | untouched | `\|= 0x055` | `\|= 0x055` |
+| group 6 `0x740/744/748` | untouched | `0xffffffff/0xffffffff/0x06002006` | same |
+| `diag_flags` | - | bit11 | bit11 + 12/13/14 |
+
+`0xAAA` is the point: it is the bitwise mirror of `0x555` and cannot be a value
+the bootloader or a previous boot happened to leave behind, so the treatment
+cannot be a silent no-op. Bits 12/13/14 record whether the in-dispatch,
+out-dispatch and group 6 words *already* held the vendor value on the way in,
+which is the fact 2413 could not see. Everything else - container, arena, code
+section, both leaves, the three reads, the single result slot, the ladder file -
+is 2412's, byte for byte.
+
+Reading:
+
+* marker 1 or 2 only -> those words govern the MCU's data path, `0x855` is
+  load-bearing, and the mechanism is the bridge; the next job is to find which
+  value lets bit 9 = 1 answer;
+* marker 3 with `output_va` `0x2412a400` -> 0xAAA changes nothing, the AXI 1-to-2
+  dispatch is not what refuses the second 512 bytes, and the lead closes;
+* marker 4 -> the bridge accepts another setting and the wall is gone, i.e. 0x855
+  was the wrong value for this MCU all along.
+
+Static check: `llvm-objdump` shows `mov w2, w0; bfxil w2, w28, #0, #12` with
+`w28 = 0xAAA` at `+0x8e0` and the vendor `|= 0x855` path replaced, so the field
+is written outright rather than ORed.
+
+Build: image `42385e94...938f`, payload `43c75828...99de`, 305 tests / 3 skipped
+(2414's mode is now covered, including a model where the page already carries the
+vendor values). 2412 and 2413 still rebuild to `333acd79...` and `aed0b399...`
+byte for byte. Runner `shim2414-perturb-trials-run-once.py`, partition hash
+`957d5e65...c7cb`, preflight passed, **not flown**.
