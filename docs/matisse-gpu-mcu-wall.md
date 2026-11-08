@@ -2871,7 +2871,7 @@ because its first data access on the wrong side of the boundary hangs.
 property - attributes and PBHA are per 4 KiB leaf. Anything that splits a page in
 half on this SoC is outside the MMU: the SLC group base/size the ADT hands out
 (`arm,physical-memory-group-manager`), MTK's GMPU, or the interconnect's sector
-handling. 2407's `slc_group6` = `0x06000006` and the path-blocked words are the
+handling. 2407's `slc_group6` = `0x06002006` and the path-blocked words are the
 only measurements of that side so far, and both were unchanged before and after
 the transaction.
 
@@ -2899,9 +2899,11 @@ The block, in `__gpufreq_acp_control()`'s order:
 
 A "1 to 2 AXI" bridge splits one stream between two downstream ports by an
 address bit and has no other dimension to split on; the wall is exactly "the
-upper 512 bytes of every 1 KiB never answers". And the page is measurably
-unprogrammed: `0x13FBF748` has read back `0x06000006` on every build since 2407,
-which is the vendor word with bit 13 ("R cache") clear.
+upper 512 bytes of every 1 KiB never answers". *(The desk audit that proposed this
+block believed it was unprogrammed because `0x13FBF748` was recorded as reading
+`0x06000006`. That number was never measured - 2407, 2412, 2413 and 2414 all
+carry `path_before.slc_group6 = 0x06002006`, the vendor word. Corrected in §69;
+the block was already programmed, which is why 2413's writes were no-ops.)*
 
 **Static verification before any flight.** `llvm-objdump` on the built
 `shim.elf` shows the eleven read-modify-writes immediately after
@@ -2913,8 +2915,8 @@ which is the vendor word with bit 13 ("R cache") clear.
 Two pieces of evidence come for free, without touching the 784-byte ABI:
 
 * `slc_group6` in the report is sampled by `platform_path()` before and after,
-  so a 2413 capture carries `path_before.slc_group6 = 0x06000006` and
-  `path_after.slc_group6 = 0x06002006` if the writes landed;
+  so a 2413 capture carries that word on both sides of the write - which is how
+  2413 learned the write was a no-op: both sides read `0x06002006`;
 * `diag_flags` bit 11 says the block ran at all.
 
 The console gains `CSF mfg in/out` lines with `coh/dsp0/dsp2/out0/slc6` on both
@@ -3018,3 +3020,66 @@ Build: image `42385e94...938f`, payload `43c75828...99de`, 305 tests / 3 skipped
 vendor values). 2412 and 2413 still rebuild to `333acd79...` and `aed0b399...`
 byte for byte. Runner `shim2414-perturb-trials-run-once.py`, partition hash
 `957d5e65...c7cb`, preflight passed, **not flown**.
+
+## 69. 2414 ran: the block was already programmed, and perturbing it changes nothing
+
+Flew `42385e94...938f`, fastboot at 89.57 s (2412 81.37 s, 2413 83.37 s). The
+operator interrupted the run during the Recovery restore, so the first pass only
+wrote the 20.87 MiB trim prefix; the device then came up in **fastboot, not
+Recovery**. Once it was in Recovery, the runner's `restore-only` channel captured
+the after evidence and wrote the full 64 MiB backup back, verified
+`2931647a...86b1`. The measurement is complete; only the restore took a second
+pass.
+
+**Reading: identical to 2412 and 2413.** `input_va` 3, `output_va` `0x2412a400`,
+`stage` 4 `timeout`, `mcu_status` 1, `as_fault` 0, `firmware_ready` 0.
+
+**`diag_flags` = `0x787F`: bit 11 plus bits 12/13/14.** Before any write this
+build saw the in-dispatch words already at `0x855`, the out-dispatch already at
+`0x055`, and group 6 already at `0x06002006`. So:
+
+* 2413's caveat resolves in the direction opposite to its hypothesis: the
+  treatment there was a genuine no-op because the hardware already carried the
+  vendor values, not because the write failed;
+* the desk audit's premise - "the block has never been programmed here" - is
+  dead. It rested on `0x13FBF748` reading `0x06000006`, and that number is in no
+  capture: 2407's own `gpu-result.json`, 2412, 2413 and 2414 all report
+  `path_before.slc_group6 = 0x06002006`. The vendor word was there all along.
+
+**And the perturbation moved nothing.** The four in-dispatch words were written
+outright as `(val & ~0xfff) | 0xAAA` - the field is replaced, not ORed, per the
+disassembly - and the ladder still ran exactly as before: marker 3, same
+`output_va`, same stage and error. The AXI 1-to-2 read dispatch is therefore not
+what refuses the second 512 bytes; the lead closes.
+
+**Residual, stated honestly.** The 784-byte ABI has no field for the dispatch
+words after the write, so "0xAAA landed" is inferred from the write path, not
+read back. That does not rescue the lead: the block arrives programmed with the
+vendor values and the wall survives them, so whether the perturbation took or not
+the original premise is refuted.
+
+**Operational note worth keeping.** `boot_a-stock-trim.img` is *not* a prefix of
+the live backup - the two boot images differ from their first 4 KiB page (header
+kernel size at offset 8). A prefix-only restore therefore leaves a hybrid
+partition (trim image + trial-image tail + original tail), and this time the
+device did not reach Recovery from it. Only the full 64 MiB write makes `boot_a`
+byte-identical again; the raw fallback exists to un-brick the transport, not to
+finish the job.
+
+Build: image `42385e94...938f`, payload `43c75828...99de`, kernel
+`c01dcbea...d5ea`, 305 tests / 3 skipped, `boot_a` restored to
+`2931647a...86b1`, device in Recovery.
+
+What is left, in the order the evidence supports:
+
+1. **Shape, not mechanism** - one ladder, four reads: `+0x000` (bit 9 = 0),
+   `+0x400` (bit 9 = 0, bit 10 = 1), `+0x600` (bits 9 and 10 = 1) and `+0x200`
+   (bit 9 = 1, bit 10 = 0). `+0x400` already returned, so "the upper half of
+   every 1 KiB" is dead; if `+0x600` stalls, the rule is literally "PA bit 9 =
+   1" and 512-byte alternation holds (0x000 ok, 0x200 stall, 0x400 ok, 0x600
+   stall). If `+0x600` returns, bit 9 alone is not the rule either and the
+   period is not 512 bytes. This is the last thing the existing instrument can
+   measure without new code.
+2. **The group table LK builds before handoff** - the MGM node is empty in DT and
+   the table is not in any of the three trees. 2409 excluded the tag itself, but
+   not the group's base/limit, which the shim has never read.

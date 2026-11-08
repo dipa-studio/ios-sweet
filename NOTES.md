@@ -1,29 +1,42 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 15:59: 2414 BUILT - PERTURB THE AXI DISPATCH (0xAAA), NOT FLOWN <<<
+## >>> ACTIVE 2026-11-08 16:05: 2414 RAN - THE GLUE WAS ALREADY PROGRAMMED, AND PERTURBING IT CHANGES NOTHING <<<
 
-2413 proved the vendor glue as a block is not the wall but could not prove its
-treatment differed from the control. 2414 fixes the method: the four in-dispatch
-words (`0x8E0/8E8/910/918`) are written outright as `(val & ~0xfff) | 0xAAA`
-instead of `|= 0x855`; the out-dispatch stays at the vendor `0x055`; group 6 stays
-`0xffffffff/0xffffffff/0x06002006`. `diag_flags` gains bits 12/13/14 = "the
-in-dispatch / out-dispatch / group 6 word already held the vendor value before
-the write", so even a no-op is now visible. Image, arena, code section, both
-leaves, three reads, result slot and ladder file are 2412's byte for byte.
+2414 flew (`42385e94...938f`, fastboot 89.57 s) and the measurement is complete.
+The run was interrupted during the restore, so the first pass only wrote the
+20.87 MiB trim prefix and the device came up in fastboot; once it was in
+Recovery, `restore-only` captured the after evidence and wrote the full 64 MiB
+back, verified `2931647a...86b1`.
 
-Read it: marker 1 or 2 only -> those words govern the MCU data path and 0x855 is
-load-bearing (the mechanism is the bridge, next find the value); marker 3 with
-`output_va` `0x2412a400` -> 0xAAA changes nothing, the AXI 1-to-2 dispatch is not
-the wall and that lead closes; marker 4 -> the wall is gone and 0x855 was simply
-the wrong value for this MCU.
+Reading is 2412's exactly: `input_va` 3, `output_va` `0x2412a400`, stage 4
+`timeout`, `mcu_status` 1, `as_fault` 0.
+
+Two facts, and they point opposite ways from the hypothesis:
+
+* `diag_flags` `0x787F` = bit 11 + 12/13/14: the in-dispatch words were already
+  `0x855`, out-dispatch already `0x055`, group 6 already `0x06002006` **before**
+  the write. So the boot chain programs the MFG top page, and 2413's writes were
+  genuine no-ops.
+* The desk audit's proof of the opposite ("`0x13FBF748` reads `0x06000006`") was
+  never measured anywhere. 2407's own `gpu-result.json`, 2412, 2413 and 2414 all
+  report `path_before.slc_group6 = 0x06002006`.
+
+Perturbing the four in-dispatch words outright to `0xAAA` moved nothing, so the
+AXI 1-to-2 read dispatch is not the wall and that lead is closed. Residual, on
+the record: the 784-byte ABI carries no after-value for those words, so "0xAAA
+landed" is inferred from the write path - but the premise is dead either way,
+because the block arrives programmed and the wall survives it.
+
+**What is left.** (1) Shape: one ladder reading `+0x000`, `+0x400`, `+0x600`,
+`+0x200` in that order - `+0x400` already returned, so "upper half of each 1 KiB"
+is dead, and `+0x600` splits "PA bit 9" from any 512-byte-period story. (2) The
+group table LK builds before handoff: the DT `mgm` node is empty and the table is
+in none of the three trees, and the shim has never read `0x740/0x744`.
 
 Image `42385e94...938f`, payload `43c75828...99de`, kernel `c01dcbea...d5ea`,
-305 tests / 3 skipped (both glue modes covered, including a model that arrives
-with the vendor values already in place). 2412 still rebuilds `333acd79...`,
-2413 still `aed0b399...`. Runner `shim2414-perturb-trials-run-once.py`,
-partition hash `957d5e65...c7cb`, preflight passed. `boot_a` still
-`2931647a...86b1`; **not flown**. Statically confirmed: `mov w2,w0; bfxil
-w2,w28,#0,#12` with `w28 = 0xAAA` at `+0x8e0`.
+305 tests / 3 skipped. `boot_a` `2931647a...86b1`, device in Recovery.
+`docs/matisse-gpu-mcu-wall.md` §69; the audit's §10.3/§10.4 are corrected in
+place. **Nothing is currently built or pending.**
 
 ## >>> PREVIOUS 2026-11-08 15:53: 2413 RAN - THE VENDOR GLUE DID NOT MOVE THE WALL, AND THE TREATMENT WAS UNVERIFIED <<<
 
@@ -59,6 +72,8 @@ device in Recovery.
 word of `__gpufreq_slc_control()` from `gpufreq_mt6983.c`, which the vendor runs
 on **every** GPU power-on and which has provably never run here: the same page
 has read back `0x06000006` for group 6 since 2407, i.e. bit 13 ("R cache") clear.
+**[Retracted 16:05 - that reading exists in no capture. 2407/2412/2413/2414 all
+report `0x06002006`. See the ACTIVE block above and §69.]**
 panthor owns `0x13000000` only; the DDK assumes the platform did `0x13fbf000`.
 
 Verified statically, no flight: the disassembly of `shim.elf` shows the eleven
@@ -119,8 +134,10 @@ writes `mfg_axi1to2_R_dispatch_mode` = `0x855`/`0x055` into
 bit and has no other dimension to split on - and the wall is exactly "one half of
 every 1 KiB answers". **And the block is measurably unprogrammed:** the shim has
 been reading `0x13FBF748` since 2407 and gets `0x06000006` where
-`__gpufreq_slc_control()` writes `0x06002006` (bit 13, "R cache"). panthor never
-touches `0x13fbf000`; the DDK assumes the platform already did.
+`__gpufreq_slc_control()` writes `0x06002006` (bit 13, "R cache"). **[Retracted
+16:05 - never measured; every report reads `0x06002006`, and 2414 showed the
+dispatch words already at `0x855`/`0x055`. The lead is closed, §69.]**
+panthor never touches `0x13fbf000`; the DDK assumes the platform already did.
 
 **Next is 2413**: 2412's image, addresses and ladder byte for byte, plus that
 vendor glue applied before `MCU_CONTROL`, with the dispatch words' before/after on

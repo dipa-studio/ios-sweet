@@ -283,26 +283,33 @@ MFG_OUT_1TO2AXI_CON_00/02/04/06 0x13FBF900/908/920/928 |= 0x055 /* R dispatch, o
 使能/从未收到 dispatch 配置"完全吻合，也是三份仓库里唯一存在的 512 字节量级
 的机制。
 
-**而且它确实没被配过，这是实测的，不是推断。** 2407 起 shim 就在读
-`0x13FBF748`（SLC group 6 策略字，同一页），读到的是：
+**2026-11-08 16:05 更正：它其实早就被配好了。** 本节最初写的"shim 读到
+`0x06000006`"是错的，那个数字不在任何一份抓取里。2407 的 `gpu-result.json`、
+2412、2413、2414 四份报告都记录 `path_before.slc_group6 = 0x06002006`——正是
+厂商值。2414 更进一步：写之前读到的 in-dispatch 已是 `0x855`、out-dispatch 已是
+`0x055`、group 6 已是 `0x06002006`（`diag_flags` bit 12/13/14 全部置位）。所以
+LK/引导链在交接前**确实**把这张表配好了，2413 的写入是真正的空操作。
 
-| 寄存器 | 厂商 `__gpufreq_slc_control()` 写的值 | shim 读到的值 |
+| 寄存器 | 厂商 `__gpufreq_slc_control()` 写的值 | shim 实测（写之前） |
 |---|---|---|
-| `0x13FBF748` group6 | `0x06002006`（W-alloc, R cache, no spec） | **`0x06000006`** |
-| `0x13FBF8E0` 等 8 个 dispatch | `0x855` / `0x055` | 从未写过 |
-| `0x13FBF168` AXCOHERENCE | `|= 0xF` | 从未写过 |
+| `0x13FBF748` group6 | `0x06002006` | **`0x06002006`**（2407/2412/2413/2414） |
+| `0x13FBF8E0` 等 4 个 in-dispatch | `0x855` | **`0x855`**（2414） |
+| `0x13FBF900` 等 4 个 out-dispatch | `0x055` | **`0x055`**（2414） |
+| `0x13FBF168` AXCOHERENCE | `|= 0xF` | 未采样 |
 
-`0x06000006` 与 `0x06002006` 的差别是 bit 13 —— 也就是厂商注释里的 "R cache"。
-这一条就把"这块寄存器被配好了"排除掉了：LK 没有按这张表配，或者干脆是复位值。
+而 2414 把四个 in-dispatch 整段改写成 `0xAAA` 之后，墙**没有丝毫移动**：
+`input_va` 仍是 3、`output_va` 仍是 `0x2412a400`、stage/error 与 2412 完全一致。
+于是这条线索关闭：MFG top 的 AXI 1-to-2 读分派不是拒绝第二个 512 字节的东西。
 
 ### 10.4 为什么 panthor 不管这些
 
 panthor 只写 `0x13000000` 起的 GPU 寄存器（`AS_TRANSTAB/TRANSCFG/MEMATTR`、
 `MCU_CONTROL`、`COHERENCY_ENABLE`）。`0x13fbf000` 这一块是 MTK 的 "MFG top"
-glue，DDK 假设它已经由平台侧（gpufreq 上电序列 / GPUEB）配好。我们的 shim
-自己做了上电，却没有做这一段 glue，于是 MCU 是在一个"SoC 侧 AXI 分派与 SLC
-策略都没配"的 GPU 上启动的——**这正好解释了为什么取指能用而数据不能**：
-四个 in / 四个 out 的桥是分开的，不是每个 master 都被同样地配过。
+glue，DDK 假设它已经由平台侧（gpufreq 上电序列 / GPUEB）配好。本节原先的推论
+是"shim 自己做了上电却漏了 glue"，但 2414 的实测把这条推论推翻了：**引导链在
+交接前已经把这九个字配成了厂商值**，glue 不是我们的缺口。也就是说，
+`0x13fbf000` 这一页可以作为"已配置"从怀疑名单里划掉，剩下的候选只有 group 表
+（`0x740/0x744` 的 base/limit，shim 至今只读过 `0x748`）与互连/其他 SoC 侧逻辑。
 
 ### 10.5 下一步（2413 的设计，不改阶梯）
 
