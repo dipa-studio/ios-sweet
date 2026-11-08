@@ -1395,6 +1395,26 @@ TRACE_PROBE[0x2403] = dict(
     patches={0x010019b0: FAULT_ENTRY_2401,
              0x01000200: ('01340a2c', '00bf7047'),
              0x0100E000: COLD_BOOT_2403})
+# 2404 asks whether the MMU can fetch a page-table descriptor from PA bit 9 = 1.
+# The mirror sits at 0x06040000: L2[48] at table offset 0x180 (bit 9 = 0), then a
+# fresh L3 page whose entries for this 64 KiB section are indices 0x40..0x4F, i.e.
+# byte offsets 0x200..0x278 - every one of them PA bit 9 = 1. Reading the mirror
+# at 0x0604E400 therefore needs a cold walk at bit 9 = 1 while the access itself
+# is at VA and PA bit 9 = 0, and nothing about it differs from read 1 except where
+# the descriptor happens to live. The leaf is valid on purpose: an invalid one
+# would fault the moment the walk succeeded and throw away the store test.
+COLD_BOOT_2404 = ('41114ff0000999652b46c0f200070021002527e040f294370021c0f200071de044f220010622c4f20301725044f22003c4f20303191d7258062afcd1f218916f11f4006f01f4a0694ff001011cbf01231365012d02d1fef7',
+                  '40f20002c0f2004240f20006c0f2001640f20007c0f204674ef200480120906056f80800d0600220906057f80800d0600320906045f65a20c5f65a20c2f80002bff34f8f04209060d2f80002d06005209060fee700bf00bf')
+TRACE_PROBE[0x2404] = dict(
+    TRACE_PROBE[0x2396], kind='cold-boot-fetch',
+    reset_vector=(0x010018ed, 0x0100E001),
+    stub_original=bytes.fromhex(COLD_BOOT_2404[0]),
+    stub=bytes.fromhex(COLD_BOOT_2404[1]),
+    mirror_code=0x06040000, uncached_page=0x01001000, leaf_group=0,
+    leaf_probe_va=(0x0100E000, 0x0604E000, 0x01001000, 0x02000000),
+    patches={0x010019b0: FAULT_ENTRY_2401,
+             0x01000200: ('01340a2c', '00bf7047'),
+             0x0100E000: COLD_BOOT_2404})
 
 
 
@@ -1473,9 +1493,13 @@ def mirror_check(fetch, candidate, plan, spec, stub, section):
     # build() adds 0x40000000 + the arena offset it read from the linked ELF.
     # Recording root+dst here is what made 2399/2401's manifest point 0x1000
     # below the image for a whole build.
-    arena, mplan = fetch.build_arena(candidate, 0x40077000, memory_group=6,
+    arena, mplan = fetch.build_arena(candidate, 0x40077000,
+                                     memory_group=spec.get('leaf_group', 6),
                                      relocate_code=True, mirror_code=True,
-                                     share_code_l3=bool(share), vendor=True)
+                                     mirror_va=mirror,
+                                     share_code_l3=bool(share),
+                                     uncached_page=spec.get('uncached_page', 0),
+                                     vendor=True)
     if len(mplan['sections']) != len(plan['sections']) + 1:
         raise ValueError('mirror did not add exactly one mapping')
     code = next(s for s in mplan['sections'] if s['va'] == section['va'])
@@ -1559,10 +1583,15 @@ def fault_vector_probe(path, expected, build_id):
         if not new & 1:
             raise ValueError('reset vector %#x is not a Thumb address' % new)
         mirror = spec.get('mirror_code', 0)
-        low = section['va'] if not mirror else mirror
-        if not (low <= target and target + 4 <= low + section['data_bytes']):
-            where = ('the mirrored code copy at %#x' % low) if mirror else 'the code section'
-            raise ValueError('reset vector target %#x is outside %s' % (target, where))
+        # The start address may live in either copy: 2401 starts inside the
+        # mirror, 2404 deliberately starts in the original section and only
+        # *reads* the mirror, so the run keeps its warm translation.
+        lows = [section['va']] + ([mirror] if mirror else [])
+        if not any(low <= target and target + 4 <= low + section['data_bytes']
+                   for low in lows):
+            where = ' or '.join('%#x' % low for low in lows)
+            raise ValueError('reset vector target %#x is outside the copy at %s'
+                             % (target, where))
         vector_new = new
 
     stub_at = offset(spec['stub_va'])
@@ -1709,7 +1738,7 @@ def fault_vector_probe(path, expected, build_id):
                 '0 or 8': 'the read neither faulted nor completed'})
     if build_id in (0x2385, 0x2386, 0x2387, 0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
                     0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402,
-                    0x2403):
+                    0x2403, 0x2404):
         target = {0x2385: '0x100e000', 0x2386: '0x1000200',
                   0x2387: '0x1000600', 0x2388: '0x1001200',
                   0x2389: '0x1001000', 0x2390: '0x10018ec',
@@ -1718,7 +1747,8 @@ def fault_vector_probe(path, expected, build_id):
                   0x2396: '0x100e000', 0x2397: '0x100e000',
                   0x2398: '0x100e000', 0x2399: '0x100e000',
                   0x2400: '0x100e000', 0x2401: '0x300e000',
-                  0x2402: '0x100e000', 0x2403: '0x100e000'}[build_id]
+                  0x2402: '0x100e000', 0x2403: '0x100e000',
+                  0x2404: '0x100e000'}[build_id]
         patch['cold_boot'] = dict(
             target=target, marker_value=target, marker_field='input_va',
             counter_field='groups', counter_seed=8, counter_meanings={
@@ -1846,6 +1876,42 @@ def fault_vector_probe(path, expected, build_id):
                     '0x5': 'bit 9 is not the rule: the code page returned and the stack page stalled',
                     '0x6': 'only the shared section stalls at bit 9 = 1',
                     '0x7': 'no read stalled: 2401\'s stall does not reproduce',
+                    '0xe3': 'the core took a synchronous fault; input_va carries 0xE3'})
+        if build_id == 0x2404:
+            # Three reads and a store. Read 2 is the question: its L3 entry sits
+            # at byte 0x270 of a fresh table page, so the walk has to read PA bit
+            # 9 = 1 to translate it. A hang there means the address is dead for
+            # the MMU too; a return means the address is routable and only the
+            # MCU's own accesses are refused, and then reads 3/4 measure the
+            # store direction - the one nobody has ever tested.
+            patch['cold_boot'] = dict(
+                target='0x100e000', marker_field='input_va', marker_value='0x1..0x5',
+                counter_field='groups', counter_seed=8,
+                mirror_va='0x6040000', mirror_l3_index='0x4e',
+                mirror_l3_offset='0x270', mirror_l3_offset_bit9=1,
+                entry_program='tools/matisse-csf-ladder2404.S',
+                store=dict(va='0x04000200', value='0x5a5a5a5a', barrier='dsb sy',
+                           page='shared, RW, AttrIdx 5, PBHA 0'),
+                ladder=[dict(marker='0x1', read_va='0x0100E400', bit9=0,
+                             section='code, warm translation',
+                             meaning='baseline; the word must be 0x0f10f857'),
+                        dict(marker='0x2', read_va='0x0604E400', bit9=0,
+                             section='mirror, cold walk, L3 entry at bit 9 = 1',
+                             meaning='the walk to this page needs a PA bit 9 = 1 read'),
+                        dict(marker='0x3', read_va=None, bit9=1,
+                             section='store to 0x04000200',
+                             meaning='the store to the shared page never completed'),
+                        dict(marker='0x4', read_va='0x04000200', bit9=1,
+                             section='shared, read back after the store',
+                             meaning='the store completed; the read back hung'),
+                        dict(marker='0x5', read_va=None, section='none',
+                             meaning='everything returned, store included')],
+                counter_meanings={
+                    '0x1': '0x0100E400 stalled: the baseline is broken, ignore the rest',
+                    '0x2': 'the cold walk died reading an L3 entry at bit 9 = 1: the address is dead for the MMU too',
+                    '0x3': 'the mirror read returned and the store never completed: writes die at bit 9 = 1',
+                    '0x4': 'the store completed and the read back hung: writes land, reads do not',
+                    '0x5': 'everything returned; shared+20 must hold 0x5a5a5a5a',
                     '0xe3': 'the core took a synchronous fault; input_va carries 0xE3'})
         if build_id == 0x2403:
             # Four reads, no mirror, and an L2 alias so read 2 and read 4 name
@@ -2024,7 +2090,8 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
 # neither), and a build that declares a leaf_probe without the property fails
 # closed at decode time, which is the right failure but a wasted trial.
 LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
-                    0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402, 0x2403)
+                    0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402, 0x2403,
+                    0x2404)
 
 
 def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False):
@@ -2081,24 +2148,24 @@ def build(a):
     # leaf AttrIdx 0/5, vendor MEMATTR, no nG, read-only code. The entry and
     # its fetch target are the only other things that move.
     if a.build_id in (0x2393, 0x2394, 0x2395, 0x2396, 0x2397, 0x2398, 0x2399,
-                      0x2400, 0x2401, 0x2402, 0x2403):
+                      0x2400, 0x2401, 0x2402, 0x2403, 0x2404):
         if not (a.trace_probe and a.vendor_leaves and a.relocate_code and a.mcu_control == '2'):
             raise ValueError('build%x requires --trace-probe --vendor-leaves --relocate-code --mcu-control 2' % a.build_id)
         if a.uncached_code != (a.build_id == 0x2395):
             raise ValueError('build%x requires --uncached-code exactly when it is 2395' % a.build_id)
         if a.xn_page != (a.build_id == 0x2397):
             raise ValueError('build%x requires --xn-page exactly when it is 2397' % a.build_id)
-        if a.leaf_group != (0 if a.build_id in (0x2398, 0x2403) else 6):
+        if a.leaf_group != (0 if a.build_id in (0x2398, 0x2403, 0x2404) else 6):
             raise ValueError('build%x requires --leaf-group %d' %
-                             (a.build_id, 0 if a.build_id in (0x2398, 0x2403) else 6))
+                             (a.build_id, 0 if a.build_id in (0x2398, 0x2403, 0x2404) else 6))
         if a.alias_page != (a.build_id == 0x2399):
             raise ValueError('build%x requires --alias-page exactly when it is 2399' % a.build_id)
-        if a.uncached_page != (a.build_id in (0x2400, 0x2403)):
-            raise ValueError('build%x requires --uncached-page exactly when it is 2400 or 2403'
+        if a.uncached_page != (a.build_id in (0x2400, 0x2403, 0x2404)):
+            raise ValueError('build%x requires --uncached-page exactly when it is 2400, 2403 or 2404'
                              % a.build_id)
-        if (a.mirror_code != (a.build_id == 0x2401) or
+        if (a.mirror_code != (a.build_id in (0x2401, 0x2404)) or
                 a.share_code_l3 != (a.build_id in (0x2401, 0x2403))):
-            raise ValueError('build%x requires --mirror-code exactly when it is 2401 and '
+            raise ValueError('build%x requires --mirror-code exactly when it is 2401 or 2404 and '
                              '--share-code-l3 exactly when it is 2401 or 2403' % a.build_id)
         if (a.ro_as_rw or a.vendor_memattr or a.global_init or a.fault_probe or
                 a.entry_probe or a.reset_store_stub or a.inline_entry or
@@ -2177,12 +2244,16 @@ def build(a):
                    '-DSWEET_CSF_UNCACHED_VA=' + ('0x01001000u' if a.uncached_page else '0'),
                    '-DSWEET_CSF_GLOBAL_INIT=' + ('1' if a.global_init else '0'),
                    '-DSWEET_CSF_RELOCATE_CODE=' + ('1' if a.relocate_code else '0'),
-                   '-DSWEET_CSF_MIRROR_CODE_VA=' + ('0x03000000u' if a.mirror_code else '0'),
+                   '-DSWEET_CSF_MIRROR_CODE_VA=' +
+                   ('0x06040000u' if a.build_id == 0x2404 else
+                    '0x03000000u' if a.mirror_code else '0'),
                    '-DSWEET_CSF_SHARE_CODE_L3_VA=' +
                    ('0x03000000u' if a.build_id == 0x2403 else
                     '0x05000000u' if a.share_code_l3 else '0'),
                    '-DSWEET_CSF_LEAF_VA_LIST=' +
-                   ('{0x03000000u,0x03001000u,0x05001000u,0x01001000u}' if a.mirror_code else
+                   ('{0x0100e000u,0x0604e000u,0x01001000u,0x02000000u}'
+                    if a.build_id == 0x2404 else
+                    '{0x03000000u,0x03001000u,0x05001000u,0x01001000u}' if a.mirror_code else
                     '{0x0100e000u,0x0300e000u,0x01001000u,0x02000000u}' if a.build_id == 0x2403 else
                     '{0x01000000u,0x01001000u,0x0100e000u,0x0100f000u}'),
                    '-DSWEET_CSF_LEAF_PROBE=' + ('1' if a.build_id in LEAF_PROBE_BUILDS else '0'),
@@ -2338,7 +2409,10 @@ def build(a):
         # still fails closed.
         # 2403 lands one page higher, like 2399 and 2401: every build that
         # writes a second L2 slot gets an extra table page from the plan.
-        expected_arena = 0x78000 if a.build_id in (0x2399, 0x2401, 0x2403) else 0x77000
+        # 2404 mirrors the section but does not alias L2, so it lands on 2402's
+        # arena; only mirror+share (2401) or share alone (2403) push a page on.
+        expected_arena = (0x78000 if a.build_id in (0x2399, 0x2401, 0x2403)
+                          else 0x77000)
         if arena != expected_arena:
             raise ValueError('fault probe builds must keep their measured pre-probe arena '
                              'placement (expected %#x, got %#x)' % (expected_arena, arena))
@@ -2363,6 +2437,10 @@ def build(a):
             if a.build_id == 0x2402:
                 for name in ('tools/matisse-csf-fault-entry-e3.S',
                              'tools/matisse-csf-ladder2402.S'):
+                    info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
+            if a.build_id == 0x2404:
+                for name in ('tools/matisse-csf-fault-entry-e3.S',
+                             'tools/matisse-csf-ladder2404.S'):
                     info['trace_probe']['source_sha256'][name] = digest((ROOT / name).read_bytes())
             if a.build_id == 0x2403:
                 for name in ('tools/matisse-csf-fault-entry-e3.S',
@@ -2431,7 +2509,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',

@@ -123,7 +123,7 @@ def check_access(arena, root_pa, va, size, operation, unprivileged=False):
 
 def build_arena(firmware, arena_pa, compiler='cc', memory_group=0, entry_probe=False,
                 inline_entry=False, relocate_code=False, mirror_code=False, share_code_l3=False,
-                share_va=0x05000000, uncached_page=0, vendor=False):
+                share_va=0x05000000, mirror_va=0x03000000, uncached_page=0, vendor=False):
     if not isinstance(memory_group, int) or not 0 <= memory_group <= 15:
         raise ValueError('memory group must fit four bits')
     with tempfile.TemporaryDirectory(prefix='csf-fetch-') as tmp:
@@ -132,7 +132,7 @@ def build_arena(firmware, arena_pa, compiler='cc', memory_group=0, entry_probe=F
         source.write_text(HOST_BUILDER)
         defines = ['-DSWEET_CSF_RELOCATE_CODE=1'] if relocate_code else []
         if mirror_code:
-            defines.append('-DSWEET_CSF_MIRROR_CODE_VA=0x03000000u')
+            defines.append('-DSWEET_CSF_MIRROR_CODE_VA=%#xu' % mirror_va)
         if share_code_l3:
             defines.append('-DSWEET_CSF_SHARE_CODE_L3_VA=%#xu' % share_va)
         if uncached_page:

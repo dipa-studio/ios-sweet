@@ -744,6 +744,53 @@ class ReportDecodeTests(unittest.TestCase):
     LEAVES_2403 = (0x00000000401b34c3, 0x00000000401b34c3,
                    0x00000000401a64d7, 0x0060000040091443)
 
+    # 2404: code page at 0x401C3000, the mirror's copy of it at 0x401B3000, the
+    # uncached page, and the stack page for reference.
+    LEAVES_2404 = (0x00000000401C34C3, 0x00000000401B34C3,
+                   0x00000000401B64D7, 0x0060000040091443)
+
+    def test_2404_asks_whether_the_walk_survives_bit9(self):
+        """2404: a descriptor fetch at PA bit 9 = 1, then the store direction."""
+        csf = self.cold_report(build=0x2404, input_va=2,
+                               firmware_probe_pa_lo=0x401C3000,
+                               output_va=0x0F10F857, leaf=self.LEAVES_2404)['csf']
+        self.assertTrue(csf['mirror_applied'])
+        self.assertTrue(csf['value_verified'])
+        self.assertEqual(csf['cold_boot_outcome'], 'walk-dies-at-bit9')
+        self.assertIn('dead for the MMU too', csf['instrument_verdict'])
+
+        for marker, outcome in ((1, 'baseline-stalls'), (3, 'store-stalls'),
+                                (4, 'store-lands-read-hangs'), (5, 'all-returned')):
+            csf = self.cold_report(build=0x2404, input_va=marker,
+                                   firmware_probe_pa_lo=0x401C3000,
+                                   output_va=0x5A5A5A5A if marker == 5 else 0x0F10F857,
+                                   leaf=self.LEAVES_2404)['csf']
+            self.assertEqual(csf['cold_boot_outcome'], outcome, marker)
+
+        csf = self.cold_report(build=0x2404, input_va=5,
+                               firmware_probe_pa_lo=0x401C3000,
+                               output_va=0x5A5A5A5A, leaf=self.LEAVES_2404)['csf']
+        self.assertTrue(csf['store_verified'])
+        self.assertNotIn('WARNING', csf['instrument_verdict'])
+
+        # The store completed but the data did not land: the decoder must say so.
+        csf = self.cold_report(build=0x2404, input_va=5,
+                               firmware_probe_pa_lo=0x401C3000,
+                               output_va=0x00000000, leaf=self.LEAVES_2404)['csf']
+        self.assertFalse(csf['store_verified'])
+        self.assertIn('WARNING', csf['instrument_verdict'])
+
+        # A mirror leaf that names the code page instead of a copy: read 2 asked
+        # nothing, and the run must not be read as a walk result.
+        split = (self.LEAVES_2404[0], self.LEAVES_2404[0],
+                 self.LEAVES_2404[2], self.LEAVES_2404[3])
+        csf = self.cold_report(build=0x2404, input_va=2,
+                               firmware_probe_pa_lo=0x401C3000,
+                               output_va=0x0F10F857, leaf=split)['csf']
+        self.assertFalse(csf['mirror_applied'])
+        self.assertEqual(csf['cold_boot_outcome'], 'mirror-not-applied')
+        self.assertFalse(csf['cold_boot_marker_present'])
+
     def test_2403_alias_splits_the_va_from_the_leaf(self):
         """2403: the same leaf and PA through a second VA, plus a data check."""
         csf = self.cold_report(build=0x2403, input_va=2,

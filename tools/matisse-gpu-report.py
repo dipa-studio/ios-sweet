@@ -126,7 +126,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -188,7 +188,9 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             # 2401 publishes the four descriptors that distinguish its three
             # windows: the mirror's own section and page, the shared-L3 alias,
             # and the original code page.
-            names = (('leaf_0x0100e000','leaf_0x0300e000',
+            names = (('leaf_0x0100e000','leaf_0x0604e000',
+                      'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2404 else
+                     ('leaf_0x0100e000','leaf_0x0300e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
                      ('leaf_0x03000000','leaf_0x03001000',
                       'leaf_0x05001000','leaf_0x01001000') if expected_build == 0x2401 else
@@ -1195,6 +1197,126 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                            'fault entry either (it would leave 0xE3 in input_va)' % csf['groups'])
             csf['cold_boot_outcome'] = outcome
             csf['instrument_verdict'] = verdict
+        if expected_build == 0x2404:
+            # The mirror sits at 0x06040000 so its L3 entries live at byte
+            # 0x200..0x278 of a fresh table page: reading the mirror needs a
+            # descriptor fetch at PA bit 9 = 1 while the access itself is at
+            # bit 9 = 0. Read 1 is the same word through the warm original.
+            csf['cold_boot_counter'] = csf['groups']
+            csf['relocation_observed'] = csf['firmware_probe_pa'] == 0x401C3000
+            csf['cold_boot_target'] = 0x0100E000
+            csf['cold_boot_ladder'] = {
+                '0x1': 'stopped reading 0x0100E400 (bit 9 = 0, warm translation)',
+                '0x2': 'stopped reading 0x0604E400: the walk needed a PA bit 9 = 1 descriptor',
+                '0x3': 'the mirror read returned; the store to 0x04000200 never completed',
+                '0x4': 'the store completed; the read back hung',
+                '0x5': 'every access returned, store included',
+                '0xe3': 'a Cortex-M7 fault entry ran; input_va carries 0xE3'}
+            code_leaf = csf.get('leaf_0x0100e000')
+            mirror_leaf = csf.get('leaf_0x0604e000')
+            page = 0x0000fffffffff000
+            csf['code_leaf'] = code_leaf
+            csf['mirror_leaf'] = mirror_leaf
+            # The mirror has to be a real second copy: its own physical page with
+            # the code page's own attribute bits, or read 2 asked nothing.
+            csf['mirror_applied'] = bool(
+                code_leaf is not None and mirror_leaf is not None and
+                (code_leaf & page) == 0x401C3000 and
+                (mirror_leaf & page) == 0x401B3000 and
+                (mirror_leaf & ~page) == (code_leaf & ~page))
+            marker = csf['input_va']
+            fault = marker == 0xE3
+            csf['m7_fault_taken'] = fault
+            if fault:
+                csf['m7_stacked_pc'] = csf['output_va']
+                csf['m7_cfsr'] = csf['group_stride']
+                csf['m7_cfsr_flags'] = cfsr_flags(csf['group_stride'])
+            csf['cold_boot_marker_present'] = (not fault) and marker in (1, 2, 3, 4, 5)
+            # shared+12 carries read 1, then read 2, then the read back - so the
+            # expected word depends on how far the ladder got.
+            csf['sampled_word'] = csf['output_va']
+            csf['sampled_word_expected'] = 0x0F10F857
+            csf['store_value'] = csf['output_va']
+            csf['store_verified'] = marker == 5 and csf['output_va'] == 0x5A5A5A5A
+            csf['value_verified'] = (marker in (1, 2, 3, 4) and
+                                     csf['output_va'] == 0x0F10F857)
+            if not csf['relocation_observed']:
+                outcome = 'not-relocated'
+                verdict = ('the executable probe PA is not 0x401c3000; this is not the mirror '
+                           'layout the run was built for')
+            elif csf['error'] == -54 or csf['mmu_raw'] & 0xffff or csf['as_fault']:
+                outcome = 'cold-boot-refused'
+                verdict = ('the MMU reported a fault before any marker appeared (AS_FAULT %#x at '
+                           '%#x); with read 2 still ahead of it, that is not the bit-9 walk' %
+                           (csf['as_fault'], csf['as_fault_hi'] << 32 | csf['as_fault_lo']))
+            elif fault:
+                outcome = 'm7-fault-taken'
+                csf['cold_boot_start'] = 'fault-0xe3'
+                verdict = ('the core took a synchronous fault at stacked PC %#x with CFSR %#x '
+                           '(%s). A walk that faults is a walk that read its descriptor: the '
+                           'MMU does reach PA bit 9 = 1, so the refusal is on the MCU access '
+                           'path and not on the address itself' %
+                           (csf['output_va'], csf['group_stride'],
+                            ', '.join(csf['m7_cfsr_flags']) or 'no named bit'))
+            elif not csf['mirror_applied']:
+                outcome = 'mirror-not-applied'
+                csf['cold_boot_marker_present'] = False
+                csf['cold_boot_start'] = None
+                verdict = ('the live leaves do not describe a second copy at 0x06040000 (code %s, '
+                           'mirror %s), so read 2 asked nothing about the walk' %
+                           (None if code_leaf is None else hex(code_leaf),
+                            None if mirror_leaf is None else hex(mirror_leaf)))
+            elif marker == 1:
+                outcome = 'baseline-stalls'
+                csf['cold_boot_start'] = 'code-0x0100E400'
+                verdict = ('the baseline read in the warm page stalled, which 2402 and 2403 both '
+                           'got right; this build changed more than the mirror and cannot be '
+                           'read against them')
+            elif marker == 2:
+                outcome = 'walk-dies-at-bit9'
+                csf['cold_boot_start'] = 'mirror-0x0604E400'
+                verdict = ('0x0100E400 returned and 0x0604E400 never did. The two reads name the '
+                           'same physical word through the same leaf encoding; the only new cost '
+                           'in the second one is a descriptor fetch at PA bit 9 = 1. The address '
+                           'is therefore dead for the MMU too, which puts the wall below the page '
+                           'table and above the DRAM: no leaf, attribute or VA can reach it')
+            elif marker == 3:
+                outcome = 'store-stalls'
+                csf['cold_boot_start'] = 'store-0x04000200'
+                verdict = ('the mirror read returned - so the MMU does read PA bit 9 = 1 - and the '
+                           'store to 0x04000200 never completed. Writes and reads both die there, '
+                           'which is an address decode or routing fault, not a read-response one. '
+                           'The remaining lead is the GPU L2 slice select (0x48 HASH / ASN_HASH)')
+            elif marker == 4:
+                outcome = 'store-lands-read-hangs'
+                csf['cold_boot_start'] = 'read-back-0x04000200'
+                verdict = ('the store to 0x04000200 completed and the read back hung. The address '
+                           'decodes and accepts writes on both sides of bit 9; only the read '
+                           'response never arrives, so this is a read path bug with a different '
+                           'owner than the store path')
+            elif marker == 5:
+                outcome = 'all-returned'
+                csf['cold_boot_start'] = 'all-returned'
+                verdict = ('every access returned, the read back included, and shared+12 holds %#x. '
+                           '2402\'s stall did not reproduce in this build, so the trigger is in '
+                           'something this build changed rather than in bit 9 alone' %
+                           csf['output_va'])
+            else:
+                outcome = 'no-marker'
+                csf['cold_boot_start'] = None
+                verdict = ('the core never wrote a marker, so 0x0100E000 did not start; check the '
+                           'entry leaf and the fault entry before reading anything into it. '
+                           'groups = %#x' % csf['groups'])
+            if csf['cold_boot_marker_present'] and marker in (1, 2, 3, 4) and not csf['value_verified']:
+                csf['instrument_verdict'] = verdict + (' WARNING: shared+12 is %#x, not the vendor '
+                    'word 0x0f10f857, so the read that returned did not return the right bytes' %
+                    csf['output_va'])
+            elif marker == 5 and not csf['store_verified']:
+                csf['instrument_verdict'] = verdict + (' WARNING: shared+12 is %#x, not 0x5a5a5a5a, '
+                    'so the store completed without its data landing' % csf['output_va'])
+            else:
+                csf['instrument_verdict'] = verdict
+            csf['cold_boot_outcome'] = outcome
         if expected_build == 0x2403:
             # 2402's page, plus an L2 alias: slot 24 carries slot 8's entry, so
             # 0x0300E200 walks the identical L3 page, leaf and physical word as
@@ -2389,7 +2511,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('marks',type=Path)
     p.add_argument('--build',type=lambda s:int(s,0),default=0x2321,
-                   help='expected kernel/report build (0x2321 through 0x2403)')
+                   help='expected kernel/report build (0x2321 through 0x2404)')
     p.add_argument('--allow-missing-leaf',action='store_true',
                    help='decode a build >=0x2388 whose image shipped without the '
                         'sweet-csf-leaf property (2389 did); leaf fields stay absent')

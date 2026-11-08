@@ -2088,3 +2088,61 @@ fastboot 85.6 s; the runner completed its own restore this time
 boot_a restored and verified 2931647a...86b1
 289 tests / 3 skipped
 ```
+
+
+## 53. 2404 built: force the page walk to read a descriptor at PA bit 9 = 1
+
+2402 and 2403 left one invariate: every MCU access with address bit 9 = 1 hangs,
+every access at bit 9 = 0 returns correct data. Either the address is dead for the
+whole GPU side, or the defect is confined to the MCU's own fetches and loads. The
+only way to tell is to make hardware that is *not* the MCU read at bit 9 = 1, and
+the page walk is such a reader.
+
+**A descriptor has an address too.** Mirroring the executable section at
+`0x06040000` puts `L2[48]` at table offset `0x180` (bit 9 = 0) and lands the
+section's 16 pages on L3 indices `0x40..0x4F`, i.e. byte offsets `0x200..0x278` of
+a fresh table page. Every one of those has PA bit 9 = 1. Reading `0x0604E400` then
+costs a cold walk whose final descriptor fetch is at bit 9 = 1, while the access
+itself is VA bit 9 = 0, PA bit 9 = 0 (`0x401b3400`), and names the same word as
+`0x0100E400`.
+
+`0x08000000` was rejected as the base. The Cortex-M7 window decoders on this family
+are documented as owning `0x08000000..0x3FFFFFFF`, and a mis-decode there produces
+exactly the symptom under test - no marker at all - which would have been read as
+"the walk died". Staying below `0x08000000` removes the ambiguity for free.
+
+**The leaf must be valid.** An unmapped entry faults as soon as the walk succeeds,
+ending the run before the store test, and the store direction is the one thing
+nobody has measured.
+
+| marker | access | bit 9 | why |
+|---|---|---|---|
+| 1 | read `0x0100E400` | 0 | warm translation; word must be `0x0f10f857` |
+| 2 | read `0x0604E400` | descriptor 1 | the walk question |
+| 3 | store `0x5a5a5a5a` -> `0x04000200` + `DSB SY` | 1 | first write anyone has issued there |
+| 4 | read `0x04000200` | 1 | read-after-write |
+| 5 | - | - | everything returned |
+
+The `DSB` is not optional: a normal non-cacheable store is posted, so without it
+marker 3 would appear whether or not the write ever reached AXI. Every read stores
+its word to `shared+12`; `shared+16` is the `groups` counter and `shared+20` is
+`group_stride`, which the decoder checks as a length, so a `0x5a5a5a5a` word there
+would have thrown the run away.
+
+| item | value |
+|---|---|
+| image | `3c58fb31...cecd`, 26,714,112 B, arena `0x77000` |
+| kernel | `04110196...a281`, `SWEET_BUILD_ID 0x2404`, patch 0200 |
+| section | `0x401b5000`; probe VA `0x0100E000` -> `0x401c3000` |
+| mirror | `0x401a5000`; entry `0x0604E000` -> `0x401b3000` |
+| leaves | `0x30000000401c34c3`, `0x30000000401b34c3`, `0x30000000401b64d7` |
+| ladder | 88 B, `tools/matisse-csf-ladder2404.S` |
+| tests | 292 ran, 3 skipped |
+
+Readings: `2` => the wall is below the page table and above DRAM; `3` => both
+directions die, an address decode fault; `4` => writes land and only the read
+response is missing; `5` with `shared+12 = 0x5a5a5a5a` => the block heals once
+written; `0xe3` => a synchronous fault, which itself proves the walk completed.
+
+Built, unit-tested, statically verified and preflighted, **not flown**. `boot_a` is
+`2931647a...86b1`.

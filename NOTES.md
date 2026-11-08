@@ -1,6 +1,66 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 12:21: 2403 RAN - THE VA PREFIX IS OUT; THE WALL IS THE ADDRESS BIT ITSELF <<<
+## >>> ACTIVE 2026-11-08 12:45: 2404 BUILT - CAN THE MMU READ A DESCRIPTOR AT PA BIT 9 = 1? <<<
+
+**The one question that decides whether the address is unfixable.** 2401..2403 left
+a single invariate: every MCU access with address bit 9 = 1 hangs and every access
+with bit 9 = 0 returns correct data. That is either an address that is dead for
+the whole GPU side, or a defect confined to the MCU's own fetches and loads. 2404
+separates the two by making the *page walk* read a descriptor at bit 9 = 1.
+
+**Why 0x06040000.** A descriptor's position is an address too. With the executable
+section mirrored at `0x06040000`, `L2[48]` sits at table offset `0x180` (bit 9 = 0)
+and the mirror's fresh L3 page holds the 64 KiB section at indices `0x40..0x4F`,
+i.e. byte offsets `0x200..0x278` - every one of them PA bit 9 = 1. Reading
+`0x0604E400` needs a cold walk that fetches its last descriptor at bit 9 = 1, while
+the access itself is VA bit 9 = 0 and PA bit 9 = 0 (`0x401b3400`) and names the very
+same word as `0x0100E400`.
+
+`0x08000000` was rejected as the mirror base: the Cortex-M7 window decoders on this
+family are documented as taking over `0x08000000..0x3FFFFFFF`, and a mis-decode
+there would look exactly like a hang. Everything stays below `0x08000000`.
+
+**The leaf is valid on purpose.** An unmapped entry would fault the moment the walk
+succeeded and end the run, throwing away reads 3 and 4 - and those are the only
+measurements of the store direction anyone has.
+
+```
+marker 1  read  0x0100E400   bit9 0, warm        the word must be 0x0f10f857
+marker 2  read  0x0604E400   bit9 1 descriptor   the same word, cold walk
+marker 3  store 0x5a5a5a5a -> 0x04000200 (bit9 1) + DSB SY
+marker 4  read  0x04000200   bit9 1             read-after-write
+marker 5  everything returned
+```
+
+Every read stores its word to `shared+12`. `shared+16` is the `groups` counter and
+`shared+20` is `group_stride`, which the decoder validates as a length - a
+`0x5a5a5a5a` there would have made it reject a perfectly good run.
+
+| item | value |
+|---|---|
+| image | `3c58fb31...cecd`, 26,714,112 B, arena `0x77000` |
+| kernel | `04110196...a281`, `SWEET_BUILD_ID 0x2404`, patch 0200 |
+| relocated | section `0x401b5000`, probe VA `0x0100E000` -> `0x401c3000` |
+| mirror | section `0x401a5000`, entry `0x0604E000` -> `0x401b3000` |
+| leaves | `0x30000000401c34c3` / `0x30000000401b34c3` / `0x30000000401b64d7` |
+| ladder | 88 B, `tools/matisse-csf-ladder2404.S`, 4-byte aligned |
+| container | 130 B changed vs 2403: vector word + 88 B at `0x0100E000` |
+| tests | 292 ran, 3 skipped |
+
+Readings: `input_va = 1` the build is wrong. `2` the walk died on a bit 9 = 1
+descriptor => the address is dead below the page table and no leaf, attribute or VA
+can reach it; the next lead is the GPU L2 slice select (`0x48` HASH / `ASN_HASH`).
+`3` the walk returned and the store did not => both directions die, an address
+decode fault. `4` the store completed and the read back hung => the address decodes
+and accepts writes, only the read response is missing. `5` with `shared+12 =
+0x5a5a5a5a` => the block heals once written. `0xe3` a synchronous fault, stacked PC
+in `output_va`, CFSR in `group_stride`.
+
+**Status: built, unit-tested, statically verified, preflight passed; not flown.**
+`boot_a` is `2931647a...86b1`; the partition hash after writing this image is
+`abc9a9ce...a11a`.
+
+## >>> PREVIOUS 2026-11-08 12:21: 2403 RAN - THE VA PREFIX IS OUT; THE WALL IS THE ADDRESS BIT ITSELF <<<
 
 **RESULT: `input_va = 2`.** One read returned, the second never did:
 
