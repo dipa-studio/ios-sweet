@@ -2762,3 +2762,51 @@ Build: image `c8d0b033...b233`, payload `a72b45cc...9083`, kernel
 `c01dcbea...d5ea`, arena `0x40078000`, code `0x401a5000`, 303 tests.
 **Not flown** - 2410 already cost one boot, and the next flash is a separate
 decision.
+
+## 64. 2411: the first controlled answer - a write at bit 9 = 1 stalls too
+
+2411 was built to ask whether a page past the arena answers. It answered a
+different question first, and that answer is the cleanest one this series has
+produced.
+
+**What the ladder did.** Marker 1 was written, then the MCU read `0x0100C400` -
+an untouched firmware leaf into the arena, tag 6, PA `0x401b1400` (bit 9 = 0).
+It returned `0xb001500c`, which is exactly the word the firmware carries at VA
+`0x0100C400` (container offset `0xd294`), and that word landed in `shared+0x0c`.
+The next instruction stores the same word to `shared+0x200`, and marker 2 never
+appears: `input_va` = 1, `mcu_status` = 1 (enabled, not halted).
+
+**Why that is an answer and not a failure.** Between the word landing at
+`shared+0x0c` and the missing marker there is exactly one memory access:
+
+| access | address | bit 9 | outcome |
+|---|---|---|---|
+| result store | `0x0400000c` | 0 | landed |
+| result store | `0x04000200` | 1 | never returned |
+
+Same page, same mapping, same tag, same instruction, one address bit apart. So
+the wall is not a read-side property: **a write at bit 9 = 1 stalls exactly like
+a read**, and it does so in a third VA range (`0x04000000`, the shared section)
+that has nothing to do with the code pages every earlier build probed.
+
+It also explains a piece of the series' history. `2405`'s ladder contains that
+same store as its marker 3 ("first write at bit 9 = 1"), and 2405 through 2408
+all stopped at their read 2 before reaching it. 2411 is the first build that ever
+executed it, and it behaved exactly as the bit-9 rule predicts.
+
+**Two corrections to the record came out of this run.** The decoder rejected the
+control leaf because it bounded the arena at 1 MiB; the arena is 2 MiB, and a
+leaf at `0x401b1000` was called "not in the arena". It now uses 0x200000, and the
+2411 capture re-decodes as `ooa_remap_observed: true`, `cold_boot_outcome:
+write-at-bit9-stalled` - not `remap-not-applied`.
+
+**2412 is 2411 minus that store.** One result word at `shared+0x0c` and no other
+slot, because every extra slot is another chance to hang the core between two
+markers for a reason that is not the question. Nothing else changes: the same
+remapped leaf (`0x0100D000` -> `0x40279000`, tag 6), the same arena control leaf
+at `0x0100C000`, the same three reads.
+
+Build: image `333acd79...a3e72`, payload `156b7f6c...2e9d`, kernel
+`c01dcbea...d5ea`, arena `0x40078000`, code `0x401a5000`, 303 tests. Runner
+`shim2412-ooa4-trials-run-once.py`, partition hash `28a0b698...7fc1`.
+**Not flown.**

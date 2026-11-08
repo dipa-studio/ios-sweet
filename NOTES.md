@@ -1,6 +1,33 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 15:20: 2410 CRASHED THE BOOT; 2411 REMOVES THE FAR PAGE <<<
+## >>> ACTIVE 2026-11-08 15:35: 2411 ANSWERED - A WRITE AT BIT 9 = 1 STALLS TOO; 2412 IS THAT MINUS THE STORE <<<
+
+2411 did not reach its question, and what stopped it is the cleanest result of
+the series. Marker 1 landed, the MCU read `0x0100C400` - an **untouched** firmware
+leaf into the arena, tag 6, PA `0x401b1400`, bit 9 = 0 - and got `0xb001500c`,
+which is exactly the word the container carries at VA `0x0100C400`
+(offset `0xd294`). That word landed at `shared+0x0c`. The next instruction
+stores the same word to `shared+0x200`, and marker 2 never appears
+(`input_va` 1, `mcu_status` 1 = enabled, not halted).
+
+Between the landing word and the missing marker there is one access:
+`shared+0x0c` (bit 9 = 0) landed, `shared+0x200` (bit 9 = 1) never returned.
+Same page, same mapping, same tag, same instruction. **A write at bit 9 = 1
+stalls exactly like a read**, in a third VA range (the shared section). 2405's
+ladder has that store as its marker 3 and 2405..2408 all stopped before it, so
+2411 is the first build that ever executed it.
+
+Decoder fixes this run forced: the arena bound was 1 MiB and rejected a control
+leaf at `0x401b1000`; it is 2 MiB now, and 2411 re-decodes as
+`ooa_remap_observed: true`, `cold_boot_outcome: write-at-bit9-stalled`.
+
+**2412 is 2411 minus that store**: one result word at `shared+0x0c`, no other
+slot, everything else identical (0x0100D000 -> 0x40279000 tag 6, 0x0100C000
+control leaf, three reads). Image `333acd79...a3e72`, payload `156b7f6c...2e9d`,
+303 tests, runner `shim2412-ooa4-trials-run-once.py` (`28a0b698...7fc1`).
+**Not flown**, `boot_a` back to `2931647a...86b1`.
+
+## >>> PREVIOUS 2026-11-08 15:20: 2410 CRASHED THE BOOT; 2411 REMOVES THE FAR PAGE <<<
 
 **2410 did not publish anything.** `after-marks.bin` is byte-identical to
 `before-marks.bin` (`9e1bdb11...`), and that content is 2409's report - the

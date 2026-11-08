@@ -36,7 +36,7 @@
  * witness dereferenced LK's GPU firmware allocation and the shim died before it
  * could hand the report back, so that build answered nothing.
  *
- * The page is written with 0x2411a400 at +0x400 and 0x2411a200 at +0x200, so
+ * The page is written with 0x2412a400 at +0x400 and 0x2412a200 at +0x200, so
  * the word the MCU returns names the offset by itself. 0x0100C000 keeps the
  * firmware's own leaf into the arena and serves as the instrument control.
  */
@@ -132,8 +132,8 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
      *the arena and proves the instrument works before the new page is asked. */
     uint64_t pa_near=(uint64_t)(uintptr_t)ooa_near;
     struct sweet_csf_remap remaps[1]={{0x0100D000u,pa_near,SWEET_CSF_LEAF_GROUP}};
-    ((volatile uint32_t *)ooa_near)[0x400/4]=0x2411a400u;
-    ((volatile uint32_t *)ooa_near)[0x200/4]=0x2411a200u;
+    ((volatile uint32_t *)ooa_near)[0x400/4]=0x2412a400u;
+    ((volatile uint32_t *)ooa_near)[0x200/4]=0x2412a200u;
     /* Fail closed rather than fly a page whose backing is unknown. */
     if(!pa_near||(pa_near&4095)||(pa_near>=pa&&pa_near<pa+sizeof(arena))) {
         shim_csf_report.error=SWEET_CSF_BOOT_ARGUMENT;return shim_csf_report.error;
