@@ -1,29 +1,32 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: GLES USERSPACE BUILD COMPLETE; ROOT EXPORT IN PROGRESS <<<
+## >>> ACTIVE 2026-11-09: GLES2427 PREPARED; ADDITIVE ROOT DELTA PREFLIGHT <<<
 
-Latest user asks to choose PanVK versus OpenGL ES. Selected native GLES first:
-EAGL -> Mesa Gallium -> IOSurface, later G710 CSF KMD. PanVK is Vulkan; Zink
-would add another translation layer. Hardware acceleration remains unimplemented.
-Pinned hakios-mt6768 84b025233e7350f3549ec5b8eb330fd74b4602f4 and common mtk
-620c77507a17ad23ac5a40bad900abe9ed4d7740 under ignored 20261109-hakios/.
-Common tree DOES contain the rendering userspace, unlike device-only repo.
-Its Darwin panfrost patch hardcodes G52/v7 and JM; cannot copy to G710/CSF.
+GLES userspace buildf52013f plus EAGL API3 test completed. Mesa25.0.7 softpipe,
+HakiOS common mtk620c775...7740, device84b0252...02f4; source manifest under
+research/matisse/20261109-hakios/. Selected native GLES as first path; PanVK
+is a later Vulkan path. G52/v7/JM hardware code cannot be used for G710/CSF.
+Probe executes2 shaders/4 draws/8 pixel checks/4 IOSurface swaps and then
+EAGL API3 macro-table readback (9th pixel check). No hardware claim.
+Both iOS dylibs and probe cross-compiled/codesigned; display ASan/UBSan test
+passed. No new kernel/CI. Kernel2316 e25c06b0...857269 reused.
 
-Built Mesa25.0.7 (verified592272df...0f8a6), ONLY OSMesa ES-profile patch,
-softpipe arm64-apple-ios16.0 using local Xcode16.4/iOS18.5 SDK. Built the
-HakiOS EAGL bridge:409 slots (356 forwarded,30 manual,23 unavailable).
-Added tools/build-sweet-gles.py and userland/gles-probe.c. Probe renders real
-GLES shaders, reads/checks8 pixels, then submits4 IOSurface frames at native
-canvas. No device execution yet. No performance/GPU/GUI success claim.
+Live16GiB root exported SHA132a4cbe0f654073208dd2a9c46638b02643d1e53f57119b1f75716d582eab01.
+APFS clone native HFS journal replay +3 new files, no existing file content
+edits. Offline fsck_hfs -fn exit0, volume OK. Edited image SHA
+cb39abd0b0f1b78d627cc845056617406d472bf066fc575dffa7536bec3d4751.
+Delta184 coalesced runs/86568960B, includes verified unchanged gaps and native
+journal/metadata updates. Complete preimages retained in root-delta-gles-packed/.
+Read-only delta preflight running; NO device root writes/boot yet.
 
-Read-only16GiB live root export running to research/matisse/20261109-hakios/
-live-root-before.dmg. Plan additive reversible library/probe installation via
-native HFS journal replay and verified delta; keep original full preimage.
-Device Recovery/boot_a restored, no boot or device root writes in this phase yet.
-2427 image prepared using hardware-proven2316 kernel (no CI/kernel changes),
-launchdsuffix=gles-probe; image metadata in gles2427.json. Not booted.
-Need finish root export, install files, validate dependency/ABI, run probe,
-then test EAGL in backboardd. MCU/global2426 success remains intact below.
+2427 image0f1a4f89709354ab2f9310eca2165bfff4d7df750d3b95751cc9fee7865dd3fc,
+7073792B; launchdsuffix=gles-probe selects newly added
+/usr/appleinternal/sbin/launchd.gles-probe. rootrw=0/ufsrw=1: VFS read-only,
+persistent tail log writable. Device Recovery, full boot_a preflight verified
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Runner run-gles2427.py (new, not consumed); boot recovery mode (UI kernel,
+no CSF probe). Always restore full boot_a; follow journal, never blindly rerun.
+Next: apply verified additive delta, run2427, inspect pixels/FBIMG/EAGL ABI,
+then integrate opt-in EAGL into backboardd. MCU/global2426 remains verified.
 
 ## >>> PREVIOUS 2026-11-09: MCU/GLOBAL COMPLETE; USER REQUESTS HAKIOS USERSPACE RENDERING <<<
 

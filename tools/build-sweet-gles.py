@@ -8,7 +8,6 @@ Needs clang/SDK for iOS, ninja, bison >= 2.7 and Python meson/mako/packaging.
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -84,6 +83,10 @@ needs_exe_wrapper = true
             '--libdir=lib', '--buildtype=release', '-Db_ndebug=true'] +
             [f'-D{k.replace("_", "-")}={v}' for k, v in options.items()])
     run(['ninja', '-C', build, f'-j{a.jobs}'])
+    config = {v['name']: v['value'] for v in json.loads(
+        (build / 'meson-info/intro-buildoptions.json').read_text())}
+    if config['gallium-drivers'] != ['softpipe'] or config['vulkan-drivers'] != []:
+        ap.error('existing build directory is not the software validation profile')
     out = work / 'out'; out.mkdir(exist_ok=True)
     library = out / 'libOSMesa.8.dylib'
     shutil.copy2(build / 'src/gallium/targets/osmesa/libOSMesa.8.dylib', library)
@@ -107,12 +110,13 @@ needs_exe_wrapper = true
         'IOSurface', '-lobjc', str(library), '-o', str(out / 'libsweet-gles.dylib'),
         str(ref / 'userland/src/eagl.c'), str(ref / 'userland/src/gl_osmesa.c')])
     run(compiler + ['-O2', '-Wall', '-Wextra', '-I' + str(src / 'include'),
-        '-framework', 'CoreFoundation', '-framework', 'IOKit', '-framework', 'IOSurface',
+        '-framework', 'CoreFoundation', '-framework', 'IOKit', '-framework', 'IOSurface', '-lobjc',
         str(library), str(ROOT / 'userland/gles-probe.c'), '-o', str(out / 'gles-probe')])
     for p in out.iterdir():
         if p.suffix == '.dylib' or p.name == 'gles-probe':
             run(['codesign', '--force', '--sign', '-', p])
-    files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in out.iterdir() if p.is_file()}
+    files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in out.iterdir()
+             if p.is_file() and p.name != 'manifest.json'}
     (out / 'manifest.json').write_text(json.dumps(dict(
         hakios_commit=HAKIOS, mesa_version=MESA, mesa_archive_sha256=MESA_SHA,
         renderer='softpipe', target='arm64-apple-ios16.0', sdk=str(sdk),

@@ -9,6 +9,9 @@
 #include <mach/mach_time.h>
 #include <GL/osmesa.h>
 #include <GLES2/gl2.h>
+#include <dlfcn.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -127,6 +130,44 @@ static void expect(unsigned x, unsigned y, int r, int g, int b)
         fail("pixel mismatch", x << 16 | y);
 }
 
+static void eagl_probe(void)
+{
+    void *apple = dlopen("/System/Library/Frameworks/OpenGLES.framework/OpenGLES", RTLD_NOW | RTLD_LOCAL);
+    if (!apple) { printf("SWEET GLES: dlopen: %s\n", dlerror()); fail("OpenGLES", 0); }
+    /* Record the real 20H392 dispatch stubs before replacing Objective-C methods.
+     * The upstream slots describe 20F66: these bytes let us compare its ABI. */
+    const char *names[] = { "glClear", "glClearColor", "glDrawArrays", "glFinish", "glGetError", "glReadPixels" };
+    for (unsigned n = 0; n < sizeof(names) / sizeof(names[0]); n++) {
+        const uint32_t *code = dlsym(apple, names[n]);
+        if (!code) fail("Apple GL symbol", n);
+        printf("SWEET GLES: Apple %s", names[n]);
+        for (unsigned i = 0; i < 12; i++) printf(" %08x", code[i]);
+        printf("\n");
+    }
+    void *bridge = dlopen("/usr/local/sweet/lib/libsweet-gles.dylib", RTLD_NOW | RTLD_LOCAL);
+    if (!bridge) { printf("SWEET GLES: dlopen: %s\n", dlerror()); fail("EAGL bridge", 0); }
+    Class cls = objc_getClass("EAGLContext");
+    id object = ((id (*)(id, SEL))objc_msgSend)((id)cls, sel_registerName("alloc"));
+    object = ((id (*)(id, SEL, unsigned long, id))objc_msgSend)(object,
+        sel_registerName("initWithAPI:properties:"), 3, nil);
+    if (!object) fail("EAGL API3", 0);
+    void **table = ((void **(*)(id, SEL))objc_msgSend)(object, sel_registerName("getMacroContextPrivate"));
+    if (!table || !table[0]) fail("EAGL macro table", 0);
+    ((void (*)(void *, float, float, float, float))table[0x68 / 8])(table[0], .25f, .5f, .75f, 1);
+    ((void (*)(void *, unsigned))table[0x58 / 8])(table[0], GL_COLOR_BUFFER_BIT);
+    ((void (*)(void *))table[0x2d0 / 8])(table[0]);
+    unsigned char pixel[4] = {0};
+    ((void (*)(void *, int, int, int, int, unsigned, unsigned, void *))table[0x770 / 8])(
+        table[0], 8, 8, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    unsigned error = ((unsigned (*)(void *))table[0x338 / 8])(table[0]);
+    printf("SWEET GLES: EAGL API3 macro pixel=%u,%u,%u,%u error=0x%x\n",
+        pixel[0], pixel[1], pixel[2], pixel[3], error);
+    if (error || abs(pixel[0] - 64) > 2 || abs(pixel[1] - 128) > 2 || abs(pixel[2] - 191) > 2)
+        fail("EAGL macro pixel", error);
+    printf("SWEET GLES: EAGL bridge PASS\n");
+    ((void (*)(id, SEL))objc_msgSend)(object, sel_registerName("release"));
+}
+
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -172,7 +213,8 @@ int main(int argc, char **argv)
             frame == 1 ? 255 : 0, frame == 2 ? 127 : 0);
         present(frame);
     }
-    printf("SWEET GLES: PASS shaders=2 draws=4 pixel_checks=8 swaps=4 hardware_claim=0\n");
+    eagl_probe();
+    printf("SWEET GLES: PASS shaders=2 draws=4 pixel_checks=9 swaps=4 eagl_api=3 hardware_claim=0\n");
     sleep(8);
     if (getpid() == 1) { reboot(RB_AUTOBOOT); for (;;) sleep(1); }
     CFRelease(surface); IOServiceClose(fb); OSMesaDestroyContext(context);
