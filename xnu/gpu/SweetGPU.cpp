@@ -13,6 +13,7 @@
 extern "C" {
 #include "../../../bsd/dev/sweet_gpu_handoff.h"
 #include "../../../bsd/dev/mali_csf_queue.h"
+#include "../../../bsd/dev/mali_csf_runtime.h"
 vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 }
 
@@ -37,6 +38,7 @@ static void barrier(void *){__asm__ volatile("dsb sy" ::: "memory");}
 static uint64_t ticks(void *)
 {uint64_t t;__asm__ volatile("isb; mrs %0,cntpct_el0":"=r"(t));return t;}
 static struct sweet_gpu_io gpu_io;
+#include "SweetGPUVM.h"
 
 static int submit_compute(struct sweet_csf_queue_report *report=NULL)
 {
@@ -69,14 +71,69 @@ bool SweetGPU::start(IOService *provider)
 class SweetGPUUserClient : public IOUserClient {
     OSDeclareDefaultStructors(SweetGPUUserClient);
 public:
+    GPUVM *vm;
+    bool start(IOService *) APPLE_KEXT_OVERRIDE;
+    void free(void) APPLE_KEXT_OVERRIDE;
+    IOReturn clientMemoryForType(UInt32,IOOptionBits *,IOMemoryDescriptor **) APPLE_KEXT_OVERRIDE;
     IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
     IOReturn externalMethod(uint32_t,IOExternalMethodArguments *,IOExternalMethodDispatch *,OSObject *,void *) APPLE_KEXT_OVERRIDE;
 };
 OSDefineMetaClassAndStructors(SweetGPUUserClient,IOUserClient);
+bool SweetGPUUserClient::start(IOService *provider)
+{
+    vm=NULL;if(!IOUserClient::start(provider))return false;
+    IOLockLock(gpu_lock);if(ready)vm=gpu_vm_create();IOLockUnlock(gpu_lock);
+    IOLog("SWEET GPU: user client open AS=%u\n",vm?vm->as_nr:0);
+    return vm&&!vm->broken;
+}
+void SweetGPUUserClient::free(void)
+{
+    IOLockLock(gpu_lock);gpu_vm_destroy(vm);vm=NULL;IOLockUnlock(gpu_lock);IOUserClient::free();
+}
+IOReturn SweetGPUUserClient::clientMemoryForType(UInt32 type,IOOptionBits *options,IOMemoryDescriptor **memory)
+{
+    IOLockLock(gpu_lock);GPUBuffer *b=gpu_bo(vm,type);IOReturn rc=kIOReturnNotFound;
+    if(b&&!(b->flags&1)) {*memory=b->memory;(*memory)->retain();*options=kIOMapWriteCombineCache;rc=kIOReturnSuccess;}
+    IOLockUnlock(gpu_lock);return rc;
+}
 IOReturn SweetGPUUserClient::clientClose(void){terminate();return kIOReturnSuccess;}
 IOReturn SweetGPUUserClient::externalMethod(uint32_t selector,IOExternalMethodArguments *a,
     IOExternalMethodDispatch *,OSObject *,void *)
 {
+    if(selector>=SWEET_GPU_INFO&&selector<=SWEET_GPU_SUBMIT) {
+        if(!vm||!a||a->scalarInputCount||a->structureInputDescriptor||a->structureOutputDescriptor)
+            return kIOReturnBadArgument;
+        if(selector==SWEET_GPU_INFO) {
+            if(a->structureInputSize||!a->structureOutput||a->structureOutputSize<sizeof(sweet_gpu_info))
+                return kIOReturnBadArgument;
+            sweet_gpu_info info={};info.version=1;
+            const unsigned off[]={0,0x280,0x1c,4,0xc,0x10,0x14,0xac,0xa0,0xa4,0xa8,0x300,
+                0xb0,0xb4,0xb8,0xbc,0x18,0,0x100,0x104,0x120,0x124,0x110,0x114,8,0};
+            IOLockLock(gpu_lock);
+            for(unsigned i=0;i<26;i++)if(i!=17&&i!=25)info.gpu[i]=read_word(NULL,handoff.gpu+off[i]);
+            uint32_t cs=read_word(NULL,handoff.shared_pa+0x1040);
+            info.cs[0]=SWEET_CSF_GROUPS;info.cs[1]=1;info.cs[2]=(cs&255)+1;
+            info.cs[3]=(cs>>8)&255;info.cs[4]=4;
+            IOLockUnlock(gpu_lock);
+            memcpy(a->structureOutput,&info,sizeof(info));a->structureOutputSize=sizeof(info);return kIOReturnSuccess;
+        }
+        union {sweet_gpu_bo bo;sweet_gpu_map map;sweet_gpu_group group;sweet_gpu_submit submit;} r;
+        size_t size=selector==SWEET_GPU_VM_MAP?sizeof(r.map):selector==SWEET_GPU_SUBMIT?sizeof(r.submit):
+            (selector==SWEET_GPU_BO_CREATE?sizeof(r.bo):sizeof(r.group));
+        if(!a->structureInput||a->structureInputSize!=size||!a->structureOutput||a->structureOutputSize<size)
+            return kIOReturnBadArgument;
+        memcpy(&r,a->structureInput,size);IOLockLock(gpu_lock);
+        IOReturn rc=kIOReturnUnsupported;
+        switch(selector) {
+        case SWEET_GPU_BO_CREATE:rc=gpu_bo_create(vm,&r.bo);break;
+        case SWEET_GPU_BO_CLOSE:rc=gpu_bo_close(vm,r.group.handle);break;
+        case SWEET_GPU_VM_MAP:rc=gpu_vm_map(vm,&r.map);break;
+        case SWEET_GPU_GROUP_CREATE:rc=gpu_group_create(vm,&r.group);break;
+        case SWEET_GPU_GROUP_CLOSE:rc=gpu_group_close(vm,r.group.handle);break;
+        case SWEET_GPU_SUBMIT:rc=gpu_submit(vm,&r.submit);break;
+        }
+        memcpy(a->structureOutput,&r,size);a->structureOutputSize=size;IOLockUnlock(gpu_lock);return rc;
+    }
     if(!a||a->scalarInputCount||a->structureInputSize||a->structureInputDescriptor)
         return kIOReturnBadArgument;
     if(selector==0) {
@@ -87,12 +144,64 @@ IOReturn SweetGPUUserClient::externalMethod(uint32_t selector,IOExternalMethodAr
         a->scalarOutputCount=4;IOLockUnlock(gpu_lock);return kIOReturnSuccess;
     }
     if(selector==1) {
-        if(!a->structureOutput||a->structureOutputSize<sizeof(last_report))return kIOReturnBadArgument;
-        int rc=submit_compute((struct sweet_csf_queue_report *)a->structureOutput);
-        a->structureOutputSize=sizeof(last_report);
-        return rc?kIOReturnIOError:kIOReturnSuccess;
+        /* The old diagnostic owns AS1 and all scratch memory. Once clients
+         * have VMs, it cannot run alongside their persistent groups. */
+        return kIOReturnUnsupported;
     }
     return kIOReturnUnsupported;
+}
+
+static bool resident_vm_test(void)
+{
+    /* Real allocated BOs and a root with no firmware mappings. Rebind the
+     * SAME VA to another BO halfway through, and wrap the ring twice. */
+    GPUVM *v=gpu_vm_create();if(!v||v->broken){gpu_vm_destroy(v);return false;}
+    sweet_gpu_bo bo[2]={{0x10000,0,0},{0x10000,0,0}};
+    sweet_gpu_group group={};bool ok=true;
+    for(unsigned i=0;i<2;i++)if(gpu_bo_create(v,&bo[i])!=kIOReturnSuccess)ok=false;
+    const uint64_t va=0x10000000;
+    sweet_gpu_map map={bo[0].handle,0,0,va,0x10000};
+    if(ok&&gpu_vm_map(v,&map)!=kIOReturnSuccess)ok=false;
+    if(ok&&gpu_group_create(v,&group)!=kIOReturnSuccess)ok=false;
+    unsigned completed=0;
+    for(unsigned i=0;i<70&&ok;i++) {
+        if(i==35) {
+            map.flags=1u<<28;if(gpu_vm_map(v,&map)!=kIOReturnSuccess){ok=false;break;}
+            map.flags=0;map.handle=bo[1].handle;
+            if(gpu_vm_map(v,&map)!=kIOReturnSuccess){ok=false;break;}
+        }
+        IOBufferMemoryDescriptor *m=OSDynamicCast(IOBufferMemoryDescriptor,gpu_bo(v,map.handle)->memory);
+        volatile uint64_t *p=(volatile uint64_t *)m->getBytesNoCopy();
+        uint32_t tag=0x24380000+i;
+        p[0x4000/8]=UINT64_C(0x0110c000000000c0)|((va+0x3000)<<8);
+        p[0x4008/8]=UINT64_C(0x0110c100000000c0);
+        p[0x4010/8]=UINT64_C(0x0110c200000000c0)|((uint64_t)tag<<8);
+        p[0x4018/8]=UINT64_C(0x7861420218000040);
+        p[0x5000/8]=0x80000018;p[0x5008/8]=va+0x4000;p[0x6000/8]=31ull<<32;
+        p[0x3000/8]=0xdeadbeef;
+        const uint64_t init[]={
+            UINT64_C(0x2200000000000001),UINT64_C(0x1700000000000002),
+            UINT64_C(0x0100000000000000),UINT64_C(0x0108000000000000),
+            UINT64_C(0x0110000000000000)|(va+0x5000),UINT64_C(0x0118000000000000)|(va+0x6000),
+            UINT64_C(0x0220000000000000),UINT64_C(0x0221000000000000),
+            UINT64_C(0x0222000000000000),UINT64_C(0x0223000000000000),
+            UINT64_C(0x0224000000000000),UINT64_C(0x0225000000000001),
+            UINT64_C(0x0226000000000001),UINT64_C(0x0227000000000001),
+            UINT64_C(0x0400000000008001),UINT64_C(0x0300000000ff0000),
+            UINT64_C(0x2200000000000000)};
+        const uint64_t again[]={UINT64_C(0x2200000000000001),UINT64_C(0x0400000000008001),
+            UINT64_C(0x0300000000ff0000),UINT64_C(0x2200000000000000)};
+        const uint64_t *words=i?again:init;unsigned count=i?4:17;
+        for(unsigned k=0;k<count;k++)p[k]=words[k];barrier(NULL);
+        sweet_gpu_submit s={group.handle,count*8,va,0};
+        ok=gpu_submit(v,&s)==kIOReturnSuccess&&p[0x3000/8]==tag;
+        if(ok)completed++;
+        else IOLog("SWEET GPU: VM test failed i=%u actual=%llx expected=%x\n",i,p[0x3000/8],tag);
+    }
+    IOLog("SWEET GPU: VM test completed=%u/70 root=%llx firmware_root=%llx tables=%u remap=%u ring_wraps=%u\n",
+        completed,v->pt[0].pa,handoff.root_pa,v->tables,completed>35,completed/32);
+    if(group.handle&&gpu_group_close(v,group.handle)!=kIOReturnSuccess)ok=false;
+    gpu_vm_destroy(v);return ok;
 }
 
 static void resident_worker(void *arg,wait_result_t)
@@ -102,6 +211,9 @@ static void resident_worker(void *arg,wait_result_t)
         if(submit_compute())break;
         IOSleep(20);
     }
+    IOLockLock(gpu_lock);
+    if(ready&&!resident_vm_test()){ready=0;IOLog("SWEET GPU: VM selftest failed\n");}
+    IOLockUnlock(gpu_lock);
     if(ready) {
         SweetGPU *gpu=OSTypeAlloc(SweetGPU);
         if(gpu&&gpu->init()&&gpu->attach(provider)&&gpu->start(provider))

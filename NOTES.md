@@ -1,5 +1,21 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2437 RESIDENT XNU GPU VERIFIED <<<
+## >>> ACTIVE 2026-11-09: 2438 BO/VM/PERSISTENT CSF TEST READY <<<
+
+2437 resident ownership is verified below.2438 now adds per-client AS/root,
+IOBuffer BOs, GPU mappings, persistent CSF groups and synchronous CALL/fence
+submissions. Native selftest makes70 shader submissions, remaps the same VA
+from BO1 to BO2 at35, and wraps the4KiB ring twice. No Mesa hardware result yet.
+Local full kernel build-v2 exit0; kernel2eafef5757ed6db22e822ed47b091d7d56645b04b301ee192945c1923bf2e706,
+16768544B; actual runtime_submit symbol checked. Image4a5003dea27ae084ab6a3c4f8440d9e94fd2d79127fb21a810de7b023f134e11,26734592B.
+6 targeted tests PASS including actual runtime C with100 interpreted submissions,
+register persistence, ring wraps, timeout/fault paths under ASan/UBSan.
+0208 reverse/replay checked. New shim2438-vm-run-once.py prepared, not run yet.
+Check its gpu-normal/journal.json before device actions. Device Recovery,2437
+fully restored; no root changes. Mesa hardware build in progress separately:
+tools/build-sweet-panfrost.py + userland/sweet-panthor-drm.c, hardware required;
+not built/tested yet. Uses G710 v10, not HakiOS's v7/JM transport.
+
+## >>> PREVIOUS 2026-11-09: 2437 RESIDENT XNU GPU VERIFIED <<<
 
 Source1960662.2437 normal boot retained MCU/power successfully. Native XNU
 SweetGPU submitted THREE real compute shaders: all rc0/stage7,
