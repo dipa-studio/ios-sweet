@@ -25,9 +25,12 @@ struct GPUVM {
 static uint32_t gpu_as_used=1,gpu_group_used;
 static IOBufferMemoryDescriptor *gpu_buffer_alloc(uint64_t size)
 {
+    gpu_checkpoint("buffer allocation begin",size);
     IOBufferMemoryDescriptor *m=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
         kIODirectionInOut|kIOMemoryKernelUserShared|kIOMapWriteCombineCache|kIOMemoryMapperNone,size,PAGE_SIZE);
+    gpu_checkpoint("buffer allocation returned",size,m!=NULL);
     if(m)bzero(m->getBytesNoCopy(),size);
+    gpu_checkpoint("buffer zeroed",size);
     return m;
 }
 static GPUPageTable *gpu_new_table(GPUVM *v)
@@ -36,7 +39,9 @@ static GPUPageTable *gpu_new_table(GPUVM *v)
     GPUPageTable *t=&v->pt[v->tables];
     t->memory=gpu_buffer_alloc(PAGE_SIZE);
     if(!t->memory)return NULL;
+    gpu_checkpoint("table physical query",v->tables);
     IOByteCount len=0;t->pa=t->memory->getPhysicalSegment(0,&len,kIOMemoryMapperNone);
+    gpu_checkpoint("table physical returned",t->pa,len);
     if(!t->pa||(t->pa&4095)||len<4096||t->pa>=(1ull<<40)) {
         OSSafeReleaseNULL(t->memory);return NULL;
     }
@@ -84,14 +89,19 @@ static GPUVM *gpu_vm_create(void)
     unsigned nr=1;uint32_t present=read_word(NULL,handoff.gpu+0x18);
     while(nr<16&&(!(present&(1u<<nr))||(gpu_as_used&(1u<<nr))))nr++;
     if(nr==16)return NULL;
+    gpu_checkpoint("VM metadata allocation begin",nr);
     GPUVM *v=IONewZero(GPUVM,1);if(!v)return NULL;
+    gpu_checkpoint("VM object allocated",sizeof(*v));
     v->pt=IONewZero(GPUPageTable,GPU_MAX_PT);v->bo=IONewZero(GPUBuffer,GPU_MAX_BO);
+    gpu_checkpoint("VM metadata allocated",v->pt!=NULL,v->bo!=NULL);
     if(!v->pt||!v->bo||!gpu_new_table(v)) {
         if(v->pt)IODelete(v->pt,GPUPageTable,GPU_MAX_PT);
         if(v->bo)IODelete(v->bo,GPUBuffer,GPU_MAX_BO);IODelete(v,GPUVM,1);return NULL;
     }
     v->as_nr=nr;gpu_as_used|=1u<<nr;
+    gpu_checkpoint("MMU root bind begin",nr,v->pt[0].pa);
     if(sweet_csf_runtime_bind(&queue,&gpu_io,nr,v->pt[0].pa))v->broken=true;
+    gpu_checkpoint("MMU root bind returned",nr,v->broken);
     return v;
 }
 static GPUBuffer *gpu_bo(GPUVM *v,uint32_t handle)

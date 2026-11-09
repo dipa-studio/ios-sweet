@@ -16,6 +16,7 @@ extern "C" {
 #include "../../../bsd/dev/mali_csf_runtime.h"
 vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 int sweet_gpu_log_ready(void);
+int sweet_gpu_log_flush(void);
 }
 
 static struct sweet_gpu_handoff handoff;
@@ -39,6 +40,14 @@ static void barrier(void *){__asm__ volatile("dsb sy" ::: "memory");}
 static uint64_t ticks(void *)
 {uint64_t t;__asm__ volatile("isb; mrs %0,cntpct_el0":"=r"(t));return t;}
 static struct sweet_gpu_io gpu_io;
+static uint32_t gpu_trace;
+static void gpu_checkpoint(const char *phase,uint64_t a=0,uint64_t b=0)
+{
+    if(!gpu_trace)return;
+    IOLog("SWEET GPU: checkpoint %s a=%llx b=%llx\n",phase,a,b);
+    int rc=sweet_gpu_log_flush();
+    if(rc)IOLog("SWEET GPU: checkpoint flush failed rc=%d\n",rc);
+}
 #include "SweetGPUVM.h"
 
 static int submit_compute(struct sweet_csf_queue_report *report=NULL)
@@ -156,16 +165,16 @@ static bool resident_vm_test(void)
 {
     /* Real allocated BOs and a root with no firmware mappings. Rebind the
      * SAME VA to another BO halfway through, and wrap the ring twice. */
-    IOLog("SWEET GPU: VM test allocating private page tables\n");IOSleep(1200);
+    gpu_checkpoint("VM test begin");
     GPUVM *v=gpu_vm_create();if(!v||v->broken){gpu_vm_destroy(v);return false;}
-    IOLog("SWEET GPU: VM root=%llx AS=%u; allocating BOs\n",v->pt[0].pa,v->as_nr);IOSleep(1200);
+    gpu_checkpoint("VM root ready",v->pt[0].pa,v->as_nr);
     sweet_gpu_bo bo[2]={{0x10000,0,0},{0x10000,0,0}};
     sweet_gpu_group group={};bool ok=true;
     for(unsigned i=0;i<2;i++)if(gpu_bo_create(v,&bo[i])!=kIOReturnSuccess)ok=false;
     const uint64_t va=0x10000000;
     sweet_gpu_map map={bo[0].handle,0,0,va,0x10000};
     if(ok&&gpu_vm_map(v,&map)!=kIOReturnSuccess)ok=false;
-    IOLog("SWEET GPU: VM BO map ok=%u; starting persistent group\n",ok);IOSleep(1200);
+    gpu_checkpoint("VM BO map",ok);
     if(ok&&gpu_group_create(v,&group)!=kIOReturnSuccess)ok=false;
     unsigned completed=0;
     for(unsigned i=0;i<70&&ok;i++) {
@@ -219,7 +228,9 @@ static void resident_worker(void *arg,wait_result_t)
      * retained-arena probe. Wait for actual persistent-log completion so
      * an allocation/cache/VM failure leaves fresh evidence on this board. */
     while(ready&&!sweet_gpu_log_ready())IOSleep(100);
+    gpu_checkpoint("persistent logging ready");
     IOLockLock(gpu_lock);
+    gpu_checkpoint("VM lock acquired");
     if(ready&&!resident_vm_test()){ready=0;IOLog("SWEET GPU: VM selftest failed\n");}
     IOLockUnlock(gpu_lock);
     if(ready) {
@@ -241,6 +252,7 @@ extern "C" void SweetGPUStart(IOService *provider)
 {
     DTEntry chosen;const void *raw=NULL;unsigned int bytes=0;
     uint32_t enabled=0;PE_parse_boot_argn("sweetgpu",&enabled,sizeof(enabled));
+    PE_parse_boot_argn("sweetgputrace",&gpu_trace,sizeof(gpu_trace));
     if(!enabled||SecureDTLookupEntry(NULL,"/chosen",&chosen)!=kSuccess||
        SecureDTGetProperty(chosen,"sweet-gpu-resident",&raw,&bytes)!=kSuccess||
        bytes!=sizeof(handoff))return;

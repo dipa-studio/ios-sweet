@@ -1,5 +1,23 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2438 STALE CAPTURE; 2439 DIAGNOSTIC BUILD <<<
+## >>> ACTIVE 2026-11-09: 2439 REACHES XNU; 2440 DURABLE VM CHECKPOINTS <<<
+
+2439 consumed and fully restored, independent Recovery boot_a SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1 verified.
+Fresh kernel/trial2439, changed tail, three native GPU compute successes,
+launchd starts. Exactly one persistent flush, no VM-stage message survived.
+Thus XNU DOES boot; precise VM regression is still unknown (not shim failure).
+Evidence:20261109-resident-gpu/vm2439-verified.json and shim2439-vm/gpu-normal.
+2440 adds synchronous UFS-backed allocation/MMU checkpoints gated by
+sweetgputrace=1, replacing unproven sleep-based flushing. Actual flush code
+passes ASan/UBSan bounds/ring-wrap/write-failure/cache-sync-failure tests;
+existing runtime/transport tests pass. Full local kernel build exit0,
+0210 reverse application verified. GitHub Actions dispatch again422 disabled;
+no new CI run. Image cf4e76ab82827239b92a3e81372240e98d39d0c4f2d918f7afa8ab22e42a5ddc,
+kernel30ad8c8f8ddaa9f7d7d17053c52e700ebf9b88c2b0182bad1b4d326481a90dbd.
+2440 runner prepared; inspect its journal before device actions. No root edits.
+Hardware Mesa remains built/not installed; existing userland changes retained.
+
+## >>> PREVIOUS 2026-11-09: 2438 STALE CAPTURE; 2439 DIAGNOSTIC BUILD <<<
 
 2438 returned Fastboot138.50s, but before/after tail hashes are IDENTICAL and
 kernel marks still2437. No fresh XNU evidence:2438 VM test is NOT verified;
