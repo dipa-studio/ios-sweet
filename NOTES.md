@@ -1,5 +1,47 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2439 REACHES XNU; 2440 DURABLE VM CHECKPOINTS <<<
+## >>> ACTIVE 2026-11-09: 2442 GPU SERVICE + INTERACTIVE UI VERIFIED <<<
+
+2442 fresh trial/kernel2442, changed log tail, three native compute shaders
+rc0/stage7/witness2436c5f1, service registered and nine status samples with
+ready1/submits3/failures0/MCU1. User saw UI and working swipe updates. This is
+resident GPU coexisting with normal UI; UI is NOT yet hardware rendered.
+Fastboot170.07s. Full64MiB boot_a restored; independent Recovery SHA256
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No restore pending. Evidence:20261109-resident-gpu/resident2442-verified.json
+and observation2442.json.0211/0212 restore normal startup and fix high-DRAM
+cache-address overflow (direct causality of that fix remains unproven).
+
+0213 now enables sweetgles=2 through exec/AMFI90/IOSurface gates; previously
+only1 was recognized. Both modes1/2 and unsupported3 tested under ASan/UBSan.
+Full local2443 kernel build exit0, no boot yet. Hardware Mesa rebuild and
+read-only current-root snapshot underway under20261109-panfrost. No library
+installation yet. Need deploy additive /usr/local/sweet-gpu and hardware probe,
+verify GPU pixel checks, then backboardd sweetgles=2 with glcopy=1. This keeps
+GPU shader/raster work; glcopy is IOSurface presentation copy, not softpipe.
+Hardware profile refuses software fallback. Do not claim hardware UI until
+renderer, actual CSF submits and completed frames are verified together.
+
+## >>> PREVIOUS 2026-11-09: 2442 NORMAL GPU SERVICE + UI BOOT TRIAL <<<
+
+2440 and2441 completed with fresh console and fully restored boot_a.2441
+returned Fastboot97.87s despite180s window; user observed XNU console. No
+VM checkpoint survived; this is NOT proof that GPU was absent.2437 had
+three real compute successes and service registration;2440/2441 registered
+only after the later VM/logging wait. Both diagnostic roots were read-only.
+2442 gates VM stress behind sweetgpuvmtest=1 (off normally), restores service
+registration after three resident submissions and the normal writable UI root.
+Kernel67569933106d2ee62da6d96df075b48a54d630d8b332962968db36e160c732fa,
+image0bd13233af24aef9bff5eb93f46475e66c4cdbb0fc8a29bc15e163afd9c83be3,
+26734592B. Existing full local build passed; canonical driver equals built
+source,0211/0212 reverse-check pass. Four ASan/UBSan/runtime/transport tests
+PASS.0211 fixes a verified32-bit physical-page shift overflow; its effect on
+the observed boot stall is still unproven. No Mesa deployment/root edit yet.
+2442 runner started; inspect shim2442-ui/gpu-normal/journal.json before any
+device action. Full boot_a restore required. Preflight independently verified
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Artifacts:research/matisse/20261109-resident-gpu/. Hardware UI NOT verified.
+
+## >>> PREVIOUS 2026-11-09: 2439 REACHES XNU; 2440 DURABLE VM CHECKPOINTS <<<
 
 2439 consumed and fully restored, independent Recovery boot_a SHA256
 2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1 verified.

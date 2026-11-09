@@ -1,0 +1,48 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5584,7 +5584,7 @@
+ 	const char *env = imgp->ip_endargv;
+ 	int error;
+ 
+-	if (sweet_gles_exec_enabled != 1 || ptr_size != 8 || imgp->ip_ndp == NULL ||
++	if ((sweet_gles_exec_enabled != 1 && sweet_gles_exec_enabled != 2) || ptr_size != 8 || imgp->ip_ndp == NULL ||
+ 	    imgp->ip_ndp->ni_cnd.cn_namelen != sizeof(name) - 1 ||
+ 	    strncmp(imgp->ip_ndp->ni_cnd.cn_nameptr, name, sizeof(name) - 1) != 0) {
+ 		return 0;
+diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -323,7 +323,7 @@
+ 	uint64_t flags = (1ULL << 1) | (1ULL << 4);
+ 	int error;
+ 
+-	if (call != 90 || sweet_gles_dyld_enabled != 1 || !proc_is64bit_data(p)) {
++	if (call != 90 || (sweet_gles_dyld_enabled != 1 && sweet_gles_dyld_enabled != 2) || !proc_is64bit_data(p)) {
+ 		return ENOPOLICY;
+ 	}
+ 	proc_name(proc_pid(p), name, sizeof(name));
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -302,7 +302,7 @@
+ 	s->pixelFormat = sweet_dict_u32(props, "IOSurfacePixelFormat", 0);
+ 	/* HakiOS negotiates new XR targets as BGRA before anyone draws into
+ 	 * them. Report the new layout; never reinterpret caller-owned pixels. */
+-	if (sweet_surface_gles == 1 && !wrapped &&
++	if ((sweet_surface_gles == 1 || sweet_surface_gles == 2) && !wrapped &&
+ 	    (s->pixelFormat == 'b3a8' || s->pixelFormat == 'w30r' ||
+ 	    s->pixelFormat == 'l10r' || s->pixelFormat == 'w30R')) {
+ 		bgra = true;
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -823,7 +823,7 @@
+ #define SWEET_MARK_MAX  160
+ 
+ /* Bumped for every locally built kernel that is flashed to the phone. */
+-#define SWEET_BUILD_ID 0x2442u
++#define SWEET_BUILD_ID 0x2443u
+ 
+ struct sweet_mark_rec {
+ 	uint32_t code;

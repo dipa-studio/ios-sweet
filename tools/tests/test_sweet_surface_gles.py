@@ -12,7 +12,8 @@ REL = 'iokit/Kernel/arm/SweetSurface.cpp'
 def source():
     with tempfile.TemporaryDirectory() as d:
         for n in ('0046-sweet-iosurface-iomfb.patch', '0068-sweet-surface-lookup-cached.patch',
-                  '0206-sweet-gles-iosurface-layout-and-wrapping.patch'):
+                  '0206-sweet-gles-iosurface-layout-and-wrapping.patch',
+                  '0213-sweet-gles-hardware-mode.patch'):
             subprocess.run(['git', 'apply', '--include=' + REL, '-'], cwd=d, check=True,
                            input=(ROOT / 'xnu/patches' / n).read_text(), text=True, capture_output=True)
         return (Path(d) / REL).read_text()
@@ -71,13 +72,15 @@ struct SweetSurface {
 struct SweetSurfaceRef {Mapping*data,*state;};
 static uint32_t sweet_surface_gles;
 ''' + helpers + r'''
-int main(){
+int main(int argc, char **argv){
+ assert(argc==2);unsigned mode=argv[1][0]-'0';
  OSNumber w(1440),h(3200),fmt('b3a8'),bpe(4),row(5760),alloc(23150592);
  OSDictionary props;props.v={{"IOSurfaceWidth",&w},{"IOSurfaceHeight",&h},{"IOSurfacePixelFormat",&fmt},
   {"IOSurfaceBytesPerElement",&bpe},{"IOSurfaceBytesPerRow",&row},{"IOSurfaceAllocSize",&alloc}};
  OSDictionary plane0,plane1;OSArray planes;planes.v={&plane0,&plane1};props.v["IOSurfacePlaneInfo"]=&planes;
  SweetSurface s={};assert(sweet_surface_layout(&s,&props)==0 && s.pixelFormat=='b3a8' && s.planeCount==2);
- sweet_surface_gles=1;s={};assert(sweet_surface_layout(&s,&props)==0);
+ sweet_surface_gles=3;s={};assert(sweet_surface_layout(&s,&props)==0 && s.pixelFormat=='b3a8');
+ sweet_surface_gles=mode;s={};assert(sweet_surface_layout(&s,&props)==0);
  assert(s.pixelFormat=='BGRA' && s.planeCount==0 && s.width==1440 && s.height==3200);
  assert(s.bytesPerRow==5760 && s.bytesPerElement==4 && s.allocSize==18432000);
  Mapping data{0x1234000},state{0x5678000};SweetSurfaceRef ref{&data,&state};uint8_t out[0xa68];
@@ -109,8 +112,9 @@ int main(){
                 '-Wno-multichar', '-fsanitize=address,undefined', str(p), '-o', str(binary)],
                 text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            result = subprocess.run([str(binary)], text=True, capture_output=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
+            for mode in ('1', '2'):
+                result = subprocess.run([str(binary), mode], text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == '__main__':

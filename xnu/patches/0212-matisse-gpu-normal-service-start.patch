@@ -1,0 +1,44 @@
+diff --git a/iokit/Kernel/arm/SweetGPU.cpp b/iokit/Kernel/arm/SweetGPU.cpp
+--- a/iokit/Kernel/arm/SweetGPU.cpp
++++ b/iokit/Kernel/arm/SweetGPU.cpp
+@@ -224,15 +224,19 @@
+         if(submit_compute())break;
+         IOSleep(20);
+     }
+-    /* Allocating application memory is a later startup phase than the
+-     * retained-arena probe. Wait for actual persistent-log completion so
+-     * an allocation/cache/VM failure leaves fresh evidence on this board. */
+-    while(ready&&!sweet_gpu_log_ready())IOSleep(100);
+-    gpu_checkpoint("persistent logging ready");
+-    IOLockLock(gpu_lock);
+-    gpu_checkpoint("VM lock acquired");
+-    if(ready&&!resident_vm_test()){ready=0;IOLog("SWEET GPU: VM selftest failed\n");}
+-    IOLockUnlock(gpu_lock);
++    /* Normal boots expose the driver after the proven resident probe.
++     * The destructive-to-VM stress test is an explicit diagnostic mode;
++     * service discovery must not depend on the persistent-log worker. */
++    uint32_t selftest=0;
++    PE_parse_boot_argn("sweetgpuvmtest",&selftest,sizeof(selftest));
++    if(selftest) {
++        while(ready&&!sweet_gpu_log_ready())IOSleep(100);
++        gpu_checkpoint("persistent logging ready");
++        IOLockLock(gpu_lock);
++        gpu_checkpoint("VM lock acquired");
++        if(ready&&!resident_vm_test()){ready=0;IOLog("SWEET GPU: VM selftest failed\n");}
++        IOLockUnlock(gpu_lock);
++    }
+     if(ready) {
+         SweetGPU *gpu=OSTypeAlloc(SweetGPU);
+         if(gpu&&gpu->init()&&gpu->attach(provider)&&gpu->start(provider))
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -823,7 +823,7 @@
+ #define SWEET_MARK_MAX  160
+ 
+ /* Bumped for every locally built kernel that is flashed to the phone. */
+-#define SWEET_BUILD_ID 0x2440u
++#define SWEET_BUILD_ID 0x2442u
+ 
+ struct sweet_mark_rec {
+ 	uint32_t code;

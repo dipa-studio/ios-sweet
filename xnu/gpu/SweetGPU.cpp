@@ -224,15 +224,19 @@ static void resident_worker(void *arg,wait_result_t)
         if(submit_compute())break;
         IOSleep(20);
     }
-    /* Allocating application memory is a later startup phase than the
-     * retained-arena probe. Wait for actual persistent-log completion so
-     * an allocation/cache/VM failure leaves fresh evidence on this board. */
-    while(ready&&!sweet_gpu_log_ready())IOSleep(100);
-    gpu_checkpoint("persistent logging ready");
-    IOLockLock(gpu_lock);
-    gpu_checkpoint("VM lock acquired");
-    if(ready&&!resident_vm_test()){ready=0;IOLog("SWEET GPU: VM selftest failed\n");}
-    IOLockUnlock(gpu_lock);
+    /* Normal boots expose the driver after the proven resident probe.
+     * The destructive-to-VM stress test is an explicit diagnostic mode;
+     * service discovery must not depend on the persistent-log worker. */
+    uint32_t selftest=0;
+    PE_parse_boot_argn("sweetgpuvmtest",&selftest,sizeof(selftest));
+    if(selftest) {
+        while(ready&&!sweet_gpu_log_ready())IOSleep(100);
+        gpu_checkpoint("persistent logging ready");
+        IOLockLock(gpu_lock);
+        gpu_checkpoint("VM lock acquired");
+        if(ready&&!resident_vm_test()){ready=0;IOLog("SWEET GPU: VM selftest failed\n");}
+        IOLockUnlock(gpu_lock);
+    }
     if(ready) {
         SweetGPU *gpu=OSTypeAlloc(SweetGPU);
         if(gpu&&gpu->init()&&gpu->attach(provider)&&gpu->start(provider))

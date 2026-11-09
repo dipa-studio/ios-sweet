@@ -13,7 +13,17 @@ def added_function(name):
     source = '\n'.join(line[1:] for line in PATCH.read_text().splitlines()
                        if line.startswith('+') and not line.startswith('+++'))
     start = source.index('static int\n' + name + '(')
-    return source[start:source.index('\n}', start) + 2]
+    function = source[start:source.index('\n}', start) + 2]
+    # Replay the later mode-2 patch against the original helper, so this
+    # harness exercises the shipped gate rather than only the 0205 version.
+    update = (ROOT / 'xnu/patches/0213-sweet-gles-hardware-mode.patch').read_text()
+    lines = update.splitlines()
+    for index, line in enumerate(lines[:-1]):
+        if line.startswith('-\tif ') and lines[index + 1].startswith('+\tif '):
+            old, new = line[1:], lines[index + 1][1:]
+            if old in function:
+                function = function.replace(old, new)
+    return function
 
 
 @unittest.skipUnless(shutil.which('cc'), 'needs a host C compiler')
@@ -27,7 +37,8 @@ class GLESInjectionTests(unittest.TestCase):
                             '-fsanitize=address,undefined', str(path), '-o', str(binary)],
                            capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
-            subprocess.run([str(binary)], check=True, capture_output=True)
+            for mode in ('1', '2'):
+                subprocess.run([str(binary), mode], check=True, capture_output=True)
 
     def test_exec_gate_duplicate_conflict_and_space_accounting(self):
         self.compile_run(r'''
@@ -57,13 +68,15 @@ static int exec_add_user_string(struct image_params *p, uintptr_t a, int space, 
     p->ip_argspace-=n;p->ip_strspace-=n;return 0;
 }
 ''' + added_function('sweet_gles_exec_env') + r'''
-int main(void) {
+int main(int argc, char **argv) {
+    assert(argc == 2);
+    unsigned mode = argv[1][0] - '0';
     char buf[512]="A=B";
     struct nameidata nd={ {10,"backboardd"} };
     struct image_params p={buf,buf+4,400,500,1,&nd};
     assert(!sweet_gles_exec_env(&p,8) && added==0);
-    sweet_gles_exec_enabled=2;assert(!sweet_gles_exec_env(&p,8) && added==0);
-    sweet_gles_exec_enabled=1;assert(!sweet_gles_exec_env(&p,4) && added==0);
+    sweet_gles_exec_enabled=3;assert(!sweet_gles_exec_env(&p,8) && added==0);
+    sweet_gles_exec_enabled=mode;assert(!sweet_gles_exec_env(&p,4) && added==0);
     p.ip_ndp=0;assert(!sweet_gles_exec_env(&p,8) && added==0);p.ip_ndp=&nd;
     nd.ni_cnd.cn_nameptr="SpringBoard";nd.ni_cnd.cn_namelen=11;
     assert(!sweet_gles_exec_env(&p,8) && added==0);
@@ -115,12 +128,16 @@ static int copyout(const void *src,user_addr_t addr,size_t size){
     memcpy((void*)addr,src,size);return 0;
 }
 ''' + added_function('sweet_amfi_policy_syscall') + r'''
-int main(void) {
+int main(int argc, char **argv) {
+    assert(argc == 2);
+    unsigned mode = argv[1][0] - '0';
     struct proc p={"backboardd",1};current=&p;
     uint64_t output=0x12345678;
     struct {uint64_t in;user_addr_t out;} args={6,(uintptr_t)&output};
     assert(sweet_amfi_policy_syscall(&p,90,(uintptr_t)&args)==ENOPOLICY && reads==0);
-    sweet_gles_dyld_enabled=1;
+    sweet_gles_dyld_enabled=3;
+    assert(sweet_amfi_policy_syscall(&p,90,(uintptr_t)&args)==ENOPOLICY && reads==0);
+    sweet_gles_dyld_enabled=mode;
     assert(sweet_amfi_policy_syscall(&p,96,(uintptr_t)&args)==ENOPOLICY && reads==0);
     p.is64=0;assert(sweet_amfi_policy_syscall(&p,90,0)==ENOPOLICY && reads==0);
     p.is64=1;p.name="SpringBoard";
