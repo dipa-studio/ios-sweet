@@ -21,6 +21,23 @@ GPU shader/raster work; glcopy is IOSurface presentation copy, not softpipe.
 Hardware profile refuses software fallback. Do not claim hardware UI until
 renderer, actual CSF submits and completed frames are verified together.
 
+Completed source commits:9f6c6cb (startup/pmap/mode2), b8b99be (hardware Mesa
+transport/probe).9f6c6cb pushed to fork. gh xnu.yml dispatch HTTP422 Actions
+disabled, no new CI ID.2443 local full kernel4545b48c2232e824f1c6adbd372b5569fca12d80fc265ee357a3274c5709ee2e;
+image62af52351380094ae4c2d6afaa5fb31881fa19b2ddf6ab95de44f62a65aacac7,
+26734592B. Image uses launchdsuffix=panfrost-probe and sweetgles=2,
+sweetgputrace=1, root writable for journal replay. Preflight passed.
+Current16GiB root snapshot verified against device128MiB chunk hashes;
+local HFS clone has additive GPU libraries/probe and replacement opt-in loader.
+fsck_hfs -fn PASS. Block delta preparation in progress, no device root writes
+as of this checkpoint.2443 runner not started yet; inspect its journal first.
+UPDATE:95/95 device delta preimages matched and all95 writes readback verified,
+16834560 bytes. No root write pending. New root expected SHA256e932dddd7b8dec5be4d3b609e7cd26b6aa21559fcab417e9dba1db24d165d2d4.
+2443 hardware probe runner NOW STARTED; follow its journal to full boot_a
+restoration before device actions. Canonical builder also aligns Mesa's VA
+range to the kernel128MiB minimum; rebuilt output installed. Seven host tests
+PASS. Kernel/image exact hashes above; no2443 hardware result yet.
+
 ## >>> PREVIOUS 2026-11-09: 2442 NORMAL GPU SERVICE + UI BOOT TRIAL <<<
 
 2440 and2441 completed with fresh console and fully restored boot_a.2441

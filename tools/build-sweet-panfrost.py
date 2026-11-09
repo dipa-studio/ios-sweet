@@ -86,6 +86,29 @@ def main():
         (src / '.sweet-v10-profile').write_text('panthor v10 hardware required\n')
     if not (src / '.sweet-v10-profile').exists():
         ap.error('incomplete or incompatible source tree; choose a fresh work directory')
+    # Match SweetGPU's reserved firmware/queue aperture. Gallium otherwise
+    # advertises a 32 MiB start, below the kernel's 128 MiB BO boundary.
+    p = src / 'src/panfrost/lib/kmod/panthor_kmod.c'
+    old_range = '''      .start = 0,
+
+      /* 3G/1G user/kernel VA split'''
+    new_range = '''      .start = 0x08000000ull,
+
+      /* 3G/1G user/kernel VA split'''
+    if old_range in p.read_text():
+        replace(p, old_range, new_range)
+        replace(p, 'va_bits == 32 ? (1ull << (va_bits - 2)) * 3 : 1ull << (va_bits - 1),',
+                '(va_bits == 32 ? (1ull << (va_bits - 2)) * 3 : 1ull << (va_bits - 1)) - 0x08000000ull,')
+    if new_range not in p.read_text():
+        ap.error('incompatible Panthor VA range patch')
+    # 25.0.7 has the v10 compiler/CSF backend but its product table only
+    # names G610. The phone reports a8620004 (G710, variant 0). Register the
+    # product explicitly instead of lying about GPU_ID in the transport.
+    p = src / 'src/panfrost/lib/pan_props.c'
+    g610 = '        MODEL(0xa867, 0, "G610",   "TVIx", HAS_ANISO,         32768, {}),'
+    g710 = '        MODEL(0xa862, 0, "G710",   "TVIx", HAS_ANISO,         32768, {}),'
+    if g710 not in p.read_text():
+        replace(p, g610, g710 + '\n' + g610)
     shutil.copyfile(ROOT / 'userland/sweet-panthor-drm.c', src / 'src/redwood-drm/redwood_drm.c')
     shutil.copyfile(ROOT / 'xnu/gpu/sweet_gpu_user.h', src / 'src/redwood-drm/sweet_gpu_user.h')
     cross = work / 'ios-cross.ini'
