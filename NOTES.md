@@ -1,5 +1,21 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2428 RESTORED; DYLD INJECTION GAP IDENTIFIED <<<
+## >>> ACTIVE 2026-11-09: 2429 INVALID TRIAL RESTORED; REBUILD LOADER FOR2430 <<<
+
+2429 user saw REDMI only. Before/after persistent tail hashes IDENTICAL
+817744f3...f4aa; marks still2316, bootargs still2428. These are stale logs,
+NOT new-kernel evidence. Packing bug identified: compiled shim loader expects
+16726016B, new payload16726912B (+896); embedded_payload rejects mismatch.
+Do not conclude AMFI/GLES failed. 188.78s to Fastboot; runner restored full
+boot_a and verified2931647a...86b1, pending=false. No runner active.
+
+Fix: rebuild loader.o against actual payload length using frozen2313 shim
+objects, link; first regenerate the old loader/prefix byte-identical to2428.
+2430 will use the SAME2429 kernel e1c94338...44f8ba (mark2429), new trial arg.
+No root change. 0205 source7a65b31 and seven tests already pass, full local
+build exit0. CI disabled HTTP422; no CI run. Next image/preflight/boot,
+verify fresh identity BEFORE interpreting any backboardd output, restore.
+
+## >>> PREVIOUS 2026-11-09: 2428 RESTORED; DYLD INJECTION GAP IDENTIFIED <<<
 
 2428 completed: user observed lock/home screen. 169.12s to Fastboot; full
 boot_a restored by runner, independently rehashed in Recovery to

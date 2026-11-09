@@ -89,3 +89,15 @@ interposing。已有相同环境变量不重复添加，不同值返回 EINVAL�
 宿主 ASan/UBSan 测试执行补丁中的实际函数，覆盖启用范围、重复/冲突
 环境变量、参数空间不足，以及 AMFI 的两级指针复制与 EFAULT 传播。
 2429 是验证这项内核修复的试验编号；上机结果需要另行记录。
+
+2429 没有形成有效内核试验：用户只看到 REDMI，回收的尾部日志和
+marks 都与 2428 相同，不能解释为新内核已经进入 launchd。新 payload
+比旧版本大 896 字节，而复用的 shim 内含旧的 `EMBEDDED_XNU_BYTES`；
+loader 的长度检查在跳转 XNU 前拒绝了它。完整 boot_a 已恢复核验。
+
+`tools/repack-sweet-ui.py` 修正此打包流程：使用冻结的已验证 shim
+源代码/对象，先重编旧 loader 并逐字节复现整个基准 Image，再按新
+payload 大小重编 loader。保留原 ramdisk、签名和 Android header 参数。
+2430 的基准复现通过，使用同一个 2429 内核（mark 2429），只修正
+loader 和 trial 参数。每次必须先验证日志新鲜度与 trial 身份，再
+解读用户态输出。原始 2429 运行脚本不可重复执行。
