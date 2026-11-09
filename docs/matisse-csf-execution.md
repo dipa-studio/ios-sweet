@@ -64,3 +64,16 @@ kernel2431; no new kernel build or CI run. Final image2436 SHA256:
 Exact manifests, logs and decoded results are under ignored
 `research/matisse/20261109-gpu/`; `queue-compute-verified.json` indexes the four
 verified captures. No downloaded firmware, device dumps or serials are in git.
+
+## Resident XNU handoff (2437)
+
+Commit1960662 retains the firmware arena and acquired power reference, passes
+an explicit128-byte handoff through the ADT, and installs SweetGPU in XNU.
+The2437 hardware boot completed three independent compute submissions inside
+XNU; all returned stage7, shader witness2436c5f1,192-byte extract/insert and
+no AS fault. SweetGPU registered its IOService; two later status records showed
+MCU1 with three successes and zero failures. The full boot_a backup was
+restored and rehashed. This proves resident ownership/execution, not Mesa
+hardware rendering. The remaining work is BO/VM, persistent command-stream
+submission, synchronization, and Mesa v10 integration. Kernel/image manifests
+and fresh console evidence are under20261109-resident-gpu.

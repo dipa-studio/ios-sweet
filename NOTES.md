@@ -1,5 +1,24 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2437 RESIDENT GPU BUILT; HARDWARE TEST NEXT <<<
+## >>> ACTIVE 2026-11-09: 2437 RESIDENT XNU GPU VERIFIED <<<
+
+Source1960662.2437 normal boot retained MCU/power successfully. Native XNU
+SweetGPU submitted THREE real compute shaders: all rc0/stage7,
+shader witness2436c5f1, insert=extract192, AS fault0. IOService registered;
+periodic status twice confirmed ready1/submits3/failures0/MCU1.
+Fresh trial/kernel2437, changed persistent console verified. Hardware execution
+now works inside XNU, not only in the shim. UI is still NOT GPU accelerated.
+Resident evidence:20261109-resident-gpu/resident2437-verified.json.
+Fastboot81.31s; runner consumed, full64MiB boot_a restored and independently
+rehashed2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Device Recovery; no restore pending/no active runner/root edit.
+Next implement isolated application VM/BO and persistent CSF queue, expose
+Panfrost/Panthor transport and build hardware Mesa v10; then GLES triangle/UI.
+Origin push denied403; fork push1960662 succeeded. gh workflow dispatch on
+Jinsens/ios-sweet returned422 Actions disabled; no CI run ID. Local full build
+and actual native symbols verified as detailed below. Legacy GPU report does
+not accept2437; resident evidence validates raw SWEETMRK identity and console.
+
+## >>> PREVIOUS 2026-11-09: 2437 RESIDENT GPU BUILT; HARDWARE TEST NEXT <<<
 
 User requires GPU-accelerated system UI; no softpipe optimization. Resident
 shim handoff retains proven MCU, firmware arena and power. Native SweetGPU
