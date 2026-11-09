@@ -881,6 +881,28 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertTrue(csf['mirror_mapped'])
         self.assertEqual(csf['cold_boot_outcome'], 'walk-dies-at-bit9')
 
+    def test_2426_requires_matching_global_ack(self):
+        words = [7,0,0x4001000,0x4002000,0,0,31,0xff,0,0x271000,
+                 0x271000,0x271000,0x0480071e,0x40e,0,0x40e,2,0x40e,1,1]
+        changes = {f'gpu_regs_{side}_{key}':words[i*10+j]
+                   for i,side in enumerate(('before','after'))
+                   for j,key in enumerate(self.module.CSF_GPU_REG_KEYS)}
+        def decode(**extra):
+            fields = dict(changes, **self.ZERO_PATH)
+            fields.update(extra)
+            return self.module.decode(self.marks_dvfs(build=0x2426,
+                memattr_lo=0x888d8f88,memattr_hi=0x00084c8d,**fields),
+                0x2426,require_leaf=False)
+        r = decode()
+        self.assertTrue(r['csf_firmware_boot_verified'])
+        self.assertEqual(r['csf']['global_init']['ack_last'], 0x40e)
+        for changes_bad in ({'gpu_regs_after_reg_04c':0},
+                            {'gpu_regs_before_reg_000':3},
+                            {'gpu_regs_after_reg_2c8':0},
+                            {'gpu_regs_after_reg_2cc':0}):
+            with self.subTest(changes_bad=changes_bad):
+                self.assertFalse(decode(**changes_bad)['csf_firmware_boot_verified'])
+
     def test_2425_requires_real_firmware_ready_evidence(self):
         data = self.marks_dvfs(build=0x2425, memattr_lo=0x888d8f88,
                               memattr_hi=0x00084c8d, **self.ZERO_PATH)

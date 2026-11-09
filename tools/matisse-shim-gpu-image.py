@@ -2572,7 +2572,7 @@ def diagnostic_firmware(path, expected, build_id, reset_store_stub, entry_probe=
 LEAF_PROBE_BUILDS = (0x2388, 0x2389, 0x2390, 0x2391, 0x2393, 0x2394, 0x2395,
                     0x2396, 0x2397, 0x2398, 0x2399, 0x2400, 0x2401, 0x2402, 0x2403,
                     0x2404, 0x2405, 0x2406, 0x2407, 0x2408, 0x2409, 0x2410, 0x2411,
-                    0x2412, 0x2413, 0x2414, 0x2415, 0x2416, 0x2417, 0x2418, 0x2419, 0x2420, 0x2421, 0x2422, 0x2423, 0x2424, 0x2425)
+                    0x2412, 0x2413, 0x2414, 0x2415, 0x2416, 0x2417, 0x2418, 0x2419, 0x2420, 0x2421, 0x2422, 0x2423, 0x2424, 0x2425, 0x2426)
 
 
 def diagnostic_adt(data, build_id=0x2333, global_property=False, leaf_property=False,
@@ -2654,7 +2654,7 @@ SENTINEL_BUILDS = (0x2405, 0x2406, 0x2407, 0x2408, 0x2409, 0x2410, 0x2411, 0x241
                    0x2413, 0x2414, 0x2415, 0x2416, 0x2417, 0x2418, 0x2419, 0x2420, 0x2421, 0x2422, 0x2423, 0x2424)
 LADDER_2405_BUILDS = (0x2405, 0x2406, 0x2407, 0x2408)
 GPU_REG_BUILDS = (0x2407, 0x2408, 0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414,
-                 0x2415, 0x2416, 0x2417, 0x2418, 0x2419, 0x2420, 0x2421, 0x2422, 0x2423, 0x2424, 0x2425)
+                 0x2415, 0x2416, 0x2417, 0x2418, 0x2419, 0x2420, 0x2421, 0x2422, 0x2423, 0x2424, 0x2425, 0x2426)
 # 2416 reuses the 40-byte register block for the SLC group window instead of the
 # 2407 GPU words; same size, different labels. 2417 uses it for the ten group
 # base words, sampled once after the MCU start (2416 proved the page is
@@ -2684,14 +2684,16 @@ def build(a):
     if out.exists():
         raise ValueError('refuse existing output directory')
     kernel = pinned(a.kernel, a.kernel_sha256)
-    if a.build_id == 0x2425:
+    if a.build_id in (0x2425, 0x2426):
         if not a.vendor_leaves or a.mcu_control != '2' or any((
                 a.trace_probe, a.fault_probe, a.entry_probe, a.reset_store_stub,
                 a.inline_entry, a.entry_pte_guard, a.redirect_mcu_stores,
-                a.relocate_code, a.ro_as_rw, a.global_init, a.mirror_code,
+                a.relocate_code, a.ro_as_rw, a.mirror_code,
                 a.share_code_l3, a.uncached_code, a.xn_page, a.alias_page,
                 a.uncached_page)):
-            raise ValueError('2425 requires unmodified firmware, vendor leaves and AUTO2')
+            raise ValueError('2425/2426 require unmodified firmware, vendor leaves and AUTO2')
+        if a.global_init != (a.build_id == 0x2426):
+            raise ValueError('2426 requires global-init,2425 forbids it')
     if a.build_id == 0x2379 and (not a.trace_probe or not a.ro_as_rw or a.mcu_control != '2'):
         raise ValueError('build2379 requires --trace-probe --ro-as-rw --mcu-control 2')
     if a.build_id == 0x2338 and not (a.entry_probe and a.inline_entry and a.entry_pte_guard):
@@ -2821,8 +2823,9 @@ def build(a):
                    '-DSWEET_CSF_DISPATCH_READBACK=' + ('1' if a.build_id in DISPATCH_READBACK_BUILDS else '0'),
                    '-DSWEET_CSF_STORE_WITNESS=' + ('1' if a.build_id in (0x2420, 0x2421, 0x2422, 0x2423, 0x2424) else '0'),
                    '-DSWEET_CSF_ARENA_TAIL_OFFSET=' + ('0x05000000u' if a.build_id == 0x2422 else '0'),
-                   '-DSWEET_CSF_EMI_DIAG=' + ('1' if a.build_id in (0x2423, 0x2424, 0x2425) else '0'),
+                   '-DSWEET_CSF_EMI_DIAG=' + ('1' if a.build_id in (0x2423, 0x2424, 0x2425, 0x2426) else '0'),
                    '-DSWEET_CSF_EMI_KEEP_PDC=' + ('1' if a.build_id == 0x2424 else '0'),
+                   '-DSWEET_CSF_GLOBAL_RELAY=' + ('1' if a.build_id == 0x2426 else '0'),
                    '-DSWEET_CSF_L2_HASH8=' + ('1' if a.build_id == 0x2421 else '0'),
                    '-DSWEET_CSF_OOA_SHAPE=' + ('1' if a.build_id == 0x2415 else '0'),
                    '-DSWEET_CSF_MFG_GLUE=' + str(MFG_GLUE_BUILDS.get(a.build_id, 0)),
@@ -2925,10 +2928,10 @@ def build(a):
                 sources={str(p.relative_to(ROOT)):digest(p.read_bytes()) for p in source.values()},
                 autorecovery_seconds=60, automatic_recovery_verified=False,
                 gpu_csf_firmware_embedded_sha256=digest(firmware), gpu_csf_boot_hardware_verified=False)
-    if a.build_id == 0x2425:
+    if a.build_id in (0x2425, 0x2426):
         if digest(firmware) != a.firmware_sha256:
             raise ValueError('2425 firmware was modified')
-        info['emi_boot_probe'] = dict(firmware_unmodified=True, emi_reads=True, diagnostic_writes=False)
+        info['emi_boot_probe'] = dict(firmware_unmodified=True, emi_reads=True, diagnostic_writes=False, global_init=a.global_init)
     info['csf_leaf_memory_group'] = a.leaf_group
     info['gpu_boot_report_bytes'] = 112
     info['gpufreq_dvfs'] = dict(commit=a.dvfs_commit, definitions=dvfs,
@@ -3139,7 +3142,7 @@ def build(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415,0x2416,0x2417,0x2418,0x2419,0x2420,0x2421,0x2422,0x2423,0x2424,0x2425), default=0x2333)
+    p.add_argument('--build-id', type=lambda s:int(s,0), choices=(0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2381,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415,0x2416,0x2417,0x2418,0x2419,0x2420,0x2421,0x2422,0x2423,0x2424,0x2425,0x2426), default=0x2333)
     p.add_argument('--reset-store-stub', action='store_true',
                    help='build2334 only: replace20 Thumb reset-entry bytes; no firmware-readiness claim')
     p.add_argument('--entry-probe', action='store_true',

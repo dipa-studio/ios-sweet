@@ -325,10 +325,27 @@ int main(void) {
   struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
   m.path_on=1;m.no_fw=no_fw;c.platform_snapshot=1;c.platform_path=1;c.access_snapshot=1;
   c.firmware_probe_va=0x01000000;c.firmware_probe_offset=0x6000;c.firmware_probe_expected=0x12345678;
+#if SWEET_CSF_GLOBAL_RELAY
+  struct sweet_csf_global_evidence ev={0};
+  c.global_init=1;c.shared_va=0x04000000;c.global_evidence=&ev;
+#endif
   assert(run(&m,&c,&r)==(no_fw?-53:0));
   assert(sizeof(r)==784 && m.emi_reads==16 && !m.witness_reads);
   assert(r.firmware_ready==!no_fw && r.path_sample_flags==3);
   assert(r.path_after.pdc_st0==0x9021c830);clean(&m,&r);
+#if SWEET_CSF_GLOBAL_RELAY
+  if(no_fw) {assert(!r.gpu_regs_flags && !m.doorbell_writes);}
+  else {
+   assert(r.gpu_regs_flags==3 && r.gpu_regs_before.reg_000==7);
+   assert(r.gpu_regs_after.reg_034==0x40e && r.gpu_regs_after.reg_04c==0x40e);
+   assert(r.gpu_regs_after.reg_2c8==1 && r.gpu_regs_after.reg_2cc==1);
+   m=model();m.path_on=1;m.ack_mode=1;ev=(struct sweet_csf_global_evidence){0};
+   assert(run(&m,&c,&r)==-53 && !r.firmware_ready);clean(&m,&r);
+   assert(r.gpu_regs_flags==3 && r.gpu_regs_before.reg_000==3);
+   assert((int32_t)r.gpu_regs_before.reg_004==-53);
+   assert(!r.gpu_regs_after.reg_2c8 && r.gpu_regs_after.reg_2cc==1);
+  }
+#endif
  }
  return 0;
 }
@@ -765,6 +782,11 @@ class CsfBootTests(unittest.TestCase):
     def test_unmodified_firmware_with_emi_diagnostics(self):
         self._run(['-DSWEET_CSF_VENDOR_MEMATTR=1','-DSWEET_CSF_GPU_REGS=1',
                    '-DSWEET_CSF_EMI_DIAG=1'])
+
+    def test_global_handshake_persisted(self):
+        self._run(['-DSWEET_CSF_VENDOR_MEMATTR=1','-DSWEET_CSF_GPU_REGS=1',
+                   '-DSWEET_CSF_EMI_DIAG=1','-DSWEET_CSF_GLOBAL_INIT=1',
+                   '-DSWEET_CSF_GLOBAL_RELAY=1'])
 
     def test_l2_hash_before_power_on(self):
         self._run(['-DSWEET_CSF_STORE_WITNESS=1','-DSWEET_CSF_GPU_REGS=1',

@@ -1,20 +1,31 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2424 PASS; 2425 UNMODIFIED FIRMWARE RUNNING <<<
+## >>> ACTIVE 2026-11-09: 2426 GLOBAL HANDSHAKE TRIAL <<<
 
-2423 passed twice;2424 adds all old PDC/SLC reads back after EMI and also
-passes marker4, both CPU stores visible, cleanup_error0/reset_completed1.
-2424 fastboot156.87s (longer, but restored normally), full boot_a verified to
-2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
-Thus removing PDC reads is not required. EMI reads versus timing not isolated.
+2425 firmware boot is verified (details below).2426 enables global-init and
+relays20 actual handshake words into the existing784-byte report; no kernel
+build needed. Firmware remains byte-identical de22d2fc...7229a; EMI reads kept.
+Image3f9e3f8f3948e71ec65242362fde544d656622ee5c2da6db13ff5b9381414792,
+77 relevant tests pass including ACK mismatch/timeout and firmware-not-ready.
+Recovery preflight passed. Trial journal shim2426-global/gpu-normal/journal.json,
+log research/matisse/20261109-gpu/run2426.log. Restore full boot_a after boot.
+No rendering/scheduler implemented yet. Do not claim global ACK until captured.
 
-2425 image a1fa8065544fa2b5c1f7bbc06288670a2a98ddb09ca60c960fb2f47b9f07c58f
-runs unmodified pinned vendor firmware (de22d2fc...7229a), vendor leaf encoding,
-AUTO2 and EMI diagnostic reads. No ladder, no shared sentinel/witness stores,
-no remaps, no relocation. Arena0x40077000. No global-init yet.
-Model test verifies normal ready and timeout paths; decoder ready evidence test
-passes. Trial running in research/matisse/20261109-gpu/run2425.log;
-journal shim2425-stock-fw-emi/gpu-normal/journal.json. Restore before stopping.
-No new XNU/CI; c01dcbea...d5ea mark0x2407 reused. Last commit7f6eb92.
+## >>> PREVIOUS 2026-11-09: 2425 REAL VENDOR FIRMWARE BOOT VERIFIED <<<
+
+2425 a1fa8065544fa2b5c1f7bbc06288670a2a98ddb09ca60c960fb2f47b9f07c58f
+booted UNMODIFIED firmware de22d2fc...7229a. Fresh JOB IRQ0x80000000,
+GLB_VERSION0x01010000, input0x04002000/output0x04003000, groups8/stride160,
+MMU_RAW0/AS_FAULT0. CSF stage7/error0/firmware_ready1, cleanup_error0 and
+reset_completed1. Platform stage10/error0; strict decoder verifies firmware
+boot. This is beyond the diagnostic MCU program. Full boot_a restored and
+verified; no restoration pending. Fastboot80.22s. Raw run2425.log and
+shim2425-stock-fw-emi/gpu-normal. Source83fd385 (+ comment/doc corrections).
+127 combined tests pass. No CI/new kernel, same c01dcbea...d5ea mark0x2407.
+
+Next2426: enable existing global-init REQ/ACK protocol and relay its evidence
+in the existing784-byte report so persistent logs contain actual handshake
+values. Keep unmodified firmware and eight EMI reads. Minimal EMI read set
+and timing-vs-read cause are still open. GPU rendering is not implemented.
 
 ## >>> PREVIOUS 2026-11-09: 2423 BREAKTHROUGH — ODD STORE AND READ COMPLETE <<<
 

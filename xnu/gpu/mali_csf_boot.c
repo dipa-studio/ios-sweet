@@ -82,7 +82,9 @@ static void platform_state(const struct sweet_csf_boot_config *c,const struct sw
     s->mfg_pll_con1=rd(io,0x13fa000c);s->mfgsc_pll_con1=rd(io,0x13fa0c0c);
     s->topckgen_sel=rd(io,0x100001f0);s->rpc_slp_protect=rd(io,0x13f91048);
     r->platform_sample_flags|=after?2:1;
-#if SWEET_CSF_GPU_REGS && SWEET_CSF_STORE_WITNESS
+#if SWEET_CSF_GPU_REGS && SWEET_CSF_GLOBAL_RELAY
+    /* 2426: this carrier is populated after global_init, not by GPU reads. */
+#elif SWEET_CSF_GPU_REGS && SWEET_CSF_STORE_WITNESS
     {
         struct sweet_csf_gpu_regs *g=after?&r->gpu_regs_after:&r->gpu_regs_before;
         uint64_t shared=c->arena_pa+c->shared_offset;
@@ -712,8 +714,8 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
         if(rc) {r->error=SWEET_CSF_BOOT_STATE;goto cleanup;}
     }
     r->stage=SWEET_CSF_BOOT_MCU;
-    /* Every build up to2371 wrote AUTO alone(2). The vendor driver writes
-     * ENABLE|AUTO(3), but2372 measured3 on this SoC and MCU_STATUS stayed0 for
+    /* r32p1 and Panthor start the MCU with AUTO alone(2). Build2372 tested
+     * ENABLE|AUTO(3) on this SoC and MCU_STATUS stayed0 for
      * the whole budget, so2 is the default here and3 stays reachable through
      * the config word for a single-variable trial. The written and
      * immediately read-back bytes go to platform_reserved so the696-byte
@@ -769,6 +771,21 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     if(c->global_init) {
         r->stage=SWEET_CSF_BOOT_GLOBAL;
         rc=csf_global_init(c,io,r,budget);
+#if SWEET_CSF_GLOBAL_RELAY
+        /* Persist20 handshake words through the existing two40-byte slots.
+         * Physical addresses are already derivable from AS root/shared plan.
+         * Zero flags mean global-init was never reached; do not invent ACK. */
+        const struct sweet_csf_global_evidence *e=c->global_evidence;
+        r->gpu_regs_before=(struct sweet_csf_gpu_regs){
+            e->flags,(uint32_t)e->error,e->input_va,e->output_va,
+            e->req_before,e->ack_before,e->protm_coherency,
+            e->alloc_en_lo,e->alloc_en_hi,e->pwroff_timer};
+        r->gpu_regs_after=(struct sweet_csf_gpu_regs){
+            e->progress_timer,e->idle_timer,e->ack_irq_mask,e->req_written,
+            e->ack_first,e->ack_last,e->polls,e->req_mask,
+            e->ack_matched,e->doorbell_value};
+        r->gpu_regs_flags=3;
+#endif
         if(rc) {r->error=rc;goto cleanup;}
     }
 #endif

@@ -91,7 +91,7 @@ static uint64_t sweet_csf_leaf_of(const struct sweet_gpu_io *io,uint64_t root,ui
 }
 #endif
 /* Value written to MCU_CONTROL to start the MCU. 2 is AUTO alone and is what
- * every build up to2371 used; 3 is the vendor driver's ENABLE|AUTO. 2372 measured
+ * every build up to2371 used; 3 is ENABLE|AUTO; r32p1 starts with AUTO alone. 2372 measured
  * 3 on this SoC: the write reads back, but MCU_STATUS stays0 for the whole
  * budget and the firmware never runs, so AUTO alone is the start value here.
  * The halt step in front of it is unaffected. */

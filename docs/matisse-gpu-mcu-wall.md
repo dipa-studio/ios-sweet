@@ -1,5 +1,12 @@
 # Matisse GPU: the MCU wall is a data read of unfetched code
 
+> 2026-11-09 update: see [current bring-up evidence](matisse-gpu-20261109.md).
+> Trials2423 (twice) and2424 completed the previously failing MCU odd-slot
+> store and read after adding vendor EMI diagnostic reads. Earlier claims of
+> an immutable physical address hole, hardware defect, or an excluded entire
+> interconnect are superseded. The exact role of the reads is still being isolated.
+
+
 Status: 2026-11-06, trials 2321-2390. Everything below is device evidence unless
 marked as inference. Source of truth for the instrument specs is the
 `TRACE_PROBE` table in `tools/matisse-shim-gpu-image.py`; this document explains

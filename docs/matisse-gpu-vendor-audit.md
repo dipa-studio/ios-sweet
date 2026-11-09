@@ -1,5 +1,12 @@
 # matisse / MT6983 厂商 GPU 驱动审计（Mali r32p1）
 
+> 2026-11-09 update: see [current bring-up evidence](matisse-gpu-20261109.md).
+> Trials2423 (twice) and2424 completed the previously failing MCU odd-slot
+> store and read after adding vendor EMI diagnostic reads. Earlier claims of
+> an immutable physical address hole, hardware defect, or an excluded entire
+> interconnect are superseded. The exact role of the reads is still being isolated.
+
+
 日期：2026-11-06 23:40。范围：`MiCode/Xiaomi_Kernel_OpenSource` 分支
 `rubens-s-oss` 中的 `drivers/gpu/mediatek/gpu_mali/mali_valhall/mali-r32p1`，
 以及树外的 `gpufreq_mt6983.c`。本文只做静态对照，没有改设备。

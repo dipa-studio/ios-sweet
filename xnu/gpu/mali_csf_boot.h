@@ -47,8 +47,8 @@ struct sweet_csf_boot_config {
      * and after the wait,before cleanup. Never changes interface version. */
     uint32_t entry_checkpoint;
     /*2372: value written to MCU_CONTROL to start the MCU.0 selects AUTO
-     * alone(2), the measured-good value on this SoC;3 is the vendor
-     * ENABLE|AUTO form, which2372 measured as leaving MCU_STATUS at0 for the
+     * alone(2), the vendor start value;3 is
+     * the ENABLE|AUTO combination, which2372 measured as leaving MCU_STATUS at0 for the
      * whole budget. Only0,2,3 are accepted so a trial moves one number.
      * The written/readback pair is recorded in platform_reserved. */
     uint32_t mcu_control_value;

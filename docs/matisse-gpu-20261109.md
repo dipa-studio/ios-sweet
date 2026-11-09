@@ -140,4 +140,13 @@ for the successful outcome. Added EMI reads versus delay remains unisolated.
 and EMI reads, no diagnostic shared writes or remaps. Arena0x40077000;
 firmware hash de22d2fc...7229a unchanged. Image
  a1fa8065544fa2b5c1f7bbc06288670a2a98ddb09ca60c960fb2f47b9f07c58f.
-Hardware outcome pending; no CSF firmware boot claim yet.
+Hardware outcome: **real vendor firmware boot verified**. Fresh JOB IRQ
+0x80000000, GLB_VERSION0x01010000, input0x04002000/output0x04003000,
+8 groups with stride160, MMU_RAW0/AS_FAULT0. CSF stage7/error0,
+firmware_ready1, cleanup_error0/reset_completed1. Platform stage10/error0.
+Shared allocation changed; private probe words staying unchanged did not imply
+lack of execution. Fastboot80.22s; full boot_a restored and verified.
+127 combined tests pass. Kernel unchanged; no CI build.
+
+Next is global REQ/ACK configuration with persistent handshake evidence.
+This milestone establishes firmware boot, not a scheduler or rendered frame.

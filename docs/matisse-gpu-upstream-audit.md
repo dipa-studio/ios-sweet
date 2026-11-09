@@ -1,5 +1,12 @@
 # matisse GPU：以三个上游仓库为准的重审（2026-11-08）
 
+> 2026-11-09 update: see [current bring-up evidence](matisse-gpu-20261109.md).
+> Trials2423 (twice) and2424 completed the previously failing MCU odd-slot
+> store and read after adding vendor EMI diagnostic reads. Earlier claims of
+> an immutable physical address hole, hardware defect, or an excluded entire
+> interconnect are superseded. The exact role of the reads is still being isolated.
+
+
 本文的每一条事实都来自下面三个仓库的**当前源码**，不引用本项目此前的结论。
 凡是本项目自己测出来的东西，都单独标注为"设备实测"。
 
@@ -67,7 +74,7 @@ CSF_DOORBELL(i) = 0x80000 + i*0x10000
 `panthor_mmu_regs.h`：
 
 ```
-AS_COMMAND 0x2428  NOP 0 UPDATE 1 LOCK 2 UNLOCK 3 FLUSH_PT 4 FLUSH_MEM 5
+AS_COMMAND 0x2418  NOP 0 UPDATE 1 LOCK 2 UNLOCK 3 FLUSH_PT 4 FLUSH_MEM 5
 AS_TRANSCFG 0x2430 ADRMODE_AARCH64_4K (6<<0) · INA_BITS(x) (x<<6)
                    OUTA_BITS(x) (x<<14) · PTW_MEMATTR_WB (2<<24)
                    PTW_SH_OS (2<<28) · PTW_RA BIT(30)
