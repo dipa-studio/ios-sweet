@@ -1,5 +1,29 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2446 HARDWARE UI VERIFIED; 2447 SHARED SURFACES IN PREPARATION <<<
+## >>> ACTIVE 2026-11-09: 2447 SYNC FAILURE IDENTIFIED; 2448 SHARED PROBE PREPARING <<<
+
+2447 completed with fresh trial/kernel2447; baseline G710 GLES pixels and EAGL
+context teardown PASS. Shared IOSurface import succeeded, but Mesa then called
+unsupported Linux dma-buf export to obtain implicit fences; shared drawing was
+NOT submitted and the first direct CPU pixel check failed. Evidence:
+research/matisse/20261109-resident-gpu/shared2447-verified.json and
+shim2447-share/gpu-normal/after-console.txt. Full boot_a restored and readback
+verified2931647a...86b1; journal complete/restore_pending=false.
+
+2448 fixes Darwin imported-BO synchronization to use the existing synchronous
+SweetGPU completion timeline (GPU failure does NOT signal completion). Mesa
+cross-build+codesign PASS; 12 targeted host tests PASS, including actual Mesa
+imported wait/get/attach functions under ASan/UBSan. Test harness needed unistd.h.
+No new kernel: same verified kernel2447. Fresh2448 SHARE probe image in preparation;
+old2448-ui-ready image was NEVER booted and is superseded by this probe plan.
+Current root snapshot verified all128x128MiB chunks; live-root-gpu2448.dmg clone
+mounted /Volumes/iOSRoot with updated libOSMesa only. No2448 device root write or
+boot yet. Next: fsck/delta checks,2448 shared pixel probe,then fresh2449 UI trial
+at60Hz with GPU blits. Do not claim shared pixels or FPS improvement until measured.
+User reports2446 icon/text missing blocks/flicker; blur works. User recalls posterd
+was disabled. Current launchd disabled.plist has no poster entry; PosterBoard
+previously ran/crashed. Wallpaper cause remains under investigation.
+
+## >>> PREVIOUS 2026-11-09: 2446 HARDWARE UI VERIFIED; 2447 SHARED SURFACES PREPARATION <<<
 
 2446 completed with fresh trial2446/kernel2445 and changed persistent log.
 Mali-G710/Panfrost in backboardd,4834 CSF submissions,0 submit failures;
@@ -28,6 +52,22 @@ ASan/UBSan tests PASS. Probe includes3 imports and12 direct CPU pixel checks
 of GPU-written surface data,after EAGL group teardown. Not yet run on phone.
 Clone unmounted,fsck/delta preparation underway;runner readonly preflight PASS.
 Do not claim direct surface/performance success until fresh2447 evidence.
+
+2447 deployment checkpoint: source0fd0f12 committed/pushed. GitHub Actions
+workflow dispatch HTTP422 (repository Actions disabled),no CI run ID.
+Full local builds are the build evidence. fsck_hfs -fn PASS. Delta coalesced
+into137 spans/101183488B including unchanged gaps; ALL137 preimages verified.
+Applying with readback now;check apply-delta2447-result.json before any device
+operation. Before root SHAe6aa87bc4128e408129867a02ce1db92d5582eef7e3423a659f35f054f4c11ba;
+expected afterf2bd5dd9cb97d53b61b61d0c3a9c4818bab839f480f1a5ed6828d7f5d761b97b.
+No PosterBoard configuration changed: current job matches earlier cached
+plist,and crash reports identify _stateLock_setupSwitcherConfigurationForFirstTime.
+
+2447 device delta completed137/137 with exact readback,root write_pending=false.
+Starting new one-shot shim2447-share-run-once.py now. Full boot_a restoration
+required until shim2447-share/gpu-normal/journal.json says complete. Kernel2447,
+probe-only launchd; direct shared pixels and group teardown still unverified.
+2448 UI image prepared (same kernel,normal launchd,60Hz/glcopy0/glwait1),not booted.
 
 ## >>> PREVIOUS 2026-11-09: 2445 HARDWARE GLES PIXELS VERIFIED; UI NEXT <<<
 

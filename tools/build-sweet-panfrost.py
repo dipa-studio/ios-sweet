@@ -101,6 +101,32 @@ def main():
                 '(va_bits == 32 ? (1ull << (va_bits - 2)) * 3 : 1ull << (va_bits - 1)) - 0x08000000ull,')
     if new_range not in p.read_text():
         ap.error('incompatible Panthor VA range patch')
+    # IOSurface IDs are not Linux dma-buf FDs. SweetGPU ABI v1 serializes
+    # import with submission and returns from SUBMIT only after the hardware
+    # fence completes. Track each imported BO with the same real timeline
+    # used for local non-exclusive BOs; never invent/export sync-file FDs.
+    sync_marker = '/* SweetGPU synchronous IOSurface timeline. */'
+    if sync_marker not in p.read_text():
+        replace(p, 'int ret = drmSyncobjCreate(dev->fd, 0, &panthor_bo->sync.handle);',
+                '''#ifdef __APPLE__
+   /* SweetGPU synchronous IOSurface timeline. No work is in flight on import. */
+   int ret = drmSyncobjCreate(dev->fd, DRM_SYNCOBJ_CREATE_SIGNALED, &panthor_bo->sync.handle);
+#else
+   int ret = drmSyncobjCreate(dev->fd, 0, &panthor_bo->sync.handle);
+#endif''')
+        text = p.read_text()
+        shared = '''   bool shared =
+      bo->flags & (PAN_KMOD_BO_FLAG_EXPORTED | PAN_KMOD_BO_FLAG_IMPORTED);'''
+        if text.count(shared) != 4:
+            raise ValueError('unexpected Panthor implicit synchronization sites')
+        # The first occurrence is bo_export, which remains unsupported.
+        first = text.index(shared) + len(shared)
+        text = text[:first] + text[first:].replace(shared, '''#ifdef __APPLE__
+   /* SweetGPU synchronous IOSurface timeline. */
+   bool shared = false;
+#else
+''' + shared + '\n#endif')
+        p.write_text(text)
     # 25.0.7 has the v10 compiler/CSF backend but its product table only
     # names G610. The phone reports a8620004 (G710, variant 0). Register the
     # product explicitly instead of lying about GPU_ID in the transport.

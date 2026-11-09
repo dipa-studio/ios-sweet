@@ -114,7 +114,62 @@ class PanthorTransportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d);(p / 'IOKit').mkdir()
             (p / 'IOKit/IOKitLib.h').write_text(MOCK)
-            (p / 'test.c').write_text(HARNESS)
+            # Exercise Mesa's actual Darwin imported-BO sync path too.
+            kmod = (MESA / 'src/panfrost/lib/kmod/panthor_kmod.c').read_text()
+            if 'SweetGPU synchronous IOSurface timeline.' not in kmod:
+                self.skipTest('requires rebuilt shared-IOSurface Mesa fixture')
+            def function(name):
+                start = kmod.index(name + '(')
+                start = kmod.rfind('\n', 0, kmod.rfind('\n', 0, start)) + 1
+                brace = kmod.index('{', start)
+                depth = 1
+                end = brace + 1
+                while depth:
+                    depth += (kmod[end] == '{') - (kmod[end] == '}')
+                    end += 1
+                return kmod[start:end] + '\n'
+            prelude = r'''
+#include <stdbool.h>
+#include <stddef.h>
+#include <unistd.h>
+#include "drm-uapi/dma-buf.h"
+#define MAX2(a,b) ((a)>(b)?(a):(b))
+#define container_of(ptr,type,member) ((type*)((char*)(ptr)-offsetof(type,member)))
+#define mesa_loge(...) ((void)0)
+#define PAN_KMOD_BO_FLAG_IMPORTED 1
+#define PAN_KMOD_BO_FLAG_EXPORTED 2
+struct pan_kmod_dev {int fd;};
+struct pan_kmod_vm {unsigned handle;};
+struct pan_kmod_bo {struct pan_kmod_dev *dev;struct pan_kmod_vm *exclusive_vm;unsigned handle,flags;};
+struct local_sync {uint32_t handle;uint64_t read_point,write_point;};
+struct panthor_kmod_bo {struct pan_kmod_bo base;struct local_sync sync;};
+struct panthor_kmod_vm {struct pan_kmod_vm base;struct local_sync sync;};
+static int64_t os_time_get_nano(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (int64_t)t.tv_sec*1000000000+t.tv_nsec;}
+int sync_wait(int fd,int timeout);
+'''
+            funcs = ''.join(function(n) for n in ['panthor_kmod_bo_wait',
+                'panthor_kmod_bo_attach_sync_point', 'panthor_kmod_bo_get_sync_point'])
+            checks = r'''
+ struct pan_kmod_dev dev={fd};struct panthor_kmod_bo imported={.base={.dev=&dev,.flags=PAN_KMOD_BO_FLAG_IMPORTED}};
+ assert(!drmSyncobjCreate(fd,DRM_SYNCOBJ_CREATE_SIGNALED,&imported.sync.handle));
+ uint32_t dep;uint64_t dep_point;
+ assert(!panthor_kmod_bo_get_sync_point(&imported.base,&dep,&dep_point,false));
+ assert(dep==imported.sync.handle&&!dep_point&&!drmSyncobjWait(fd,&dep,1,0,0,NULL));
+ /* The prior GPU failure/reset cannot be attached as completed work. */
+ assert(panthor_kmod_bo_attach_sync_point(&imported.base,fence,8,true)<0);
+ assert(!imported.sync.write_point&&!imported.sync.read_point);
+ fail_submit=0;op.flags=DRM_PANTHOR_SYNC_OP_SIGNAL|DRM_PANTHOR_SYNC_OP_HANDLE_TYPE_TIMELINE_SYNCOBJ;op.timeline_value=9;
+ assert(!drmIoctl(fd,DRM_IOCTL_PANTHOR_GROUP_SUBMIT,&group));
+ assert(!panthor_kmod_bo_attach_sync_point(&imported.base,fence,9,true));
+ assert(!panthor_kmod_bo_get_sync_point(&imported.base,&dep,&dep_point,true)&&dep_point==1);
+ assert(panthor_kmod_bo_wait(&imported.base,0,false));
+ assert(!drmSyncobjDestroy(fd,imported.sync.handle));
+'''
+            harness = HARNESS.replace('#include <errno.h>', '#include <errno.h>\n#include <time.h>')
+            harness = harness.replace('int main(void){', prelude + funcs + 'int main(void){')
+            head, tail = harness.rsplit(' return 0;\n}\n', 1)
+            harness = head + checks + ' return 0;\n}\n' + tail
+            (p / 'test.c').write_text(harness)
             subprocess.run(['clang', '-std=c11', '-O1', '-g', '-fsanitize=address,undefined',
                             '-I', str(p), '-I', str(MESA / 'src/redwood-drm'),
                             '-I', str(MESA / 'include'), '-I', str(ROOT / 'xnu/gpu'),
