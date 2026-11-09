@@ -18,6 +18,11 @@
 #endif
 
 struct sweet_csf_global_evidence;
+#ifndef SWEET_CSF_QUEUE_PROBE
+#define SWEET_CSF_QUEUE_PROBE 0
+#endif
+struct sweet_csf_queue_config;
+struct sweet_csf_queue_report;
 struct sweet_csf_boot_config {
     uint64_t gpu, root_pa, arena_pa, arena_bytes;
     uint32_t shared_offset, shared_bytes, timeout_ms;
@@ -61,6 +66,10 @@ struct sweet_csf_boot_config {
      * additional MMIO access is issued. Requires global_evidence. */
     uint32_t global_init;
     struct sweet_csf_global_evidence *global_evidence;
+#if SWEET_CSF_QUEUE_PROBE
+    struct sweet_csf_queue_config *queue_config;
+    struct sweet_csf_queue_report *queue_report;
+#endif
 };
 /*2381 evidence, published through a separate ADT property so the 696-byte
  * report ABI is byte-identical. 24 words = 96 bytes = 12 SWEETMRK records;

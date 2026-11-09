@@ -1,6 +1,9 @@
 /* Independent bounded MCU boot transaction. Register facts cross-checked
  * against the device KMD and Linux v6.12 Panthor. No Linux APIs required. */
 #include "mali_csf_boot.h"
+#if SWEET_CSF_QUEUE_PROBE
+#include "mali_csf_queue.h"
+#endif
 static uint32_t rd(const struct sweet_gpu_io *io,uint64_t p) {return io->read32(io->context,p);}
 static void wr(const struct sweet_gpu_io *io,uint64_t p,uint32_t v) {io->write32(io->context,p,v);io->barrier(io->context);}
 static int poll(const struct sweet_gpu_io *io,uint64_t p,uint32_t mask,uint32_t value,uint64_t budget)
@@ -82,7 +85,7 @@ static void platform_state(const struct sweet_csf_boot_config *c,const struct sw
     s->mfg_pll_con1=rd(io,0x13fa000c);s->mfgsc_pll_con1=rd(io,0x13fa0c0c);
     s->topckgen_sel=rd(io,0x100001f0);s->rpc_slp_protect=rd(io,0x13f91048);
     r->platform_sample_flags|=after?2:1;
-#if SWEET_CSF_GPU_REGS && SWEET_CSF_GLOBAL_RELAY
+#if SWEET_CSF_GPU_REGS && (SWEET_CSF_GLOBAL_RELAY || SWEET_CSF_QUEUE_PROBE)
     /* 2426: this carrier is populated after global_init, not by GPU reads. */
 #elif SWEET_CSF_GPU_REGS && SWEET_CSF_STORE_WITNESS
     {
@@ -790,6 +793,21 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     }
 #endif
     r->firmware_ready=1;
+#if SWEET_CSF_QUEUE_PROBE
+    if(!c->queue_config||!c->queue_report||!c->global_init) {
+        r->error=SWEET_CSF_BOOT_ARGUMENT;goto cleanup;
+    }
+    c->queue_config->input_va=r->input_va;c->queue_config->output_va=r->output_va;
+    rc=sweet_csf_queue_probe(c->queue_config,io,c->queue_report);
+    /* Existing 20-word relay: keep the persistent report ABI at784 bytes. */
+    _Static_assert(sizeof(*c->queue_report)==80, "queue relay size");
+    for(unsigned i=0;i<10;i++) {
+        ((uint32_t *)&r->gpu_regs_before)[i]=((const uint32_t *)c->queue_report)[i];
+        ((uint32_t *)&r->gpu_regs_after)[i]=((const uint32_t *)c->queue_report)[i+10];
+    }
+    r->gpu_regs_flags=3;
+    if(rc)r->error=rc;
+#endif
 cleanup:
     /* GPU reset stops DMA and discards AS0/L2 state before the caller
      * releases its GPUEB reference. Never reclaim arena on failed reset. */

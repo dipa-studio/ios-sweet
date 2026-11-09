@@ -57,12 +57,10 @@ class PersistentReportPatchTests(unittest.TestCase):
         # locally edited build tree must not conceal a broken source patch.
         names = subprocess.check_output(['git','ls-files','--','xnu/patches/*.patch'],
                                         cwd=ROOT,text=True).splitlines()
-        identity = sorted(n for n in names if n.endswith('-identity.patch'))
-        self.assertTrue(identity, 'no identity patch carries the build id')
-        last = Path(ROOT / identity[-1]).read_text()
-        # The patch removes the old id and adds the new one; the added line is
-        # the last occurrence in the file.
-        expected = int(last.split('#define SWEET_BUILD_ID 0x')[-1].split('u')[0], 16)
+        added_ids = [line for n in sorted(names) for line in (ROOT/n).read_text(errors='replace').splitlines()
+                     if line.startswith('+#define SWEET_BUILD_ID 0x')]
+        self.assertTrue(added_ids, 'no patch carries the build id')
+        expected = int(added_ids[-1].split('0x')[1].split('u')[0], 16)
         evidence='xnu/patches/0136-matisse-gpu-dvfs-evidence.patch'
         if evidence not in names:
             names = sorted(names + [evidence])
@@ -902,6 +900,31 @@ class ReportDecodeTests(unittest.TestCase):
                             {'gpu_regs_after_reg_2cc':0}):
             with self.subTest(changes_bad=changes_bad):
                 self.assertFalse(decode(**changes_bad)['csf_firmware_boot_verified'])
+
+    def test_2433_requires_gpu_completion_and_clean_termination(self):
+        words = [7,0,0x11,0x11,0x511,0x511,32,32,0xdeadbeef,0x2433c5f1,
+                 0,0,0,0,0x08000020,0,0x10000,8,0x10,10]
+        def decode(values, **extra):
+            fields = {f'gpu_regs_{side}_{key}':values[i*10+j]
+                      for i,side in enumerate(('before','after'))
+                      for j,key in enumerate(self.module.CSF_GPU_REG_KEYS)}
+            fields.update(self.ZERO_PATH)
+            fields.update(extra)
+            return self.module.decode(self.marks_dvfs(build=0x2433,
+                memattr_lo=0x888d8f88,memattr_hi=0x00084c8d,**fields),
+                0x2433,require_leaf=False)['csf']
+        self.assertTrue(decode(words)['queue_execution_verified'])
+        for index,value in ((0,4),(1,0xffffffc1),(3,0),(5,0),(6,0),(7,24),
+                            (8,0x2433c5f1),(9,0xdeadbeef),(10,1),(11,1),
+                            (12,2),(13,1),(18,0x11),(19,0)):
+            bad = words.copy()
+            bad[index] = value
+            with self.subTest(index=index):
+                self.assertFalse(decode(bad)['queue_execution_verified'])
+        for extra in ({'reset_completed':0},{'cleanup_error':-53}):
+            self.assertFalse(decode(words,**extra)['queue_execution_verified'])
+        with self.assertRaises(ValueError):
+            decode(words,gpu_regs_flags=0)
 
     def test_2425_requires_real_firmware_ready_evidence(self):
         data = self.marks_dvfs(build=0x2425, memattr_lo=0x888d8f88,

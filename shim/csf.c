@@ -1,6 +1,9 @@
 /* CSF probe arena is part of the shim's own linked BSS, below its payload.
  * It never borrows GPUEB reservations or the XNU RAM window. */
 #include "csf.h"
+#if SWEET_CSF_QUEUE_PROBE
+#include "../xnu/gpu/mali_csf_queue.h"
+#endif
 #include "console.h"
 #ifdef SHIM_CSF_ENTRY_PROBE
 #include "../xnu/gpu/mali_csf_entry_probe.h"
@@ -168,6 +171,16 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
     if(!rc)rc=sweet_csf_memory_remap_leaves(active_arena,sizeof(arena),pa,(mmu>>8)&255,remaps,1);
 #endif
     if(rc) {shim_csf_report.error=rc;return rc;}
+#if SWEET_CSF_QUEUE_PROBE
+    struct sweet_csf_queue_report qr={0};
+    struct sweet_csf_queue_config qc={.gpu=gpu,.root_pa=root,
+        .shared_pa=pa+memory.shared_offset,.shared_va=memory.shared_va,
+        .shared_bytes=memory.shared_bytes,.memory_bytes=SWEET_CSF_QUEUE_BYTES,
+        .timeout_ms=1000};
+    rc=sweet_csf_queue_memory(active_arena,sizeof(arena),pa,memory.required_bytes,
+        memory.table_pages,(mmu>>8)&255,&qc.memory_pa);
+    if(rc){shim_csf_report.error=rc;return rc;}
+#endif
 #if SWEET_CSF_OUT_OF_ARENA
     /* CPU witness: the shim runs with the MMU off, so these are the same
      * physical words the MCU will read through the remapped leaf. Only this
@@ -217,6 +230,9 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
 #if SWEET_CSF_GLOBAL_INIT
         ,.shared_va=memory.shared_va,.global_init=1,
         .global_evidence=&shim_csf_global_evidence
+#endif
+#if SWEET_CSF_QUEUE_PROBE
+        ,.queue_config=&qc,.queue_report=&qr
 #endif
         };
 #if defined(SHIM_CSF_ENTRY_PROBE) || defined(SHIM_CSF_ENTRY_CHECKPOINT)

@@ -1,5 +1,41 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2431 SYSTEM GLES VERIFIED; INVESTIGATING LATENCY <<<
+## >>> ACTIVE 2026-11-09: USER REQUIRES GPU CONNECTION; SOFTWARE PATH COMPLETE <<<
+
+User explicitly corrected direction: stop software optimization/resolution work
+and connect G710 hardware now. No low-resolution code was written. GLES is
+the validated frontend; current task is hardware CSF queues, resident KMD,
+BO/VM and Mesa panfrost v10 backend. Do not drift back to softpipe tuning.
+2432 completed: fresh trial2432/kernel2431,47 frames/36 surface-draw frames,
+zero logged GL/shader/link/dispatch errors. User confirms swipes DO refresh
+but very slowly.53 slow calls all glDrawElements; max8.503368s. Frame14
+18.920260s, slow-call intervals cover18.733698s(99.014%). No GPU claim.
+Full boot_a restored, SHA2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No runner active, no restore pending.2432 used same2431 kernel; no CI run.
+Raw evidence result2432.json/latency2432.json and gles2432-run under
+research/matisse/20261109-gles-inject/. Source handoff0950325.
+
+Next hardware layer: use2426 proven firmware/global boot; implement group/
+stream interface discovery, owned queue/IO/suspend memory, AS and command
+submission with a CPU-visible completion witness, then retain hardware under
+XNU ownership for Mesa. Existing sweet_csf_boot ALWAYS resets at return, and
+sweet_gpu_boot releases its power reference, so2426 is not a resident driver.
+Mesa25.0.7 already contains Gallium pan_csf.c for PAN_ARCH>=10; the HakiOS
+Darwin patch only implements v7/JM. Need a CSF transport, not that JM shim.
+
+2433 queue implementation ready: portable mali_csf_queue.c/h adds owned
+512KiB queue/IO/witness/suspend memory, AS1, CSG0/CS0, four CS instructions
+(MOVE/MOVE32/SYNC_SET32/WAIT). Success requires GPU tag change, extract32,
+matching ACKs, no faults, termination and outer reset. Not shader rendering.
+102 targeted tests PASS (queue C under ASan/UBSan plus firmware/MMU/evidence).
+Local shim build exit0; reuses2431 kernel, no new kernel build or CI run.
+Image692b48148bdf21ed32193c46dda92dbe0adb0014f4dceb26aab4ea5a55091b8f
+26718208B; manifest in20261109-gpu/shim2433-queue-v2-ready. Read-only device
+preflight PASSED, full boot_a baseline verified. One-shot runner prepared at
+research/matisse/20261109-gpu/shim2433-queue-run-once.py; not started yet.
+After launch inspect shim2433-queue/gpu-normal/journal.json before acting.
+Existing raw backup/restore workflow retained; normal boot runs shim probe.
+
+## >>> PREVIOUS 2026-11-09: 2431 SYSTEM GLES VERIFIED; INVESTIGATING LATENCY <<<
 
 2431 completed with fresh console/trial/kernel identity. One bridge/context,
 37 frame records, 26 with draws into known IOSurface targets; zero recorded
