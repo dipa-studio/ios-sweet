@@ -37,6 +37,10 @@ int sweet_csf_queue_memory(void *buffer,size_t capacity,uint64_t pa,
     uint64_t data=pa+used+4096;
     for(unsigned i=0;i<SWEET_CSF_QUEUE_BYTES/4096;i++)
         store64(arena+used+i*8,(data+i*4096)|UINT64_C(0x60000000000457));
+#if SWEET_CSF_COMPUTE_PROBE
+    /* One read-only executable shader page. All other BO pages remain XN. */
+    store64(arena+used+4*8,(data+0x4000)|UINT64_C(0x4d7));
+#endif
     /* Vendor AP=RW, AF, AttrIdx5(noncacheable), XN; no physical-group tag
      * for application BOs. Firmware mappings retain their existing tags. */
     store64(slot,(pa+used)|3);
@@ -49,6 +53,52 @@ static void wr(const struct sweet_gpu_io *io,uint64_t a,uint32_t n)
 {io->write32(io->context,a,n);io->barrier(io->context);}
 static void wr64(const struct sweet_gpu_io *io,uint64_t a,uint64_t n)
 {wr(io,a,(uint32_t)n);wr(io,a+4,(uint32_t)(n>>32));}
+#if SWEET_CSF_COMPUTE_PROBE
+static unsigned compute_program(const struct sweet_gpu_io *io,uint64_t mem)
+{
+    const uint64_t va=SWEET_CSF_QUEUE_VA;
+    /* Valhall shader assembled with Mesa25.0.7 valhall/asm.py:
+     * IADD_IMM.i32 r0, 0x0, #completion_address
+     * IADD_IMM.i32 r1, 0x0, #0
+     * IADD_IMM.i32 r2, 0x0, #COMPUTE_TAG
+     * STORE.i32.slot0.end @r2, ^r0, offset:0
+     * One invocation, no uniforms/resources/TLS/WLS. The queue's SYNC_SET
+     * writes a DIFFERENT location; only this shader writes the witness. */
+    wr64(io,mem+0x4000,UINT64_C(0x0110c000000000c0)|((va+0x3000)<<8));
+    wr64(io,mem+0x4008,UINT64_C(0x0110c100000000c0));
+    wr64(io,mem+0x4010,UINT64_C(0x0110c200000000c0)|((uint64_t)SWEET_CSF_COMPUTE_TAG<<8));
+    wr64(io,mem+0x4018,UINT64_C(0x7861420218000040));
+    /* v10 Shader Program: compute,32 registers; Local Storage: no WLS. */
+    wr(io,mem+0x5000,0x80000018);wr64(io,mem+0x5008,va+0x4000);
+    wr(io,mem+0x6004,31);
+    wr(io,mem+0x3010,0);wr(io,mem+0x3014,0);
+    uint64_t program[]={
+        UINT64_C(0x2200000000000001), /* REQ_RESOURCE compute */
+        UINT64_C(0x1700000000000002), /* SET_SB_ENTRY endpoint2,other0 */
+        UINT64_C(0x0100000000000000), /* SRT0 */
+        UINT64_C(0x0108000000000000), /* FAU0 */
+        UINT64_C(0x0110000000000000)|(va+0x5000),
+        UINT64_C(0x0118000000000000)|(va+0x6000),
+        UINT64_C(0x0220000000000000), /* global offset */
+        UINT64_C(0x0221000000000000), /* workgroup1,1,1 */
+        UINT64_C(0x0222000000000000),UINT64_C(0x0223000000000000),
+        UINT64_C(0x0224000000000000), /* offsets0,0,0 */
+        UINT64_C(0x0225000000000001),UINT64_C(0x0226000000000001),
+        UINT64_C(0x0227000000000001), /* grid1,1,1 */
+        UINT64_C(0x0400000000008001), /* RUN_COMPUTE,Z,increment1 */
+        UINT64_C(0x0300000000ff0000), /* WAIT all slots */
+        UINT64_C(0x024a000000000000), /* latest flush ID0 in r74 */
+        UINT64_C(0x24004a0000000211), /* clean L2/LSC,invalidate other */
+        UINT64_C(0x0300000000010000),
+        UINT64_C(0x2200000000000000), /* release compute resource */
+        UINT64_C(0x0100000000000000)|(va+0x3010),
+        UINT64_C(0x0202000000000000)|SWEET_CSF_QUEUE_TAG,
+        UINT64_C(0x2600000200000000),UINT64_C(0x0300000000010000),
+    };
+    for(unsigned i=0;i<sizeof(program)/sizeof(program[0]);i++)wr64(io,mem+i*8,program[i]);
+    return sizeof(program);
+}
+#endif
 static int poll(const struct sweet_gpu_io *io,uint64_t a,uint32_t mask,uint32_t n,uint64_t budget)
 {
     uint64_t start=io->ticks(io->context);
@@ -114,11 +164,18 @@ int sweet_csf_queue_probe(const struct sweet_csf_queue_config *c,
     uint64_t mem=c->memory_pa,va=SWEET_CSF_QUEUE_VA;
     wr(io,mem+0x3000,0xdeadbeef);wr(io,mem+0x3004,0);
     r->before=rd(io,mem+0x3000);
+#if SWEET_CSF_COMPUTE_PROBE
+    r->insert=compute_program(io,mem);
+    const uint32_t expected=SWEET_CSF_COMPUTE_TAG;
+#else
     wr64(io,mem,UINT64_C(0x0100000000000000)|(va+0x3000));
     wr64(io,mem+8,UINT64_C(0x0202000000000000)|SWEET_CSF_QUEUE_TAG);
     wr64(io,mem+16,UINT64_C(0x2600000200000000));
     wr64(io,mem+24,UINT64_C(0x0300000000010000));
-    r->insert=32;wr64(io,mem+0x1000,r->insert);wr64(io,mem+0x1008,0);
+    r->insert=32;
+    const uint32_t expected=SWEET_CSF_QUEUE_TAG;
+#endif
+    wr64(io,mem+0x1000,r->insert);wr64(io,mem+0x1008,0);
     wr64(io,mem+0x2000,0);
     wr64(io,ci+0x10,va);wr(io,ci+0x18,4096);
     wr64(io,ci+0x30,va+0x1000);wr64(io,ci+0x38,va+0x2000);
@@ -156,7 +213,10 @@ int sweet_csf_queue_probe(const struct sweet_csf_queue_config *c,
             r->error=-64;break;
         }
         if((r->csg_ack&0x17)==(r->csg_req&0x17)&&(r->cs_ack&7)==1&&
-           r->after==SWEET_CSF_QUEUE_TAG&&r->before==0xdeadbeef&&
+           r->after==expected&&r->before==0xdeadbeef&&
+#if SWEET_CSF_COMPUTE_PROBE
+           rd(io,mem+0x3010)==SWEET_CSF_QUEUE_TAG&&!rd(io,mem+0x3014)&&
+#endif
            r->extract==r->insert&&!rd(io,mem+0x2004)){r->error=0;r->stage=5;break;}
         if(io->ticks(io->context)-start>=budget)break;
     }

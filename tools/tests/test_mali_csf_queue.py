@@ -42,9 +42,10 @@ static void execute(struct model*m){
  if(m->mode==4){co[0x84/4]=0x44;return;}
  if(m->mode==6){m->gpu[0x2000/4]|=2;return;}
  if(m->mode==7){m->gpu[0x245c/4]=0xc1;return;}
- uint32_t regs[96]={0};unsigned waited=0;
+ uint32_t regs[96]={0};unsigned waited=0,resources=0;
+ unsigned length=m->mem[0x1000/4];
  /* Decode the submitted words, rather than accepting a host-supplied tag. */
- for(unsigned off=0;off<32;off+=8){
+ for(unsigned off=0;off<length;off+=8){
   uint64_t ins=word(m,MEM+off);unsigned op=ins>>56,dst=(ins>>48)&255;
   if(op==1){assert(dst+1<96);regs[dst]=ins;regs[dst+1]=(ins>>32)&0xffff;}
   else if(op==2){assert(dst<96);regs[dst]=ins;}
@@ -52,12 +53,36 @@ static void execute(struct model*m){
    unsigned addr=(ins>>40)&255,data=(ins>>32)&255;
    assert(addr+1<96&&data<96&&(ins&0xffffffff)==0&&dst==0);
    uint64_t va=regs[addr]|((uint64_t)regs[addr+1]<<32);
-   assert(va==0x06003000&&m->mem[0x3000/4]==0xdeadbeef);
-   m->mem[0x3000/4]=regs[data]^(m->mode==2);m->executed++;
-  }else if(op==3){assert(((ins>>16)&255)==1);waited++;}
+   assert(va==(SWEET_CSF_COMPUTE_PROBE?0x06003010:0x06003000));
+   if(!SWEET_CSF_COMPUTE_PROBE)assert(m->mem[0x3000/4]==0xdeadbeef);
+   m->mem[(va-0x06000000)/4]=regs[data]^(m->mode==2);m->executed++;
+  }else if(op==3){assert(((ins>>16)&255)!=0);waited++;}
+  else if(op==34){resources=ins&15;}
+  else if(op==23){assert((ins&255)==2);}
+  else if(op==36){assert((ins&0xffffffff)==0x211&&regs[(ins>>40)&255]==0);}
+  else if(op==4){
+   assert(SWEET_CSF_COMPUTE_PROBE&&resources==1&&(ins&0xffff)==0x8001);
+   assert(regs[0]==0&&regs[8]==0&&regs[16]==0x06005000&&regs[24]==0x06006000);
+   assert(regs[33]==0&&regs[37]==1&&regs[38]==1&&regs[39]==1);
+   assert(m->mem[0x5000/4]==0x80000018&&m->mem[0x6004/4]==31);
+   uint64_t pc=word(m,MEM+0x5008);uint32_t sr[64]={0};
+   for(unsigned k=0;k<4;k++){
+    uint64_t shader=word(m,MEM+(pc-0x06000000)+k*8);
+    if(((shader>>48)&255)==16){
+     assert((shader&0xffffc000000000ffULL)==0x0110c000000000c0ULL);
+     sr[(shader>>40)&63]=(uint32_t)(shader>>8);
+    }else{
+     assert(((shader>>48)&255)==0x61&&((shader>>59)&15)==15);
+     unsigned ar=shader&63,dr=(shader>>40)&63;assert(ar+1<64);
+     uint64_t va=sr[ar]|((uint64_t)sr[ar+1]<<32);assert(va==0x06003000);
+     assert(m->mem[0x3000/4]==0xdeadbeef);m->mem[0x3000/4]=sr[dr];
+    }
+   }
+  }
   else assert(0);
  }
- assert(waited==1);m->mem[0x2000/4]=m->mode==3?24:32;
+ assert(waited==(SWEET_CSF_COMPUTE_PROBE?3:1));
+ m->mem[0x2000/4]=m->mode==3?length-8:length;
 }
 static void wr(void*p,uint64_t a,uint32_t n){
  struct model*m=p;m->writes++;*address(m,a)=n;
@@ -77,7 +102,10 @@ static void memory_test(void){
  a[0]=(p+4096)|3;a[512]=(p+8192)|3;
  assert(!sweet_csf_queue_memory(a,2<<20,p,0x10000,3,40,&mem));
  assert(mem==p+0x11000&&a[1024+48]==(p+0x10000+3));
- for(unsigned i=0;i<128;i++)assert(a[0x10000/8+i]==((mem+4096*i)|0x0060000000000457ULL));
+ for(unsigned i=0;i<128;i++){
+  uint64_t flags=(SWEET_CSF_COMPUTE_PROBE&&i==4)?0x4d7:0x0060000000000457ULL;
+  assert(a[0x10000/8+i]==((mem+4096*i)|flags));
+ }
  assert(a[0]==((p+4096)|3)&&a[512]==((p+8192)|3));
  uint8_t *copy=malloc(2<<20);assert(copy);memcpy(copy,a,2<<20);
  assert(sweet_csf_queue_memory(a,2<<20,p,0x10000,3,40,&mem)<0);assert(!memcmp(a,copy,2<<20));
@@ -94,7 +122,8 @@ int main(void){
  .memory_bytes=SWEET_CSF_QUEUE_BYTES,.timeout_ms=1};
  struct sweet_csf_queue_report r;
  for(int i=0;i<8;i++){init(m);m->mode=i;int rc=sweet_csf_queue_probe(&c,&io,&r);
-  if(!i)assert(!rc&&r.stage==7&&r.after==SWEET_CSF_QUEUE_TAG&&r.extract==32&&m->executed==1);
+  if(!i)assert(!rc&&r.stage==7&&r.after==(SWEET_CSF_COMPUTE_PROBE?SWEET_CSF_COMPUTE_TAG:SWEET_CSF_QUEUE_TAG)&&
+              r.extract==(SWEET_CSF_COMPUTE_PROBE?192:32)&&m->executed==1);
   else assert(rc<0&&r.stage!=7);assert(m->bells==2);
  }
  init(m);m->gpu[0x2470/4]=6;assert(sweet_csf_queue_probe(&c,&io,&r)==-62&&!m->writes);
@@ -107,11 +136,18 @@ int main(void){
 
 class QueueTests(unittest.TestCase):
     def test_actual_queue_and_memory_under_sanitizers(self):
+        self.run_model(False)
+
+    def test_compute_shader_and_stream_under_sanitizers(self):
+        self.run_model(True)
+
+    def run_model(self, compute):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             (d / 'queue.c').write_text(HARNESS)
             subprocess.run(['cc', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-                '-fsanitize=address,undefined', '-I' + str(ROOT / 'xnu/gpu'),
+                '-fsanitize=address,undefined', '-DSWEET_CSF_COMPUTE_PROBE='+str(int(compute)),
+                '-I' + str(ROOT / 'xnu/gpu'),
                 str(d / 'queue.c'), str(ROOT / 'xnu/gpu/mali_csf_queue.c'),
                 '-o', str(d / 'queue')], check=True)
             subprocess.run([str(d / 'queue')], check=True)

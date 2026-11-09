@@ -1,66 +1,45 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: USER REQUIRES GPU CONNECTION; SOFTWARE PATH COMPLETE <<<
+## >>> ACTIVE 2026-11-09: CSF QUEUE2435 VERIFIED; COMPUTE SHADER2436 READY <<<
 
-User explicitly corrected direction: stop software optimization/resolution work
-and connect G710 hardware now. No low-resolution code was written. GLES is
-the validated frontend; current task is hardware CSF queues, resident KMD,
-BO/VM and Mesa panfrost v10 backend. Do not drift back to softpipe tuning.
-2432 completed: fresh trial2432/kernel2431,47 frames/36 surface-draw frames,
-zero logged GL/shader/link/dispatch errors. User confirms swipes DO refresh
-but very slowly.53 slow calls all glDrawElements; max8.503368s. Frame14
-18.920260s, slow-call intervals cover18.733698s(99.014%). No GPU claim.
-Full boot_a restored, SHA2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
-No runner active, no restore pending.2432 used same2431 kernel; no CI run.
-Raw evidence result2432.json/latency2432.json and gles2432-run under
-research/matisse/20261109-gles-inject/. Source handoff0950325.
+User explicitly requires direct G710 hardware integration, not softpipe tuning.
+GLES frontend/system rendering already works;2432 slowness was glDrawElements.
+No low-resolution or software optimization changes were made. Next layers are
+shader execution, resident XNU KMD/BO/VM/queues/fences and Mesa v10 transport.
 
-Next hardware layer: use2426 proven firmware/global boot; implement group/
-stream interface discovery, owned queue/IO/suspend memory, AS and command
-submission with a CPU-visible completion witness, then retain hardware under
-XNU ownership for Mesa. Existing sweet_csf_boot ALWAYS resets at return, and
-sweet_gpu_boot releases its power reference, so2426 is not a resident driver.
-Mesa25.0.7 already contains Gallium pan_csf.c for PAN_ARCH>=10; the HakiOS
-Darwin patch only implements v7/JM. Need a CSF transport, not that JM shim.
+2435 SUCCESS: fresh trial2435/kernel2431. CSG_REQ0x11/ACK0x10000011,
+CS_REQ0x511/ACK0x11, insert=extract=32, witness deadbeef ->2433c5f1,
+10 polls, fault/fatal/AS fault0, MMU_RAW0x20000(request completion only).
+Group terminated, MCU disabled0, reset completed, cleanup_error0. This is
+hardware COMMAND execution, not shader rendering or accelerated UI.
+Source560f3d0; image30decd7848f0c465a153e73454dfae6ff2a0c59faa09d601e82010f98f21cfc1.
+Fastboot79.30s; full boot_a restored and independently verified to
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Device Recovery; no runner active/restoration pending at this handoff.
+Raw evidence20261109-gpu/shim2435-queue/gpu-normal/.
 
-2435 ready: shared-window queue at0x06000000;102 tests PASS; shim build exit0.
-Image30decd7848f0c465a153e73454dfae6ff2a0c59faa09d601e82010f98f21cfc1,26718208B.
-Same2431 kernel/no CI. New runner shim2435-queue-run-once.py; starting after
-read-only preflight and commit. Journal shim2435-queue/gpu-normal/journal.json.
+Earlier2433 aborted on MMU bit17 wrongly treated as fault (fixed2e5c0eb).
+2434 then showed real AS0 fault bit0, CSG_ACK0x11/CS_ACK0/extract0.
+Moving queue IO from08000000 to06000000 fixed that in2435. Panthor MCU shared
+window is[04000000,08000000). AS0 fault-address relay added for later errors.
+2433/2434 also fully restored. Raw logs under shim2433-queue/shim2434-queue.
 
-2434 hardware result: fresh trial2434, CSG_ACK0x11 but CS_ACK0/extract0/
-witness unchanged. MMU_RAW0x20001 after3 polls: true AS0(firmware) fault;
-AS1 fault0. Root cause candidate: queue IO VA0x08000000 is outside Panthor
-CSF_MCU_SHARED_REGION [0x04000000,0x08000000). Preparing2435 at0x06000000
-and relaying AS fault address on failure. Shader test waits for queue success.
-Manual Fastboot requested; user entered, logs captured and full boot_a restored.
-No UI/GPU rendering claim. Kernel2431 reused; no CI. Raw shim2434-queue/.
+2436 prepared: compute-only CS stream192B, real four-instruction Valhall shader
+writes2436c5f1 into a separate witness; final SYNC_SET writes another location.
+One executable read-only shader page; other data pages remain XN. Word encoding
+matches Mesa25.0.7 valhall/asm.py.103 tests PASS incl actual C ASan/UBSan,
+command/shader interpreter and rejecting queue-only completion as shader proof.
+Local shim build exit0. Imaged5468945fe4eb1df16d7682a474308cdbd6213b10c957662a0e198afbaf0d435,
+26718208B; output20261109-gpu/shim2436-compute-ready/manifest.json.
+Kernel2431 unchanged20a6a410...19146d, mark2431. No kernel rebuild/new CI.
+Runner shim2436-compute-run-once.py prepared, not started yet; after launch
+inspect shim2436-compute/gpu-normal/journal.json. Always finish full boot_a
+restoration. Do not rerun consumed trial runners. No pending root filesystem edit.
 
-2434 fixed MMU completion/fault classification, all102 tests PASS, local shim
-build exit0. Image08fa195e86b177a2dd6f220639f8b4f00e52c3edac34e26fd645c0790f9eac14,
-26718208B; kernel2431 unchanged, no CI. Source2e5c0eb. One-shot runner STARTED and consumed; do not rerun.
-Journal shim2434-queue/gpu-normal/journal.json; completed and restored full boot_a.
-No restoration pending. Independent Recovery hash matches2931647a...86b1.
-
-2433 hardware result: fresh trial2433/kernel2431; MCU/global boot reached,
-CSG ACK eventually0x11. Queue exited at first poll because MMU RAWSTAT0x20000
-(AS1 command completion) was incorrectly treated as a fault. Witness unchanged,
-extract0; NO queue-execution claim. MCU disable timeout(-53), reset completed.
-Boot returned Fastboot91.69s; full boot_a restored and independently hashed to
-2931647a...86b1. No restoration pending. Sourcec034b5b. Fixing low16-bit fault
-mask and AS fault check for2434; raw evidence shim2433-queue/gpu-normal/.
-
-2433 queue implementation ready: portable mali_csf_queue.c/h adds owned
-512KiB queue/IO/witness/suspend memory, AS1, CSG0/CS0, four CS instructions
-(MOVE/MOVE32/SYNC_SET32/WAIT). Success requires GPU tag change, extract32,
-matching ACKs, no faults, termination and outer reset. Not shader rendering.
-102 targeted tests PASS (queue C under ASan/UBSan plus firmware/MMU/evidence).
-Local shim build exit0; reuses2431 kernel, no new kernel build or CI run.
-Image692b48148bdf21ed32193c46dda92dbe0adb0014f4dceb26aab4ea5a55091b8f
-26718208B; manifest in20261109-gpu/shim2433-queue-v2-ready. Read-only device
-preflight PASSED, full boot_a baseline verified. One-shot runner prepared at
-research/matisse/20261109-gpu/shim2433-queue-run-once.py; not started yet.
-After launch inspect shim2433-queue/gpu-normal/journal.json before acting.
-Existing raw backup/restore workflow retained; normal boot runs shim probe.
+Existing sweet_csf_boot resets and sweet_gpu_boot releases power on return;
+these shim probes are not a resident driver. Queue module is portable, with
+shared root for AS0/AS1 only in this exclusive test. Separate application VM
+and persistent XNU ownership still required. Mesa25 pan_csf.c supports v10;
+HakiOS Darwin patch is v7/JM and cannot substitute for the needed CSF transport.
 
 ## >>> PREVIOUS 2026-11-09: 2431 SYSTEM GLES VERIFIED; INVESTIGATING LATENCY <<<
 

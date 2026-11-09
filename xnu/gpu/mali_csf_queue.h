@@ -12,6 +12,10 @@
 #define SWEET_CSF_QUEUE_VA 0x06000000u
 #define SWEET_CSF_QUEUE_BYTES 0x80000u
 #define SWEET_CSF_QUEUE_TAG 0x2433c5f1u
+#ifndef SWEET_CSF_COMPUTE_PROBE
+#define SWEET_CSF_COMPUTE_PROBE 0
+#endif
+#define SWEET_CSF_COMPUTE_TAG 0x2436c5f1u
 struct sweet_csf_queue_config {
     uint64_t gpu, root_pa, shared_pa, memory_pa;
     uint32_t shared_va, shared_bytes, input_va, output_va, memory_bytes;
