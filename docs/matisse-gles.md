@@ -101,3 +101,24 @@ payload 大小重编 loader。保留原 ramdisk、签名和 Android header 参�
 2430 的基准复现通过，使用同一个 2429 内核（mark 2429），只修正
 loader 和 trial 参数。每次必须先验证日志新鲜度与 trial 身份，再
 解读用户态输出。原始 2429 运行脚本不可重复执行。
+
+## 2430：注入成功，定位 IOSurface 接口缺口
+
+2430 的 console 内容与前像不同，boot-args 为2430，marks 为新内核2429；
+270850字节、flush111，完整 boot_a 已恢复并独立核对。用户看到持续跑码。
+8次 backboardd 启动均加载桥接，8/8 EAGL 方法替换成功，7次创建
+softpipe ES3.1上下文；没有已完成的 GLES 显示帧。
+
+首个1440×3200目标为 `b3a8` 双平面表面，HakiOS 的 GLES 桥接只接受
+BGRA或无格式的单平面目标，因而拒绝 attach，首个 draw 返回0x506。
+随后 selector6 被 SWEET 的默认分支以全零结果宣告成功，伪造出没有
+共享状态页的 IOSurfaceClient；崩溃位于 `IOSurfaceClientGetBulkAttachments`
+复制 `shared + 0x30`，FAR为0x30。参考树的 MiniIOSurface 对6/7明确
+返回 Unsupported，并在新建表面时将 b3a8 协商为 BGRA，且支持
+`IOSurfaceAddress` 包装调用方内存。这些接口需要一起移植，不能将
+原有双平面像素直接按BGRA解读。
+
+`tools/sweet-gles-evidence.py` 从原始环形日志验证内容新鲜度、trial和
+内核编号，分别报告库加载、上下文和带 display surface 的绘制帧。
+七项回归检查通过；旧2429捕获被正确拒绝。工具不会把软件帧或库
+加载标为硬件加速，也不自动断言屏幕视觉质量。

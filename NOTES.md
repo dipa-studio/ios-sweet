@@ -1,5 +1,23 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2429 INVALID TRIAL RESTORED; REBUILD LOADER FOR2430 <<<
+## >>> ACTIVE 2026-11-09: 2430 INJECTION WORKS; B3A8 TARGET REJECTED <<<
+
+2430 captured FRESH trial2430/kernel mark2429;270850 console bytes/flush111.
+Exec injection8, AMFI90 successes16, loader/8 EAGL methods installed8;
+7 ES3.1 softpipe contexts. First native1440x3200 display IOSurface is b3a8,
+2 planes, and HakiOS my_attachImage rejects it (only BGRA/0, nonplanar).
+Each first draw gets GL_INVALID_FRAMEBUFFER_OPERATION0x506 then backboardd
+SIGSEGV at FAR0x30. Seven observed crashes; no completed GLES frame.
+User saw continuously scrolling console and entered Fastboot at341.74s.
+Full boot_a restored; independent Recovery SHA matches2931647a...86b1.
+No runner active/restore pending. Packaging6ee5272 worked; no new kernel/CI.
+Next: symbolicate the first backboardd crash, inspect actual b3a8 planes and
+format negotiation; implement the smallest correct surface/GLES adaptation.
+Do not reinterpret b3a8 as linear BGRA without proving its layout.
+Evidence: research/matisse/20261109-gles-inject/result2430.json and
+ gles2430-run/gpu-normal/after-console.txt. Offline evidence tool now rejects
+unchanged console, wrong trial/build, and missing display draws (7 tests pass).
+
+## >>> PREVIOUS 2026-11-09: 2429 INVALID TRIAL RESTORED; REBUILD LOADER FOR2430 <<<
 
 2429 user saw REDMI only. Before/after persistent tail hashes IDENTICAL
 817744f3...f4aa; marks still2316, bootargs still2428. These are stale logs,
