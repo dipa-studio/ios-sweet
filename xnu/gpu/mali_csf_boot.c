@@ -82,7 +82,27 @@ static void platform_state(const struct sweet_csf_boot_config *c,const struct sw
     s->mfg_pll_con1=rd(io,0x13fa000c);s->mfgsc_pll_con1=rd(io,0x13fa0c0c);
     s->topckgen_sel=rd(io,0x100001f0);s->rpc_slp_protect=rd(io,0x13f91048);
     r->platform_sample_flags|=after?2:1;
-#if SWEET_CSF_GPU_REGS && SWEET_CSF_SLC_GROUPS
+#if SWEET_CSF_GPU_REGS && SWEET_CSF_STORE_WITNESS
+    {
+        struct sweet_csf_gpu_regs *g=after?&r->gpu_regs_after:&r->gpu_regs_before;
+        uint64_t shared=c->arena_pa+c->shared_offset;
+        io->barrier(io->context);
+        g->slot200=rd(io,shared+0x200);g->slot400=rd(io,shared+0x400);
+        g->marker=rd(io,shared+8);g->result=rd(io,shared+12);
+        g->target_pa_lo=(uint32_t)(shared+0x200);
+        g->target_pa_hi=(uint32_t)((shared+0x200)>>32);
+        g->control_pa_lo=(uint32_t)(shared+0x400);
+        g->control_pa_hi=(uint32_t)((shared+0x400)>>32);
+#if SWEET_CSF_L2_HASH8
+        /* 2421 reuses the seed labels for the pre/post L2_CONFIG readback. */
+        g->seed200=r->gpu_regs_before.seed200;
+        g->seed400=r->gpu_regs_before.seed400;
+#else
+        g->seed200=0x24205200;g->seed400=0x24205400;
+#endif
+        r->gpu_regs_flags|=after?2:1;
+    }
+#elif SWEET_CSF_GPU_REGS && SWEET_CSF_SLC_GROUPS
     /*2417: the base word of groups0..9, once, after the MCU start. 2416 read
      *five words of this same page before and after and got identical values,
      *so the page is configuration and one post-start snapshot buys ten groups
@@ -411,6 +431,20 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     if(!(r->l2_present&1)) {r->error=SWEET_CSF_BOOT_MODEL;goto cleanup;}
     rc=poll(io,c->gpu+0x220,1,0,budget);
     if(rc) {r->error=rc;goto cleanup;}
+#if SWEET_CSF_L2_HASH8
+    /* r32p1 kbase_pm_l2_config_override(): hash in bits31:24, before L2 ON.
+     * kbase_read_l2_config_from_dt permits user selectors 8..15. This is a
+     * diagnostic for arch10's hash, NOT arch11+ ASN_HASH enable/coefficients. */
+    if(rd(io,c->gpu+0x160)&1) {r->error=SWEET_CSF_BOOT_STATE;goto cleanup;}
+    uint32_t l2_config=rd(io,c->gpu+0x48);
+    uint32_t l2_hash8=(l2_config&0x00ffffffu)|0x08000000u;
+    r->gpu_regs_before.seed200=l2_config;
+    wr(io,c->gpu+0x48,l2_hash8);
+    r->gpu_regs_before.seed400=rd(io,c->gpu+0x48);
+    if(r->gpu_regs_before.seed400!=l2_hash8) {
+        r->error=SWEET_CSF_BOOT_STATE;goto cleanup;
+    }
+#endif
     wr(io,c->gpu+0x1a0,1);
     rc=poll(io,c->gpu+0x160,1,1,budget);r->l2_ready=rd(io,c->gpu+0x160);
     if(rc) {r->error=rc;goto cleanup;}
@@ -492,6 +526,12 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     }
     r->irq_gate_passed=1;
     r->stage=SWEET_CSF_BOOT_HALT;
+#if SWEET_CSF_STORE_WITNESS
+    /* The diagnostic MCU code owns these two otherwise unused shared words.
+     * Sample before reset: cleanup cannot erase or manufacture the witness. */
+    wr(io,shared+0x200,0x24205200);
+    wr(io,shared+0x400,0x24205400);
+#endif
     platform_state(c,io,r,0);
     access_state(c,io,r,0);
     if(platform_path(c,io,r,0)) {

@@ -131,7 +131,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415,0x2416,0x2417,0x2418,0x2419):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415,0x2416,0x2417,0x2418,0x2419,0x2420,0x2421):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -198,7 +198,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                       'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406, 0x2407, 0x2408) else
                      ('leaf_0x0100d000','leaf_0x0100c000',
                       'leaf_0x0100e000','leaf_0x01001000') if expected_build in (0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414, 0x2415, 0x2416, 0x2417,
-                                                                       0x2418, 0x2419) else
+                                                                       0x2418, 0x2419, 0x2420, 0x2421) else
                      ('leaf_0x0100e000','leaf_0x0300e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
                      ('leaf_0x03000000','leaf_0x03001000',
@@ -444,6 +444,37 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 '0x000 into the four in-direction ones. The vendor driver ORs 0x855/0x055 '
                 'into bits 11:0 on every power-on and never reads the words back, so the '
                 'upper bits have never been observed before this run.')
+        if expected_build in (0x2420, 0x2421):
+            order = ('reg_000', 'reg_004', 'reg_00c', 'reg_034', 'reg_048',
+                     'reg_04c', 'reg_2c0', 'reg_2c4', 'reg_2c8', 'reg_2cc')
+            names = ('slot200', 'slot400', 'marker', 'result', 'target_pa_lo',
+                     'target_pa_hi', 'control_pa_lo', 'control_pa_hi', 'seed200', 'seed400')
+            before, after = [dict(zip(names, [csf[key][n] for n in order]))
+                             for key in ('gpu_regs_before', 'gpu_regs_after')]
+            if csf['gpu_regs_sample_flags'] != 3 or any(
+                    before[k] != v for k, v in (('slot200', 0x24205200),
+                                               ('slot400', 0x24205400))):
+                raise ValueError('invalid store-witness baseline')
+            for key in names[4:]:
+                if before[key] != after[key]:
+                    raise ValueError('store-witness address/seed changed')
+            if expected_build == 0x2421:
+                old, new = before['seed200'], before['seed400']
+                csf['l2_hash_override'] = dict(before=old, after=new, selector=8,
+                    readback_verified=new == ((old & 0x00ffffff) | 0x08000000))
+            marker = after['marker']
+            control = after['slot400'] == 0x2420a400
+            visible = after['slot200'] == 0x2420a200
+            csf['store_witness'] = dict(before=before, after=after,
+                control_visible=control, odd_store_visible=visible,
+                store_dsb_completed=marker in (3, 4), read_completed=marker == 4,
+                outcome=('control-incomplete' if not control or marker not in (2, 3, 4) else
+                         'odd-read-returned' if marker == 4 else
+                         'odd-store-visible' if visible else 'odd-store-not-visible'),
+                note='CPU observations before cleanup; absence does not by itself prove an address hole.')
+            for key in ('gpu_regs_before', 'gpu_regs_after', 'gpu_regs_block_live',
+                        'gpu_regs_slice_signal', 'gpu_regs_note'):
+                csf.pop(key, None)
         if expected_build == 0x2419:
             # Four words before the write, the same four after it, two
             # out-direction words that are never written. The post-words are the

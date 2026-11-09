@@ -29,6 +29,7 @@ HARNESS=r'''
 #define MEMATTR_HI 0x4c4c4c4c
 #endif
 struct model {
+ uint32_t witness200,witness400,l2_hash;unsigned witness_reads,l2_hash_writes;int witness_drop;
  uint64_t tick;unsigned reads,writes,enabled,resets,as_updates,locked,flushed,lock_low,lock_high;
  uint32_t path[16],path_after_bits;unsigned path_on,path_reads,marker_reads;
  uint32_t gpu_mask,job_mask,mmu_mask,l2,raw,job,mcu,mmu,transcfg,table_low,table_high;
@@ -54,6 +55,12 @@ static int dsp_in(uint64_t a) {
 #endif
 static uint32_t rd(void *p,uint64_t a) {
  struct model*m=p;m->reads++;
+#if SWEET_CSF_STORE_WITNESS
+ if(a==0x90010200||a==0x90010400) {
+  assert(m->resets==0);m->witness_reads++;
+  return a==0x90010200?m->witness200:m->witness400;
+ }
+#endif
  if(m->path_on) {
   const uint64_t addresses[]={0x13f9103c,0x13f91048,0x10001ca0,0x10001cac,
    0x10001c60,0x10001c6c,0x10001c70,0x10001c7c,0x13fbf100,0x13fbf120,
@@ -122,6 +129,7 @@ static uint32_t rd(void *p,uint64_t a) {
 #endif
  assert(a>=0x13000000 && a<0x13002500);assert(!m->unpowered);
  switch(a-0x13000000) {
+ case 0x48:return m->l2_hash?m->l2_hash:0x07130000;
  case 0:return m->bad_id?0xa0020001:0xa8620004;
  case 0x14:return m->bad_bits?0x1010:0x2830;
  case 0x18:return 0xff;
@@ -155,6 +163,12 @@ static uint32_t rd(void *p,uint64_t a) {
 }
 static void wr(void*p,uint64_t a,uint32_t v) {
  struct model*m=p;m->writes++;assert(!m->unpowered);
+#if SWEET_CSF_STORE_WITNESS
+ if(a==0x90010200||a==0x90010400) {
+  assert(!m->enabled);
+  if(a==0x90010200)m->witness200=v;else m->witness400=v;return;
+ }
+#endif
  if(a==0x13080000) {
   /*2381: kernel doorbell. The firmware acks the CFG bits by mirroring REQ. */
   assert(m->enabled && m->as_updates==2 && m->resets==PRESTART_RESETS);
@@ -185,6 +199,9 @@ static void wr(void*p,uint64_t a,uint32_t v) {
  }
 #endif
  switch(a-0x13000000) {
+ case 0x48:
+  assert(!m->l2 && !m->enabled && v==0x08130000);
+  m->l2_hash=v;m->l2_hash_writes++;return;
  case 0x304:
   assert(v==31 && !m->l2 && !m->as_updates && !m->enabled);
   assert(!m->gpu_mask && !m->job_mask && !m->mmu_mask);
@@ -226,6 +243,10 @@ static void wr(void*p,uint64_t a,uint32_t v) {
   assert(m->l2 && m->as_updates==2 && m->transcfg==(m->vendor_ina0?0x42000006:0x420001c6));
   assert((m->gpu_mask&0x103)==0x103 && m->job_mask==UINT32_MAX && (m->mmu_mask&0xff)==0xff);
   m->started=1;m->enabled++;m->mcu=1;
+#if SWEET_CSF_STORE_WITNESS
+  m->witness400=0x2420a400;
+  if(!m->witness_drop)m->witness200=0x2420a200;
+#endif
   if(m->request_done)m->mmu=0x10000;
   if(m->fw_fault)m->mmu=1;
   else if(!m->no_fw)m->job|=0x80000000;
@@ -246,7 +267,29 @@ static struct model model(void){return (struct model){.gpu_mask=0x55,.job_mask=0
 static struct sweet_csf_boot_config cfg(void){return (struct sweet_csf_boot_config){.gpu=0x13000000,.root_pa=0x90000000,.arena_pa=0x90000000,.arena_bytes=0x200000,.shared_offset=0x10000,.shared_bytes=0x20000,.timeout_ms=1,.private_probe_offset=0x5000};}
 static int run(struct model*m,struct sweet_csf_boot_config*c,struct sweet_csf_boot_report*r){struct sweet_gpu_io io={m,rd,wr,ticks,barrier,1000};return sweet_csf_boot(c,&io,r);}
 static void clean(struct model*m,struct sweet_csf_boot_report*r){assert(m->gpu_mask==0x55 && m->job_mask==0xaa && m->mmu_mask==0xbb && m->resets==1+PRESTART_RESETS);assert(r->reset_completed);}
-#if SWEET_CSF_DISPATCH_READBACK
+#if SWEET_CSF_STORE_WITNESS
+int main(void) {
+ for(int drop=0;drop<2;drop++) {
+  struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
+  c.platform_snapshot=1;m.no_fw=1;m.witness_drop=drop;
+  assert(run(&m,&c,&r)==-53);
+  assert(sizeof(r)==784 && r.gpu_regs_flags==3 && m.witness_reads==4);
+  assert(r.gpu_regs_before.slot200==0x24205200 && r.gpu_regs_before.slot400==0x24205400);
+  assert(r.gpu_regs_after.slot400==0x2420a400);
+  assert(r.gpu_regs_after.slot200==(drop?0x24205200:0x2420a200));
+  assert(r.gpu_regs_after.target_pa_lo==0x90010200 && r.gpu_regs_after.control_pa_lo==0x90010400);
+#if SWEET_CSF_L2_HASH8
+  assert(m.l2_hash_writes==1);
+  assert(r.gpu_regs_before.seed200==0x07130000 && r.gpu_regs_before.seed400==0x08130000);
+  assert(r.gpu_regs_after.seed200==0x07130000 && r.gpu_regs_after.seed400==0x08130000);
+#else
+  assert(!m.l2_hash_writes);
+#endif
+  assert(!r.firmware_ready);clean(&m,&r);
+ }
+ return 0;
+}
+#elif SWEET_CSF_DISPATCH_READBACK
 /*2419: the four in-direction words are written0x800 and read back in the same
  *block. This model stores the write, so a landed write reads back as0x800 and
  *an ignored one as the page's own offset - the two answers this flight exists
@@ -664,6 +707,13 @@ class CsfBootTests(unittest.TestCase):
 
     def test_vendor_memattr_with_global_interface(self):
         self._run(['-DSWEET_CSF_VENDOR_MEMATTR=1','-DSWEET_CSF_GLOBAL_INIT=1'])
+
+    def test_store_witness_before_cleanup(self):
+        self._run(['-DSWEET_CSF_STORE_WITNESS=1','-DSWEET_CSF_GPU_REGS=1'])
+
+    def test_l2_hash_before_power_on(self):
+        self._run(['-DSWEET_CSF_STORE_WITNESS=1','-DSWEET_CSF_GPU_REGS=1',
+                   '-DSWEET_CSF_L2_HASH8=1'])
 
     def test_dispatch_readback(self):
         """2419: 0x800 written, then the same four words read back."""

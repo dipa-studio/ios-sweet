@@ -1,6 +1,62 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## >>> ACTIVE 2026-11-08 17:25: 2419 RAN - THE WRITE LANDS, THE FIELD IS STILL NOT THE WALL <<<
+## >>> ACTIVE 2026-11-09: 2421 L2 HASH TEST RUNNING <<<
+
+2421 image 8e31785b853a18e736d5898af06063042abac4600b0083aa381b7adeb9a6dc9f
+passed build, 12 sanitizer boot-model tests, two assembled/Unicorn ladder tests
+and Recovery preflight. It keeps 2420's MCU program and shared samples, changes
+L2_CONFIG bits31:24 to 8 before L2 power-on and requires readback. The two seed
+label slots now carry L2_CONFIG before/after (decoder labels it separately).
+Trial running; see research/matisse/20261109-gpu/run2421.log and
+shim2421-l2hash8/gpu-normal/journal.json. Restore full boot_a before stopping.
+
+## >>> PREVIOUS 2026-11-09: 2420 RAN — ODD STORE NOT CPU-VISIBLE, DSB DOES NOT COMPLETE <<<
+
+2420 completed and restored full boot_a; independent Recovery SHA256 matches
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No restoration pending. Fastboot arrived at 82.26 s. Fresh marks changed from
+the previous capture. marker=2, output=0x2420a400, MCU_STATUS=1, AS_FAULT=0.
+CPU before/after: +0x400 0x24205400 -> 0x2420a400 (control works);
++0x200 0x24205200 -> 0x24205200 (odd store absent). The MCU never reached
+marker3 after the odd store's DSB. This contradicts the old claim that only
+read responses are broken; both directions now fail under controlled testing.
+The result does NOT identify an address hole or a hardware defect.
+
+Next: test a supported vendor L2 hash override (8, leaving size unchanged),
+before L2 power-on, with readback and the same 2420 witness. Original L2_CONFIG
+is 0x07130000, not a zero config. r32p1 mali_kbase_gpuprops.c explicitly allows
+user-defined hash selectors 8..15; mali_kbase_pm_driver.c programs bits31:24
+before L2 power-on. No such test has run. Earlier panthor ASN_HASH reasoning
+applies to arch>=11 and cannot exclude arch10 L2_CONFIG's hash selector.
+
+## >>> PREVIOUS 2026-11-09: 2420 CPU WITNESS TRIAL <<<
+
+The user explicitly authorized continued GPU hardware trials in this session.
+2420 image e47c27d83f11bc4e32e1568759b7b6af8e781a85c3448f9eee3affa3501b7d39
+was built and the read-only Recovery preflight passed. The runner has written
+and verified the candidate and started the boot; restoration is pending until
+the journal confirms otherwise. Runner/log/artifacts:
+research/matisse/20261109-gpu/shim2420-store-witness-run-once.py, run2420.log,
+shim2420-store-witness/gpu-normal/journal.json.
+
+The CPU seeds and reads shared+0x200/+0x400 before AUTO and after the wait,
+BEFORE disable/reset. MCU markers: 1 control store/read, 2 odd store/DSB,
+3 odd read, 4 completed. CPU absence alone does not prove an address hole.
+784-byte ABI unchanged; kernel c01dcbea...d5ea / mark 0x2407 reused (shim-only,
+no CI run). 11 boot-model tests and 35 fetch tests pass; arena 0x40078000.
+
+References pinned today: Linux 7475ea8b58616b33c04afb976cf0fbaad9dd63fb;
+Xiaomi 270b84910b941bf75490fccdb5fb2b3021dd7cbf; OnePlus branch
+oneplus/mt6983_t_13.0_oneplus_ace_2v at ff51a39c66a87f91d870bfff1611e2b36371c8a4.
+Eight selected vendor files match byte-for-byte. Their hashes/paths are in
+research/matisse/20261109-gpu-sources/sources.json.
+
+Corrections: AS_COMMAND is GPU+0x2418, AS_STATUS is +0x2428 (implementation
+already correct). 0x855 is documented as R_dispatch_mode, not an eight-slot
+port map; earlier inference cannot exclude the entire MFG/interconnect.
+2402/2404 did not prove odd stores completed (see wall report section 55).
+
+## >>> PREVIOUS 2026-11-08 17:25: 2419 RAN - THE WRITE LANDS, THE FIELD IS STILL NOT THE WALL <<<
 
 Four in-words read `0xFFC855` before and `0x00000800` after - all four, exactly the
 word written, upper 20 bits cleared too. `diag_flags` `0x387F` (bit11 ran, bit12

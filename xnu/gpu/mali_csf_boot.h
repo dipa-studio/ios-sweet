@@ -98,7 +98,14 @@ struct sweet_csf_access_snapshot {
  *Raw offsets only - naming bits nobody documented is how a sample turns into an
  *assumption. Guarded so every earlier build still compiles to its old size. */
 #if SWEET_CSF_GPU_REGS
-#if SWEET_CSF_DISPATCH_READBACK
+#if SWEET_CSF_STORE_WITNESS
+/* CPU samples of owned shared RAM, before AUTO and before cleanup. */
+struct sweet_csf_gpu_regs {
+    uint32_t slot200, slot400, marker, result;
+    uint32_t target_pa_lo, target_pa_hi, control_pa_lo, control_pa_hi;
+    uint32_t seed200, seed400;
+};
+#elif SWEET_CSF_DISPATCH_READBACK
 /*2419 asks the question 2413/2414/2418 never asked: does a write to the MFG top
  *page land at all? Four in-direction words before the write, the same four read
  *back after it, and two out-direction words that are never written as a control
