@@ -1,0 +1,215 @@
+--- a/iokit/Kernel/arm/SweetSurface.h
++++ b/iokit/Kernel/arm/SweetSurface.h
+@@ -35,7 +35,8 @@
+ 	uint32_t cacheMode, planeCount, parentID;
+ 	struct sweet_surface_plane planes[SWEET_SURFACE_MAX_PLANES];
+ 
+-	IOMemoryDescriptor       *memory;       /* pixels (buffer or physical) */
++	bool                      memoryPrepared, memoryReadOnly;
++	IOMemoryDescriptor       *memory;       /* pixels (buffer, physical or caller-owned) */
+ 	IOOptionBits              mapCache;     /* cache mode for user mappings */
+ 	IOBufferMemoryDescriptor *state;        /* shared state page, read-only for users */
+ 	IOMemoryMap              *kernelMap;    /* lazily created for kernel copies */
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -39,10 +39,13 @@
+ #include <libkern/c++/OSNumber.h>
+ #include <libkern/c++/OSUnserialize.h>
+ #include <sys/proc.h>
++#include <pexpert/pexpert.h>
+ 
+ enum {
+ 	kSweetSurfaceCreate             = 0,
+ 	kSweetSurfaceLookup             = 4,
++	kSweetSurfaceWrapClientImage    = 6,
++	kSweetSurfaceWrapClientMemory   = 7,
+ 	kSweetSurfaceLimits             = 13,
+ 	kSweetSurfaceLookupFromPort     = 34,
+ 	kSweetSurfaceCreatePort         = 35,
+@@ -73,6 +76,7 @@
+ static uint32_t      sweet_surface_next_id = 1;
+ static uint32_t      sweet_surface_creates_logged;
+ static uint64_t      sweet_surface_wired;       /* bytes of buffer surfaces */
++static TUNABLE(uint32_t, sweet_surface_gles, "sweetgles", 0);
+ #define SWEET_SURFACE_WIRED_MAX         (1536ull << 20)
+ 
+ OSDefineMetaClassAndStructors(SweetSurface, OSObject);
+@@ -84,6 +88,9 @@
+ 		OSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&sweet_surface_wired);
+ 	}
+ 	OSSafeReleaseNULL(kernelMap);
++	if (memoryPrepared && memory != NULL) {
++		memory->complete();
++	}
+ 	OSSafeReleaseNULL(memory);
+ 	OSSafeReleaseNULL(state);
+ 	OSObject::free();
+@@ -98,7 +105,7 @@
+ 	}
+ 	IOLockLock(sweet_surface_lock);
+ 	if (kernelMap == NULL && memory != NULL) {
+-		kernelMap = memory->map(kIOMapWriteCombineCache);
++		kernelMap = memory->map(mapCache | (memoryReadOnly ? kIOMapReadOnly : 0));
+ 	}
+ 	IOLockUnlock(sweet_surface_lock);
+ 	return kernelMap != NULL ? (uintptr_t)kernelMap->getVirtualAddress() : 0;
+@@ -281,6 +288,11 @@
+ sweet_surface_layout(SweetSurface *s, OSDictionary *props)
+ {
+ 	uint64_t end;
++	bool wrapped = props->getObject("IOSurfaceAddress") != NULL;
++	bool bgra = false;
++	if (props->getObject("IOSurfaceAddressRanges") != NULL) {
++		return kIOReturnUnsupported;
++	}
+ 
+ 	s->width = sweet_dict_u32(props, "IOSurfaceWidth", 0);
+ 	s->height = sweet_dict_u32(props, "IOSurfaceHeight", 0);
+@@ -288,6 +300,16 @@
+ 	s->elementWidth = (uint8_t)sweet_dict_u32(props, "IOSurfaceElementWidth", 1);
+ 	s->elementHeight = (uint8_t)sweet_dict_u32(props, "IOSurfaceElementHeight", 1);
+ 	s->pixelFormat = sweet_dict_u32(props, "IOSurfacePixelFormat", 0);
++	/* HakiOS negotiates new XR targets as BGRA before anyone draws into
++	 * them. Report the new layout; never reinterpret caller-owned pixels. */
++	if (sweet_surface_gles == 1 && !wrapped &&
++	    (s->pixelFormat == 'b3a8' || s->pixelFormat == 'w30r' ||
++	    s->pixelFormat == 'l10r' || s->pixelFormat == 'w30R')) {
++		bgra = true;
++		s->pixelFormat = 'BGRA';
++		s->bytesPerElement = 4;
++		s->elementWidth = s->elementHeight = 1;
++	}
+ 	s->cacheMode = sweet_dict_u32(props, "IOSurfaceCacheMode", 0);
+ 	s->offset = sweet_dict_u32(props, "IOSurfaceOffset", 0);
+ 	if (s->width > SWEET_SURFACE_MAX_DIM || s->height > SWEET_SURFACE_MAX_DIM ||
+@@ -301,7 +323,7 @@
+ 	}
+ 	end = (uint64_t)s->offset + (uint64_t)s->bytesPerRow * sweet_div_up(s->height, s->elementHeight);
+ 
+-	OSArray *planes = OSDynamicCast(OSArray, props->getObject("IOSurfacePlaneInfo"));
++	OSArray *planes = bgra ? NULL : OSDynamicCast(OSArray, props->getObject("IOSurfacePlaneInfo"));
+ 	s->planeCount = 0;
+ 	if (planes != NULL) {
+ 		uint64_t next = s->offset;
+@@ -337,10 +359,17 @@
+ 	}
+ 
+ 	uint64_t alloc = sweet_dict_u32(props, "IOSurfaceAllocSize", 0);
+-	if (alloc < end) {
+-		alloc = end;
+-	}
+-	alloc = round_page(alloc);
++	if (wrapped) {
++		/* Borrowed memory ends exactly where its owner says. */
++		if (alloc < end) {
++			return kIOReturnBadArgument;
++		}
++	} else {
++		if (bgra || alloc < end) {
++			alloc = end;
++		}
++		alloc = round_page(alloc);
++	}
+ 	if (alloc == 0 || alloc > SWEET_SURFACE_MAX_ALLOC) {
+ 		return kIOReturnNoMemory;
+ 	}
+@@ -527,7 +556,8 @@
+ 	s->retain();
+ 	ref->surface = s;
+ 	ref->count = 1;
+-	ref->data = s->memory->createMappingInTask(fTask, 0, kIOMapAnywhere | s->mapCache);
++	ref->data = s->memory->createMappingInTask(fTask, 0, kIOMapAnywhere | s->mapCache |
++	    (s->memoryReadOnly ? kIOMapReadOnly : 0));
+ 	ref->state = s->state->createMappingInTask(fTask, 0, kIOMapAnywhere | kIOMapReadOnly);
+ 	if (ref->data == NULL || ref->state == NULL) {
+ 		ref->release();
+@@ -585,12 +615,14 @@
+ 	put32(out, 0x44, s->cacheMode);
+ 	put32(out, 0x50, s->parentID);
+ 	put32(out, 0x54, 1);
+-	for (uint32_t i = 0; i < s->planeCount; i++) {
++	for (uint32_t i = 0; i < (s->planeCount ? s->planeCount : 1); i++) {
+ 		uint8_t *p = out + 0x68 + i * 0x80;
+-		const struct sweet_surface_plane *pl = &s->planes[i];
++		const struct sweet_surface_plane linear = { s->width, s->height, s->bytesPerRow,
++		    s->offset, s->allocSize - s->offset, s->bytesPerElement, s->elementWidth, s->elementHeight };
++		const struct sweet_surface_plane *pl = s->planeCount ? &s->planes[i] : &linear;
+ 		put32(p, 0x00, pl->width);
+ 		put32(p, 0x04, pl->height);
+-		put32(p, 0x08, pl->bytesPerRow);
++		put32(p, 0x10, pl->bytesPerRow);
+ 		put32(p, 0x0c, pl->offset);
+ 		put32(p, 0x14, pl->size);
+ 		memcpy(p + 0x18, &pl->bytesPerElement, 2);
+@@ -646,6 +678,30 @@
+ 	return ret;
+ }
+ 
++/* Retain the caller's backing pages so later writes remain visible. */
++static IOReturn
++sweet_surface_pin(SweetSurface *s, uint64_t address, task_t task)
++{
++	if (address == 0 || address + s->allocSize < address) {
++		return kIOReturnBadArgument;
++	}
++	for (unsigned int attempt = 0; attempt < 2; attempt++) {
++		IOMemoryDescriptor *mem = IOMemoryDescriptor::withAddressRange(address, s->allocSize,
++		    attempt == 0 ? kIODirectionInOut : kIODirectionOut, task);
++		if (mem != NULL) {
++			if (mem->prepare() == kIOReturnSuccess) {
++				s->memory = mem;
++				s->memoryPrepared = true;
++				s->memoryReadOnly = attempt != 0;
++				s->mapCache = kIOMapDefaultCache;
++				return kIOReturnSuccess;
++			}
++			mem->release();
++		}
++	}
++	return kIOReturnVMError;
++}
++
+ IOReturn
+ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
+ {
+@@ -684,7 +740,14 @@
+ 	}
+ 	s->parentID = args->scalarInputCount > 0 ? (uint32_t)args->scalarInput[0] : 0;
+ 	ret = sweet_surface_layout(s, props);
+-	if (ret == kIOReturnSuccess) {
++	OSObject *address = props->getObject("IOSurfaceAddress");
++	if (ret == kIOReturnSuccess && address != NULL) {
++		OSNumber *value = OSDynamicCast(OSNumber, address);
++		ret = value != NULL ? sweet_surface_pin(s, value->unsigned64BitValue(), fTask) : kIOReturnBadArgument;
++		if (ret == kIOReturnSuccess && !sweet_surface_publish(s)) {
++			ret = kIOReturnNoResources;
++		}
++	} else if (ret == kIOReturnSuccess) {
+ 		IOBufferMemoryDescriptor *mem = NULL;
+ 		if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&sweet_surface_wired) +
+ 		    s->allocSize <= SWEET_SURFACE_WIRED_MAX) {
+@@ -739,6 +802,13 @@
+ 	}
+ 	case kSweetSurfaceCreate:
+ 		return create(args);
++	case kSweetSurfaceWrapClientImage:
++	case kSweetSurfaceWrapClientMemory:
++		/* 20H392 constructs a client on success. A zero result gives it a
++		 * NULL shared page and crashes GetBulkAttachments at address0x30.
++		 * Refuse these shortcuts, as HakiOS does, so callers can fall back. */
++		sweet_surf_log_once("unsupported", selector);
++		return kIOReturnUnsupported;
+ 	case kSweetSurfaceLookup: {
+ 		SweetSurface *s = sweet_surface_copy((uint32_t)arg0);
+ 		IOReturn ret = kIOReturnNotFound;
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -823,7 +823,7 @@
+ #define SWEET_MARK_MAX  160
+ 
+ /* Bumped for every locally built kernel that is flashed to the phone. */
+-#define SWEET_BUILD_ID 0x2429u
++#define SWEET_BUILD_ID 0x2431u
+ 
+ struct sweet_mark_rec {
+ 	uint32_t code;

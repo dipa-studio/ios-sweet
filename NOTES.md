@@ -1,5 +1,20 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2430 INJECTION WORKS; B3A8 TARGET REJECTED <<<
+## >>> ACTIVE 2026-11-09: 2431 IOSURFACE FIX BUILT; PREFLIGHT NEXT <<<
+
+0206 negotiates new XR/b3a8 targets as BGRA when sweetgles=1, refuses
+unsupported wrap shortcuts6/7, pins IOSurfaceAddress backing with read-only
+fallback and balanced complete(), fixes plane rowBytes to+0x10. No root edit.
+2430 crash was symbolicated to IOSurfaceClientGetBulkAttachments (NULL shared
+page after fake selector6 success). HakiOS does the same XR negotiation and
+refusal;20H392 disassembly confirms plane row ABI.
+15 targeted tests pass including actual patched C++ ASan/UBSan geometry,
+read-only pin fallback/failure, exact borrowed length, ABI and stale captures.
+Local full kernel build exit0: kernel20a6a410...19146d, mark2431; image
+02319ad5146e1ec83051f1b4afd16ff60a80f4dd042fbacdbf34912b3652615f.
+Baseline shim reproduced byte-for-byte; loader rebuilt for16727184B.
+No2431 boot yet.2430 full boot_a restored/verified. No restoration pending.
+
+## >>> PREVIOUS 2026-11-09: 2430 INJECTION WORKS; B3A8 TARGET REJECTED <<<
 
 2430 captured FRESH trial2430/kernel mark2429;270850 console bytes/flush111.
 Exec injection8, AMFI90 successes16, loader/8 EAGL methods installed8;
