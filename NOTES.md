@@ -1,5 +1,25 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2438 BO/VM/PERSISTENT CSF TEST READY <<<
+## >>> ACTIVE 2026-11-09: 2438 STALE CAPTURE; 2439 DIAGNOSTIC BUILD <<<
+
+2438 returned Fastboot138.50s, but before/after tail hashes are IDENTICAL and
+kernel marks still2437. No fresh XNU evidence:2438 VM test is NOT verified;
+do not infer which VM operation failed. Full64MiB boot_a restored and independently
+verified2931647a...86b1. Runner consumed; Recovery/no restoration pending.
+2439 built/preflight next: delay allocating VM/BOs until the persistent log has actually
+flushed once, log allocation/map stages, and explicitly opt out of a system
+IOMMU mapper (the GPU owns its translation). Local2438 build was valid; the
+failure point is not yet observed. No root modifications.
+Hardware Mesa v10+Darwin Panthor transport now cross-built/codesigned under
+20261109-panfrost/out; hardware REQUIRED, no softpipe fallback. Actual transport
+ASan/UBSan test verifies unsignalled/future fences, failed submit does not signal,
+IOKit BO mapping and heap creation. It is NOT tested on phone yet.
+2439 imagec7280d252a0bf0cad5687755047046a1ceccdea61c14e36418038f92bbc2c48d,26734592B. Kernel8ae33a1a6c2d8a817f1e74975a3f620c922f69296534ada9e108caac3e546d5e,
+16768616B. Full local build exit0,0209 patch replay pass. New one-shot2439
+runner prepared/not run yet. User observes shim starts but XNU does not; this
+corroborates the absent fresh persistent evidence, not a precise crash site.
+Uncommitted build tool/transport test/source pending final review/commit.
+
+## >>> PREVIOUS 2026-11-09: 2438 BO/VM/PERSISTENT CSF TEST READY <<<
 
 2437 resident ownership is verified below.2438 now adds per-client AS/root,
 IOBuffer BOs, GPU mappings, persistent CSF groups and synchronous CALL/fence

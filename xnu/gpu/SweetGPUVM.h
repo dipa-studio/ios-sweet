@@ -26,7 +26,7 @@ static uint32_t gpu_as_used=1,gpu_group_used;
 static IOBufferMemoryDescriptor *gpu_buffer_alloc(uint64_t size)
 {
     IOBufferMemoryDescriptor *m=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
-        kIODirectionInOut|kIOMemoryKernelUserShared|kIOMapWriteCombineCache,size,PAGE_SIZE);
+        kIODirectionInOut|kIOMemoryKernelUserShared|kIOMapWriteCombineCache|kIOMemoryMapperNone,size,PAGE_SIZE);
     if(m)bzero(m->getBytesNoCopy(),size);
     return m;
 }

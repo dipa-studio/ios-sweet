@@ -15,6 +15,7 @@ extern "C" {
 #include "../../../bsd/dev/mali_csf_queue.h"
 #include "../../../bsd/dev/mali_csf_runtime.h"
 vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+int sweet_gpu_log_ready(void);
 }
 
 static struct sweet_gpu_handoff handoff;
@@ -155,13 +156,16 @@ static bool resident_vm_test(void)
 {
     /* Real allocated BOs and a root with no firmware mappings. Rebind the
      * SAME VA to another BO halfway through, and wrap the ring twice. */
+    IOLog("SWEET GPU: VM test allocating private page tables\n");IOSleep(1200);
     GPUVM *v=gpu_vm_create();if(!v||v->broken){gpu_vm_destroy(v);return false;}
+    IOLog("SWEET GPU: VM root=%llx AS=%u; allocating BOs\n",v->pt[0].pa,v->as_nr);IOSleep(1200);
     sweet_gpu_bo bo[2]={{0x10000,0,0},{0x10000,0,0}};
     sweet_gpu_group group={};bool ok=true;
     for(unsigned i=0;i<2;i++)if(gpu_bo_create(v,&bo[i])!=kIOReturnSuccess)ok=false;
     const uint64_t va=0x10000000;
     sweet_gpu_map map={bo[0].handle,0,0,va,0x10000};
     if(ok&&gpu_vm_map(v,&map)!=kIOReturnSuccess)ok=false;
+    IOLog("SWEET GPU: VM BO map ok=%u; starting persistent group\n",ok);IOSleep(1200);
     if(ok&&gpu_group_create(v,&group)!=kIOReturnSuccess)ok=false;
     unsigned completed=0;
     for(unsigned i=0;i<70&&ok;i++) {
@@ -211,6 +215,10 @@ static void resident_worker(void *arg,wait_result_t)
         if(submit_compute())break;
         IOSleep(20);
     }
+    /* Allocating application memory is a later startup phase than the
+     * retained-arena probe. Wait for actual persistent-log completion so
+     * an allocation/cache/VM failure leaves fresh evidence on this board. */
+    while(ready&&!sweet_gpu_log_ready())IOSleep(100);
     IOLockLock(gpu_lock);
     if(ready&&!resident_vm_test()){ready=0;IOLog("SWEET GPU: VM selftest failed\n");}
     IOLockUnlock(gpu_lock);
