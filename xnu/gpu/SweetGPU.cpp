@@ -28,7 +28,7 @@ static struct sweet_csf_queue_report last_report;
 
 static volatile uint32_t *address(uint64_t pa)
 {
-    if(pa>=handoff.gpu && pa-handoff.gpu<0x90000)
+    if(pa>=handoff.gpu && pa-handoff.gpu<0x110000)
         return (volatile uint32_t *)(gpu_map+pa-handoff.gpu);
     if(pa>=handoff.arena_pa && pa-handoff.arena_pa<handoff.arena_bytes)
         return (volatile uint32_t *)(arena_map+pa-handoff.arena_pa);
@@ -271,7 +271,8 @@ extern "C" void SweetGPUStart(IOService *provider)
        handoff.memory_pa-handoff.arena_pa>handoff.arena_bytes-handoff.memory_bytes) {
         IOLog("SWEET GPU: invalid resident handoff\n");return;
     }
-    gpu_map=ml_io_map(handoff.gpu,0x90000);
+    /* Global doorbell0 and one user doorbell per resident group (1..8). */
+    gpu_map=ml_io_map(handoff.gpu,0x110000);
     arena_map=ml_io_map(handoff.arena_pa,handoff.arena_bytes);
     gpu_lock=IOLockAlloc();
     if(!gpu_map||!arena_map||!gpu_lock){IOLog("SWEET GPU: mapping failed\n");return;}

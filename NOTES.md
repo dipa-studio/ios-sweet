@@ -1,5 +1,66 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2442 GPU SERVICE + INTERACTIVE UI VERIFIED <<<
+## >>> ACTIVE 2026-11-09: 2444 QUEUE TIMEOUT; 2445 USER DOORBELL FIX <<<
+
+2444 completed and full boot_a restored; independent Recovery readback this
+turn confirms2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Fresh trial2444/kernel2443, changed log tail. Hardware Mesa opened SweetGPU
+(GPU a8620004,96 registers,8 scoreboards); first userspace submit timed out
+rc-63,extract0/128,fault0,fatal0,MMU20000. Context creation failed. User saw
+console/boot screen. No hardware draw verified. Evidence:hardware2444-verified.json.
+
+2445 candidate fixes the missing user queue doorbell (slot+1), matching pinned
+Panthor queue_run_job; maps its full MMIO range and expands failure diagnostics.
+Probe PID1 now waits for the Recovery watchdog instead of rebooting repeatedly.
+Prior build2445-native.log linked successfully BUT DID NOT include the new
+runtime C and retained kernel2443 identity: DO NOT USE that intermediate kernel.
+0214 now stages all three canonical GPU files and marks kernel2445. Corrected
+full local rebuild and root snapshot/probe deployment are next. No2445 image,
+trial, root delta, or pending device restoration at this checkpoint. Do not
+rerun consumed2444. Hardware UI remains unverified; continue GLES hardware path.
+
+UPDATE2445: corrected full build-v2 exit0; actual staged runtime matches
+canonical source and0214 reverse-check passes. Five targeted tests PASS.
+Kernel0a40b5970e6a0e224c521a68cb383a2ea1efe7ee3288b2a5806da8bbab1c6f64,
+imagecb18063759705c9a8ba0a2b2f7e3164c495ae8ede14615532a270726588f8989,
+26734592 bytes, kernel identity2445. Read-only preflight PASS. Current root
+snapshot verified in128MiB chunks (changed0,5); offline probe-only deployment
+and delta preparation underway. New runner shim2445-hw-run-once.py prepared;
+not yet booted. Check journal before device use. No device write pending.
+
+## >>> PREVIOUS 2026-11-09: 2443 USERSPACE REACHES GPU VM; 2444 PREPARING <<<
+
+2442 verified interactive UI plus resident GPU (below), hardware UI not yet.
+2443 hardware GLES probe DID start asPID1. Fresh trial/kernel2443, changed tail,
+three resident computes passed and service registered. Synchronous checkpoints
+verify IOBuffer allocation/zero, physical root0x108fe0000 (16KiB above4GiB),
+and AS1 MMU bind returned success. Last durable line is `MMU root bind returned
+a=1 b=0`; no `user client open`, renderer or CSF submits captured. Exact stop
+is UNPROVEN: could be later code or checkpoint flush itself. Do not claim a
+GPU rendering result. User saw black/reboot, entered Fastboot manually at
+212.84s. Full boot_a restored and independently Recovery-rehashed2931647a...
+86b1. No restore pending. Evidence:hardware2443-verified.json,observation2443.json.
+
+Hardware libraries/probe now deployed:95/95 preimages/writes verified,
+16834560B delta; before/after root clones and rollback blocks retained under
+research/matisse/20261109-panfrost. Ordinary boots leave hardware bridge off.
+The deployed2443 Mesa v3 lacks G710 product-table entry (v10 backend exists);
+subsequent v4 rebuild adds real0xa862/G710 entry, hardware verification pending.
+2444 preparing same2443 kernel with synchronous GPU trace OFF to isolate the
+last checkpoint, plus v4 Mesa deployment. Read-only current-root snapshot
+in progress (snapshot-root2444.py); no new root write yet. New image/runner
+must have fresh trial2444; expected kernel identity remains2443. Do not rerun
+consumed2443. Latest commits9f6c6cb,b8b99be,e04725b. CI dispatch again422
+Actions disabled;2443 full local kernel build passed, no new CI ID.
+
+UPDATE2444:root snapshot verified (only first128MiB chunk changed by2443).
+Updated only libOSMesa;62/62 delta preimages and writes verified,15753216B.
+Expected rootSHA2a1c280a576780106b47381d38086633d4497666d3bef7f09655b58c55f1a95c.
+2444 image42700632f552b62cfeb9168e40b307726d430cbdc36eafaa9e63b493314b655e,
+26734592B, same2443 kernel4545b48c...5709ee2e. Preflight passed; runner NOW
+STARTED. Check shim2444-hw/gpu-normal/journal.json; full boot_a restore pending
+until it reports complete. No root write pending. Hardware draw result pending.
+
+## >>> PREVIOUS 2026-11-09: 2442 GPU SERVICE + INTERACTIVE UI VERIFIED <<<
 
 2442 fresh trial/kernel2442, changed log tail, three native compute shaders
 rc0/stage7/witness2436c5f1, service registered and nine status samples with

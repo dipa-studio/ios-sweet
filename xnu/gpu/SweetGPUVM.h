@@ -200,9 +200,11 @@ static IOReturn gpu_submit(GPUVM *v,struct sweet_gpu_submit *r)
     if(rc){v->broken=true;failures++;}
     r->sequence=v->groups[r->group-1].sequence;
     if(rc||r->sequence<=3||(r->sequence%100)==0)
-        IOLog("SWEET GPU: CSF submit as=%u group=%u seq=%llu rc=%d extract=%u/%u fault=%x fatal=%x mmu=%x addr=%x:%x\n",
+        IOLog("SWEET GPU: CSF submit as=%u group=%u seq=%llu rc=%d extract=%u/%u fault=%x fatal=%x mmu=%x addr=%x:%x csg=%x/%x cs=%x/%x asfault=%x fence=%x/%x\n",
             v->as_nr,r->group,r->sequence,rc,last_report.extract,last_report.insert,
-            last_report.fault,last_report.fatal,last_report.mmu_raw,last_report.cmd_hi,last_report.cmd_lo);
+            last_report.fault,last_report.fatal,last_report.mmu_raw,last_report.cmd_hi,last_report.cmd_lo,
+            last_report.csg_req,last_report.csg_ack,last_report.cs_req,last_report.cs_ack,
+            last_report.as_fault,last_report.before,last_report.after);
     return rc?kIOReturnIOError:kIOReturnSuccess;
 }
 static void gpu_vm_destroy(GPUVM *v)

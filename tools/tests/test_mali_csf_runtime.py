@@ -15,8 +15,8 @@ HARNESS = r'''
 #define SH 0x90000000ull
 #define MEM 0x91000000ull
 struct model {
- uint32_t gpu[0x90000/4],sh[0x10000/4],mem[SWEET_CSF_QUEUE_BYTES/4],reg[96];
- uint64_t ticks,user[4];unsigned writes,calls,mode;
+ uint32_t gpu[0x110000/4],sh[0x10000/4],mem[SWEET_CSF_QUEUE_BYTES/4],reg[96];
+ uint64_t ticks,user[4];unsigned writes,calls,mode,user_doorbells;
 };
 static uint32_t *addr(struct model*m,uint64_t a){
  assert(!(a&3));
@@ -43,13 +43,16 @@ static void instruction(struct model*m,uint64_t ins,unsigned depth){
   if(m->mode!=2)m->mem[0x3000/4]=m->reg[vr];
  }else assert(0);
 }
-static void doorbell(struct model*m){
+static void doorbell(struct model*m,int user){
  uint32_t *gi=m->sh+0x2000/4,*go=m->sh+0x3000/4,*in=m->sh+0x4000/4,*out=m->sh+0x5000/4;
  uint32_t *ci=m->sh+0x6000/4,*co=m->sh+0x7000/4;
- assert((gi[2]^go[2])&1);go[2]=gi[2];out[2]=in[2];
+ if(!user){assert((gi[2]^go[2])&1);go[2]=gi[2];out[2]=in[2];}
  if(!(in[0]&7)){if(m->mode!=4)out[0]=in[0];return;}
  if(!(ci[0]&7)){co[0]=ci[0];return;}
  out[0]=in[0];co[0]=ci[0];
+ /* Firmware request notifications do not stand in for a queue kick. */
+ if(!user)return;
+ assert(ci[1]==0x10f);m->user_doorbells++;
  if(m->mode==1)return;
  if(m->mode==3){co[0x80/4]=0x44;return;}
  uint64_t insert=word(m,MEM+0x1000),extract=word(m,MEM+0x2000);
@@ -59,7 +62,8 @@ static void doorbell(struct model*m){
 }
 static void wr(void*p,uint64_t a,uint32_t n){
  struct model*m=p;m->writes++;*addr(m,a)=n;
- if(a==GPU+0x80000)doorbell(m);
+ if(a==GPU+0x80000)doorbell(m,0);
+ if(a==GPU+0x90000)doorbell(m,1);
  if(a==GPU+0x2458)m->gpu[0x2000/4]|=0x20000;
 }
 static uint64_t tick(void*p){return ++((struct model*)p)->ticks;}
@@ -87,7 +91,7 @@ int main(void){
   m->user[0]=i?0:0x025000002438cafeull;
   assert(!sweet_csf_runtime_submit(&c,&io,&g,0x10000000,8,&r));
   assert(r.stage==7&&r.after==i+1&&r.extract==(i+1)*128&&r.error==0);
-  assert(m->reg[80]==0x2438cafe&&m->calls==i+1);
+  assert(m->reg[80]==0x2438cafe&&m->calls==i+1&&m->user_doorbells==i+1);
  }
  unsigned writes=m->writes;
  assert(sweet_csf_runtime_submit(&c,&io,&g,0x10000001,8,&r)==-60&&m->writes==writes);

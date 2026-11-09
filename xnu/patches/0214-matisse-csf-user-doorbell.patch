@@ -1,0 +1,77 @@
+diff --git a/iokit/Kernel/arm/SweetGPU.cpp b/iokit/Kernel/arm/SweetGPU.cpp
+--- a/iokit/Kernel/arm/SweetGPU.cpp
++++ b/iokit/Kernel/arm/SweetGPU.cpp
+@@ -28,7 +28,7 @@
+ 
+ static volatile uint32_t *address(uint64_t pa)
+ {
+-    if(pa>=handoff.gpu && pa-handoff.gpu<0x90000)
++    if(pa>=handoff.gpu && pa-handoff.gpu<0x110000)
+         return (volatile uint32_t *)(gpu_map+pa-handoff.gpu);
+     if(pa>=handoff.arena_pa && pa-handoff.arena_pa<handoff.arena_bytes)
+         return (volatile uint32_t *)(arena_map+pa-handoff.arena_pa);
+@@ -271,7 +271,8 @@
+        handoff.memory_pa-handoff.arena_pa>handoff.arena_bytes-handoff.memory_bytes) {
+         IOLog("SWEET GPU: invalid resident handoff\n");return;
+     }
+-    gpu_map=ml_io_map(handoff.gpu,0x90000);
++    /* Global doorbell0 and one user doorbell per resident group (1..8). */
++    gpu_map=ml_io_map(handoff.gpu,0x110000);
+     arena_map=ml_io_map(handoff.arena_pa,handoff.arena_bytes);
+     gpu_lock=IOLockAlloc();
+     if(!gpu_map||!arena_map||!gpu_lock){IOLog("SWEET GPU: mapping failed\n");return;}
+diff --git a/iokit/Kernel/arm/SweetGPUVM.h b/iokit/Kernel/arm/SweetGPUVM.h
+--- a/iokit/Kernel/arm/SweetGPUVM.h
++++ b/iokit/Kernel/arm/SweetGPUVM.h
+@@ -200,9 +200,11 @@
+     if(rc){v->broken=true;failures++;}
+     r->sequence=v->groups[r->group-1].sequence;
+     if(rc||r->sequence<=3||(r->sequence%100)==0)
+-        IOLog("SWEET GPU: CSF submit as=%u group=%u seq=%llu rc=%d extract=%u/%u fault=%x fatal=%x mmu=%x addr=%x:%x\n",
++        IOLog("SWEET GPU: CSF submit as=%u group=%u seq=%llu rc=%d extract=%u/%u fault=%x fatal=%x mmu=%x addr=%x:%x csg=%x/%x cs=%x/%x asfault=%x fence=%x/%x\n",
+             v->as_nr,r->group,r->sequence,rc,last_report.extract,last_report.insert,
+-            last_report.fault,last_report.fatal,last_report.mmu_raw,last_report.cmd_hi,last_report.cmd_lo);
++            last_report.fault,last_report.fatal,last_report.mmu_raw,last_report.cmd_hi,last_report.cmd_lo,
++            last_report.csg_req,last_report.csg_ack,last_report.cs_req,last_report.cs_ack,
++            last_report.as_fault,last_report.before,last_report.after);
+     return rc?kIOReturnIOError:kIOReturnSuccess;
+ }
+ static void gpu_vm_destroy(GPUVM *v)
+diff --git a/bsd/dev/sweet_gpu_runtime.c b/bsd/dev/sweet_gpu_runtime.c
+--- a/bsd/dev/sweet_gpu_runtime.c
++++ b/bsd/dev/sweet_gpu_runtime.c
+@@ -95,7 +95,7 @@
+     for(unsigned i=0;i<SWEET_CSF_GROUP_BYTES;i+=4)write32(io,mem+i,0);
+     write64(io,ci+0x10,va);write32(io,ci+0x18,4096);
+     write64(io,ci+0x30,va+0x1000);write64(io,ci+0x38,va+0x2000);
+-    write32(io,ci+4,0x10f);write32(io,ci+12,UINT32_MAX);
++    write32(io,ci+4,((slot+1)<<8)|15u);write32(io,ci+12,UINT32_MAX);
+     write32(io,ci,(read32(io,ci)&~0x517u)|0x511u);
+     uint64_t cores=read64(io,c->gpu+0x100);unsigned count=0;
+     for(uint64_t n=cores;n;n>>=1)count+=n&1;
+@@ -134,7 +134,12 @@
+     uint64_t pos=g->insert&4095;
+     for(unsigned i=0;i<16;i++)write64(io,g->memory_pa+pos+i*8,commands[i]);
+     g->insert+=sizeof(commands);r->insert=(uint32_t)g->insert;
+-    write64(io,g->memory_pa+0x1000,g->insert);ring(c,io,g);r->stage=4;
++    write64(io,g->memory_pa+0x1000,g->insert);
++    /* The global doorbell processes interface requests. New ring contents
++     * need the user doorbell selected in CS_CONFIG, as in Panthor's
++     * queue_submit: an unchanged CS_REQ does not wake an idle stream. */
++    write32(io,c->gpu+0x80000+(uint64_t)(g->slot+1)*0x10000,1);
++    r->stage=4;
+     uint64_t start=io->ticks(io->context),budget=io->frequency*c->timeout_ms/1000;
+     r->error=-63;
+     for(unsigned i=0;i<10000000;i++) {
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -823,7 +823,7 @@
+ #define SWEET_MARK_MAX  160
+ 
+ /* Bumped for every locally built kernel that is flashed to the phone. */
+-#define SWEET_BUILD_ID 0x2443u
++#define SWEET_BUILD_ID 0x2445u
+ 
+ struct sweet_mark_rec {
+ 	uint32_t code;

@@ -18,9 +18,6 @@
 #include <string.h>
 #include <unistd.h>
 
-/* XNU's reboot(2) is exported by libSystem but absent from public iOS headers. */
-extern int reboot(int);
-#define RB_AUTOBOOT 0
 #ifndef SWEET_GLES_HARDWARE
 #define SWEET_GLES_HARDWARE 0
 #endif
@@ -37,7 +34,10 @@ static void fail(const char *what, unsigned code)
     fflush(stdout);
     /* PID 1 must not exit; allow the persistent logger to drain first. */
     sleep(8);
-    if (getpid() == 1) { reboot(RB_AUTOBOOT); for (;;) sleep(1); }
+    /* The diagnostic kernel's watchdog selects Recovery before resetting.
+     * reboot(0) here would run this same boot_a image again and overwrite
+     * the result with an incomplete next boot before the host can read it. */
+    if (getpid() == 1) for (;;) sleep(1);
     exit(1);
 }
 
@@ -226,7 +226,7 @@ int main(int argc, char **argv)
     printf("SWEET GLES: PASS shaders=2 draws=4 pixel_checks=9 swaps=4 eagl_api=3 hardware_claim=%d\n",
         SWEET_GLES_HARDWARE);
     sleep(8);
-    if (getpid() == 1) { reboot(RB_AUTOBOOT); for (;;) sleep(1); }
+    if (getpid() == 1) for (;;) sleep(1);
     CFRelease(surface); IOServiceClose(fb); OSMesaDestroyContext(context);
     return 0;
 }

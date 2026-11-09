@@ -93,7 +93,7 @@ int sweet_csf_runtime_start(const struct sweet_csf_queue_config *c,const struct 
     for(unsigned i=0;i<SWEET_CSF_GROUP_BYTES;i+=4)write32(io,mem+i,0);
     write64(io,ci+0x10,va);write32(io,ci+0x18,4096);
     write64(io,ci+0x30,va+0x1000);write64(io,ci+0x38,va+0x2000);
-    write32(io,ci+4,0x10f);write32(io,ci+12,UINT32_MAX);
+    write32(io,ci+4,((slot+1)<<8)|15u);write32(io,ci+12,UINT32_MAX);
     write32(io,ci,(read32(io,ci)&~0x517u)|0x511u);
     uint64_t cores=read64(io,c->gpu+0x100);unsigned count=0;
     for(uint64_t n=cores;n;n>>=1)count+=n&1;
@@ -132,7 +132,12 @@ int sweet_csf_runtime_submit(const struct sweet_csf_queue_config *c,const struct
     uint64_t pos=g->insert&4095;
     for(unsigned i=0;i<16;i++)write64(io,g->memory_pa+pos+i*8,commands[i]);
     g->insert+=sizeof(commands);r->insert=(uint32_t)g->insert;
-    write64(io,g->memory_pa+0x1000,g->insert);ring(c,io,g);r->stage=4;
+    write64(io,g->memory_pa+0x1000,g->insert);
+    /* The global doorbell processes interface requests. New ring contents
+     * need the user doorbell selected in CS_CONFIG, as in Panthor's
+     * queue_submit: an unchanged CS_REQ does not wake an idle stream. */
+    write32(io,c->gpu+0x80000+(uint64_t)(g->slot+1)*0x10000,1);
+    r->stage=4;
     uint64_t start=io->ticks(io->context),budget=io->frequency*c->timeout_ms/1000;
     r->error=-63;
     for(unsigned i=0;i<10000000;i++) {

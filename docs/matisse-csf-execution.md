@@ -1,8 +1,8 @@
 # MT6983 / Mali-G710 CSF execution — 2026-11-09
 
 The port now executes CSF commands and a Valhall compute shader on the phone.
-This establishes hardware execution; the system GLES frontend still uses
-softpipe until the resident XNU driver and Mesa CSF transport are connected.
+This establishes hardware execution. The resident XNU driver and a hardware-only
+Mesa CSF transport now exist; hardware-rendered system UI is not yet verified.
 
 ## Hardware results
 
@@ -64,6 +64,58 @@ kernel2431; no new kernel build or CI run. Final image2436 SHA256:
 Exact manifests, logs and decoded results are under ignored
 `research/matisse/20261109-gpu/`; `queue-compute-verified.json` indexes the four
 verified captures. No downloaded firmware, device dumps or serials are in git.
+
+## Normal UI and userspace integration (2442–2443)
+
+2442 restores service registration immediately after the three proven resident
+compute submissions. The later VM stress test now requires
+`sweetgpuvmtest=1`. Normal UI boots also retain the writable root needed for
+HFS journal replay; the diagnostic read-only configuration logged journal
+replay failures. The phone displayed an interactive UI in2442, with nine GPU
+status samples reporting MCU1, three submissions and zero failures. This
+proves coexistence of the UI and resident GPU, not accelerated UI rendering.
+
+The Darwin transport implements BO allocation/mapping, separate address
+spaces, persistent CSF groups, synchronous submissions and timeline fences.
+Fences are signalled only after the kernel observes GPU-written completion.
+`tools/build-sweet-panfrost.py` builds pinned Mesa25.0.7 with the HakiOS GLES
+bridge, v10 CSF backend and the actual G710 product ID. The hardware profile
+returns failure if GPU screen creation fails; it cannot fall back to softpipe.
+Its VA range excludes SweetGPU's low128MiB firmware/queue aperture.
+
+`sweetgles=2` enables the hardware library path, exec injection, AMFI90 dyld
+permissions and IOSurface BGRA negotiation. Mode1 remains the prior software
+validation profile. The first integration uses `glcopy=1`: shaders and
+rasterization are intended to execute on the GPU, with CPU readback/copy for
+IOSurface presentation. Direct IOSurface import and cross-process fences are
+not implemented, and those transport requests return unsupported.
+
+2443 started the hardware-required GLES program and reached GPU user-client
+creation. Persistent checkpoints show a16KiB page-table allocation at physical
+address0x108fe0000, zeroing and successful AS1 root binding. The last durable
+record is the bind return; no user-client return, renderer string, graphics
+submission or pixel result was captured. The phone showed black and needed
+manual Fastboot. A checkpoint flush stall is a hypothesis, not an established
+cause. Both2442 and2443 restored and independently verified the full boot_a
+backup. Evidence and root-delta preimages stay in ignored research directories.
+
+2444 disabled synchronous allocation checkpoints and installed the G710
+product-table entry. Hardware Mesa opened the GPU and reached its first CSF
+submission, which timed out with extract0/128, no CS fault/fatal, and only
+MMU request-completion bit17. Context creation failed; no pixels were drawn.
+The full boot_a backup was restored and independently rehashed.
+
+2445 rings the user doorbell selected by CS_CONFIG after publishing INSERT,
+matching the pinned Panthor queue_run_job path. The global doorbell remains
+for firmware interface requests. The host model now distinguishes these
+paths and checks100 submissions/ring wraps and timeout/fault handling.
+The PID1 probe waits for the diagnostic recovery timer after success/failure
+to keep its result from being overwritten by a second boot. Hardware testing
+is pending. Next verify real draws/pixels, then backboardd completed frames.
+Neither a registered service nor a renderer string alone proves accelerated
+system UI. Source milestones:9f6c6cb,b8b99be,e04725b. Full local kernel builds
+passed; GitHub Actions dispatch returned HTTP422 because the fork's Actions
+are disabled, so these milestones have no new CI run ID.
 
 ## Resident XNU handoff (2437)
 
