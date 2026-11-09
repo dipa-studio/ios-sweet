@@ -1,5 +1,27 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: GLES2427 PREPARED; ADDITIVE ROOT DELTA PREFLIGHT <<<
+## >>> ACTIVE 2026-11-09: GLES2427 PASSED ON DEVICE; EAGL API3 WORKS <<<
+
+2427 unambiguously passed: Mesa softpipe / OpenGL ES3.1 Mesa25.0.7,
+2 GLSL shaders,4 draws,8 triangle/background/blend pixels plus EAGL macro
+pixel64,128,191,255/error0 (9 checks).4 IOSurface swaps at1440x3200.
+User directly observed blue background with red/green triangle. Fresh kernel
+FBIMG captures3 frames after copying; renderer readback times13766,7590,10345,
+7527us at256x256 (NOT full-resolution performance). No GPU acceleration.
+8/8 EAGL methods installed; API3 context and macro table verified on20H392.
+This is newly exercised Mesa userspace rendering, separate from old CA::OGL::SW.
+
+Fastboot observed125.91s; full boot_a restored and hash verified
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No restore pending/no runner active. Probe image0f1a4f89...dd3fc/kernel2316
+unchanged; no CI. result2427.json and complete logs in20261109-hakios/.
+Source milestone7aebab2; retained full root before/after and delta preimages.
+
+Next: boot-arg-gated GLES loader in backboardd, EnvironmentVariables in its
+launchd job, test actual CoreAnimation UI. Keep ordinary software UI available.
+G710 hardware still needs resident CSF KMD/BO/VM/queues/fences; do not describe
+softpipe as GPU acceleration. Current MCU/global2426 remains verified below.
+
+## >>> PREVIOUS 2026-11-09: GLES2427 BOOT RUNNING; ROOT DELTA VERIFIED <<<
 
 GLES userspace buildf52013f plus EAGL API3 test completed. Mesa25.0.7 softpipe,
 HakiOS common mtk620c775...7740, device84b0252...02f4; source manifest under
@@ -16,14 +38,16 @@ edits. Offline fsck_hfs -fn exit0, volume OK. Edited image SHA
 cb39abd0b0f1b78d627cc845056617406d472bf066fc575dffa7536bec3d4751.
 Delta184 coalesced runs/86568960B, includes verified unchanged gaps and native
 journal/metadata updates. Complete preimages retained in root-delta-gles-packed/.
-Read-only delta preflight running; NO device root writes/boot yet.
+184/184 delta runs applied and every readback matched. Root write_pending=false.
+2427 runner started: run2427.log and gles2427-run/gpu-normal/journal.json.
+BOOT_A RESTORATION PENDING until that journal verifies full original hash.
 
 2427 image0f1a4f89709354ab2f9310eca2165bfff4d7df750d3b95751cc9fee7865dd3fc,
 7073792B; launchdsuffix=gles-probe selects newly added
 /usr/appleinternal/sbin/launchd.gles-probe. rootrw=0/ufsrw=1: VFS read-only,
 persistent tail log writable. Device Recovery, full boot_a preflight verified
 2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
-Runner run-gles2427.py (new, not consumed); boot recovery mode (UI kernel,
+Runner run-gles2427.py NOW CONSUMED; do not rerun; boot recovery mode (UI kernel,
 no CSF probe). Always restore full boot_a; follow journal, never blindly rerun.
 Next: apply verified additive delta, run2427, inspect pixels/FBIMG/EAGL ABI,
 then integrate opt-in EAGL into backboardd. MCU/global2426 remains verified.
