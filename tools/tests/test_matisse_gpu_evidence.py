@@ -881,6 +881,17 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertTrue(csf['mirror_mapped'])
         self.assertEqual(csf['cold_boot_outcome'], 'walk-dies-at-bit9')
 
+    def test_2425_requires_real_firmware_ready_evidence(self):
+        data = self.marks_dvfs(build=0x2425, memattr_lo=0x888d8f88,
+                              memattr_hi=0x00084c8d, **self.ZERO_PATH)
+        r = self.module.decode(data, 0x2425, require_leaf=False)
+        self.assertTrue(r['csf_firmware_boot_verified'])
+        self.assertNotIn('store_witness', r['csf'])
+        self.assertIn('emi_before', r['csf'])
+        data = self.marks_dvfs(build=0x2425, memattr_lo=0x888d8f88,
+            memattr_hi=0x00084c8d, firmware_ready=0, job_raw=0, version=0, **self.ZERO_PATH)
+        self.assertFalse(self.module.decode(data, 0x2425, require_leaf=False)['csf_firmware_boot_verified'])
+
     def test_2423_emi_labels_preserve_store_witness_and_protection_gate(self):
         fields = {}
         for side in ('before', 'after'):

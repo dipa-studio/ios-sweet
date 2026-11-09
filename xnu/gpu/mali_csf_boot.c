@@ -209,6 +209,14 @@ static int platform_path(const struct sweet_csf_boot_config *c,const struct swee
     s->pdc_st4=rd(io,0x13fbf0c0);s->pdc_st5=rd(io,0x13fbf098);
     s->pdc_st6=rd(io,0x13fbf1c0);s->slc_group6=rd(io,0x13fbf748);
 #endif
+#if SWEET_CSF_EMI_KEEP_PDC
+    /* 2424 restores all eight reads removed by2423, after the EMI reads.
+     * Distinguish priming by added reads from side effects of removed reads. */
+    (void)rd(io,0x13fbf100);(void)rd(io,0x13fbf120);
+    (void)rd(io,0x13fbf140);(void)rd(io,0x13fbf118);
+    (void)rd(io,0x13fbf0c0);(void)rd(io,0x13fbf098);
+    (void)rd(io,0x13fbf1c0);(void)rd(io,0x13fbf748);
+#endif
     r->path_sample_flags|=after?2:1;
     /* Observation only for PDC/SLC: no readiness inference from those words. */
     return ((s->rpc_enable|s->rpc_status)&0xf0000) ||

@@ -122,3 +122,22 @@ tests and the strict MMIO model pass. No CI/new XNU kernel.
 Causality is not isolated: added reads, removed PDC reads, timing and run
 variation are competing explanations. Repeat the image, then split the reads.
 Do not conclude that an EMI register write is necessary: this trial writes none.
+
+
+2423 repeat: same image, marker4 again, both stores visible, cleanup_error0 and
+reset_completed1. Fastboot84.28s, full boot_a restored/verified.
+
+## Trial 2424: retain the original PDC/SLC reads
+
+Image afccc2206a36c7c710d237aba9de75ff412df5c62a3e619db79034c69e92fecc
+adds all eight original PDC/SLC reads after the EMI reads; everything else
+matches2423. Marker4, both CPU stores visible, output0x2420a200,
+cleanup_error0/reset_completed1 again. EMI values match2423. Fastboot156.87s;
+full boot_a restored/verified. Removing the original reads is not necessary
+for the successful outcome. Added EMI reads versus delay remains unisolated.
+
+2425 is prepared/running with the unmodified vendor firmware, vendor leaves
+and EMI reads, no diagnostic shared writes or remaps. Arena0x40077000;
+firmware hash de22d2fc...7229a unchanged. Image
+ a1fa8065544fa2b5c1f7bbc06288670a2a98ddb09ca60c960fb2f47b9f07c58f.
+Hardware outcome pending; no CSF firmware boot claim yet.

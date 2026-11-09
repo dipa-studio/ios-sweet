@@ -1,5 +1,22 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2423 BREAKTHROUGH — ODD STORE AND READ COMPLETE <<<
+## >>> ACTIVE 2026-11-09: 2424 PASS; 2425 UNMODIFIED FIRMWARE RUNNING <<<
+
+2423 passed twice;2424 adds all old PDC/SLC reads back after EMI and also
+passes marker4, both CPU stores visible, cleanup_error0/reset_completed1.
+2424 fastboot156.87s (longer, but restored normally), full boot_a verified to
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+Thus removing PDC reads is not required. EMI reads versus timing not isolated.
+
+2425 image a1fa8065544fa2b5c1f7bbc06288670a2a98ddb09ca60c960fb2f47b9f07c58f
+runs unmodified pinned vendor firmware (de22d2fc...7229a), vendor leaf encoding,
+AUTO2 and EMI diagnostic reads. No ladder, no shared sentinel/witness stores,
+no remaps, no relocation. Arena0x40077000. No global-init yet.
+Model test verifies normal ready and timeout paths; decoder ready evidence test
+passes. Trial running in research/matisse/20261109-gpu/run2425.log;
+journal shim2425-stock-fw-emi/gpu-normal/journal.json. Restore before stopping.
+No new XNU/CI; c01dcbea...d5ea mark0x2407 reused. Last commit7f6eb92.
+
+## >>> PREVIOUS 2026-11-09: 2423 BREAKTHROUGH — ODD STORE AND READ COMPLETE <<<
 
 2423 image c43e902e027a3e4f8eee17d1773eefae0a4969831f175f6266336d356b330e1a
 ran. MCU marker4, CPU control0x2420a400 and odd0x2420a200: first controlled

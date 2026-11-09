@@ -46,6 +46,9 @@ struct model {
   *whether this model honours writes to them at all. */
  unsigned mfg_rb_set;uint32_t mfg_rb[4];int mfg_ignore;
 };
+#ifndef SWEET_CSF_EMI_KEEP_PDC
+#define SWEET_CSF_EMI_KEEP_PDC 0
+#endif
 #if SWEET_CSF_DISPATCH_READBACK
 /*2419: index of the four in-direction dispatch words, or-1. */
 static int dsp_in(uint64_t a) {
@@ -138,6 +141,8 @@ static uint32_t rd(void *p,uint64_t a) {
 #endif
  assert(a>=0x13000000 && a<0x13002500);assert(!m->unpowered);
  switch(a-0x13000000) {
+ case 4:return 0x07130306;case 0xc:return 0x809;
+ case 0x4c:case 0x2c0:case 0x2c4:case 0x2c8:case 0x2cc:return 0;
  case 0x48:return m->l2_hash?m->l2_hash:0x07130000;
  case 0:return m->bad_id?0xa0020001:0xa8620004;
  case 0x14:return m->bad_bits?0x1010:0x2830;
@@ -288,6 +293,7 @@ int main(void) {
   assert(run(&m,&c,&r)==-53);
 #if SWEET_CSF_EMI_DIAG
   assert(m.emi_reads==16 && r.path_sample_flags==3);
+  assert(m.path_reads==(SWEET_CSF_EMI_KEEP_PDC?34:18));
   assert(r.path_before.pdc_cg==0x1021c82c && r.path_after.pdc_cg==0x9021c82c);
   assert(r.path_before.pdc_st0==0x1021c830 && r.path_after.pdc_st0==0x9021c830);
   assert(r.path_before.pdc_st1==0x1021e82c && r.path_after.pdc_st1==0x9021e82c);
@@ -310,6 +316,19 @@ int main(void) {
   assert(!m.l2_hash_writes);
 #endif
   assert(!r.firmware_ready);clean(&m,&r);
+ }
+ return 0;
+}
+#elif SWEET_CSF_EMI_DIAG
+int main(void) {
+ for(int no_fw=0;no_fw<2;no_fw++) {
+  struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
+  m.path_on=1;m.no_fw=no_fw;c.platform_snapshot=1;c.platform_path=1;c.access_snapshot=1;
+  c.firmware_probe_va=0x01000000;c.firmware_probe_offset=0x6000;c.firmware_probe_expected=0x12345678;
+  assert(run(&m,&c,&r)==(no_fw?-53:0));
+  assert(sizeof(r)==784 && m.emi_reads==16 && !m.witness_reads);
+  assert(r.firmware_ready==!no_fw && r.path_sample_flags==3);
+  assert(r.path_after.pdc_st0==0x9021c830);clean(&m,&r);
  }
  return 0;
 }
@@ -737,6 +756,14 @@ class CsfBootTests(unittest.TestCase):
 
     def test_emi_diagnostics_before_cleanup(self):
         self._run(['-DSWEET_CSF_STORE_WITNESS=1','-DSWEET_CSF_GPU_REGS=1',
+                   '-DSWEET_CSF_EMI_DIAG=1'])
+
+    def test_emi_diagnostics_with_original_pdc_reads(self):
+        self._run(['-DSWEET_CSF_STORE_WITNESS=1','-DSWEET_CSF_GPU_REGS=1',
+                   '-DSWEET_CSF_EMI_DIAG=1','-DSWEET_CSF_EMI_KEEP_PDC=1'])
+
+    def test_unmodified_firmware_with_emi_diagnostics(self):
+        self._run(['-DSWEET_CSF_VENDOR_MEMATTR=1','-DSWEET_CSF_GPU_REGS=1',
                    '-DSWEET_CSF_EMI_DIAG=1'])
 
     def test_l2_hash_before_power_on(self):
