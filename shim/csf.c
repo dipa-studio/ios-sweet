@@ -49,7 +49,7 @@
 static uint8_t ooa_near[4096] __attribute__((aligned(4096)));
 #endif
 
-static uint8_t arena[2u<<20] __attribute__((aligned(4096)));
+static uint8_t arena[2u<<20] __attribute__((aligned(4096),used));
 extern const uint8_t sweet_csf_blob_start[],sweet_csf_blob_end[];
 struct sweet_csf_boot_report shim_csf_report;
 #if SWEET_CSF_GPU_REGS
@@ -119,7 +119,15 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
 {
     const struct shim_csf_context *ctx=arg;
     struct sweet_csf_memory memory;
-    uint64_t root=0,pa=(uintptr_t)arena;
+    uint8_t *active_arena=arena;
+#if SWEET_CSF_ARENA_TAIL_OFFSET
+    /* The builder appends an owned 2 MiB zero-filled tail after the intact
+     * Linux fallback and includes it in Image.image_size. Normal mode only:
+     * Recovery bypasses this function. No bootloader allocation is borrowed. */
+    extern uint8_t _head[];
+    active_arena=_head+SWEET_CSF_ARENA_TAIL_OFFSET;
+#endif
+    uint64_t root=0,pa=(uintptr_t)active_arena;
     size_t fw_bytes=(uintptr_t)sweet_csf_blob_end-(uintptr_t)sweet_csf_blob_start;
     shim_csf_report=(struct sweet_csf_boot_report){.stage=SWEET_CSF_BOOT_CONFIG};
     if(!ctx||!ctx->platform||!ctx->platform->power_acquired||ctx->platform->on_result!=1||
@@ -155,9 +163,9 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
         shim_csf_report.error=SWEET_CSF_BOOT_ARGUMENT;return shim_csf_report.error;
     }
 #endif
-    if(!rc)rc=sweet_csf_memory_build_group(sweet_csf_blob_start,fw_bytes,&memory,arena,sizeof(arena),pa,(mmu>>8)&255,SWEET_CSF_LEAF_GROUP,&root);
+    if(!rc)rc=sweet_csf_memory_build_group(sweet_csf_blob_start,fw_bytes,&memory,active_arena,sizeof(arena),pa,(mmu>>8)&255,SWEET_CSF_LEAF_GROUP,&root);
 #if SWEET_CSF_OUT_OF_ARENA
-    if(!rc)rc=sweet_csf_memory_remap_leaves(arena,sizeof(arena),pa,(mmu>>8)&255,remaps,1);
+    if(!rc)rc=sweet_csf_memory_remap_leaves(active_arena,sizeof(arena),pa,(mmu>>8)&255,remaps,1);
 #endif
     if(rc) {shim_csf_report.error=rc;return rc;}
 #if SWEET_CSF_OUT_OF_ARENA
@@ -180,9 +188,9 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
     struct sweet_csf_layout layout;
     rc=sweet_csf_parse(sweet_csf_blob_start,fw_bytes,&layout,dump_section,0);
 #ifdef SHIM_CSF_INLINE_ENTRY_PROBE
-    if(!rc)rc=sweet_csf_inline_probe_install(arena,sizeof(arena),&memory);
+    if(!rc)rc=sweet_csf_inline_probe_install(active_arena,sizeof(arena),&memory);
 #else
-    if(!rc)rc=sweet_csf_entry_probe_install(arena,sizeof(arena),&memory);
+    if(!rc)rc=sweet_csf_entry_probe_install(active_arena,sizeof(arena),&memory);
 #endif
     if(rc) {shim_csf_report.error=rc;return rc;}
 #endif
@@ -254,7 +262,7 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
      * arena. Marker semantics live in the ladder header; the slots are the only
      * place both words survive when the second read never returns. */
     {
-        const volatile uint32_t *slot=(const volatile uint32_t *)(uintptr_t)(arena+memory.shared_offset);
+        const volatile uint32_t *slot=(const volatile uint32_t *)(uintptr_t)(active_arena+memory.shared_offset);
         con_hex2("CSF b9 g0","ctl=",slot[0x200/4],"tst=",slot[0x208/4]);
         con_hex2("CSF b9 g6","ctl=",slot[0x204/4],"tst=",slot[0x20c/4]);
     }

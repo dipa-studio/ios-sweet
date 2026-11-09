@@ -1,6 +1,25 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
+## >>> ACTIVE 2026-11-09: 2422 RESTORED — FAR ARENA HAS SAME STORE STALL <<<
 
-## >>> ACTIVE 2026-11-09: 2421 L2 HASH TEST RUNNING <<<
+2422 ran image d11fbb7ba449601d4eb476e3ea2cf57d68b3e070b70655f457f4c2a378c38d49.
+AS root readback0x45000000, firmware PA0x4512d000, shared target0x45099200.
+Marker2; CPU +0x400 became0x2420a400; +0x200 retained0x24205200;
+MCU_STATUS1 and AS_FAULT0. Whole arena relocation did not fix the stall.
+Fastboot113.28s; fresh captures; full boot_a restored/verified to
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No restore pending. 122 tests pass including assembled/Unicorn ladder,
+boot-model and evidence tests. Kernel unchanged c01dcbea...d5ea; no CI run.
+
+2421 also completed/restored: L2_CONFIG0x07130000 ->0x08130000 verified,
+same marker2 and CPU store observations. See docs/matisse-gpu-20261109.md.
+Do not repeat the old claim that soft reset never completes:2408's pre-MCU
+soft reset completed, only post-stall cleanup reset times out.
+Next: read vendor EMI/GALS diagnostic words before/after MCU, retain the
+CPU store witness. This is new evidence below the MFG top dispatch block;
+we do not yet know which interconnect component stalls the request.
+Raw images/runners/captures: research/matisse/20261109-gpu/.
+
+## >>> PREVIOUS 2026-11-09: 2421 L2 HASH TEST RUNNING <<<
 
 2421 image 8e31785b853a18e736d5898af06063042abac4600b0083aa381b7adeb9a6dc9f
 passed build, 12 sanitizer boot-model tests, two assembled/Unicorn ladder tests

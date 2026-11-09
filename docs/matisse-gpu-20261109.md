@@ -70,4 +70,35 @@ a broken GPU, or any particular interconnect mechanism.
 Same witness/MCU program as2420, supported L2 hash selector8 instead of the
 observed7; only bits31:24 changed before power-on, with readback. Built image:
 8e31785b853a18e736d5898af06063042abac4600b0083aa381b7adeb9a6dc9f.
-Hardware outcome pending; do not claim this fixes the MCU yet.
+Hardware result: 0x07130000 -> 0x08130000 readback verified; marker2,
+control visible, odd store absent. Fastboot87.45s; full boot_a restored to
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+The hash override does not fix this witness.
+
+## Trial 2422: relocate the complete arena
+
+All page tables, firmware sections and shared backing move to an owned 2 MiB
+zero-filled Image tail at0x45000000. Image.image_size covers the allocation,
+and the stock fallback, ramdisk and signature bytes are checked unchanged.
+The unused old BSS allocation and near-page mapping remain. MCU program and
+memory attributes match2420; default L2 hash7 is restored by the next boot.
+
+Image SHA256: d11fbb7ba449601d4eb476e3ea2cf57d68b3e070b70655f457f4c2a378c38d49.
+AS root readback0x45000000, firmware PA0x4512d000, target PA0x45099200.
+Marker2, control0x2420a400 visible, odd word remains0x24205200. MCU_STATUS1,
+AS_FAULT0. Thus the symptom is reproducible at both arena locations; this
+still does not identify a hardware defect or prove every RAM range fails.
+
+Fastboot113.28s, fresh marks, full boot_a restored/verified to the same baseline.
+122 tests pass (boot model, assembled/Unicorn ladder, fetch, evidence); kernel
+c01dcbea...d5ea unchanged, no CI build. Runner and captures under
+research/matisse/20261109-gpu/shim2422-far-arena*.
+
+## Next measurement
+
+Vendor gpufreq_mt6983.c:1316-1342 reads four EMI GALS slave debug words
+(0x1021c82c/830, 0x1021e82c/830) and four M6/M7 idle controls. These have not
+been measured in the existing MFG-top trials. Read them before and after the
+MCU test and preserve CPU witness data. No bit decoding is claimed without
+source evidence. Also,2408 already demonstrated pre-MCU soft-reset completion;
+post-stall cleanup timeout must not be described as universal reset failure.
