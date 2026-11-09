@@ -18,12 +18,15 @@ Root2428 job/cache and loader were present (offline hashes checked).
 
 Preparing0205 patch: sweetgles=1 adds fixed loader env to64-bit backboardd
 at exec and permits only dyld path/print vars (0x12) for that process.
-Mark2429; no new boot yet. Seven targeted ASan/UBSan tests PASS.
+2429 image3b9192790db4128708daa89ae6a53d1c6b1572b393ea8b8417dc86f6427a57b8
+7073792B, kernele1c94338...44f8ba, source7a65b31. Local full build exit0,
+image audit/preflight pass; seven targeted ASan/UBSan tests PASS.
 Actions dispatch rejected HTTP422 (repository disabled); local CLT full
-build in progress, log build2429.log. Compile outputs for kern_exec and
-sweet_amfi already produced. Repository validator: Python syntax passes; existing0085 numbering gap
+build passed, log build2429.log. No new CI run. Repository validator: Python syntax passes; existing0085 numbering gap
 and six shell CRLF syntax failures remain (unmodified files).
-Next finish build, run verified image, restore. Libraries/root unchanged.
+2429 runner STARTED: run2429.log, gles2429-run/gpu-normal/journal.json.
+Do not rerun; follow full boot_a restoration to completion. Libraries/root
+unchanged. Read journal for actual pending state before any device action.
 Raw evidence and local preimages: research/matisse/20261109-gles-inject/.
 
 ## >>> PREVIOUS 2026-11-09: GLES2427 PASSED; BACKBOARDD2428 BOOT RUNNING <<<
