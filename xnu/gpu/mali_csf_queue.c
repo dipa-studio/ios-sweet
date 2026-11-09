@@ -141,7 +141,11 @@ int sweet_csf_queue_probe(const struct sweet_csf_queue_config *c,
         r->fault=rd(io,co+0x80);r->fatal=rd(io,co+0x84);
         r->mmu_raw=rd(io,c->gpu+0x2000);r->as_fault=rd(io,as+0x1c);
         r->cmd_lo=rd(io,co+0x40);r->cmd_hi=rd(io,co+0x44);
-        if(r->fault||r->fatal||r->mmu_raw||rd(io,mem+0x3004)) {r->error=-64;break;}
+        /* CSF MMU RAWSTAT[31:16] are command-completion events. In2433
+         * AS1 UPDATE raised bit17, and treating it as a fault aborted the
+         * first poll while firmware was still accepting the START request. */
+        if(r->fault||r->fatal||(r->mmu_raw&0xffff)||r->as_fault||
+           rd(io,mem+0x3004)) {r->error=-64;break;}
         if((r->csg_ack&0x17)==(r->csg_req&0x17)&&(r->cs_ack&7)==1&&
            r->after==SWEET_CSF_QUEUE_TAG&&r->before==0xdeadbeef&&
            r->extract==r->insert&&!rd(io,mem+0x2004)){r->error=0;r->stage=5;break;}

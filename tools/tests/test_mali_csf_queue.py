@@ -40,6 +40,8 @@ static void execute(struct model*m){
  if(m->mode==1)return;
  out[0]=in[0];co[0]=ci[0];
  if(m->mode==4){co[0x84/4]=0x44;return;}
+ if(m->mode==6){m->gpu[0x2000/4]|=2;return;}
+ if(m->mode==7){m->gpu[0x245c/4]=0xc1;return;}
  uint32_t regs[96]={0};unsigned waited=0;
  /* Decode the submitted words, rather than accepting a host-supplied tag. */
  for(unsigned off=0;off<32;off+=8){
@@ -59,6 +61,7 @@ static void execute(struct model*m){
 }
 static void wr(void*p,uint64_t a,uint32_t n){
  struct model*m=p;m->writes++;*address(m,a)=n;
+ if(a==GPU+0x2458){assert(n==1);m->gpu[0x2000/4]|=0x20000;}
  if(a==GPU+0x80000){assert(n==1);m->bells++;execute(m);}
 }
 static uint64_t ticks(void*p){return ++((struct model*)p)->ticks;}
@@ -90,7 +93,7 @@ int main(void){
  .shared_va=0x04000000,.shared_bytes=0x10000,.input_va=0x04002000,.output_va=0x04003000,
  .memory_bytes=SWEET_CSF_QUEUE_BYTES,.timeout_ms=1};
  struct sweet_csf_queue_report r;
- for(int i=0;i<6;i++){init(m);m->mode=i;int rc=sweet_csf_queue_probe(&c,&io,&r);
+ for(int i=0;i<8;i++){init(m);m->mode=i;int rc=sweet_csf_queue_probe(&c,&io,&r);
   if(!i)assert(!rc&&r.stage==7&&r.after==SWEET_CSF_QUEUE_TAG&&r.extract==32&&m->executed==1);
   else assert(rc<0&&r.stage!=7);assert(m->bells==2);
  }

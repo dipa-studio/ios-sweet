@@ -903,7 +903,7 @@ class ReportDecodeTests(unittest.TestCase):
 
     def test_2433_requires_gpu_completion_and_clean_termination(self):
         words = [7,0,0x11,0x11,0x511,0x511,32,32,0xdeadbeef,0x2433c5f1,
-                 0,0,0,0,0x08000020,0,0x10000,8,0x10,10]
+                 0,0,0x20000,0,0x08000020,0,0x10000,8,0x10,10]
         def decode(values, **extra):
             fields = {f'gpu_regs_{side}_{key}':values[i*10+j]
                       for i,side in enumerate(('before','after'))

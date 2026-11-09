@@ -22,6 +22,19 @@ sweet_gpu_boot releases its power reference, so2426 is not a resident driver.
 Mesa25.0.7 already contains Gallium pan_csf.c for PAN_ARCH>=10; the HakiOS
 Darwin patch only implements v7/JM. Need a CSF transport, not that JM shim.
 
+2434 fixed MMU completion/fault classification, all102 tests PASS, local shim
+build exit0. Image08fa195e86b177a2dd6f220639f8b4f00e52c3edac34e26fd645c0790f9eac14,
+26718208B; kernel2431 unchanged, no CI. Starting new one-shot runner next.
+Journal shim2434-queue/gpu-normal/journal.json; full boot_a restore required.
+
+2433 hardware result: fresh trial2433/kernel2431; MCU/global boot reached,
+CSG ACK eventually0x11. Queue exited at first poll because MMU RAWSTAT0x20000
+(AS1 command completion) was incorrectly treated as a fault. Witness unchanged,
+extract0; NO queue-execution claim. MCU disable timeout(-53), reset completed.
+Boot returned Fastboot91.69s; full boot_a restored and independently hashed to
+2931647a...86b1. No restoration pending. Sourcec034b5b. Fixing low16-bit fault
+mask and AS fault check for2434; raw evidence shim2433-queue/gpu-normal/.
+
 2433 queue implementation ready: portable mali_csf_queue.c/h adds owned
 512KiB queue/IO/witness/suspend memory, AS1, CSG0/CS0, four CS instructions
 (MOVE/MOVE32/SYNC_SET32/WAIT). Success requires GPU tag change, extract32,
