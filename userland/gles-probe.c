@@ -21,6 +21,9 @@
 /* XNU's reboot(2) is exported by libSystem but absent from public iOS headers. */
 extern int reboot(int);
 #define RB_AUTOBOOT 0
+#ifndef SWEET_GLES_HARDWARE
+#define SWEET_GLES_HARDWARE 0
+#endif
 
 enum { W = 256, H = 256 };
 static unsigned char pixels[W * H * 4], window[16 * 16 * 4];
@@ -144,7 +147,10 @@ static void eagl_probe(void)
         for (unsigned i = 0; i < 12; i++) printf(" %08x", code[i]);
         printf("\n");
     }
-    void *bridge = dlopen("/usr/local/sweet/lib/libsweet-gles.dylib", RTLD_NOW | RTLD_LOCAL);
+#ifndef SWEET_GLES_LIBRARY
+#define SWEET_GLES_LIBRARY "/usr/local/sweet/lib/libsweet-gles.dylib"
+#endif
+    void *bridge = dlopen(SWEET_GLES_LIBRARY, RTLD_NOW | RTLD_LOCAL);
     if (!bridge) { printf("SWEET GLES: dlopen: %s\n", dlerror()); fail("EAGL bridge", 0); }
     Class cls = objc_getClass("EAGLContext");
     id object = ((id (*)(id, SEL))objc_msgSend)((id)cls, sel_registerName("alloc"));
@@ -174,7 +180,7 @@ int main(int argc, char **argv)
     int console = open("/dev/console", O_RDWR);
     if (console >= 0) { dup2(console, 1); dup2(console, 2); close(console); }
     setvbuf(stdout, NULL, _IONBF, 0);
-    printf("SWEET GLES: begin trial=2427 pid=%d\n", getpid());
+    printf("SWEET GLES: begin hardware_required=%d pid=%d\n", SWEET_GLES_HARDWARE, getpid());
     const int attributes[] = { OSMESA_FORMAT, OSMESA_RGBA, OSMESA_PROFILE,
         OSMESA_ES_PROFILE, OSMESA_CONTEXT_MAJOR_VERSION, 2, 0 };
     OSMesaContext context = OSMesaCreateContextAttribs(attributes, NULL);
@@ -182,6 +188,9 @@ int main(int argc, char **argv)
         fail("context", 0);
     printf("SWEET GLES: renderer=%s version=%s vendor=%s\n",
         glGetString(GL_RENDERER), glGetString(GL_VERSION), glGetString(GL_VENDOR));
+    const char *renderer = (const char *)glGetString(GL_RENDERER);
+    if (SWEET_GLES_HARDWARE && (!renderer || !strstr(renderer, "G710") ||
+            !strstr(renderer, "Panfrost"))) fail("hardware renderer required", 0);
     display_open();
     GLuint texture, framebuffer;
     glGenTextures(1, &texture); glBindTexture(GL_TEXTURE_2D, texture);
@@ -214,7 +223,8 @@ int main(int argc, char **argv)
         present(frame);
     }
     eagl_probe();
-    printf("SWEET GLES: PASS shaders=2 draws=4 pixel_checks=9 swaps=4 eagl_api=3 hardware_claim=0\n");
+    printf("SWEET GLES: PASS shaders=2 draws=4 pixel_checks=9 swaps=4 eagl_api=3 hardware_claim=%d\n",
+        SWEET_GLES_HARDWARE);
     sleep(8);
     if (getpid() == 1) { reboot(RB_AUTOBOOT); for (;;) sleep(1); }
     CFRelease(surface); IOServiceClose(fb); OSMesaDestroyContext(context);

@@ -16,12 +16,15 @@ __attribute__((constructor)) static void install(void)
     int enabled = 0;
     for (char *s = strtok(args, " "); s; s = strtok(NULL, " "))
         if (!strcmp(s, "sweetgles=1")) enabled = 1;
+        else if (!strcmp(s, "sweetgles=2")) enabled = 2;
     if (!enabled) return;
     fprintf(stderr, "SWEET GLES: enabling EAGL bridge in %s\n", getprogname());
     if (!dlopen("/System/Library/Frameworks/OpenGLES.framework/OpenGLES", RTLD_NOW | RTLD_GLOBAL) ||
-        !dlopen("/usr/local/sweet/lib/libsweet-gles.dylib", RTLD_NOW | RTLD_LOCAL)) {
+        !dlopen(enabled == 2 ? "/usr/local/sweet-gpu/lib/libsweet-gles.dylib" :
+            "/usr/local/sweet/lib/libsweet-gles.dylib", RTLD_NOW | RTLD_LOCAL)) {
         fprintf(stderr, "SWEET GLES: bridge load failed: %s\n", dlerror());
         return;
     }
-    fprintf(stderr, "SWEET GLES: EAGL bridge loaded; backend=softpipe hardware_claim=0\n");
+    fprintf(stderr, "SWEET GLES: EAGL bridge loaded; requested_backend=%s\n",
+        enabled == 2 ? "panfrost-v10-csf" : "softpipe");
 }
