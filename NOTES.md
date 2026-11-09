@@ -1,5 +1,33 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2431 IOSURFACE FIX BUILT; PREFLIGHT NEXT <<<
+## >>> ACTIVE 2026-11-09: 2431 SYSTEM GLES VERIFIED; INVESTIGATING LATENCY <<<
+
+2431 completed with fresh console/trial/kernel identity. One bridge/context,
+37 frame records, 26 with draws into known IOSurface targets; zero recorded
+shader/link/dispatch/GL errors and no observed backboardd crash. User saw
+a normal lock screen and advancing clock, but swipes and keys had no visible
+response. This verifies software GLES UI rendering, NOT GPU acceleration.
+55 touch and 26 key records reached HID; display off/on requests also occurred.
+Frame-duration median178745us, max19365239us; these are wall intervals from
+first draw to flush and do not alone prove all time was spent in GL.
+Copy-out takes only a few milliseconds in the long frames. Existing HakiOS
+boot option glslow=US can time individual calls without installing new files.
+Touch logs use normalized1080x2400 coordinates; patch0111 explicitly maps
+them to the panel/logical dimensions, so the log scale alone is not a bug.
+
+Fastboot observed201.15s; runner completed full boot_a restoration and
+Recovery independently rehashed it again this turn:
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No runner active and no restoration pending. Source milestone7591fa4;
+local kernel20a6a41098a02309b15ec8dc1a36ef137b0b5a4feb038096501e4af93719146d,
+image02319ad5146e1ec83051f1b4afd16ff60a80f4dd042fbacdbf34912b3652615f.
+No new CI run; prior dispatch rejected because Actions is disabled.
+Raw evidence: research/matisse/20261109-gles-inject/result2431.json,
+observation2431.json and gles2431-run/gpu-normal/.
+Next: prepare2432 using the same kernel/root and glslow diagnostics,
+verify image/preflight, then run and recover logs/full boot_a as before.
+2432 image built/preflight passed: b94772799dc3d4fee67e50bbfb89938891cd69b1f553efc4e60ac7cbdb1cadca, 7073792B. Same2431 kernel/root; adds glslow=100000 touch_lat=1. Baseline shim reproduced byte-for-byte. Starting runner run-gles2432.py next; inspect gles2432-run/gpu-normal/journal.json before any device action. Full boot_a restoration required after trial. No kernel rebuild or CI run.
+
+## >>> PREVIOUS 2026-11-09: 2431 IOSURFACE FIX BUILT; PREFLIGHT NEXT <<<
 
 0206 negotiates new XR/b3a8 targets as BGRA when sweetgles=1, refuses
 unsupported wrap shortcuts6/7, pins IOSurfaceAddress backing with read-only
