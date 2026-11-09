@@ -7,7 +7,9 @@
 /* First CSF transport: one exclusively owned group/stream, synchronous submit.
  * The caller keeps the GPU powered and resets it before releasing any memory.
  * This is a queue-execution witness, not a shader/rendering implementation. */
-#define SWEET_CSF_QUEUE_VA 0x08000000u
+/* CS_USER_INPUT/OUTPUT are MCU pointers. The MCU shared-region aperture is
+ * [0x04000000,0x08000000), even when a page exists in the GPU page tables. */
+#define SWEET_CSF_QUEUE_VA 0x06000000u
 #define SWEET_CSF_QUEUE_BYTES 0x80000u
 #define SWEET_CSF_QUEUE_TAG 0x2433c5f1u
 struct sweet_csf_queue_config {

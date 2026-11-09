@@ -22,10 +22,24 @@ sweet_gpu_boot releases its power reference, so2426 is not a resident driver.
 Mesa25.0.7 already contains Gallium pan_csf.c for PAN_ARCH>=10; the HakiOS
 Darwin patch only implements v7/JM. Need a CSF transport, not that JM shim.
 
+2435 ready: shared-window queue at0x06000000;102 tests PASS; shim build exit0.
+Image30decd7848f0c465a153e73454dfae6ff2a0c59faa09d601e82010f98f21cfc1,26718208B.
+Same2431 kernel/no CI. New runner shim2435-queue-run-once.py; starting after
+read-only preflight and commit. Journal shim2435-queue/gpu-normal/journal.json.
+
+2434 hardware result: fresh trial2434, CSG_ACK0x11 but CS_ACK0/extract0/
+witness unchanged. MMU_RAW0x20001 after3 polls: true AS0(firmware) fault;
+AS1 fault0. Root cause candidate: queue IO VA0x08000000 is outside Panthor
+CSF_MCU_SHARED_REGION [0x04000000,0x08000000). Preparing2435 at0x06000000
+and relaying AS fault address on failure. Shader test waits for queue success.
+Manual Fastboot requested; user entered, logs captured and full boot_a restored.
+No UI/GPU rendering claim. Kernel2431 reused; no CI. Raw shim2434-queue/.
+
 2434 fixed MMU completion/fault classification, all102 tests PASS, local shim
 build exit0. Image08fa195e86b177a2dd6f220639f8b4f00e52c3edac34e26fd645c0790f9eac14,
-26718208B; kernel2431 unchanged, no CI. Starting new one-shot runner next.
-Journal shim2434-queue/gpu-normal/journal.json; full boot_a restore required.
+26718208B; kernel2431 unchanged, no CI. Source2e5c0eb. One-shot runner STARTED and consumed; do not rerun.
+Journal shim2434-queue/gpu-normal/journal.json; completed and restored full boot_a.
+No restoration pending. Independent Recovery hash matches2931647a...86b1.
 
 2433 hardware result: fresh trial2433/kernel2431; MCU/global boot reached,
 CSG ACK eventually0x11. Queue exited at first poll because MMU RAWSTAT0x20000

@@ -33,9 +33,9 @@ static void execute(struct model*m){
  uint32_t *ci=m->sh+0x6000/4,*co=m->sh+0x7000/4;
  assert((gi[2]^go[2])&1);go[2]=gi[2];
  if(!(in[0]&7)){if(m->mode!=5)out[0]=in[0];return;}
- assert(in[0]==0x11&&in[0x50/4]==1&&ci[4]==0x08000000&&ci[6]==4096);
- assert(ci[0x30/4]==0x08001000&&ci[0x38/4]==0x08002000);
- assert(in[0x40/4]==0x08010000&&in[0x34/4]==0xf0010101);
+ assert(in[0]==0x11&&in[0x50/4]==1&&ci[4]==0x06000000&&ci[6]==4096);
+ assert(ci[0x30/4]==0x06001000&&ci[0x38/4]==0x06002000);
+ assert(in[0x40/4]==0x06010000&&in[0x34/4]==0xf0010101);
  assert(m->gpu[0x2440/4]==0x90000000&&m->gpu[0x2470/4]==0x42000006);
  if(m->mode==1)return;
  out[0]=in[0];co[0]=ci[0];
@@ -52,7 +52,7 @@ static void execute(struct model*m){
    unsigned addr=(ins>>40)&255,data=(ins>>32)&255;
    assert(addr+1<96&&data<96&&(ins&0xffffffff)==0&&dst==0);
    uint64_t va=regs[addr]|((uint64_t)regs[addr+1]<<32);
-   assert(va==0x08003000&&m->mem[0x3000/4]==0xdeadbeef);
+   assert(va==0x06003000&&m->mem[0x3000/4]==0xdeadbeef);
    m->mem[0x3000/4]=regs[data]^(m->mode==2);m->executed++;
   }else if(op==3){assert(((ins>>16)&255)==1);waited++;}
   else assert(0);
@@ -76,7 +76,7 @@ static void memory_test(void){
  uint64_t *a=calloc(1,2<<20);assert(a);uint64_t p=0x90000000,mem=0;
  a[0]=(p+4096)|3;a[512]=(p+8192)|3;
  assert(!sweet_csf_queue_memory(a,2<<20,p,0x10000,3,40,&mem));
- assert(mem==p+0x11000&&a[1024+64]==(p+0x10000+3));
+ assert(mem==p+0x11000&&a[1024+48]==(p+0x10000+3));
  for(unsigned i=0;i<128;i++)assert(a[0x10000/8+i]==((mem+4096*i)|0x0060000000000457ULL));
  assert(a[0]==((p+4096)|3)&&a[512]==((p+8192)|3));
  uint8_t *copy=malloc(2<<20);assert(copy);memcpy(copy,a,2<<20);

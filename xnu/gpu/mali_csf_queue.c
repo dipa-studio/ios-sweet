@@ -145,7 +145,16 @@ int sweet_csf_queue_probe(const struct sweet_csf_queue_config *c,
          * AS1 UPDATE raised bit17, and treating it as a fault aborted the
          * first poll while firmware was still accepting the START request. */
         if(r->fault||r->fatal||(r->mmu_raw&0xffff)||r->as_fault||
-           rd(io,mem+0x3004)) {r->error=-64;break;}
+           rd(io,mem+0x3004)) {
+            /* On an AS fault, relay its address instead of a CS pointer
+             * that has not advanced. AS0 is firmware; AS1 is our queue. */
+            if(r->mmu_raw&3) {
+                uint64_t fault_as=c->gpu+((r->mmu_raw&1)?0x2400:0x2440);
+                r->as_fault=rd(io,fault_as+0x1c);
+                r->cmd_lo=rd(io,fault_as+0x20);r->cmd_hi=rd(io,fault_as+0x24);
+            }
+            r->error=-64;break;
+        }
         if((r->csg_ack&0x17)==(r->csg_req&0x17)&&(r->cs_ack&7)==1&&
            r->after==SWEET_CSF_QUEUE_TAG&&r->before==0xdeadbeef&&
            r->extract==r->insert&&!rd(io,mem+0x2004)){r->error=0;r->stage=5;break;}
