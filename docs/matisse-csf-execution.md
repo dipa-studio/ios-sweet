@@ -1,0 +1,66 @@
+# MT6983 / Mali-G710 CSF execution — 2026-11-09
+
+The port now executes CSF commands and a Valhall compute shader on the phone.
+This establishes hardware execution; the system GLES frontend still uses
+softpipe until the resident XNU driver and Mesa CSF transport are connected.
+
+## Hardware results
+
+| Trial | Result | Observation |
+| --- | --- | --- |
+| 2433 | Failed | AS1 UPDATE produced MMU bit17; the queue wrongly classified this completion event as a fault and stopped at poll1. |
+| 2434 | Failed | After fixing the mask, CSG START acknowledged, then AS0 fault bit0 appeared. CS had not started. |
+| 2435 | Passed | Moving queue interfaces from `0x08000000` to `0x06000000` removed the failure. The GPU wrote `0x2433c5f1`; insert/extract were both32 bytes. |
+| 2436 | Passed | A four-instruction Valhall compute shader wrote `0x2436c5f1`; insert/extract were both192 bytes. Queue completion used a separate memory location. |
+
+2435 completed in10 polling iterations and2436 in18. These counts are not
+performance measurements. Both had zero CS fault/fatal and AS fault status,
+matched CSG/CS state ACKs, terminated the group, disabled the MCU, and completed
+the outer GPU reset with cleanup_error0. MMU RAWSTAT0x20000 is AS1 request
+completion, not a page fault. All four captures have independently checked
+trial boot arguments, changed persistent logs, image readback and kernel mark.
+
+All four trials restored the full64MiB boot_a backup. Its independently checked
+SHA256 is `2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1`.
+2434 required the user to enter Fastboot;2433/2435/2436 returned automatically.
+No filesystem/root edits were needed for these tests.
+
+## Implemented path
+
+`xnu/gpu/mali_csf_queue.c` owns queue, IO, completion and suspend memory in
+the unused tail of the shim firmware arena. It programs AS1 and CSG0/CS0,
+submits commands, checks actual memory/extract/ACK results, and terminates.
+The existing outer boot transaction resets the GPU before releasing power.
+Firmware and its established boot mapping/power sequence are unchanged.
+
+For2436, one page is read-only executable shader memory; other new pages are
+noncacheable RW/XN. The command stream requests compute resources, sets the
+shader/local-storage descriptors and a1x1x1 workgroup/grid, runs the shader,
+waits, flushes caches and records a separate queue completion. The shader alone
+writes the compute witness. Its four words were checked against Mesa25.0.7's
+Valhall assembler.103 host tests pass, including actual C under ASan/UBSan,
+command/shader decoding, injected faults and rejection of incomplete evidence.
+
+## Sources and next integration
+
+The Linux reference is commit7475ea8b58616b33c04afb976cf0fbaad9dd63fb;
+Xiaomi r32p1 is270b84910b941bf75490fccdb5fb2b3021dd7cbf. Panthor's MCU shared
+window is `[0x04000000,0x08000000)`. Its MMU fault mask uses only bits0..15.
+Xiaomi's CSF scheduler and interface definitions supplied the CSG/CS register
+layout; Mesa25.0.7 `v10.xml`, `pan_csf.c` and Valhall assembler supplied the
+command, descriptor and shader encodings. Locally pinned source hashes are in
+the ignored `research/matisse/20261109-gpu-sources/sources.json`.
+
+Keep GLES as the working frontend and connect Mesa's v10 CSF backend. HakiOS's
+v7/JM Darwin backend is not a G710 submission driver. The next concrete work is
+resident XNU GPU ownership, separate application VM/BO mappings, a userspace
+submission/completion interface, then Mesa BO/group/heap/fence integration.
+The current shim always resets and drops power at return; it must not be
+represented as a resident driver or hardware-accelerated backboardd.
+
+Implementation commits: c034b5b,2e5c0eb,560f3d0,8faebd9. These trials reused
+kernel2431; no new kernel build or CI run. Final image2436 SHA256:
+`d5468945fe4eb1df16d7682a474308cdbd6213b10c957662a0e198afbaf0d435` (26718208B).
+Exact manifests, logs and decoded results are under ignored
+`research/matisse/20261109-gpu/`; `queue-compute-verified.json` indexes the four
+verified captures. No downloaded firmware, device dumps or serials are in git.
