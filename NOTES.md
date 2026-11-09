@@ -1,5 +1,25 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2444 QUEUE TIMEOUT; 2445 USER DOORBELL FIX <<<
+## >>> ACTIVE 2026-11-09: 2445 HARDWARE GLES PIXELS VERIFIED; UI NEXT <<<
+
+2445 hardware GLES PASS: Mali-G710(Panfrost),ES3.1,4 shader draws,9 pixel
+checks incl blending and EAGL API3,4 actual display swaps. User saw blue
+background/triangle. Fresh trial/kernel2445,changed tail verified. Resident
+status14 submits/failures0. Important remaining defect: closing the EAGL
+second group failed selector21/e00002ca and marks its VM broken; subsequent
+unmaps fail. Rendering result is real, but cleanup is NOT yet healthy.
+Evidence:20261109-resident-gpu/hardware2445-verified.json,observation2445.json.
+Fastboot123.59s; full boot_a restored/verified2931647a...86b1. No pending restore.
+Source6967e32 pushed. Full local build-v2 passed; gh dispatch422 Actions disabled.
+
+2446 UI image5394b3031686a966a0bd3609ada1df06090e1d78900998690e52043b75258393
+uses SAME verified kernel2445(0a40b597...ab1c6f64),normal launchd,keys/touch,
+sweetgles=2 glcopy=1 glwait=1. No new root edits. Prepared one-shot runner
+shim2446-ui-run-once.py; preflight PASSED, runner starting now. Full boot_a
+restore required until its journal is complete. Check journal before device use.
+Next verify backboardd frames/input, and fix CSG/group teardown failure.
+Hardware system UI is NOT yet verified;2445 is hardware GLES+EAGL probe only.
+
+## >>> PREVIOUS 2026-11-09: 2444 QUEUE TIMEOUT; 2445 USER DOORBELL FIX <<<
 
 2444 completed and full boot_a restored; independent Recovery readback this
 turn confirms2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
@@ -26,6 +46,13 @@ imagecb18063759705c9a8ba0a2b2f7e3164c495ae8ede14615532a270726588f8989,
 snapshot verified in128MiB chunks (changed0,5); offline probe-only deployment
 and delta preparation underway. New runner shim2445-hw-run-once.py prepared;
 not yet booted. Check journal before device use. No device write pending.
+
+2445 READY/RUNNING:10/10 delta preimages and writes verified,266240 bytes,
+probe-only update; rootSHAda3f772a964a8c486d8ef5d81f0934dd751f5e6a58717f4d072ff1a86a9265b0.
+Source6967e32 committed and pushed to fork. gh dispatch again HTTP422 Actions
+disabled; no new CI run ID. Starting one-shot2445 now; full boot_a restoration
+is required until shim2445-hw/gpu-normal/journal.json says complete. No root
+write pending. Treat hardware pixels/UI as unverified until fresh logs return.
 
 ## >>> PREVIOUS 2026-11-09: 2443 USERSPACE REACHES GPU VM; 2444 PREPARING <<<
 
