@@ -59,3 +59,33 @@ HakiOS 宏函数表清屏并检查第九个像素；记录本机 Apple GL 入口
 GPU 固件启动和全局握手的已验证结果见 `matisse-gpu-20261109.md`；
 仍需常驻 XNU 驱动、BO/VM、CSG/CS、tiler heap、完成同步和 IOSurface 导入，
 才能把这里的软件 GLES 后端换成 G710 硬件后端。
+
+## 2428：界面可见，但尚未启用 EAGL 桥接
+
+2428 复用 2316 内核，用户观察到锁屏或主屏幕。持久日志确认
+backboardd 和 SpringBoard 各启动一次，未记录 backboardd 崩溃，
+但 `SWEET GLES:` 和 `redwood-gl:` 均为零次。因此不能将这次 UI
+归为新 Mesa 后端的成功。169.12 秒观察到 Fastboot，随后完整
+boot_a 恢复并独立核对上述 SHA256；本地 `result2428.json` 保存了结果。
+
+静态核对找到了注入链路的两个缺口：
+
+1. HakiOS 的 `xnu/redwood.patch` 在 `exec_extract_strings()` 内追加
+   `DYLD_INSERT_LIBRARIES`，并说明 launchd 会过滤任务字典中的
+   `DYLD_` 变量。单独修改 launchd plist 不是它使用的注入方式。
+2. 20H392 的 `/usr/lib/dyld` 在 `0x5cc0c` 的
+   `amfi_check_dyld_policy_self` 调用 `__mac_syscall("AMFI", 90, arg)`；
+   `arg` 是 `{ uint64_t input_flags; user_addr_t output_flags; }`。
+   失败时 `SyscallDelegate::amfiFlags` 返回零，路径环境变量不被处理。
+   原 SWEET AMFI 策略名为 `SWEET AMFI`，且没有 syscall callback。
+   HakiOS 的 `xnu/files/bsd/kern/kern_minimac.c` 实现了这个 ABI。
+
+0205 补丁添加固定的 loader 环境变量及 AMFI 90 号接口，二者都只在
+`sweetgles=1` 且目标为 64 位 backboardd 时启用。AMFI 输出 `0x12`
+只启用路径和诊断环境变量，不放开自定义共享缓存、插入失败忽略或
+interposing。已有相同环境变量不重复添加，不同值返回 EINVAL。
+内核分别记录 exec 注入与 AMFI 握手，方便区分后续加载/渲染问题。
+
+宿主 ASan/UBSan 测试执行补丁中的实际函数，覆盖启用范围、重复/冲突
+环境变量、参数空间不足，以及 AMFI 的两级指针复制与 EFAULT 传播。
+2429 是验证这项内核修复的试验编号；上机结果需要另行记录。

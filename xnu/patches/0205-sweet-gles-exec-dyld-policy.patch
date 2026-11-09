@@ -1,0 +1,137 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5568,6 +5568,55 @@
+  * Note:	The argument and environment vectors are user space pointers
+  *		to arrays of user space pointers.
+  */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++/* launchd filters DYLD_* from job dictionaries. Add the one fixed library
++ * after copying the environment, as HakiOS does at exec. Keep this bring-up
++ * path opt-in and confined to the 64-bit window server. */
++static TUNABLE(uint32_t, sweet_gles_exec_enabled, "sweetgles", 0);
++
++static int
++sweet_gles_exec_env(struct image_params *imgp, int ptr_size)
++{
++	static const char name[] = "backboardd";
++	static const char key[] = "DYLD_INSERT_LIBRARIES=";
++	static const char value[] =
++	    "DYLD_INSERT_LIBRARIES=/usr/local/sweet/lib/libsweet-gles-loader.dylib";
++	const char *env = imgp->ip_endargv;
++	int error;
++
++	if (sweet_gles_exec_enabled != 1 || ptr_size != 8 || imgp->ip_ndp == NULL ||
++	    imgp->ip_ndp->ni_cnd.cn_namelen != sizeof(name) - 1 ||
++	    strncmp(imgp->ip_ndp->ni_cnd.cn_nameptr, name, sizeof(name) - 1) != 0) {
++		return 0;
++	}
++	/* If a caller already passed it, avoid duplicate DYLD entries. Refuse a
++	 * conflicting value rather than silently loading a different library. */
++	for (int i = 0; i < imgp->ip_envc; i++, env += strlen(env) + 1) {
++		if (strncmp(env, key, sizeof(key) - 1) == 0) {
++			if (strcmp(env, value) != 0) {
++				return EINVAL;
++			}
++			printf("SWEET GLES: backboardd exec loader environment already set\n");
++			return 0;
++		}
++	}
++	if (imgp->ip_argspace < ptr_size) {
++		return E2BIG;
++	}
++	error = exec_add_user_string(imgp, CAST_USER_ADDR_T(value), UIO_SYSSPACE, TRUE);
++	if (error) {
++		return error;
++	}
++	if (imgp->ip_argspace < ptr_size) {
++		return E2BIG;
++	}
++	imgp->ip_argspace -= ptr_size;
++	imgp->ip_envc++;
++	printf("SWEET GLES: backboardd exec loader environment added\n");
++	return 0;
++}
++#endif
++
+ __attribute__((noinline))
+ static int
+ exec_extract_strings(struct image_params *imgp)
+@@ -5740,6 +5789,13 @@
+ 		imgp->ip_argspace -= new_ptr_size; /* to hold envv[] entry */
+ 		imgp->ip_envc++;
+ 	}
++
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	error = sweet_gles_exec_env(imgp, new_ptr_size);
++	if (error) {
++		goto bad;
++	}
++#endif
+ 
+ 	/* Save space for envv[] NULL terminator */
+ 	if (imgp->ip_argspace < new_ptr_size) {
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -305,7 +305,42 @@
+ 	}
+ }
+ 
++/* iOS 16.7 dyld: __mac_syscall("AMFI", 90, { uint64_t in, user_addr_t out }).
++ * Verified in 20H392 dyld and HakiOS kern_minimac.c. Its missing-policy path
++ * returns no permissions, so merely putting DYLD_INSERT_LIBRARIES in a job
++ * cannot activate the bridge. Only opt-in backboardd gets path/print vars;
++ * no custom cache, interposing or ignored insertion failures are enabled. */
++static TUNABLE(uint32_t, sweet_gles_dyld_enabled, "sweetgles", 0);
++
++static int
++sweet_amfi_policy_syscall(proc_t p, int call, user_addr_t arg)
++{
++	struct {
++		uint64_t input_flags;
++		user_addr_t output_flags;
++	} args;
++	char name[32] = { 0 };
++	uint64_t flags = (1ULL << 1) | (1ULL << 4);
++	int error;
++
++	if (call != 90 || sweet_gles_dyld_enabled != 1 || !proc_is64bit_data(p)) {
++		return ENOPOLICY;
++	}
++	proc_name(proc_pid(p), name, sizeof(name));
++	if (strcmp(name, "backboardd") != 0) {
++		return ENOPOLICY;
++	}
++	error = copyin(arg, &args, sizeof(args));
++	if (error == 0) {
++		error = copyout(&flags, args.output_flags, sizeof(flags));
++		printf("SWEET GLES: backboardd AMFI dyld in=0x%llx out=0x%llx error=%d\n",
++		    args.input_flags, flags, error);
++	}
++	return error;
++}
++
+ static const struct mac_policy_ops sweet_amfi_mac_ops = {
++	.mpo_policy_syscall = sweet_amfi_policy_syscall,
+ 	.mpo_vnode_check_signature = sweet_amfi_vnode_check_signature,
+ };
+ 
+@@ -360,7 +395,7 @@
+ static mac_policy_handle_t sweet_sandbox_mac_handle;
+ 
+ static struct mac_policy_conf sweet_amfi_mac_conf = {
+-	.mpc_name = "SWEET AMFI",
++	.mpc_name = "AMFI",
+ 	.mpc_fullname = "SWEET built-in Mobile File Integrity",
+ 	.mpc_ops = &sweet_amfi_mac_ops,
+ };
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -823,7 +823,7 @@
+ #define SWEET_MARK_MAX  160
+ 
+ /* Bumped for every locally built kernel that is flashed to the phone. */
+-#define SWEET_BUILD_ID 0x2407u
++#define SWEET_BUILD_ID 0x2429u
+ 
+ struct sweet_mark_rec {
+ 	uint32_t code;

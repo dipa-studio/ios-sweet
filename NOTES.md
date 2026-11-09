@@ -1,5 +1,32 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: GLES2427 PASSED; BACKBOARDD2428 BOOT RUNNING <<<
+## >>> ACTIVE 2026-11-09: 2428 RESTORED; DYLD INJECTION GAP IDENTIFIED <<<
+
+2428 completed: user observed lock/home screen. 169.12s to Fastboot; full
+boot_a restored by runner, independently rehashed in Recovery to
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+restore_pending=false, no runner active. Fresh console290916B/flush85,
+bootargs identify2428; backboardd+SpringBoard surfaces/input worked. No
+SWEET GLES or redwood-gl messages: UI is NOT evidence of new GLES backend.
+2427 standalone softpipe triangle/EAGL pixel results remain passed.
+
+Two concrete source findings: current sweet_amfi.c registers "SWEET AMFI"
+without mpo_policy_syscall, but 20H392 dyld calls "AMFI" request90, with
+{uint64 input, user_addr_t output}; errors zero its permissions. HakiOS
+kern_minimac.c implements that ABI; its exec patch also explicitly states
+launchd filters DYLD_* from job dictionaries and injects at exec instead.
+Root2428 job/cache and loader were present (offline hashes checked).
+
+Preparing0205 patch: sweetgles=1 adds fixed loader env to64-bit backboardd
+at exec and permits only dyld path/print vars (0x12) for that process.
+Mark2429; no new boot yet. Seven targeted ASan/UBSan tests PASS.
+Actions dispatch rejected HTTP422 (repository disabled); local CLT full
+build in progress, log build2429.log. Compile outputs for kern_exec and
+sweet_amfi already produced. Repository validator: Python syntax passes; existing0085 numbering gap
+and six shell CRLF syntax failures remain (unmodified files).
+Next finish build, run verified image, restore. Libraries/root unchanged.
+Raw evidence and local preimages: research/matisse/20261109-gles-inject/.
+
+## >>> PREVIOUS 2026-11-09: GLES2427 PASSED; BACKBOARDD2428 BOOT RUNNING <<<
 
 2427 unambiguously passed: Mesa softpipe / OpenGL ES3.1 Mesa25.0.7,
 2 GLSL shaders,4 draws,8 triangle/background/blend pixels plus EAGL macro
