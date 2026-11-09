@@ -1,5 +1,5 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: GLES2427 PASSED ON DEVICE; EAGL API3 WORKS <<<
+## >>> ACTIVE 2026-11-09: GLES2427 PASSED; BACKBOARDD2428 PREPARED <<<
 
 2427 unambiguously passed: Mesa softpipe / OpenGL ES3.1 Mesa25.0.7,
 2 GLSL shaders,4 draws,8 triangle/background/blend pixels plus EAGL macro
@@ -15,6 +15,17 @@ Fastboot observed125.91s; full boot_a restored and hash verified
 No restore pending/no runner active. Probe image0f1a4f89...dd3fc/kernel2316
 unchanged; no CI. result2427.json and complete logs in20261109-hakios/.
 Source milestone7aebab2; retained full root before/after and delta preimages.
+
+2428 prepared: userland/gles-loader.c only enables EAGL when sweetgles=1.
+Backboardd launchd job/cache gain DYLD_INSERT_LIBRARIES pointing to the tiny
+loader. Offline HFS fsck passes, UI delta16 runs/892928B, preimagecb39abd0...d4751,
+postimage56f45505...8553. Applying with per-run preimage/readback verification;
+see apply-ui-delta-result.json. No UI boot started at this checkpoint.
+2428 image1b3de2800f914d2e55369dd8df2789dc423930545c567b67fc6051eb05fa0f18,
+known2316 kernel,2317 native/touch/keys settings plus sweetgles/glcopy/glwait.
+Run-gles2428.py new, not yet consumed. Default boot leaves bridge off.
+457 GL exported dispatch stubs checked against20H392; offsets normalized to
+context slot(+0x20) all match HakiOS, raw audit saved locally.
 
 Next: boot-arg-gated GLES loader in backboardd, EnvironmentVariables in its
 launchd job, test actual CoreAnimation UI. Keep ordinary software UI available.

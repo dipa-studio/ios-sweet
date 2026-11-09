@@ -112,6 +112,9 @@ needs_exe_wrapper = true
     run(compiler + ['-O2', '-Wall', '-Wextra', '-I' + str(src / 'include'),
         '-framework', 'CoreFoundation', '-framework', 'IOKit', '-framework', 'IOSurface', '-lobjc',
         str(library), str(ROOT / 'userland/gles-probe.c'), '-o', str(out / 'gles-probe')])
+    run(compiler + ['-O2', '-Wall', '-Wextra', '-dynamiclib', '-install_name',
+        '/usr/local/sweet/lib/libsweet-gles-loader.dylib',
+        str(ROOT / 'userland/gles-loader.c'), '-o', str(out / 'libsweet-gles-loader.dylib')])
     for p in out.iterdir():
         if p.suffix == '.dylib' or p.name == 'gles-probe':
             run(['codesign', '--force', '--sign', '-', p])
