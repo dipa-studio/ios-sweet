@@ -33,7 +33,8 @@ static void execute(struct model*m){
  uint32_t *ci=m->sh+0x6000/4,*co=m->sh+0x7000/4;
  assert((gi[2]^go[2])&1);go[2]=gi[2];
  if(!(in[0]&7)){if(m->mode!=5)out[0]=in[0];return;}
- assert(in[0]==0x11&&in[0x50/4]==1&&ci[4]==0x06000000&&ci[6]==4096);
+ if(!(ci[0]&7)){co[0]=ci[0];return;}
+ assert((in[0]&7)==1&&in[0x50/4]==1&&ci[4]==0x06000000&&ci[6]==4096);
  assert(ci[0x30/4]==0x06001000&&ci[0x38/4]==0x06002000);
  assert(in[0x40/4]==0x06010000&&in[0x34/4]==0xf0010101);
  assert(m->gpu[0x2440/4]==0x90000000&&m->gpu[0x2470/4]==0x42000006);
@@ -124,11 +125,14 @@ int main(void){
  for(int i=0;i<8;i++){init(m);m->mode=i;int rc=sweet_csf_queue_probe(&c,&io,&r);
   if(!i)assert(!rc&&r.stage==7&&r.after==(SWEET_CSF_COMPUTE_PROBE?SWEET_CSF_COMPUTE_TAG:SWEET_CSF_QUEUE_TAG)&&
               r.extract==(SWEET_CSF_COMPUTE_PROBE?192:32)&&m->executed==1);
-  else assert(rc<0&&r.stage!=7);assert(m->bells==2);
+  else assert(rc<0&&r.stage!=7);assert(m->bells==3);
  }
  init(m);m->gpu[0x2470/4]=6;assert(sweet_csf_queue_probe(&c,&io,&r)==-62&&!m->writes);
  init(m);m->sh[0x1044/4]=0x04004000;assert(sweet_csf_queue_probe(&c,&io,&r)==-61&&!m->writes);
  init(m);m->sh[0x100c/4]=0x80000;assert(sweet_csf_queue_probe(&c,&io,&r)==-61&&!m->writes);
+ init(m);c.reuse_as1=1;
+ for(unsigned i=0;i<3;i++)assert(!sweet_csf_queue_probe(&c,&io,&r));
+ assert(m->executed==3&&m->bells==9);
  memory_test();free(m);return 0;
 }
 '''

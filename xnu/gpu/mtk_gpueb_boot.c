@@ -129,7 +129,7 @@ int sweet_gpu_boot(const struct sweet_gpu_boot_config *c,
         !range(c->shared_base, c->shared_bytes) || c->shared_bytes != 0x200000 ||
         c->shared_base < 0x40000000 || c->shared_base + c->shared_bytes > 0x800000000ULL ||
         (c->shared_base & 0xffff) || !range(c->xnu_base, c->xnu_bytes) ||
-        c->dvfs_commit > 1 || c->dvfs_commit_opp < -1 ||
+        c->dvfs_commit > 1 || c->retain_power > 1 || c->dvfs_commit_opp < -1 ||
         c->dvfs_commit_opp >= (int32_t)SWEET_GPUFREQ_MAX_OPP ||
         c->layout.status_pa != c->shared_base || c->layout.status_bytes != 0x400 ||
         c->layout.debug_pa != c->shared_base + 0x400 || c->layout.debug_bytes != 0xc00) {
@@ -286,6 +286,10 @@ int sweet_gpu_boot(const struct sweet_gpu_boot_config *c,
     if (!r->error && c->powered_probe)
         r->error = c->powered_probe(c->probe_context, io, c->gpu);
 power_off:
+    if (!r->error && c->retain_power && c->powered_probe) {
+        r->stage = SWEET_GPU_COMPLETE;
+        return 0;
+    }
     /* Release precisely the single reference we acquired. Never retry an
      * ambiguous POWER_ON timeout: ownership is then unknown. */
     r->cleanup_attempted = 1;

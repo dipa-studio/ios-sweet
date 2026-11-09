@@ -1,5 +1,27 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: G710 CSF QUEUE AND COMPUTE SHADER VERIFIED <<<
+## >>> ACTIVE 2026-11-09: 2437 RESIDENT GPU BUILT; HARDWARE TEST NEXT <<<
+
+User requires GPU-accelerated system UI; no softpipe optimization. Resident
+shim handoff retains proven MCU, firmware arena and power. Native SweetGPU
+IOService runs three compute submissions after XNU starts. This is the next
+transport milestone, NOT hardware-rendered UI yet. No BO/VM/Mesa bridge yet.
+0207 installs canonical native driver/queue headers, marks kernel2437.
+Local full build exit0; actual SweetGPUStart/sweet_csf_queue_probe symbols
+verified. Kernel 2f429784a83dd0bb052c462be5e5d11c61357c5eef2c4b8fc2985947593bdd0d, 16749976B.
+Image daf358ccebab22680e4f42063d03a483a6e0f4f16336fd56c03837b3617daab8, 26726400B.
+126 host tests passed (4 skipped), including repeated submissions and power/
+runtime retention;12-file patch reverse/replay and canonical source parity pass.
+Build log build2437-native-v3.log is valid; earlier build2437.log/native.log
+were unchanged old builds, native-v2 failed on an include now corrected.
+Artifacts: research/matisse/20261109-resident-gpu/.
+New one-shot shim2437-resident-run-once.py prepared, not yet run. Device Recovery;
+no restoration pending. Check shim2437-resident/gpu-normal/journal.json before
+any device action. Test requires normal boot and sweetgpu=1. Full boot_a
+backup must be restored/verified; old GPU report reset predicate is inapplicable.
+Native selector1 copies report under the submit lock to avoid cross-call races.
+CI workflow state active as of this turn; dispatch still to be attempted.
+
+## >>> PREVIOUS 2026-11-09: G710 CSF QUEUE AND COMPUTE SHADER VERIFIED <<<
 
 User explicitly requires direct G710 hardware integration, not softpipe tuning.
 GLES frontend/system rendering already works;2432 slowness was glDrawElements.

@@ -55,6 +55,10 @@ static uint8_t ooa_near[4096] __attribute__((aligned(4096)));
 static uint8_t arena[2u<<20] __attribute__((aligned(4096),used));
 extern const uint8_t sweet_csf_blob_start[],sweet_csf_blob_end[];
 struct sweet_csf_boot_report shim_csf_report;
+#if SWEET_CSF_RESIDENT
+struct sweet_gpu_handoff shim_gpu_handoff;
+_Static_assert(sizeof(struct sweet_gpu_handoff)==128,"handoff ABI");
+#endif
 #if SWEET_CSF_GPU_REGS
 _Static_assert(sizeof(struct sweet_csf_boot_report)==784, "CSF2407 GPU register block");
 #else
@@ -226,7 +230,7 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
         .shared_bytes=memory.shared_bytes,.timeout_ms=1000,.noncoherent=1,
         .pte_group_requested=SWEET_CSF_LEAF_GROUP,.vendor_ina0=1,.vendor_cached_memattr=1,
         .platform_snapshot=1,.access_snapshot=1,.platform_path=1,
-        .mcu_control_value=SWEET_CSF_MCU_CONTROL
+        .mcu_control_value=SWEET_CSF_MCU_CONTROL,.retain_runtime=SWEET_CSF_RESIDENT
 #if SWEET_CSF_GLOBAL_INIT
         ,.shared_va=memory.shared_va,.global_init=1,
         .global_evidence=&shim_csf_global_evidence
@@ -266,6 +270,15 @@ int shim_csf_powered(void *arg,const struct sweet_gpu_io *io,uint64_t gpu)
     con_hex("CSF mfg in slc6",io->read32(io->context,SWEET_CSF_MFG_BASE+0x748));
 #endif
     rc=sweet_csf_boot(&c,io,&shim_csf_report);
+#if SWEET_CSF_RESIDENT
+    if(!rc) shim_gpu_handoff=(struct sweet_gpu_handoff){
+        .magic=SWEET_GPU_HANDOFF_MAGIC,.version=1,.bytes=128,.flags=1,
+        .gpu=gpu,.arena_pa=pa,.arena_bytes=sizeof(arena),.root_pa=root,
+        .shared_pa=pa+memory.shared_offset,.memory_pa=qc.memory_pa,
+        .shared_va=memory.shared_va,.shared_bytes=memory.shared_bytes,
+        .input_va=shim_csf_report.input_va,.output_va=shim_csf_report.output_va,
+        .memory_bytes=SWEET_CSF_QUEUE_BYTES};
+#endif
 #if SWEET_CSF_MFG_GLUE
     con_hex2("CSF mfg out","coh=",io->read32(io->context,SWEET_CSF_MFG_BASE+0x168),
              "dsp0=",io->read32(io->context,SWEET_CSF_MFG_BASE+0x8e0));

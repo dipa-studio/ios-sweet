@@ -29,6 +29,7 @@ struct sweet_gpu_boot_config {
      * exact index to commit. */
     uint32_t dvfs_commit;
     int32_t dvfs_commit_opp;
+    uint32_t retain_power;
     /* Optional synchronous diagnostic while the exclusive power reference
      * is held after reset. Default NULL preserves power/reset-only builds. */
     int (*powered_probe)(void *, const struct sweet_gpu_io *, uint64_t);

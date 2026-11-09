@@ -1,0 +1,914 @@
+diff --git a/bsd/dev/sweet_gpu_handoff.h b/bsd/dev/sweet_gpu_handoff.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/sweet_gpu_handoff.h
+@@ -0,0 +1,16 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef SWEET_GPU_HANDOFF_H
++#define SWEET_GPU_HANDOFF_H
++#include <stdint.h>
++#define SWEET_GPU_HANDOFF_MAGIC 0x53475055u
++/* Owns one GPUEB power reference and the entire reserved shim arena. The
++ * arena is outside the RAM window advertised to XNU. Polling owns the GPU;
++ * interrupt masks are zero until the resident driver installs handlers. */
++struct sweet_gpu_handoff {
++    uint32_t magic, version, bytes, flags;
++    uint64_t gpu, arena_pa, arena_bytes, root_pa, shared_pa, memory_pa;
++    uint32_t shared_va, shared_bytes, input_va, output_va, memory_bytes;
++    uint32_t reserved[3];
++    uint64_t reserved64[4];
++};
++#endif
+diff --git a/bsd/dev/mali_csf_queue.h b/bsd/dev/mali_csf_queue.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/mali_csf_queue.h
+@@ -0,0 +1,39 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef SWEET_MALI_CSF_QUEUE_H
++#define SWEET_MALI_CSF_QUEUE_H
++#include "mtk_gpueb_boot.h"
++#include <stddef.h>
++
++/* First CSF transport: one exclusively owned group/stream, synchronous submit.
++ * The caller keeps the GPU powered and resets it before releasing any memory.
++ * This is a queue-execution witness, not a shader/rendering implementation. */
++/* CS_USER_INPUT/OUTPUT are MCU pointers. The MCU shared-region aperture is
++ * [0x04000000,0x08000000), even when a page exists in the GPU page tables. */
++#define SWEET_CSF_QUEUE_VA 0x06000000u
++#define SWEET_CSF_QUEUE_BYTES 0x80000u
++#define SWEET_CSF_QUEUE_TAG 0x2433c5f1u
++#ifndef SWEET_CSF_COMPUTE_PROBE
++#define SWEET_CSF_COMPUTE_PROBE 0
++#endif
++#define SWEET_CSF_COMPUTE_TAG 0x2436c5f1u
++struct sweet_csf_queue_config {
++    uint64_t gpu, root_pa, shared_pa, memory_pa;
++    uint32_t shared_va, shared_bytes, input_va, output_va, memory_bytes;
++    uint32_t timeout_ms;
++    uint32_t reuse_as1;
++};
++struct sweet_csf_queue_report {
++    uint32_t stage;
++    int32_t error;
++    uint32_t csg_req, csg_ack, cs_req, cs_ack, insert, extract;
++    uint32_t before, after, fault, fatal, mmu_raw, as_fault;
++    uint32_t cmd_lo, cmd_hi, suspend_bytes, streams, stop_ack, polls;
++};
++/* Add an owned noncacheable data region at QUEUE_VA before starting AS0.
++ * Existing firmware leaves are unchanged. One new L3 table and data buffer
++ * come from unused arena tail; the caller supplies the proven plan bounds. */
++int sweet_csf_queue_memory(void *arena, size_t capacity, uint64_t arena_pa,
++    uint32_t used, uint32_t table_pages, unsigned pa_bits, uint64_t *memory_pa);
++int sweet_csf_queue_probe(const struct sweet_csf_queue_config *,
++    const struct sweet_gpu_io *, struct sweet_csf_queue_report *);
++#endif
+diff --git a/bsd/dev/mali_csf_memory.h b/bsd/dev/mali_csf_memory.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/mali_csf_memory.h
+@@ -0,0 +1,165 @@
++#ifndef SWEET_MALI_CSF_MEMORY_H
++#define SWEET_MALI_CSF_MEMORY_H
++#include "mali_csf_firmware.h"
++
++#define SWEET_CSF_MAX_SECTIONS 64u
++#define SWEET_CSF_PAGE 4096u
++/* MCU-only, 48-bit VA, 4 KiB stage-1 LPAE (level0 root). Firmware VAs
++ * remain 32-bit. Two leaf encodings exist and only these bits differ:
++ *   default:  cached -> AttrIndx1, other -> AttrIndx0, shared -> SH=3
++ *   vendor:   cached -> AttrIndx0, other -> AttrIndx5, no SH bits anywhere
++ * See SWEET_CSF_VENDOR_MEMATTR below. Host publishes its uncached arena
++ * before GPU access. */
++#define SWEET_CSF_VA_BITS 48u
++/* r32p1 AS_MEMATTR, proven from the pinned mali_kbase_mt6983.ko:
++ * kbase_mmu_get_as_setup (text0x47998) and mmu_update (text0x4708c) both
++ * build 0x00084C8D888D8F88 with mov/movk chains, and
++ * kbase_mmu_hw_configure stores that struct field to GPU+0x2408.
++ * Bytes: [0]=88 outer-impl-def cached, [1]=8f outer-WA, [5]=4c non-cacheable,
++ * [6]=08 shared. */
++#define SWEET_CSF_VENDOR_MEMATTR_LO 0x888d8f88u
++#define SWEET_CSF_VENDOR_MEMATTR_HI 0x00084c8du
++/* 0 keeps the 2328..2379 leaf/register encoding byte-identical: cached leaves
++ * select index1, everything else index0, the shared leaf carries SH=3, and
++ * AS_MEMATTR is the 2330 diagnostic pair. 1 selects the vendor pairing that
++ * mali_kbase_csf_firmware.c:convert_mem_flags() produces on a non-coherent
++ * SoC: CACHE_MODE_CACHED -> index0, everything else (CACHED_COHERENT is
++ * downgraded to NONE when system_coherency==NONE) -> index5 with no SH bits.
++ * The selected attribute bytes are 0x88/0x4c either way; only the index
++ * number, the SH bits and MEMATTR[0] change. */
++#ifndef SWEET_CSF_VENDOR_MEMATTR
++#define SWEET_CSF_VENDOR_MEMATTR 0
++#endif
++/* 0 keeps the 2328..2391 leaf encoding: bit11 (nG) is set on every leaf.
++ * 1 clears it to match mali_kbase_mmu_mode_aarch64.c get_mmu_flags(), which
++ * never sets bit11. 2393 uses this together with SWEET_CSF_VENDOR_MEMATTR=1
++ * and read-only leaves to reproduce the vendor page attributes exactly. */
++#ifndef SWEET_CSF_VENDOR_LEAVES
++#define SWEET_CSF_VENDOR_LEAVES 0
++#endif
++/* 0 keeps the code section on whatever AttrIndx the selected pairing gives it.
++ * 1 forces the R-X section (the only one the MCU fetches from) onto AS_MEMATTR
++ * index 5, the non-cacheable byte, and clears its SH bits. 2395 uses it: the
++ * bit-9 law measured across 2369-2394 says the stall is downstream of a
++ * translation that reports no fault, and a cacheable access is the only kind
++ * this port has ever issued to the code section, so cacheability is the first
++ * lever that has never been pulled. 2393 gave the same section vendor index 0,
++ * which convert_mem_flags() only reaches for CSF_FIRMWARE_CACHE_MODE_CACHED,
++ * so it is not this experiment. */
++#ifndef SWEET_CSF_UNCACHED_CODE
++#define SWEET_CSF_UNCACHED_CODE 0
++#endif
++/* 0 leaves every page on its section's own execute permission. 2397 sets it to
++ * one 4 KiB virtual address and forces only that page non-executable (PXN|UXN,
++ * bits 54:53) whatever the section flags say. 2396 showed that a bit-9 read in
++ * the shared and stack sections returns while the same read in the code section
++ * stalls, so the property belongs to the target page being executable rather
++ * than to the address. The page chosen is 0x01001000: it holds the read target
++ * 0x01001200 and nothing the core executes, while the entry page 0x0100E000
++ * keeps its X permission, so a read that returns names XN as the switch. A data
++ * access does not normally consult XN - that is what makes the experiment worth
++ * running on this part. */
++#ifndef SWEET_CSF_XN_VA
++#define SWEET_CSF_XN_VA 0
++#endif
++/* 0 leaves every page on its section's cache mode. Set to one 4 KiB virtual
++ * address and only that page takes AS_MEMATTR index 5 (non-cacheable) with no
++ * SH bits; the rest of the section, including the page the MCU starts on, keeps
++ * its own. 2396 showed a cached bit-9 read stalls in the code window while the
++ * cached stack page reads, 2399 moved the page underneath it and the read still
++ * stalled, so the one leaf field never varied in the *data* direction at this
++ * VA is cacheability: 2395 made the whole section non-cacheable but tested a
++ * fetch landing, not this read. A read that returns here names the cacheable
++ * fill as the wall; a read that still stalls says no data access to the code
++ * window can complete, whatever the cache mode. */
++#ifndef SWEET_CSF_UNCACHED_VA
++#define SWEET_CSF_UNCACHED_VA 0
++#endif
++/* 0 leaves every leaf pointing at the page its own section placed there. Set
++ * both to page-aligned virtual addresses inside the plan and the leaf at
++ * SWEET_CSF_ALIAS_VA is repointed at the physical page that backs
++ * SWEET_CSF_ALIAS_TO_VA, keeping every one of its own attribute bits: same VA,
++ * same permissions, same cache mode, same section, different physical page.
++ * 2399 uses 0x01001000 -> 0x02000000. 2396 read bit9 = 1 in the shared and
++ * stack sections and stalled on it in the code section, 2397 exonerated XN and
++ * 2398 exonerated the memory group, so the last structural split is which side
++ * of the translation owns the stall. The target is the page the ladder's second
++ * read already reads: offset 0x200 through either VA lands on the same physical
++ * word, at PA bit 9 = 1, so the alias moves the virtual side and nothing else.
++ * A read that returns says the wall follows the code section's physical pages
++ * (move the firmware allocation); a read that still stalls, on a word the
++ * previous read of the same boot just returned, says it follows the virtual
++ * range and no mapping change can fix it. Diagnostic only, never a shipping
++ * encoding. */
++#ifndef SWEET_CSF_ALIAS_VA
++#define SWEET_CSF_ALIAS_VA 0
++#endif
++#ifndef SWEET_CSF_ALIAS_TO_VA
++#define SWEET_CSF_ALIAS_TO_VA 0
++#endif
++/* 0 keeps every build up to2380 byte-identical: each section's arena offset
++ * follows the page tables in container order. 1 leaves every other section at
++ * exactly that offset but appends the R-X section (VA0x01000000) after the
++ * whole layout, so that one section gets a different PA while its VA, its leaf
++ * attributes, its descriptor bits and every other section's PA stay unchanged.
++ * 2382 uses this to ask whether the fetch hang follows the physical pages or
++ * the virtual range. It is not a fix and must stay off in a shipping build. */
++#ifndef SWEET_CSF_RELOCATE_CODE
++#define SWEET_CSF_RELOCATE_CODE 0
++#endif
++/* 0 keeps every build through2400 byte-identical. Set to one page-aligned VA
++ * and the plan appends a second mapping of the R-X section at that VA: same
++ * size, flags and container bytes, its own copy of the data and its own L3
++ * page. 2401 uses 0x03000000 (L2[24], a fresh L3 table page under the existing
++ * scheme) while L2[8] stays the only table that backs 0x01000000. Diagnostic
++ * only: the firmware runs from whichever VA the reset vector names. */
++#ifndef SWEET_CSF_MIRROR_CODE_VA
++#define SWEET_CSF_MIRROR_CODE_VA 0
++#endif
++/* 0 keeps every build through2400 byte-identical. Set to one page-aligned VA
++ * in an unused L2 slot and the leaf builder copies the code section's L2 entry
++ * into that slot after the tables are built. The alias VA then walks the same
++ * L3 table page and the same leaf descriptor as 0x01000000, so a read through
++ * it differs from the code read only by the VA. 2401 uses 0x05000000 (L2[40]).
++ * Fails closed if the slot is already mapped or the code L3 page is absent. */
++#ifndef SWEET_CSF_SHARE_CODE_L3_VA
++#define SWEET_CSF_SHARE_CODE_L3_VA 0
++#endif
++struct sweet_csf_mapping {
++    uint32_t va, bytes, flags, arena_offset, data_start, data_bytes;
++};
++struct sweet_csf_memory {
++    uint32_t mapping_count, protected_skipped, table_pages, required_bytes;
++    uint32_t shared_offset, shared_bytes, shared_va;
++    uint32_t firmware_bytes;
++    struct sweet_csf_mapping map[SWEET_CSF_MAX_SECTIONS];
++};
++enum sweet_csf_memory_error {
++    SWEET_CSF_MEMORY_ARGUMENT = -40,
++    SWEET_CSF_MEMORY_CAPACITY = -41,
++    SWEET_CSF_MEMORY_PHYSICAL = -42
++};
++/* Atomic planning: out untouched on any failure, no allocation or MMIO. */
++int sweet_csf_memory_plan(const uint8_t *, size_t, struct sweet_csf_memory *);
++/* Re-validates the firmware and canonical plan before touching arena.
++ * Arena, plan and firmware must be distinct; only required_bytes are written.
++ * Returns root table PA. Caller owns/retains arena until GPU reset/off. */
++int sweet_csf_memory_build(const uint8_t *, size_t, const struct sweet_csf_memory *,
++    void *arena, size_t arena_bytes, uint64_t arena_pa, unsigned pa_bits,
++    uint64_t *root_pa);
++/* Isolated platform diagnostic: leaf bits59..62 carry a 4-bit memory-group
++ * tag. Tables, PA, permissions and cache attributes are unchanged. Group0
++ * is byte-identical to sweet_csf_memory_build. No routing/readiness claim. */
++int sweet_csf_memory_build_group(const uint8_t *, size_t, const struct sweet_csf_memory *,
++    void *arena, size_t arena_bytes, uint64_t arena_pa, unsigned pa_bits,
++    unsigned memory_group, uint64_t *root_pa);
++/*2409: repoint already-mapped leaves at pages outside the arena. The leaf keeps
++ * its AttrIdx/AP/SH/AF/nG/XN bits and loses only bits47:12, which are replaced
++ * by the caller's PA; bits59..62 are replaced by the per-remap group tag, so a
++ * page can be tested with the firmware's tag and with no tag at all on the same
++ * boot. Rejected: unaligned VA or PA, group>15, PA outside pa_bits, PA inside
++ * the arena, or a VA with no valid leaf. Nothing else in the table moves. */
++struct sweet_csf_remap { uint64_t va, pa; unsigned group; };
++int sweet_csf_memory_remap_leaves(void *arena, size_t arena_bytes, uint64_t arena_pa,
++    unsigned pa_bits, const struct sweet_csf_remap *, unsigned count);
++#endif
+diff --git a/bsd/dev/mali_csf_firmware.h b/bsd/dev/mali_csf_firmware.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/mali_csf_firmware.h
+@@ -0,0 +1,62 @@
++#ifndef SWEET_MALI_CSF_FIRMWARE_H
++#define SWEET_MALI_CSF_FIRMWARE_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++/* Portable static parser; no MMIO, allocation, firmware execution or kernel hooks.
++ * Device reference: MT6983 Linux 5.10 mali-r32p1/mali_kbase_csf_firmware.c
++ * and its GPUEB/gpufreq modules. Mainline panthor is a historical ABI
++ * cross-check, not the driver that boots this phone's firmware.
++ * Firmware header version/hash are NOT the runtime GLB_VERSION interface ABI.
++ */
++enum sweet_csf_result {
++    SWEET_CSF_OK = 0,
++    SWEET_CSF_BAD_ARGUMENT = -1,
++    SWEET_CSF_TRUNCATED = -2,
++    SWEET_CSF_BAD_HEADER = -3,
++    SWEET_CSF_BAD_ENTRY = -4,
++    SWEET_CSF_BAD_SECTION = -5,
++    SWEET_CSF_NO_SHARED = -6,
++    SWEET_CSF_UNSUPPORTED_ENTRY = -7,
++    SWEET_CSF_CALLBACK_FAILED = -8,
++    SWEET_CSF_OVERLAPPING_SECTION = -9
++};
++
++struct sweet_csf_section {
++    uint32_t flags;
++    uint32_t va_start;
++    uint32_t va_end;
++    uint32_t data_start;
++    uint32_t data_end;
++    /* Name points into caller-owned firmware; bounded, may include NUL padding. */
++    const uint8_t *name;
++    size_t name_bytes;
++};
++
++struct sweet_csf_layout {
++    uint32_t format_hash;
++    uint32_t table_end;
++    uint32_t entries;
++    uint32_t sections;
++    uint32_t protected_sections;
++    uint32_t non_16k_sections;
++    uint32_t shared_va;
++    uint32_t shared_bytes;
++    uint8_t format_major;
++    uint8_t format_minor;
++};
++
++typedef int (*sweet_csf_section_fn)(const struct sweet_csf_section *, void *);
++
++/* Validate the entire container before invoking callbacks. On validation error,
++ * out and callbacks are untouched. On callback error, callbacks already issued
++ * are not undone; caller must clean up. out is published only on success.
++ * A successful parse proves structural validity only, not GPU compatibility,
++ * authenticity or permission to distribute the caller-supplied blob.
++ */
++int sweet_csf_parse(const uint8_t *data, size_t bytes,
++                    struct sweet_csf_layout *out,
++                    sweet_csf_section_fn callback, void *context);
++
++#endif
+diff --git a/bsd/dev/mtk_gpueb_boot.h b/bsd/dev/mtk_gpueb_boot.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/mtk_gpueb_boot.h
+@@ -0,0 +1,82 @@
++#ifndef SWEET_MTK_GPUEB_BOOT_H
++#define SWEET_MTK_GPUEB_BOOT_H
++#include <stdint.h>
++#include "mtk_gpueb_protocol.h"
++
++/* Independently written, single-owner MT6983 bring-up transaction. The
++ * callbacks permit deterministic host replay; they are not Linux APIs.
++ * This performs platform power plus a GPU soft reset, NOT CSF firmware
++ * boot, shader execution, or a usable graphics driver. */
++struct sweet_gpu_io {
++    void *context;
++    uint32_t (*read32)(void *, uint64_t);
++    void (*write32)(void *, uint64_t, uint32_t);
++    uint64_t (*ticks)(void *);
++    void (*barrier)(void *);
++    uint64_t frequency;
++};
++struct sweet_gpu_boot_config {
++    uint64_t mailbox, irq_set, irq_clear, tx_status, rx_status;
++    uint64_t gpu, gpueb, sleep, shared_base, shared_bytes;
++    uint64_t xnu_base, xnu_bytes;
++    struct sweet_gpueb_shared layout;
++    uint32_t boot_mode, tx_offset, rx_offset, channel, timeout_ms;
++    /* Second half of the vendor power-on sequence: gpufreq_commit after
++     * gpufreq_power_control. Zero leaves the region untouched, matching the
++     * powered_probe convention, so a zero-initialised config never sends a
++     * commit. When set, dvfs_commit_opp is -1 for "the index GPUEB already
++     * reports" (exercises the command path without moving frequency) or an
++     * exact index to commit. */
++    uint32_t dvfs_commit;
++    int32_t dvfs_commit_opp;
++    uint32_t retain_power;
++    /* Optional synchronous diagnostic while the exclusive power reference
++     * is held after reset. Default NULL preserves power/reset-only builds. */
++    int (*powered_probe)(void *, const struct sweet_gpu_io *, uint64_t);
++    void *probe_context;
++};
++enum sweet_gpu_stage {
++    SWEET_GPU_CONFIG = 1, SWEET_GPU_POWER_DOMAIN = 2,
++    SWEET_GPU_FIRMWARE = 3, SWEET_GPU_MEMORY = 4,
++    SWEET_GPU_INIT = 5, SWEET_GPU_ON = 6, SWEET_GPU_ID = 7,
++    SWEET_GPU_RESET = 8, SWEET_GPU_OFF = 9, SWEET_GPU_COMPLETE = 10,
++    /* 2338 appends this value; earlier stage numbers are unchanged. */
++    SWEET_GPU_DVFS = 11
++};
++enum sweet_gpu_error {
++    SWEET_GPU_ARGUMENT = -20, SWEET_GPU_HANDOFF = -21,
++    SWEET_GPU_OVERLAP = -22, SWEET_GPU_TIMEOUT = -23,
++    SWEET_GPU_STALE = -24, SWEET_GPU_REPLY = -25,
++    SWEET_GPU_OWNER = -26, SWEET_GPU_UNPOWERED = -27,
++    SWEET_GPU_MODEL = -28,
++    /* 2338: an accepted CMD_COMMIT did not move the reported OPP index. */
++    SWEET_GPU_FREQUENCY = -29
++};
++struct sweet_gpu_boot_report {
++    uint32_t stage;
++    int32_t error, init_result, on_result, off_result;
++    uint32_t spm_before, spm_after, spm_second, firmware_magic;
++    uint32_t gpu_id, gpu_status, reset_rawstat, as_present;
++    uint64_t firmware_memory;
++    uint32_t power_acquired, cleanup_attempted;
++    /* 2338 appends 40 bytes; the ADT slot stays 128 and the CSF report is
++     * untouched. These are read back from the gpufreq shared-status region
++     * GPUEB was given in CMD_INIT: they report what the firmware published,
++     * not what we commanded. An undecodable region is inconclusive, never
++     * proof that the GPU is unpowered. */
++    uint32_t gpufreq_valid; /* bit0 baseline, bit1 after POWER_ON,
++                             * bit2 IPI cross-check agreed, bit3 commit
++                             * verified by a second sample */
++    int32_t gpufreq_oppidx;
++    int32_t gpufreq_power_count;
++    uint32_t gpufreq_opp_num;
++    uint32_t gpufreq_freq_khz; /* 0 means "not published yet" */
++    uint32_t gpufreq_volt_uv;  /* 0 means "not published yet" */
++    uint32_t gpufreq_vsram_uv;
++    uint32_t gpufreq_dvfs_state;
++    uint32_t gpufreq_power_ctrl;
++    int32_t gpufreq_commit_result; /* INT32_MIN when not attempted */
++};
++int sweet_gpu_boot(const struct sweet_gpu_boot_config *,
++                   const struct sweet_gpu_io *, struct sweet_gpu_boot_report *);
++#endif
+diff --git a/bsd/dev/mtk_gpueb_protocol.h b/bsd/dev/mtk_gpueb_protocol.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/mtk_gpueb_protocol.h
+@@ -0,0 +1,56 @@
++#ifndef SWEET_MTK_GPUEB_PROTOCOL_H
++#define SWEET_MTK_GPUEB_PROTOCOL_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++/* MT6983 protocol facts checked against the OS2.0.2.0 vendor wrapper.
++ * Independently written, allocation-free host helpers. No MMIO or transport;
++ * success does NOT prove that GPUEB is running or owns the power domains.
++ */
++#define SWEET_GPUEB_MESSAGE_BYTES 32u
++#define SWEET_GPUEB_STATUS_BYTES 0x400u
++#define SWEET_GPUEB_CMD_INIT 0u
++#define SWEET_GPUEB_CMD_FREQ 1u
++#define SWEET_GPUEB_CMD_POWER 6u
++#define SWEET_GPUEB_CMD_COMMIT 7u
++
++enum sweet_gpueb_result {
++    SWEET_GPUEB_OK = 0,
++    SWEET_GPUEB_ARGUMENT = -1,
++    SWEET_GPUEB_RANGE = -2,
++    SWEET_GPUEB_TABLE = -3,
++    SWEET_GPUEB_RESPONSE = -4
++};
++
++struct sweet_gpueb_shared {
++    uint64_t status_pa;
++    uint64_t debug_pa;
++    uint32_t status_bytes;
++    uint32_t debug_bytes;
++};
++
++/* Input is a raw big-endian gpueb_mem_table of (ID, bytes) pairs.
++ * IDs must form a permutation of 0..N-1 (N <= 20). Regions accumulate in
++ * numeric ID order, as the platform ABI specifies, not property order.
++ * Caller obtains base/bytes from the LIVE gpueb_mem_addr/size properties
++ * and separately verifies reservation and lifetime before using any PA.
++ * On error, all output arguments of these helpers are unchanged.
++ */
++int sweet_gpueb_shared_layout(uint64_t base, uint64_t bytes,
++                              const uint8_t *table, size_t table_bytes,
++                              uint32_t gpufreq_id,
++                              struct sweet_gpueb_shared *out);
++
++int sweet_gpueb_encode_init(const struct sweet_gpueb_shared *layout,
++                            uint8_t out[SWEET_GPUEB_MESSAGE_BYTES]);
++int sweet_gpueb_encode_power(uint32_t on,
++                             uint8_t out[SWEET_GPUEB_MESSAGE_BYTES]);
++/* Decode only the confirmed command/target/return-value prefix. A caller
++ * must serialize requests, discard stale completions and impose a timeout.
++ * A valid negative firmware result is returned through result, not hidden.
++ */
++int sweet_gpueb_decode_response(const uint8_t *data, size_t bytes,
++                                uint32_t expected_command, int32_t *result);
++
++#endif
+diff --git a/bsd/dev/sweet_gpu_queue.c b/bsd/dev/sweet_gpu_queue.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/sweet_gpu_queue.c
+@@ -0,0 +1,243 @@
++#include <pexpert/arm64/board_config.h>
++#if defined(SWEET)
++#define SWEET_CSF_COMPUTE_PROBE 1
++/* SPDX-License-Identifier: MIT
++ * MT6983 r32p1 CSF interface, cross-checked with panthor_fw.h/panthor_sched.c.
++ * Instruction fields follow Mesa25.0.7 genxml/v10.xml. No Linux dependencies.
++ */
++#include "mali_csf_queue.h"
++#include "mali_csf_memory.h"
++
++static uint64_t load64(const uint8_t *p)
++{
++    uint64_t n=0;for(unsigned i=0;i<8;i++)n|=(uint64_t)p[i]<<(i*8);return n;
++}
++static void store64(uint8_t *p,uint64_t n)
++{
++    for(unsigned i=0;i<8;i++)p[i]=(uint8_t)(n>>(i*8));
++}
++int sweet_csf_queue_memory(void *buffer,size_t capacity,uint64_t pa,
++    uint32_t used,uint32_t table_pages,unsigned pa_bits,uint64_t *memory_pa)
++{
++    uint8_t *arena=buffer,*table=buffer;
++    const uint64_t mask=UINT64_C(0x0000fffffffff000);
++    if(!buffer||!memory_pa||((uintptr_t)buffer&7)||(pa&4095)||(used&4095)||
++       !table_pages||table_pages>used/4096||used>capacity||
++       4096+SWEET_CSF_QUEUE_BYTES>capacity-used||pa_bits<32||pa_bits>48||
++       pa<0x40000000||pa>=(UINT64_C(1)<<pa_bits)||
++       capacity>(UINT64_C(1)<<pa_bits)-pa)return -60;
++    /* QUEUE_VA shares existing L0/L1/L2 with firmware. Never follow data
++     * memory or overwrite an occupied slot; validate everything first. */
++    for(unsigned l=0;l<2;l++) {
++        uint64_t d=load64(table+(((uint64_t)SWEET_CSF_QUEUE_VA>>(39-9*l))&511)*8);
++        uint64_t next=d&mask;
++        if((d&3)!=3||next<pa||next-pa>=(uint64_t)table_pages*4096)return -60;
++        table=arena+(next-pa);
++    }
++    uint8_t *slot=table+((SWEET_CSF_QUEUE_VA>>21)&511)*8;
++    if(load64(slot))return -60;
++    for(size_t i=used;i<used+4096+SWEET_CSF_QUEUE_BYTES;i++)arena[i]=0;
++    uint64_t data=pa+used+4096;
++    for(unsigned i=0;i<SWEET_CSF_QUEUE_BYTES/4096;i++)
++        store64(arena+used+i*8,(data+i*4096)|UINT64_C(0x60000000000457));
++#if SWEET_CSF_COMPUTE_PROBE
++    /* One read-only executable shader page. All other BO pages remain XN. */
++    store64(arena+used+4*8,(data+0x4000)|UINT64_C(0x4d7));
++#endif
++    /* Vendor AP=RW, AF, AttrIdx5(noncacheable), XN; no physical-group tag
++     * for application BOs. Firmware mappings retain their existing tags. */
++    store64(slot,(pa+used)|3);
++    *memory_pa=data;return 0;
++}
++
++static uint32_t rd(const struct sweet_gpu_io *io,uint64_t a)
++{return io->read32(io->context,a);}
++static void wr(const struct sweet_gpu_io *io,uint64_t a,uint32_t n)
++{io->write32(io->context,a,n);io->barrier(io->context);}
++static void wr64(const struct sweet_gpu_io *io,uint64_t a,uint64_t n)
++{wr(io,a,(uint32_t)n);wr(io,a+4,(uint32_t)(n>>32));}
++#if SWEET_CSF_COMPUTE_PROBE
++static unsigned compute_program(const struct sweet_gpu_io *io,uint64_t mem)
++{
++    const uint64_t va=SWEET_CSF_QUEUE_VA;
++    /* Valhall shader assembled with Mesa25.0.7 valhall/asm.py:
++     * IADD_IMM.i32 r0, 0x0, #completion_address
++     * IADD_IMM.i32 r1, 0x0, #0
++     * IADD_IMM.i32 r2, 0x0, #COMPUTE_TAG
++     * STORE.i32.slot0.end @r2, ^r0, offset:0
++     * One invocation, no uniforms/resources/TLS/WLS. The queue's SYNC_SET
++     * writes a DIFFERENT location; only this shader writes the witness. */
++    wr64(io,mem+0x4000,UINT64_C(0x0110c000000000c0)|((va+0x3000)<<8));
++    wr64(io,mem+0x4008,UINT64_C(0x0110c100000000c0));
++    wr64(io,mem+0x4010,UINT64_C(0x0110c200000000c0)|((uint64_t)SWEET_CSF_COMPUTE_TAG<<8));
++    wr64(io,mem+0x4018,UINT64_C(0x7861420218000040));
++    /* v10 Shader Program: compute,32 registers; Local Storage: no WLS. */
++    wr(io,mem+0x5000,0x80000018);wr64(io,mem+0x5008,va+0x4000);
++    wr(io,mem+0x6004,31);
++    wr(io,mem+0x3010,0);wr(io,mem+0x3014,0);
++    uint64_t program[]={
++        UINT64_C(0x2200000000000001), /* REQ_RESOURCE compute */
++        UINT64_C(0x1700000000000002), /* SET_SB_ENTRY endpoint2,other0 */
++        UINT64_C(0x0100000000000000), /* SRT0 */
++        UINT64_C(0x0108000000000000), /* FAU0 */
++        UINT64_C(0x0110000000000000)|(va+0x5000),
++        UINT64_C(0x0118000000000000)|(va+0x6000),
++        UINT64_C(0x0220000000000000), /* global offset */
++        UINT64_C(0x0221000000000000), /* workgroup1,1,1 */
++        UINT64_C(0x0222000000000000),UINT64_C(0x0223000000000000),
++        UINT64_C(0x0224000000000000), /* offsets0,0,0 */
++        UINT64_C(0x0225000000000001),UINT64_C(0x0226000000000001),
++        UINT64_C(0x0227000000000001), /* grid1,1,1 */
++        UINT64_C(0x0400000000008001), /* RUN_COMPUTE,Z,increment1 */
++        UINT64_C(0x0300000000ff0000), /* WAIT all slots */
++        UINT64_C(0x024a000000000000), /* latest flush ID0 in r74 */
++        UINT64_C(0x24004a0000000211), /* clean L2/LSC,invalidate other */
++        UINT64_C(0x0300000000010000),
++        UINT64_C(0x2200000000000000), /* release compute resource */
++        UINT64_C(0x0100000000000000)|(va+0x3010),
++        UINT64_C(0x0202000000000000)|SWEET_CSF_QUEUE_TAG,
++        UINT64_C(0x2600000200000000),UINT64_C(0x0300000000010000),
++    };
++    for(unsigned i=0;i<sizeof(program)/sizeof(program[0]);i++)wr64(io,mem+i*8,program[i]);
++    return sizeof(program);
++}
++#endif
++static int poll(const struct sweet_gpu_io *io,uint64_t a,uint32_t mask,uint32_t n,uint64_t budget)
++{
++    uint64_t start=io->ticks(io->context);
++    for(unsigned i=0;i<10000000;i++) {
++        if((rd(io,a)&mask)==n)return 0;
++        if(io->ticks(io->context)-start>=budget)break;
++    }
++    return -63;
++}
++static uint64_t iface(const struct sweet_csf_queue_config *c,uint32_t va)
++{
++    if((va&4095)||va<c->shared_va+0x2000||va-c->shared_va>c->shared_bytes-4096)return 0;
++    return c->shared_pa+(va-c->shared_va);
++}
++static void doorbell(const struct sweet_csf_queue_config *c,const struct sweet_gpu_io *io,
++    uint64_t gi,uint64_t go)
++{
++    wr(io,gi+8,(rd(io,gi+8)&~1u)|((rd(io,go+8)^1u)&1u));
++    wr(io,c->gpu+0x80000,1);
++}
++int sweet_csf_queue_probe(const struct sweet_csf_queue_config *c,
++    const struct sweet_gpu_io *io,struct sweet_csf_queue_report *r)
++{
++    if(!r)return -60;
++    *r=(struct sweet_csf_queue_report){.stage=1};
++    if(!c||!io||!io->read32||!io->write32||!io->barrier||!io->ticks||
++       !io->frequency||io->frequency>1000000000||c->gpu!=0x13000000||
++       c->shared_va!=0x04000000||c->shared_bytes<0x4000||c->shared_bytes>0x1000000||
++       c->memory_bytes!=SWEET_CSF_QUEUE_BYTES||(c->memory_pa&4095)||
++       c->memory_pa<0x40000000||c->memory_pa>UINT64_MAX-c->memory_bytes||
++       (c->root_pa&4095)||c->root_pa<0x40000000||
++       !c->timeout_ms||c->timeout_ms>1000||c->reuse_as1>1){r->error=-60;return r->error;}
++    uint64_t budget=(io->frequency*c->timeout_ms+999)/1000;
++    uint64_t gi=iface(c,c->input_va),go=iface(c,c->output_va);
++    uint64_t ctrl=c->shared_pa+0x1000;
++    uint64_t in=iface(c,rd(io,ctrl+4)),out=iface(c,rd(io,ctrl+8));
++    r->suspend_bytes=rd(io,ctrl+12);r->streams=rd(io,ctrl+20);
++    uint32_t stride=rd(io,ctrl+24);
++    uint64_t ci=iface(c,rd(io,ctrl+0x44)),co=iface(c,rd(io,ctrl+0x48));
++    uint64_t pages[]={gi,go,in,out,ci,co};
++    for(unsigned i=0;i<6;i++) {
++        if(!pages[i]){r->error=-61;return r->error;}
++        for(unsigned j=0;j<i;j++)if(pages[i]==pages[j]){r->error=-61;return r->error;}
++    }
++    if(!r->streams||r->streams>32||stride<12||(stride&3)||
++       !r->suspend_bytes||r->suspend_bytes>SWEET_CSF_QUEUE_BYTES-0x10000||
++       (rd(io,out)&7)||(rd(io,co)&7)||!(rd(io,c->gpu+0x18)&2)) {
++        r->error=-61;return r->error;
++    }
++    r->stage=2;
++    /* AS1 belongs exclusively to this transaction. Same owned root as the
++     * MCU for now; a resident multi-client driver must use separate roots. */
++    uint64_t as=c->gpu+0x2440;
++    uint64_t old_root=rd(io,as)|((uint64_t)rd(io,as+4)<<32);
++    if(((rd(io,as+0x30)&15)>1||old_root)&&
++       !(c->reuse_as1&&old_root==c->root_pa&&(rd(io,as+0x30)&15)==6)) {
++        r->error=-62;return r->error;
++    }
++    if(poll(io,as+0x28,1,0,budget)){r->error=-63;return r->error;}
++    wr64(io,as,c->root_pa);
++    wr(io,as+8,SWEET_CSF_VENDOR_MEMATTR_LO);wr(io,as+12,SWEET_CSF_VENDOR_MEMATTR_HI);
++    wr64(io,as+0x30,0x42000006);wr(io,as+0x18,1);
++    if(poll(io,as+0x28,1,0,budget)){r->error=-63;return r->error;}
++    r->stage=3;
++    /* ring+0, input+0x1000, output+0x2000, completion+0x3000,
++     * suspend+0x10000. SYNC_SET32 writes data and an error word. */
++    uint64_t mem=c->memory_pa,va=SWEET_CSF_QUEUE_VA;
++    wr(io,mem+0x3000,0xdeadbeef);wr(io,mem+0x3004,0);
++    r->before=rd(io,mem+0x3000);
++#if SWEET_CSF_COMPUTE_PROBE
++    r->insert=compute_program(io,mem);
++    const uint32_t expected=SWEET_CSF_COMPUTE_TAG;
++#else
++    wr64(io,mem,UINT64_C(0x0100000000000000)|(va+0x3000));
++    wr64(io,mem+8,UINT64_C(0x0202000000000000)|SWEET_CSF_QUEUE_TAG);
++    wr64(io,mem+16,UINT64_C(0x2600000200000000));
++    wr64(io,mem+24,UINT64_C(0x0300000000010000));
++    r->insert=32;
++    const uint32_t expected=SWEET_CSF_QUEUE_TAG;
++#endif
++    wr64(io,mem+0x1000,r->insert);wr64(io,mem+0x1008,0);
++    wr64(io,mem+0x2000,0);
++    wr64(io,ci+0x10,va);wr(io,ci+0x18,4096);
++    wr64(io,ci+0x30,va+0x1000);wr64(io,ci+0x38,va+0x2000);
++    wr(io,ci+4,0x10f);wr(io,ci+12,UINT32_MAX);
++    r->cs_req=(rd(io,ci)&~0x517u)|0x511u;wr(io,ci,r->cs_req);
++    wr64(io,in+0x20,rd(io,c->gpu+0x100)|(uint64_t)rd(io,c->gpu+0x104)<<32);
++    wr64(io,in+0x28,rd(io,c->gpu+0x100)|(uint64_t)rd(io,c->gpu+0x104)<<32);
++    wr(io,in+0x30,rd(io,c->gpu+0x110));wr(io,in+0x34,0xf0010101);
++    wr64(io,in+0x40,va+0x10000);wr64(io,in+0x48,0);wr(io,in+0x50,1);
++    wr(io,in+4,UINT32_MAX);
++    wr(io,in+8,(rd(io,in+8)&~1u)|((rd(io,out+8)^1u)&1u));
++    r->csg_req=(rd(io,in)&~0x17u)|((rd(io,out)^0x10)&0x10)|1u;
++    wr(io,in,r->csg_req);doorbell(c,io,gi,go);r->stage=4;
++    uint64_t start=io->ticks(io->context);
++    r->error=-63;
++    for(unsigned i=0;i<10000000;i++) {
++        io->barrier(io->context);r->polls++;
++        r->csg_ack=rd(io,out);r->cs_ack=rd(io,co);
++        r->extract=rd(io,mem+0x2000);r->after=rd(io,mem+0x3000);
++        r->fault=rd(io,co+0x80);r->fatal=rd(io,co+0x84);
++        r->mmu_raw=rd(io,c->gpu+0x2000);r->as_fault=rd(io,as+0x1c);
++        r->cmd_lo=rd(io,co+0x40);r->cmd_hi=rd(io,co+0x44);
++        /* CSF MMU RAWSTAT[31:16] are command-completion events. In2433
++         * AS1 UPDATE raised bit17, and treating it as a fault aborted the
++         * first poll while firmware was still accepting the START request. */
++        if(r->fault||r->fatal||(r->mmu_raw&0xffff)||r->as_fault||
++           rd(io,mem+0x3004)) {
++            /* On an AS fault, relay its address instead of a CS pointer
++             * that has not advanced. AS0 is firmware; AS1 is our queue. */
++            if(r->mmu_raw&3) {
++                uint64_t fault_as=c->gpu+((r->mmu_raw&1)?0x2400:0x2440);
++                r->as_fault=rd(io,fault_as+0x1c);
++                r->cmd_lo=rd(io,fault_as+0x20);r->cmd_hi=rd(io,fault_as+0x24);
++            }
++            r->error=-64;break;
++        }
++        if((r->csg_ack&0x17)==(r->csg_req&0x17)&&(r->cs_ack&7)==1&&
++           r->after==expected&&r->before==0xdeadbeef&&
++#if SWEET_CSF_COMPUTE_PROBE
++           rd(io,mem+0x3010)==SWEET_CSF_QUEUE_TAG&&!rd(io,mem+0x3014)&&
++#endif
++           r->extract==r->insert&&!rd(io,mem+0x2004)){r->error=0;r->stage=5;break;}
++        if(io->ticks(io->context)-start>=budget)break;
++    }
++    /* Terminate before returning; the boot transaction then resets the GPU
++     * on both success and error, so no caller can reclaim live DMA memory. */
++    wr(io,ci,rd(io,ci)&~7u);
++    wr(io,in+8,(rd(io,in+8)&~1u)|((rd(io,out+8)^1u)&1u));
++    doorbell(c,io,gi,go);
++    int stream_stopped=poll(io,co,7,0,budget);
++    wr(io,in,rd(io,in)&~7u);doorbell(c,io,gi,go);
++    int stopped=poll(io,out,7,0,budget);r->stop_ack=rd(io,out);
++    if(!r->error&&(stopped||stream_stopped))r->error=-63;
++    if(!r->error)r->stage=7;
++    return r->error;
++}
++
++#endif
+diff --git a/iokit/Kernel/arm/SweetGPU.cpp b/iokit/Kernel/arm/SweetGPU.cpp
+new file mode 100644
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetGPU.cpp
+@@ -0,0 +1,158 @@
++/* SPDX-License-Identifier: MIT
++ * Resident MT6983 CSF owner. The loader transfers its exclusive power
++ * reference and reserved firmware arena; no firmware is loaded from disk. */
++#include <pexpert/arm64/board_config.h>
++#if defined(SWEET)
++#include <IOKit/IOService.h>
++#include <IOKit/IOUserClient.h>
++#include <IOKit/IOKitKeys.h>
++#include <IOKit/IOLib.h>
++#include <pexpert/pexpert.h>
++#include <pexpert/device_tree.h>
++#include <kern/thread.h>
++extern "C" {
++#include "../../../bsd/dev/sweet_gpu_handoff.h"
++#include "../../../bsd/dev/mali_csf_queue.h"
++vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++}
++
++static struct sweet_gpu_handoff handoff;
++static struct sweet_csf_queue_config queue;
++static vm_offset_t gpu_map, arena_map;
++static IOLock *gpu_lock;
++static uint32_t ready, submits, failures;
++static struct sweet_csf_queue_report last_report;
++
++static volatile uint32_t *address(uint64_t pa)
++{
++    if(pa>=handoff.gpu && pa-handoff.gpu<0x90000)
++        return (volatile uint32_t *)(gpu_map+pa-handoff.gpu);
++    if(pa>=handoff.arena_pa && pa-handoff.arena_pa<handoff.arena_bytes)
++        return (volatile uint32_t *)(arena_map+pa-handoff.arena_pa);
++    panic("SweetGPU: unmapped physical access");
++}
++static uint32_t read_word(void *,uint64_t pa){return *address(pa);}
++static void write_word(void *,uint64_t pa,uint32_t v){*address(pa)=v;}
++static void barrier(void *){__asm__ volatile("dsb sy" ::: "memory");}
++static uint64_t ticks(void *)
++{uint64_t t;__asm__ volatile("isb; mrs %0,cntpct_el0":"=r"(t));return t;}
++static struct sweet_gpu_io gpu_io;
++
++static int submit_compute(struct sweet_csf_queue_report *report=NULL)
++{
++    IOLockLock(gpu_lock);
++    int rc=ready?sweet_csf_queue_probe(&queue,&gpu_io,&last_report):-62;
++    submits++;
++    if(rc){failures++;ready=0;}
++    IOLog("SWEET GPU: resident submit=%u rc=%d stage=%u tag=%08x extract=%u/%u csg=%x cs=%x mmu=%x as=%x stop=%x\n",
++        submits,rc,last_report.stage,last_report.after,last_report.extract,
++        last_report.insert,last_report.csg_ack,last_report.cs_ack,last_report.mmu_raw,
++        last_report.as_fault,last_report.stop_ack);
++    if(report)memcpy(report,&last_report,sizeof(*report));
++    IOLockUnlock(gpu_lock);
++    return rc;
++}
++
++class SweetGPU : public IOService {
++    OSDeclareDefaultStructors(SweetGPU);
++public:
++    bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++};
++OSDefineMetaClassAndStructors(SweetGPU,IOService);
++bool SweetGPU::start(IOService *provider)
++{
++    if(!IOService::start(provider))return false;
++    setName("SweetGPU");setProperty(kIOUserClientClassKey,"SweetGPUUserClient");
++    setProperty("CSFVersion",(unsigned long long)1,32);
++    registerService();return true;
++}
++class SweetGPUUserClient : public IOUserClient {
++    OSDeclareDefaultStructors(SweetGPUUserClient);
++public:
++    IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
++    IOReturn externalMethod(uint32_t,IOExternalMethodArguments *,IOExternalMethodDispatch *,OSObject *,void *) APPLE_KEXT_OVERRIDE;
++};
++OSDefineMetaClassAndStructors(SweetGPUUserClient,IOUserClient);
++IOReturn SweetGPUUserClient::clientClose(void){terminate();return kIOReturnSuccess;}
++IOReturn SweetGPUUserClient::externalMethod(uint32_t selector,IOExternalMethodArguments *a,
++    IOExternalMethodDispatch *,OSObject *,void *)
++{
++    if(!a||a->scalarInputCount||a->structureInputSize||a->structureInputDescriptor)
++        return kIOReturnBadArgument;
++    if(selector==0) {
++        if(a->scalarOutputCount<4||!a->scalarOutput)return kIOReturnBadArgument;
++        IOLockLock(gpu_lock);
++        a->scalarOutput[0]=1;a->scalarOutput[1]=ready;
++        a->scalarOutput[2]=submits;a->scalarOutput[3]=failures;
++        a->scalarOutputCount=4;IOLockUnlock(gpu_lock);return kIOReturnSuccess;
++    }
++    if(selector==1) {
++        if(!a->structureOutput||a->structureOutputSize<sizeof(last_report))return kIOReturnBadArgument;
++        int rc=submit_compute((struct sweet_csf_queue_report *)a->structureOutput);
++        a->structureOutputSize=sizeof(last_report);
++        return rc?kIOReturnIOError:kIOReturnSuccess;
++    }
++    return kIOReturnUnsupported;
++}
++
++static void resident_worker(void *arg,wait_result_t)
++{
++    IOService *provider=(IOService *)arg;
++    for(unsigned i=0;i<3;i++) {
++        if(submit_compute())break;
++        IOSleep(20);
++    }
++    if(ready) {
++        SweetGPU *gpu=OSTypeAlloc(SweetGPU);
++        if(gpu&&gpu->init()&&gpu->attach(provider)&&gpu->start(provider))
++            IOLog("SWEET GPU: resident service ready; MCU retained, three compute submissions passed\n");
++        else IOLog("SWEET GPU: service registration failed\n");
++        OSSafeReleaseNULL(gpu);
++    }
++    provider->release();
++    for(;;) {
++        IOSleep(15000);
++        IOLog("SWEET GPU: resident status ready=%u submits=%u failures=%u MCU=%x\n",
++            ready,submits,failures,read_word(NULL,handoff.gpu+0x704));
++    }
++}
++
++extern "C" void SweetGPUStart(IOService *provider)
++{
++    DTEntry chosen;const void *raw=NULL;unsigned int bytes=0;
++    uint32_t enabled=0;PE_parse_boot_argn("sweetgpu",&enabled,sizeof(enabled));
++    if(!enabled||SecureDTLookupEntry(NULL,"/chosen",&chosen)!=kSuccess||
++       SecureDTGetProperty(chosen,"sweet-gpu-resident",&raw,&bytes)!=kSuccess||
++       bytes!=sizeof(handoff))return;
++    memcpy(&handoff,raw,sizeof(handoff));
++    if(handoff.magic!=SWEET_GPU_HANDOFF_MAGIC||handoff.version!=1||handoff.bytes!=128||
++       handoff.flags!=1||handoff.gpu!=0x13000000||handoff.arena_bytes!=(2u<<20)||
++       handoff.arena_pa<0x40000000||handoff.arena_pa>0x47e00000||
++       handoff.root_pa!=handoff.arena_pa||handoff.shared_pa<handoff.arena_pa||
++       handoff.shared_bytes>handoff.arena_bytes||
++       handoff.shared_pa-handoff.arena_pa>handoff.arena_bytes-handoff.shared_bytes||
++       handoff.memory_bytes!=SWEET_CSF_QUEUE_BYTES||handoff.memory_pa<handoff.arena_pa||
++       handoff.memory_pa-handoff.arena_pa>handoff.arena_bytes-handoff.memory_bytes) {
++        IOLog("SWEET GPU: invalid resident handoff\n");return;
++    }
++    gpu_map=ml_io_map(handoff.gpu,0x90000);
++    arena_map=ml_io_map(handoff.arena_pa,handoff.arena_bytes);
++    gpu_lock=IOLockAlloc();
++    if(!gpu_map||!arena_map||!gpu_lock){IOLog("SWEET GPU: mapping failed\n");return;}
++    queue.gpu=handoff.gpu;queue.root_pa=handoff.root_pa;queue.shared_pa=handoff.shared_pa;
++    queue.memory_pa=handoff.memory_pa;queue.shared_va=handoff.shared_va;
++    queue.shared_bytes=handoff.shared_bytes;queue.input_va=handoff.input_va;
++    queue.output_va=handoff.output_va;queue.memory_bytes=handoff.memory_bytes;
++    queue.timeout_ms=1000;queue.reuse_as1=1;
++    gpu_io.context=NULL;gpu_io.read32=read_word;gpu_io.write32=write_word;
++    gpu_io.barrier=barrier;gpu_io.ticks=ticks;
++    __asm__ volatile("mrs %0,cntfrq_el0":"=r"(gpu_io.frequency));
++    ready=read_word(NULL,handoff.gpu+0x704)==1;
++    IOLog("SWEET GPU: adopting MCU=%u GPU=%08x reserved arena=%llx\n",ready,
++        read_word(NULL,handoff.gpu),handoff.arena_pa);
++    if(!ready)return;
++    thread_t thread;provider->retain();
++    if(kernel_thread_start(resident_worker,provider,&thread)==KERN_SUCCESS)thread_deallocate(thread);
++    else {provider->release();ready=0;IOLog("SWEET GPU: worker failed\n");}
++}
++#endif
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -105,6 +105,7 @@
+ 
+ bsd/dev/memdev.c			standard
+ bsd/dev/sweet_ufs.c			standard
++bsd/dev/sweet_gpu_queue.c		standard
+ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_mt_keys.c			standard
+diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -8,6 +8,7 @@
+ 
+ # SWEET device-tree platform (empty translation unit on other boards)
+ iokit/Kernel/arm/SweetPlatformExpert.cpp                         optional iokitcpp
++iokit/Kernel/arm/SweetGPU.cpp                                   optional iokitcpp
+ 
+ iokit/Kernel/arm/SweetCPU.cpp                                    optional iokitcpp
+ iokit/Kernel/arm/SweetEntitlements.cpp                           optional iokitcpp
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -9,6 +9,7 @@
+ #include <IOKit/IOPlatformExpert.h>
+ #include <IOKit/IODeviceTreeSupport.h>
+ #include <IOKit/IOLib.h>
++extern "C" void SweetGPUStart(IOService *provider);
+ 
+ class SweetPlatformExpert : public IODTPlatformExpert {
+ 	OSDeclareDefaultStructors(SweetPlatformExpert);
+@@ -30,6 +31,7 @@
+ 		return false;
+ 	}
+ 	registerService();
++	SweetGPUStart(this);
+ 	IOLog("SWEET: platform expert registered\n");
+ 	return true;
+ }
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -823,7 +823,7 @@
+ #define SWEET_MARK_MAX  160
+ 
+ /* Bumped for every locally built kernel that is flashed to the phone. */
+-#define SWEET_BUILD_ID 0x2431u
++#define SWEET_BUILD_ID 0x2437u
+ 
+ struct sweet_mark_rec {
+ 	uint32_t code;

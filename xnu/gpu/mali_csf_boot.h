@@ -66,6 +66,7 @@ struct sweet_csf_boot_config {
      * additional MMIO access is issued. Requires global_evidence. */
     uint32_t global_init;
     struct sweet_csf_global_evidence *global_evidence;
+    uint32_t retain_runtime;
 #if SWEET_CSF_QUEUE_PROBE
     struct sweet_csf_queue_config *queue_config;
     struct sweet_csf_queue_report *queue_report;

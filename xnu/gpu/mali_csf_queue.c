@@ -130,7 +130,7 @@ int sweet_csf_queue_probe(const struct sweet_csf_queue_config *c,
        c->memory_bytes!=SWEET_CSF_QUEUE_BYTES||(c->memory_pa&4095)||
        c->memory_pa<0x40000000||c->memory_pa>UINT64_MAX-c->memory_bytes||
        (c->root_pa&4095)||c->root_pa<0x40000000||
-       !c->timeout_ms||c->timeout_ms>1000){r->error=-60;return r->error;}
+       !c->timeout_ms||c->timeout_ms>1000||c->reuse_as1>1){r->error=-60;return r->error;}
     uint64_t budget=(io->frequency*c->timeout_ms+999)/1000;
     uint64_t gi=iface(c,c->input_va),go=iface(c,c->output_va);
     uint64_t ctrl=c->shared_pa+0x1000;
@@ -152,7 +152,11 @@ int sweet_csf_queue_probe(const struct sweet_csf_queue_config *c,
     /* AS1 belongs exclusively to this transaction. Same owned root as the
      * MCU for now; a resident multi-client driver must use separate roots. */
     uint64_t as=c->gpu+0x2440;
-    if((rd(io,as+0x30)&15)>1||rd(io,as)||rd(io,as+4)){r->error=-62;return r->error;}
+    uint64_t old_root=rd(io,as)|((uint64_t)rd(io,as+4)<<32);
+    if(((rd(io,as+0x30)&15)>1||old_root)&&
+       !(c->reuse_as1&&old_root==c->root_pa&&(rd(io,as+0x30)&15)==6)) {
+        r->error=-62;return r->error;
+    }
     if(poll(io,as+0x28,1,0,budget)){r->error=-63;return r->error;}
     wr64(io,as,c->root_pa);
     wr(io,as+8,SWEET_CSF_VENDOR_MEMATTR_LO);wr(io,as+12,SWEET_CSF_VENDOR_MEMATTR_HI);
@@ -222,9 +226,13 @@ int sweet_csf_queue_probe(const struct sweet_csf_queue_config *c,
     }
     /* Terminate before returning; the boot transaction then resets the GPU
      * on both success and error, so no caller can reclaim live DMA memory. */
+    wr(io,ci,rd(io,ci)&~7u);
+    wr(io,in+8,(rd(io,in+8)&~1u)|((rd(io,out+8)^1u)&1u));
+    doorbell(c,io,gi,go);
+    int stream_stopped=poll(io,co,7,0,budget);
     wr(io,in,rd(io,in)&~7u);doorbell(c,io,gi,go);
     int stopped=poll(io,out,7,0,budget);r->stop_ack=rd(io,out);
-    if(!r->error&&stopped)r->error=stopped;
+    if(!r->error&&(stopped||stream_stopped))r->error=-63;
     if(!r->error)r->stage=7;
     return r->error;
 }

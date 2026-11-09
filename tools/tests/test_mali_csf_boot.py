@@ -679,6 +679,9 @@ int main(void) {
   assert(m.in_page[4]==0x271000 && m.in_page[5]==0x271000 && m.in_page[6]==0xff);
   assert(m.in_page[7]==0 && m.in_page[8]==31 && m.in_page[0x20]==0x271000);
   assert(m.in_req==0x40e && m.in_page[1]==ev.ack_irq_mask);
+  m=model();g.retain_runtime=1;memset(&ev,0,sizeof ev);
+  assert(!run(&m,&g,&r)&&r.firmware_ready&&!r.reset_completed);
+  assert(!r.disable_error&&!r.cleanup_error&&ev.ack_matched);
  }
  {
   /* A firmware that never acks is a timeout, not readiness. */

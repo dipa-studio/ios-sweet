@@ -137,6 +137,9 @@ int shim_gpu_prepare(uintptr_t dtb, uint64_t xnu_base, uint64_t xnu_bytes,
                      struct sweet_gpu_boot_report *r, uint64_t *shared)
 {
     struct sweet_gpu_boot_config c = { .timeout_ms = 250,
+#if SWEET_CSF_RESIDENT
+        .retain_power=1,
+#endif
         .dvfs_commit = SWEET_GPU_DVFS_COMMIT,
         .dvfs_commit_opp = SWEET_GPU_DVFS_COMMIT_OPP,
         .xnu_base = xnu_base, .xnu_bytes = xnu_bytes };
@@ -206,7 +209,8 @@ int shim_gpu_prepare(uintptr_t dtb, uint64_t xnu_base, uint64_t xnu_bytes,
      * ownership. A definite pre-power IPI failure can still be logged by XNU. */
     if (r->error == SWEET_GPU_OVERLAP || r->error == SWEET_GPU_ARGUMENT ||
         r->error == SWEET_GPU_HANDOFF || r->error == SWEET_GPU_UNPOWERED ||
-        r->power_acquired || (r->stage == SWEET_GPU_ON && r->error)) return -1;
+        (r->power_acquired && !(c.retain_power && !r->error &&
+          r->stage==SWEET_GPU_COMPLETE)) || (r->stage == SWEET_GPU_ON && r->error)) return -1;
     return 0;
 }
 
@@ -260,6 +264,12 @@ int shim_gpu_publish(uintptr_t adt, uint32_t bytes,
      *kernel read the same number out of the same property. */
     uint8_t *csf=property(adt, bytes, "sweet-csf-report", sizeof(shim_csf_report));
     if (!csf) return -1;
+#if SWEET_CSF_RESIDENT
+    uint8_t *handoff=property(adt,bytes,"sweet-gpu-resident",128);
+    if(!handoff || shim_gpu_handoff.magic!=SWEET_GPU_HANDOFF_MAGIC ||
+       !r->power_acquired || r->error)return -1;
+    for(unsigned i=0;i<128;i++)handoff[i]=((const uint8_t *)&shim_gpu_handoff)[i];
+#endif
     for (unsigned i=0;i<sizeof(shim_csf_report);i++) csf[i]=0;
     for (unsigned i=0;i<sizeof(shim_csf_report);i++) csf[i]=((const uint8_t *)&shim_csf_report)[i];
 #if SWEET_CSF_GLOBAL_INIT

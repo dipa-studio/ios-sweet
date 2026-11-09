@@ -345,6 +345,7 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
        c->entry_checkpoint>1||(c->entry_checkpoint&&!c->access_snapshot)||
        (c->mcu_control_value&&c->mcu_control_value!=2&&c->mcu_control_value!=3)||
        c->pte_group_requested>15||
+       c->retain_runtime>1||(c->retain_runtime&&!c->global_init)||
        c->global_init>1||(!SWEET_CSF_GLOBAL_INIT&&c->global_init)||
        (c->global_init&&(!c->global_evidence||c->shared_va!=0x04000000u))||
        c->pte_pages_built>c->arena_bytes/4096||c->root_pa!=c->arena_pa||
@@ -793,6 +794,14 @@ int sweet_csf_boot(const struct sweet_csf_boot_config *c,const struct sweet_gpu_
     }
 #endif
     r->firmware_ready=1;
+#if SWEET_CSF_GLOBAL_INIT
+    if(c->retain_runtime && c->global_init && c->global_evidence &&
+       !c->global_evidence->error && c->global_evidence->ack_matched) {
+        wr(io,c->gpu+0x28,0);wr(io,c->gpu+0x1008,0);wr(io,c->gpu+0x2008,0);
+        r->stage=SWEET_CSF_BOOT_COMPLETE;
+        return 0;
+    }
+#endif
 #if SWEET_CSF_QUEUE_PROBE
     if(!c->queue_config||!c->queue_report||!c->global_init) {
         r->error=SWEET_CSF_BOOT_ARGUMENT;goto cleanup;

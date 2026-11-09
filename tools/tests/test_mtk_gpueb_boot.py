@@ -151,6 +151,10 @@ int main(void) {
         assert(r.reset_rawstat==0x100);
     }
     c=config();m=model();m.stuck_timer=1;m.timeout_command=0;assert(run(&m,&c,&r)==SWEET_GPU_TIMEOUT);
+    c=config();m=model();c.retain_power=1;c.powered_probe=powered;c.probe_context=&m;
+    assert(!run(&m,&c,&r));assert(r.power_acquired&&!r.cleanup_attempted&&m.requests==2);
+    m=model();m.probe_error=-54;assert(run(&m,&c,&r)==-54);
+    assert(!r.power_acquired&&r.cleanup_attempted&&m.requests==3);
     /* 2338: gpufreq observation, then the optional second power-on step. */
     m=model();c=config();
     assert(!run(&m,&c,&r));assert(r.gpufreq_valid==0 && m.requests==3);

@@ -20,6 +20,7 @@ struct sweet_csf_queue_config {
     uint64_t gpu, root_pa, shared_pa, memory_pa;
     uint32_t shared_va, shared_bytes, input_va, output_va, memory_bytes;
     uint32_t timeout_ms;
+    uint32_t reuse_as1;
 };
 struct sweet_csf_queue_report {
     uint32_t stage;

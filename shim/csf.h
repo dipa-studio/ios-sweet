@@ -1,5 +1,12 @@
 #pragma once
 #include "../xnu/gpu/mali_csf_boot.h"
+#include "../xnu/gpu/sweet_gpu_handoff.h"
+#ifndef SWEET_CSF_RESIDENT
+#define SWEET_CSF_RESIDENT 0
+#endif
+#if SWEET_CSF_RESIDENT
+extern struct sweet_gpu_handoff shim_gpu_handoff;
+#endif
 struct shim_csf_context {
     uint64_t xnu_base,xnu_bytes,shared_base,shared_bytes;
     const struct sweet_gpu_boot_report *platform;
