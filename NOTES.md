@@ -1,5 +1,31 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: MCU/GLOBAL COMPLETE; USER REQUESTS HAKIOS USERSPACE RENDERING <<<
+## >>> ACTIVE 2026-11-09: GLES USERSPACE BUILD COMPLETE; ROOT EXPORT IN PROGRESS <<<
+
+Latest user asks to choose PanVK versus OpenGL ES. Selected native GLES first:
+EAGL -> Mesa Gallium -> IOSurface, later G710 CSF KMD. PanVK is Vulkan; Zink
+would add another translation layer. Hardware acceleration remains unimplemented.
+Pinned hakios-mt6768 84b025233e7350f3549ec5b8eb330fd74b4602f4 and common mtk
+620c77507a17ad23ac5a40bad900abe9ed4d7740 under ignored 20261109-hakios/.
+Common tree DOES contain the rendering userspace, unlike device-only repo.
+Its Darwin panfrost patch hardcodes G52/v7 and JM; cannot copy to G710/CSF.
+
+Built Mesa25.0.7 (verified592272df...0f8a6), ONLY OSMesa ES-profile patch,
+softpipe arm64-apple-ios16.0 using local Xcode16.4/iOS18.5 SDK. Built the
+HakiOS EAGL bridge:409 slots (356 forwarded,30 manual,23 unavailable).
+Added tools/build-sweet-gles.py and userland/gles-probe.c. Probe renders real
+GLES shaders, reads/checks8 pixels, then submits4 IOSurface frames at native
+canvas. No device execution yet. No performance/GPU/GUI success claim.
+
+Read-only16GiB live root export running to research/matisse/20261109-hakios/
+live-root-before.dmg. Plan additive reversible library/probe installation via
+native HFS journal replay and verified delta; keep original full preimage.
+Device Recovery/boot_a restored, no boot or device root writes in this phase yet.
+2427 image prepared using hardware-proven2316 kernel (no CI/kernel changes),
+launchdsuffix=gles-probe; image metadata in gles2427.json. Not booted.
+Need finish root export, install files, validate dependency/ABI, run probe,
+then test EAGL in backboardd. MCU/global2426 success remains intact below.
+
+## >>> PREVIOUS 2026-11-09: MCU/GLOBAL COMPLETE; USER REQUESTS HAKIOS USERSPACE RENDERING <<<
 
 User now requests github.com/oosexgang/hakios-mt6768 rendering approach,
 advance to userspace rendering and hardware acceleration if possible.
