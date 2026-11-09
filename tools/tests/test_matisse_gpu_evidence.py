@@ -881,6 +881,26 @@ class ReportDecodeTests(unittest.TestCase):
         self.assertTrue(csf['mirror_mapped'])
         self.assertEqual(csf['cold_boot_outcome'], 'walk-dies-at-bit9')
 
+    def test_2423_emi_labels_preserve_store_witness_and_protection_gate(self):
+        fields = {}
+        for side in ('before', 'after'):
+            for i, key in enumerate(self.module.CSF_PATH_KEYS[8:]):
+                fields[f'path_{side}_{key}'] = 0x1000 + i + (0x100 if side == 'after' else 0)
+        fields.update(gpu_regs_before_reg_000=0x24205200,
+                      gpu_regs_before_reg_004=0x24205400,
+                      gpu_regs_after_reg_000=0x24205200,
+                      gpu_regs_after_reg_004=0x2420a400,
+                      gpu_regs_after_reg_00c=2)
+        csf = self.cold_report(build=0x2423, input_va=2,
+            firmware_probe_pa_lo=0x401a5000, output_va=0x2420a400,
+            leaf=self.LEAVES_2407, **fields)['csf']
+        self.assertEqual(csf['emi_before']['nth_gals_emi1'], 0x1000)
+        self.assertEqual(csf['emi_after']['sth_idle_en0'], 0x1107)
+        self.assertEqual(csf['emi_addresses']['sth_idle_en0'], 0x1030e22c)
+        self.assertNotIn('pdc_cg', csf['path_after'])
+        self.assertTrue(csf['platform_path_released'])
+        self.assertEqual(csf['store_witness']['outcome'], 'odd-store-not-visible')
+
     def test_2407_samples_registers_without_calling_them_a_cause(self):
         """2407 is 2406 plus a read-only register block; the verdict must not move."""
         csf = self.cold_report(build=0x2407, input_va=2,

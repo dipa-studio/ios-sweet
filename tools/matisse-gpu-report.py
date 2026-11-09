@@ -62,6 +62,10 @@ CSF_ACCESS_KEYS = ['mmu_raw','job_raw','as_status','as_fault','as_fault_lo','as_
 CSF_PATH_KEYS = ['rpc_enable','rpc_status','infra_enable','infra_status',
     'emi0_enable','emi0_status','emi1_enable','emi1_status','pdc_cg','pdc_st0',
     'pdc_st1','pdc_st2','pdc_st4','pdc_st5','pdc_st6','slc_group6']
+CSF_EMI_KEYS = ['nth_gals_emi1','nth_gals_emi0','sth_gals_emi1','sth_gals_emi0',
+                'nth_idle_en1','nth_idle_en0','sth_idle_en1','sth_idle_en0']
+CSF_EMI_ADDRS = [0x1021c82c,0x1021c830,0x1021e82c,0x1021e830,
+                 0x10270228,0x1027022c,0x1030e228,0x1030e22c]
 CSF_PATH_MASKS = dict(rpc=0x000f0000, infra=0xf, emi0=0xc0000, emi1=0xc0000)
 #2407 samples raw GPU words by offset. 0x048 is the L2 config the dual-slice
 #hypothesis hangs on; 0x2c0.. is the block the vendor KMD dump reads beside it.
@@ -131,7 +135,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
     # constant tags its records with the previous trial's number. Passing the
     # observed mark keeps such a capture decodable without pretending the tag
     # matches: the image sha, not the tag, is what identifies the run.
-    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415,0x2416,0x2417,0x2418,0x2419,0x2420,0x2421,0x2422):
+    if expected_build not in (0x2321,0x2322,0x2323,0x2324,0x2325,0x2326,0x2327,0x2328,0x2329,0x2330,0x2331,0x2332,0x2333,0x2334,0x2335,0x2336,0x2337,0x2338,0x2339,0x2340,0x2341,0x2342,0x2343,0x2344,0x2345,0x2346,0x2347,0x2348,0x2349,0x2350,0x2351,0x2352,0x2353,0x2354,0x2355,0x2356,0x2357,0x2358,0x2359,0x2360,0x2361,0x2362,0x2363,0x2364,0x2365,0x2366,0x2367,0x2368,0x2369,0x2370,0x2371,0x2372,0x2373,0x2374,0x2375,0x2376,0x2377,0x2378,0x2379,0x2380,0x2382,0x2383,0x2384,0x2385,0x2386,0x2387,0x2388,0x2389,0x2390,0x2391,0x2393,0x2394,0x2395,0x2396,0x2397,0x2398,0x2399,0x2400,0x2401,0x2402,0x2403,0x2404,0x2405,0x2406,0x2407,0x2408,0x2409,0x2410,0x2411,0x2412,0x2413,0x2414,0x2415,0x2416,0x2417,0x2418,0x2419,0x2420,0x2421,0x2422,0x2423):
         raise ValueError('unsupported report ABI/build')
     if len(data) != 4096:
         raise ValueError('requires exactly one 4096-byte SWEETMRK block')
@@ -198,7 +202,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                       'leaf_0x01001000','leaf_0x02000000') if expected_build in (0x2404, 0x2405, 0x2406, 0x2407, 0x2408) else
                      ('leaf_0x0100d000','leaf_0x0100c000',
                       'leaf_0x0100e000','leaf_0x01001000') if expected_build in (0x2409, 0x2410, 0x2411, 0x2412, 0x2413, 0x2414, 0x2415, 0x2416, 0x2417,
-                                                                       0x2418, 0x2419, 0x2420, 0x2421, 0x2422) else
+                                                                       0x2418, 0x2419, 0x2420, 0x2421, 0x2422, 0x2423) else
                      ('leaf_0x0100e000','leaf_0x0300e000',
                       'leaf_0x01001000','leaf_0x02000000') if expected_build == 0x2403 else
                      ('leaf_0x03000000','leaf_0x03001000',
@@ -358,6 +362,15 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
             csf['platform_path_note'] = ('Original MT6983 scpsys MFG1 masks: RPC bits16..19, '
                 'INFRA bits0..3, EMI0/1 bits18..19; enable and status are separate registers. '
                 'PDC/SLC words are raw observations, not power or reachability proof.')
+        if expected_build == 0x2423:
+            for name in ('before', 'after'):
+                path = csf['path_' + name]
+                csf['emi_' + name] = dict(zip(CSF_EMI_KEYS,
+                    [path.pop(key) for key in CSF_PATH_KEYS[8:]]))
+            csf['emi_addresses'] = dict(zip(CSF_EMI_KEYS, CSF_EMI_ADDRS))
+            csf['platform_path_note'] = ('MFG1 protection gates unchanged; eight tail slots '
+                'sample vendor EMI/GALS and idle controls before AUTO and before cleanup. '
+                'Raw observations; no undocumented bit meanings inferred.')
         if expected_build == 0x2416:
             # The same 40 bytes the 2407 block samples, asked a different
             # question: the MFG top SLC group window. Re-label the ten words and
@@ -444,7 +457,7 @@ def decode(data, expected_build=0x2321, mark=None, require_leaf=True):
                 '0x000 into the four in-direction ones. The vendor driver ORs 0x855/0x055 '
                 'into bits 11:0 on every power-on and never reads the words back, so the '
                 'upper bits have never been observed before this run.')
-        if expected_build in (0x2420, 0x2421, 0x2422):
+        if expected_build in (0x2420, 0x2421, 0x2422, 0x2423):
             order = ('reg_000', 'reg_004', 'reg_00c', 'reg_034', 'reg_048',
                      'reg_04c', 'reg_2c0', 'reg_2c4', 'reg_2c8', 'reg_2cc')
             names = ('slot200', 'slot400', 'marker', 'result', 'target_pa_lo',

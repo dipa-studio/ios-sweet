@@ -194,10 +194,21 @@ static int platform_path(const struct sweet_csf_boot_config *c,const struct swee
     s->infra_enable=rd(io,0x10001ca0);s->infra_status=rd(io,0x10001cac);
     s->emi0_enable=rd(io,0x10001c60);s->emi0_status=rd(io,0x10001c6c);
     s->emi1_enable=rd(io,0x10001c70);s->emi1_status=rd(io,0x10001c7c);
+#if SWEET_CSF_EMI_DIAG
+    /* 2423: gpufreq_mt6983.c __gpufreq_dump_infra_status() reads these
+     * north/south EMI GALS and M6/M7 idle words. Reuse the eight PDC/SLC
+     * diagnostic slots; the protection gate above and CPU witness stay intact.
+     * Raw observation only: no debug selector or fabric control is written. */
+    s->pdc_cg=rd(io,0x1021c82c);s->pdc_st0=rd(io,0x1021c830);
+    s->pdc_st1=rd(io,0x1021e82c);s->pdc_st2=rd(io,0x1021e830);
+    s->pdc_st4=rd(io,0x10270228);s->pdc_st5=rd(io,0x1027022c);
+    s->pdc_st6=rd(io,0x1030e228);s->slc_group6=rd(io,0x1030e22c);
+#else
     s->pdc_cg=rd(io,0x13fbf100);s->pdc_st0=rd(io,0x13fbf120);
     s->pdc_st1=rd(io,0x13fbf140);s->pdc_st2=rd(io,0x13fbf118);
     s->pdc_st4=rd(io,0x13fbf0c0);s->pdc_st5=rd(io,0x13fbf098);
     s->pdc_st6=rd(io,0x13fbf1c0);s->slc_group6=rd(io,0x13fbf748);
+#endif
     r->path_sample_flags|=after?2:1;
     /* Observation only for PDC/SLC: no readiness inference from those words. */
     return ((s->rpc_enable|s->rpc_status)&0xf0000) ||

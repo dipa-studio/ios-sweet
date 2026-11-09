@@ -29,7 +29,7 @@ HARNESS=r'''
 #define MEMATTR_HI 0x4c4c4c4c
 #endif
 struct model {
- uint32_t witness200,witness400,l2_hash;unsigned witness_reads,l2_hash_writes;int witness_drop;
+ unsigned emi_reads;uint32_t witness200,witness400,l2_hash;unsigned witness_reads,l2_hash_writes;int witness_drop;
  uint64_t tick;unsigned reads,writes,enabled,resets,as_updates,locked,flushed,lock_low,lock_high;
  uint32_t path[16],path_after_bits;unsigned path_on,path_reads,marker_reads;
  uint32_t gpu_mask,job_mask,mmu_mask,l2,raw,job,mcu,mmu,transcfg,table_low,table_high;
@@ -59,6 +59,15 @@ static uint32_t rd(void *p,uint64_t a) {
  if(a==0x90010200||a==0x90010400) {
   assert(m->resets==0);m->witness_reads++;
   return a==0x90010200?m->witness200:m->witness400;
+ }
+#endif
+#if SWEET_CSF_EMI_DIAG
+ {const uint32_t aemi[8]={0x1021c82c,0x1021c830,0x1021e82c,0x1021e830,
+                        0x10270228,0x1027022c,0x1030e228,0x1030e22c};
+  for(unsigned i=0;i<8;i++)if(a==aemi[i]) {
+   assert(m->resets==0 && m->as_updates==2 && m->l2);
+   m->emi_reads++;return (uint32_t)a^(m->enabled?0x80000000u:0);
+  }
  }
 #endif
  if(m->path_on) {
@@ -272,7 +281,22 @@ int main(void) {
  for(int drop=0;drop<2;drop++) {
   struct model m=model();struct sweet_csf_boot_config c=cfg();struct sweet_csf_boot_report r;
   c.platform_snapshot=1;m.no_fw=1;m.witness_drop=drop;
+#if SWEET_CSF_EMI_DIAG
+  c.platform_path=1;c.access_snapshot=1;c.firmware_probe_va=0x01000000;
+  c.firmware_probe_offset=0x6000;c.firmware_probe_expected=0x12345678;m.path_on=1;
+#endif
   assert(run(&m,&c,&r)==-53);
+#if SWEET_CSF_EMI_DIAG
+  assert(m.emi_reads==16 && r.path_sample_flags==3);
+  assert(r.path_before.pdc_cg==0x1021c82c && r.path_after.pdc_cg==0x9021c82c);
+  assert(r.path_before.pdc_st0==0x1021c830 && r.path_after.pdc_st0==0x9021c830);
+  assert(r.path_before.pdc_st1==0x1021e82c && r.path_after.pdc_st1==0x9021e82c);
+  assert(r.path_before.pdc_st2==0x1021e830 && r.path_after.pdc_st2==0x9021e830);
+  assert(r.path_before.pdc_st4==0x10270228 && r.path_after.pdc_st4==0x90270228);
+  assert(r.path_before.pdc_st5==0x1027022c && r.path_after.pdc_st5==0x9027022c);
+  assert(r.path_before.pdc_st6==0x1030e228 && r.path_after.pdc_st6==0x9030e228);
+  assert(r.path_before.slc_group6==0x1030e22c && r.path_after.slc_group6==0x9030e22c);
+#endif
   assert(sizeof(r)==784 && r.gpu_regs_flags==3 && m.witness_reads==4);
   assert(r.gpu_regs_before.slot200==0x24205200 && r.gpu_regs_before.slot400==0x24205400);
   assert(r.gpu_regs_after.slot400==0x2420a400);
@@ -710,6 +734,10 @@ class CsfBootTests(unittest.TestCase):
 
     def test_store_witness_before_cleanup(self):
         self._run(['-DSWEET_CSF_STORE_WITNESS=1','-DSWEET_CSF_GPU_REGS=1'])
+
+    def test_emi_diagnostics_before_cleanup(self):
+        self._run(['-DSWEET_CSF_STORE_WITNESS=1','-DSWEET_CSF_GPU_REGS=1',
+                   '-DSWEET_CSF_EMI_DIAG=1'])
 
     def test_l2_hash_before_power_on(self):
         self._run(['-DSWEET_CSF_STORE_WITNESS=1','-DSWEET_CSF_GPU_REGS=1',

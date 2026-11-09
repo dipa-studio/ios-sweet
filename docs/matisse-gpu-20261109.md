@@ -102,3 +102,23 @@ been measured in the existing MFG-top trials. Read them before and after the
 MCU test and preserve CPU witness data. No bit decoding is claimed without
 source evidence. Also,2408 already demonstrated pre-MCU soft-reset completion;
 post-stall cleanup timeout must not be described as universal reset failure.
+
+
+## Trial 2423: first successful controlled odd-slot store/read
+
+This trial replaces the eight PDC/SLC observation slots with eight vendor
+EMI/GALS/idle-register reads, keeping the MFG1 protection gate and complete
+CPU witness. MCU bytecode and arena0x40078000 match2420. No EMI register is
+written. Image c43e902e027a3e4f8eee17d1773eefae0a4969831f175f6266336d356b330e1a.
+
+**Observed:** marker4, CPU control0x2420a400, CPU odd0x2420a200, output0x2420a200.
+Both stores, DSBs and reads completed. This is diagnostic-program success,
+not real firmware boot. Four GALS registers all read0x01007514 before/after;
+north/south idle_en1 read0x10000618 and idle_en0 read0xc40000e8.
+
+Fastboot96.66s; fresh marks; full boot_a restored and verified. 74 decoder
+tests and the strict MMIO model pass. No CI/new XNU kernel.
+
+Causality is not isolated: added reads, removed PDC reads, timing and run
+variation are competing explanations. Repeat the image, then split the reads.
+Do not conclude that an EMI register write is necessary: this trial writes none.

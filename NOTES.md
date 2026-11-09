@@ -1,5 +1,20 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2422 RESTORED — FAR ARENA HAS SAME STORE STALL <<<
+## >>> ACTIVE 2026-11-09: 2423 BREAKTHROUGH — ODD STORE AND READ COMPLETE <<<
+
+2423 image c43e902e027a3e4f8eee17d1773eefae0a4969831f175f6266336d356b330e1a
+ran. MCU marker4, CPU control0x2420a400 and odd0x2420a200: first controlled
+store/read witness success. It changes only eight PDC/SLC read addresses to
+vendor EMI/GALS/idle diagnostic reads; MCU bytecode, low arena, page attrs
+and power protocol unchanged. No firmware-ready claim: diagnostic loop only.
+Four GALS words all0x01007514 before/after; nth/sth idle_en1=0x10000618,
+idle_en0=0xc40000e8 before/after. Full boot_a restored/verified, no pending
+restore. Fastboot96.66s. New raw evidence in shim2423-emi/gpu-normal.
+Next: repeat2423, then isolate added reads versus removed PDC reads and timing;
+do not add clock writes now that this read-only change passed.
+Kernel c01dcbea...d5ea unchanged; no CI. 74 decoder tests plus MMIO-model pass.
+2422 code checkpoint3590109. Update docs and commit2423 milestone next.
+
+## >>> PREVIOUS 2026-11-09: 2422 RESTORED — FAR ARENA HAS SAME STORE STALL <<<
 
 2422 ran image d11fbb7ba449601d4eb476e3ea2cf57d68b3e070b70655f457f4c2a378c38d49.
 AS root readback0x45000000, firmware PA0x4512d000, shared target0x45099200.
