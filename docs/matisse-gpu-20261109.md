@@ -150,3 +150,33 @@ lack of execution. Fastboot80.22s; full boot_a restored and verified.
 
 Next is global REQ/ACK configuration with persistent handshake evidence.
 This milestone establishes firmware boot, not a scheduler or rendered frame.
+
+
+## Trial 2426: global configuration handshake verified
+
+Image3f9e3f8f3948e71ec65242362fde544d656622ee5c2da6db13ff5b9381414792,
+source0dc9811, enables global-init after real firmware boot. A20-word relay
+uses the existing784-byte report to persist the handshake without a kernel
+rebuild. The original96-byte ADT evidence is still published separately.
+
+REQ was0, ACK was0; host wrote0x40e and rang doorbell0. ACK first read0 and
+then0x40e on poll10. Flags7, error0, request mask0x40e, ack_matched1.
+Core allocation0x770017, coherency31, IRQ mask0x0480071e. Firmware version
+0x01010000 and fresh JOB IRQ0x80000000; CSFstage7/error0, cleanup_error0,
+reset_completed1. Both strict firmware and global-init predicates pass.
+
+Fastboot80.24s; full boot_a restored/verified.77 relevant tests passed,
+including absent firmware, timeout, mismatched ACK and missing doorbell cases.
+No new kernel or CI build. This establishes firmware boot and global protocol,
+not CSG scheduling, command submission, completion fences or rendering.
+
+Reverse control reran the exact original2420 image after these successes:
+marker2, control visible, odd store absent, cleanup_error-53 again. Fastboot
+84.40s; full boot_a restored. This rejects a simple persistent warm-state
+explanation; the successful path depends on a per-image difference. The added
+reads and their timing still need to be separated. Final129 tests pass, and
+an independent Recovery hash verified the complete baseline boot partition.
+
+The user subsequently requested hakios-mt6768's rendering method and progress
+to userspace rendering, with hardware acceleration if possible. That is the
+next phase; this report records the completed MCU/global protocol baseline.

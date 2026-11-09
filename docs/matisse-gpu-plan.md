@@ -1,33 +1,28 @@
 # matisse GPU 路线与证据边界
 
-日期：2026-10-31。目标板是 Redmi K50 Pro / matisse / MT6983，
+更新：2026-11-09。目标板是 Redmi K50 Pro / matisse / MT6983，
 不是 sweet / SM7150，也不是 UniXNU 的 SM8550。
 
 ## 当前基线
 
-本轮已推进到 [本地镜像静态审计与固件解析器实现](matisse-gpu-static-audit.md)。
-Android 不能启动；用户随后确认 Recovery 在线，可继续采集和测试。
-已取得新 live DT、实机 LK/GPUEB 分区和完整 OS2.0.2.0 刷机包，
-并确认 Recovery 的 LK 分支跳过 GPUEB。交接校验/消息编码和只读
-启动探针已实现；尚未刷入探针、读取 GPU_ID 或验证 GPU 执行。
-详见 [GPUEB 启动交接](matisse-gpueb-handoff.md)。
+MCU 卡点已取得实机突破。2425 启动未经修改的厂商 CSF 固件，2426 完成
+全局配置握手：`GLB_VERSION=0x01010000`，新 `JOB_IRQ=0x80000000`，
+`REQ/ACK=0x40e`，8 个组、stride160；MMU 无故障，停止和复位成功。
+实际 GPU_ID 是 `0xa8620004`。详见 [2026-11-09 实测](matisse-gpu-20261109.md)。
 
-- 本项目的 0x2317 实机已验证原生 1440×3200、触摸和三个实体键。
-  显示仍走现有 IOSurface / AppleCLCD / framebuffer 路径；这不是 GPU 验证。
-- 此轮之前的完整 stock boot_a 恢复已校验；没有正在运行的硬件试验。
-  设备状态以 NOTES.md 的 ACTIVE 交接为准。
-- 本地厂商参考源码 `research/matisse/mt6983.dts` 的
-  `mali@13000000` 声明 `mediatek,mali` / `arm,mali-valhall`，
-  MMIO 范围 `0x13000000 + 0x480000`。它是源码事实，
-  不等于已核对当前 Recovery 的 live DT 或读取 GPU_ID。
-- 同一参考 DTS 声明 GPUEB 和 `gpufreq_wrapper`，两处
-  `gpueb-support = <1>`。不得假定这台机器没有 GPUEB。
-- 本地 `MiCode/MTK_kernel_modules` 的 `rubens-s-oss` 提交
-  `c66b3c9ce7b5c0bc3d72a829f6542200deaa8a9c`，其
-  `gpu/gpu_mali/mali_valhall/mali-r32p1/drivers/gpu/arm/midgard/Makefile`
-  在 MT6983 的 OOT 配置中明确启用 `CONFIG_MALI_CSF_SUPPORT := y`。
-  CSF 固件加载源码的默认名为 `mali_csffw.bin`。这是邻近厂商源码
-  的支持证据，不等于已经确认本机正在加载 r32p1 或该固件。
+关键差异是启动前增加 MT6983 厂商诊断路径中的 EMI/GALS/idle 寄存器读取。
+2423 两次和2424 的受控 MCU 读写均成功；2424 补回旧 PDC/SLC 读取后仍通过。
+读取副作用、延迟和启动状态的因果关系仍在隔离，不能把它解释成已知硬件勘误。
+固件内容没有修改，未改 GPU 电压/频率。最新可复现镜像配置是2426。
+
+内存与固件验收目前覆盖独立 shim 内的4 KiB GPU 页表、共享区、固件启动及
+全局协议。XNU 内的常驻 GPU 生命周期、通用 BO/VM、CSG/CS 调度、任务提交、
+fence 和 GPU 绘制尚未实现。现有显示仍走 IOSurface/AppleCLCD/framebuffer。
+设备运行/恢复状态以 `NOTES.md` 顶部 ACTIVE 交接为准。
+
+参考源码已固定 Linux `7475ea8b58616b33c04afb976cf0fbaad9dd63fb`、
+Xiaomi rubens-s-oss `270b84910b941bf75490fccdb5fb2b3021dd7cbf` 和 OnePlus
+MT6983 `ff51a39c66a87f91d870bfff1611e2b36371c8a4`。关键平台文件跨厂商一致。
 
 ## 架构选择
 
@@ -47,8 +42,8 @@ iOS 16.7.16 / CoreAnimation / Metal
   -> 现有 AppleCLCD / framebuffer / 面板刷新
 ```
 
-预期硬件为 Mali-G710（CSF），因此以 Panthor / PanVK 的 CSF 路径
-作为调查方向；最终必须用本机驱动配置、GPU_ID 和固件 ABI 确认。
+本机 GPU_ID 和 CSF 固件 ABI 已实测，以 Panthor / PanVK 的 CSF 路径
+继续推进 Mali-G710。
 不把 JM / Panfrost 内核路径作为默认，不引入 Adreno 的 PM4、
 GMU、RPMh GPU 投票或 A740 固件。
 
@@ -114,28 +109,9 @@ Mesa 主线后端另有更新的 ioctl；后续必须固定 Mesa 提交再确定
 
 ## 本轮交付与下一步
 
-本轮先固定路线和证据要求，不声称已经实现 GPU、Metal 或 Vulkan。
-下一项是阶段 0 的只读基线与阶段 1 的接口审计。任何 boot_a、
-userdata 或固件持久写入都仍需当次确认；不修改 GPT。
-不要复用或导入历史 run-ui 试验脚本。
-
-## 可核对的来源
-
-- [Mesa 官方 Panfrost / PanVK 支持表](https://docs.mesa3d.org/drivers/panfrost.html)。
-  本轮抓取的原始 HTML SHA256：
-  `f1d24d83909a710631a3f3a57c1676cf3d1d86e189f5776cdb699014c932a36a`。
-- [Linux v6.12 Panthor 驱动](https://github.com/torvalds/linux/tree/v6.12/drivers/gpu/drm/panthor)
-  与 [Panthor UAPI](https://github.com/torvalds/linux/blob/v6.12/include/uapi/drm/panthor_drm.h)。
-  `panthor_drv.c` SHA256：
-  `a330beefa792fbf15d3772ea30f47ee530095a95d65851eb646bd65d739599f3`；
-  `panthor_drm.h` SHA256：
-  `49ef00061b27b4e3b889347a31cb4481e96900c648c9020f25decbbe9be9bf52`。
-- [MiCode MTK 模块参考提交](https://github.com/MiCode/MTK_kernel_modules/tree/c66b3c9ce7b5c0bc3d72a829f6542200deaa8a9c)。
-- [AdrenoMetal 说明](https://github.com/UniXNU/AdrenoMetal)：本轮读取的
-  README 确认 metal2vulkan + Turnip 和 sheng/A740 GPU composition，
-  不据此宣称其 AIR 前端已适配本项目 iOS 16 ABI。
-
-第三方参考文件及逐文件 hash 清单保存在忽略目录
-`research/matisse/20261031-gpu/`；未将第三方源码或固件加入 git。
-本轮未能读取 UniXNU 的 GPU 移植网页（HTTP 403），不把该页视作
-已独立核实的实施细节。
+固件启动和全局握手的代码、镜像构建参数、严格报告解码、MMIO 状态机测试
+均已落地；所有硬件证据保存在忽略的 research 目录，摘要和哈希进入版本库。
+下一步先锁定 EMI 读取的最小必要条件，再用已成功的2426配置采集每组的
+CS 数量、输入/输出页和 suspend-size 等 capability，按 Panthor 的组/队列
+握手建立一个有界测试提交。常驻 XNU 驱动需把本轮探针的“测试后复位退出”
+改成明确的电源、页表、固件与 BO 生命周期；不能直接把探针当成渲染驱动。

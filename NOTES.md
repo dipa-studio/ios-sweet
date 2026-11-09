@@ -1,5 +1,33 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2426 GLOBAL HANDSHAKE TRIAL <<<
+## >>> ACTIVE 2026-11-09: MCU/GLOBAL COMPLETE; USER REQUESTS HAKIOS USERSPACE RENDERING <<<
+
+User now requests github.com/oosexgang/hakios-mt6768 rendering approach,
+advance to userspace rendering and hardware acceleration if possible.
+Next: inspect/pin that reference and the current userland/display baseline.
+
+MCU baseline2426 PASSED: unmodified firmware de22d2fc...7229a, fresh JOB_IRQ
+0x80000000, GLB_VERSION0x01010000, input0x04002000/output0x04003000,
+groups8/stride160. Global REQ0x40e ACK0 ->0x40e in10 polls; flags7/error0.
+CSF stage7/error0, cleanup_error0/reset_completed1; strict firmware and global
+verification true. Image3f9e3f8f3948e71ec65242362fde544d656622ee5c2da6db13ff5b9381414792.
+Source0dc9811; c01dcbea...d5ea kernel reused with persistent mark0x2407; no CI.
+
+Seven hardware boots this work session:2422 still failed after far relocation;
+2423 passed twice;2424 retained original PDC reads and passed;2425 stock fw
+booted;2426 global handshake passed; exact original2420 reverse control again
+failed at marker2 with odd store absent/cleanup timeout (fastboot84.40s).
+Thus successful new path is repeatable and reverse control rejects simple
+persistent warm-state explanation. Minimal EMI read set vs timing still open.
+129 combined tests passed. Details: docs/matisse-gpu-20261109.md.
+
+ALL trials restored full boot_a. Independent final Recovery check (root,
+matisse,_a,recovery) verified
+2931647a56039722ea2585990b8ef3b1a2daf4c9b990231879f753049eaf86b1.
+No restore pending/no runner active. Raw logs/images under ignored
+research/matisse/20261109-gpu/; final-recovery-verification.json has no serial.
+Current GPU path is a bounded shim probe; scheduler/rendering not yet implemented.
+
+## >>> PREVIOUS 2026-11-09: 2426 GLOBAL HANDSHAKE TRIAL <<<
 
 2425 firmware boot is verified (details below).2426 enables global-init and
 relays20 actual handshake words into the existing784-byte report; no kernel

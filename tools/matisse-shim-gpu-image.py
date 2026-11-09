@@ -2958,7 +2958,8 @@ def build(a):
     info['csf_leaf_probe_va'] = ['%#x' % va for va in manifest_leaves]
     # The shim publishes the96-byte block, but sweet_ufs.c does not forward it
     # into SWEETMRK yet, so2381 evidence is console-only until that lands.
-    info['csf_global_init'] = (dict(enabled=True, report_bytes=96, kernel_marks_wired=False)
+    info['csf_global_init'] = (dict(enabled=True, report_bytes=96, kernel_marks_wired=False,
+                                 persistent_report_relay=a.build_id == 0x2426)
                                if a.global_init else False)
     info['csf_mapping_metadata_hardware_readback'] = False
     info['csf_arena'] = dict(shim_offset=arena, bytes=2 << 20,
