@@ -118,6 +118,44 @@ static IOReturn gpu_bo_create(GPUVM *v,struct sweet_gpu_bo *r)
     v->bo[i].memory=m;v->bo[i].size=size;v->bo[i].flags=r->flags;v->allocated+=size;
     r->handle=i+1;r->size=size;return kIOReturnSuccess;
 }
+/* Metadata queries do not create a BO. UINT32_MAX imports the owned,
+ * uncached IOSurface backing; repeat imports return the same live handle.
+ * Borrowed/cacheable memory stays on the explicit texture upload path. */
+static IOReturn gpu_surface(GPUVM *v,struct sweet_gpu_surface *r)
+{
+    if(v->broken)return kIOReturnNotReady;
+    if(!r->surface||(r->handle&&r->handle!=UINT32_MAX))return kIOReturnBadArgument;
+    bool import=r->handle==UINT32_MAX;
+    SweetSurface *s=sweet_surface_copy(r->surface);
+    if(!s)return kIOReturnNotFound;
+    uint64_t size=s->memory?s->memory->getLength():0;
+    if(!OSDynamicCast(IOBufferMemoryDescriptor,s->memory)||s->memoryReadOnly||
+       s->mapCache!=kIOMapWriteCombineCache||s->pixelFormat!='BGRA'||s->planeCount||
+       s->bytesPerElement!=4||!s->width||!s->height||s->width>UINT32_MAX/4||
+       s->bytesPerRow<s->width*4||(s->bytesPerRow&63)||(s->offset&63)||
+       !size||(size&4095)||size>(256ull<<20)||
+       s->offset+(uint64_t)s->bytesPerRow*s->height>size) {
+        s->release();return kIOReturnUnsupported;
+    }
+    r->handle=0;r->size=size;r->offset=s->offset;r->row_bytes=s->bytesPerRow;
+    r->width=s->width;r->height=s->height;r->pixel_format=s->pixelFormat;r->planes=0;
+    if(import) {
+        unsigned slot=GPU_MAX_BO;
+        for(unsigned i=0;i<GPU_MAX_BO;i++) {
+            if(v->bo[i].surface==s){r->handle=i+1;break;}
+            if(slot==GPU_MAX_BO&&!v->bo[i].memory)slot=i;
+        }
+        if(!r->handle) {
+            if(slot==GPU_MAX_BO){s->release();return kIOReturnNoResources;}
+            GPUBuffer *b=&v->bo[slot];b->memory=s->memory;b->memory->retain();
+            b->surface=s;s->retain();b->size=size;r->handle=slot+1;
+            static unsigned logged;
+            if(logged++<24)IOLog("SWEET GPU: surface import id=%u bo=%u %ux%u stride=%u bytes=%llu NC\n",
+                s->id,r->handle,r->width,r->height,r->row_bytes,size);
+        }
+    }
+    s->release();return kIOReturnSuccess;
+}
 static IOReturn gpu_vm_map(GPUVM *v,struct sweet_gpu_map *r)
 {
     if(v->broken)return kIOReturnNotReady;
@@ -180,7 +218,12 @@ static IOReturn gpu_group_close(GPUVM *v,uint32_t handle)
 {
     if(!handle||handle>SWEET_CSF_GROUPS||!v->groups[handle-1].active)return kIOReturnNotFound;
     unsigned slot=handle-1;
-    if(sweet_csf_runtime_stop(&queue,&gpu_io,&v->groups[slot])){v->broken=true;return kIOReturnIOError;}
+    int rc=sweet_csf_runtime_stop(&queue,&gpu_io,&v->groups[slot]);
+    IOLog("SWEET GPU: group close as=%u group=%u rc=%d csg=%x/%x cs=%x/%x\n",
+        v->as_nr,handle,rc,read_word(NULL,v->groups[slot].input),
+        read_word(NULL,v->groups[slot].output),read_word(NULL,v->groups[slot].cs_input),
+        read_word(NULL,v->groups[slot].cs_output));
+    if(rc){v->broken=true;return kIOReturnIOError;}
     if(!gpu_unmap_pages(v,SWEET_CSF_QUEUE_VA+slot*SWEET_CSF_GROUP_BYTES,SWEET_CSF_GROUP_BYTES))
         return kIOReturnIOError;
     bzero(&v->groups[slot],sizeof(v->groups[slot]));gpu_group_used&=~(1u<<slot);return kIOReturnSuccess;

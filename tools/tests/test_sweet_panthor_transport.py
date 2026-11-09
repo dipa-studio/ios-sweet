@@ -41,6 +41,7 @@ HARNESS = r'''
 #include "drm-uapi/panthor_drm.h"
 #include "sweet_gpu_user.h"
 static unsigned submitted,fail_submit,created,nextbo=1;
+static unsigned surface_handle, imports, closes;
 void *IOServiceMatching(const char *n){assert(!strcmp(n,"SweetGPU"));return (void *)1;}
 io_service_t IOServiceGetMatchingService(unsigned a,void*b){(void)a;(void)b;return 1;}
 kern_return_t IOServiceOpen(io_service_t a,unsigned b,unsigned c,io_connect_t *out){(void)a;(void)b;(void)c;*out=1;return 0;}
@@ -55,6 +56,12 @@ kern_return_t IOConnectCallStructMethod(unsigned c,unsigned s,const void *in,siz
  if(s==SWEET_GPU_BO_CREATE){struct sweet_gpu_bo*r=out;r->handle=nextbo++;r->size=(r->size+16383)&~16383ull;created++;}
  else if(s==SWEET_GPU_GROUP_CREATE)((struct sweet_gpu_group*)out)->handle=1;
  else if(s==SWEET_GPU_SUBMIT){submitted++;if(fail_submit)return 7;((struct sweet_gpu_submit*)out)->sequence=submitted;}
+ else if(s==SWEET_GPU_SURFACE){struct sweet_gpu_surface*r=out;
+  if(r->surface!=99)return kIOReturnNotFound;
+  if(r->handle==UINT32_MAX){if(!surface_handle){surface_handle=nextbo++;imports++;}r->handle=surface_handle;}
+  r->size=262144;r->width=256;r->height=256;r->row_bytes=1024;r->pixel_format=0x42475241;}
+ else if(s==SWEET_GPU_BO_CLOSE){unsigned h=((struct sweet_gpu_group*)out)->handle;
+  if(h==surface_handle){surface_handle=0;closes++;}}
  return 0;
 }
 kern_return_t IOConnectMapMemory64(unsigned a,unsigned b,unsigned c,mach_vm_address_t *p,mach_vm_size_t*s,unsigned f){
@@ -85,6 +92,17 @@ int main(void){
  assert(!drmIoctl(fd,DRM_IOCTL_PANTHOR_TILER_HEAP_CREATE,&heap)&&heap.handle&&created==4);
  assert(heap.tiler_heap_ctx_gpu_va>heap.first_heap_chunk_gpu_va);
  struct drm_panthor_tiler_heap_destroy destroy={.handle=heap.handle};assert(!drmIoctl(fd,DRM_IOCTL_PANTHOR_TILER_HEAP_DESTROY,&destroy));
+ struct redwood_drm_surface surf={.surface=99};assert(!redwood_drm_surface(fd,&surf));
+ assert(surf.size==262144&&surf.row_bytes==1024&&!imports&&!surface_handle);
+ uint32_t h1,h2;assert(!drmPrimeFDToHandle(fd,99,&h1)&&!drmPrimeFDToHandle(fd,99,&h2));
+ assert(h1==h2&&imports==1);
+ surf=(struct redwood_drm_surface){.handle=h1};assert(!redwood_drm_surface(fd,&surf)&&surf.surface==99);
+ assert(!drmCloseBufferHandle(fd,h1)&&closes==1);
+ surf=(struct redwood_drm_surface){.handle=h1};assert(redwood_drm_surface(fd,&surf)<0);
+ assert(!drmPrimeFDToHandle(fd,99,&h2)&&h1!=h2&&imports==2);
+ assert(drmPrimeFDToHandle(fd,98,&h1)<0&&errno==ENOENT);
+ assert(drmPrimeFDToHandle(fd,99,NULL)<0&&errno==EINVAL);
+ assert(!drmCloseBufferHandle(fd,h2)&&closes==2);
  return 0;
 }
 '''

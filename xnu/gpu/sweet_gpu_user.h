@@ -16,6 +16,7 @@ struct sweet_gpu_map { uint32_t handle, flags; uint64_t offset, va, size; };
 struct sweet_gpu_group { uint32_t handle, pad; };
 struct sweet_gpu_submit { uint32_t group, bytes; uint64_t stream, sequence; };
 struct sweet_gpu_surface {
+    /* handle=0: query layout only; UINT32_MAX: import/reuse backing BO. */
     uint32_t surface, handle;
     uint64_t size;
     uint32_t offset, row_bytes, width, height, pixel_format, planes;

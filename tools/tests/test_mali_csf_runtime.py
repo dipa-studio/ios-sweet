@@ -48,7 +48,9 @@ static void doorbell(struct model*m,int user){
  uint32_t *ci=m->sh+0x6000/4,*co=m->sh+0x7000/4;
  if(!user){assert((gi[2]^go[2])&1);go[2]=gi[2];out[2]=in[2];}
  if(!(in[0]&7)){if(m->mode!=4)out[0]=in[0];return;}
- if(!(ci[0]&7)){co[0]=ci[0];return;}
+ /* An individual CS STOP may not acknowledge while another group holds
+  * resources; CSG TERMINATE above must still finish and leave a stale CS ACK. */
+ if(!(ci[0]&7)){if(m->mode!=5)co[0]=ci[0];return;}
  out[0]=in[0];co[0]=ci[0];
  /* Firmware request notifications do not stand in for a queue kick. */
  if(!user)return;
@@ -96,7 +98,15 @@ int main(void){
  unsigned writes=m->writes;
  assert(sweet_csf_runtime_submit(&c,&io,&g,0x10000001,8,&r)==-60&&m->writes==writes);
  assert(sweet_csf_runtime_start(&c,&io,&g,0,1)==-62&&m->writes==writes);
+ m->mode=5;
  assert(!sweet_csf_runtime_stop(&c,&io,&g)&&!g.active);
+ assert((m->sh[0x7000/4]&7)==1 && !(m->sh[0x6000/4]&7));
+ memset(&g,0,sizeof(g));m->mode=0;
+ assert(!sweet_csf_runtime_start(&c,&io,&g,0,1));
+ m->user[0]=0x025000002438cafeull;
+ assert(!sweet_csf_runtime_submit(&c,&io,&g,0x10000000,8,&r));
+ assert(r.after==1 && r.extract==128 && m->reg[80]==0x2438cafe);
+ assert(!sweet_csf_runtime_stop(&c,&io,&g));
  assert(!sweet_csf_runtime_bind(&c,&io,1,0)&&word(m,GPU+0x2470)==1);
  for(unsigned mode=1;mode<=3;mode++) {
   init(m);memset(&g,0,sizeof(g));assert(!sweet_csf_runtime_start(&c,&io,&g,0,1));

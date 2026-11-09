@@ -174,6 +174,47 @@ static void eagl_probe(void)
     ((void (*)(id, SEL))objc_msgSend)(object, sel_registerName("release"));
 }
 
+/* Observe the IOSurface CPU mapping after real GPU writes, without using
+ * glReadPixels to manufacture the result. Repeat an import, free its texture,
+ * then re-import to exercise BO lifetime as well as colour and row layout. */
+static void shared_surface_probe(void)
+{
+    if (!SWEET_GLES_HARDWARE) return;
+    void (*image_target)(unsigned, void *) = (void *)OSMesaGetProcAddress("glEGLImageTargetTexture2DOES");
+    if (!image_target) fail("shared image entry", 0);
+    for (unsigned round=0; round<3; round++) {
+        GLuint tex, fbo;
+        glGenTextures(1,&tex);glBindTexture(GL_TEXTURE_2D,tex);
+        image_target(GL_TEXTURE_2D,(void *)(uintptr_t)IOSurfaceGetID(surface));
+        if (glGetError()) fail("shared surface import",round);
+        glGenFramebuffers(1,&fbo);glBindFramebuffer(GL_FRAMEBUFFER,fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,tex,0);
+        if(glCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE)fail("shared FBO",round);
+        glViewport(0,0,width,height);glDisable(GL_SCISSOR_TEST);
+        glClearColor(round==1?0:1,round==1?1:0,0,1);glClear(GL_COLOR_BUFFER_BIT);
+        glEnable(GL_SCISSOR_TEST);glScissor(17,23,31,29);
+        glClearColor(0,0,1,1);glClear(GL_COLOR_BUFFER_BIT);glFinish();
+        if(glGetError())fail("shared draw",round);
+        if(IOSurfaceLock(surface,kIOSurfaceLockReadOnly,NULL))fail("shared CPU lock",round);
+        const volatile unsigned char *base=IOSurfaceGetBaseAddress(surface);
+        size_t stride=IOSurfaceGetBytesPerRow(surface);
+        const unsigned xy[4][2]={{0,0},{18,24},{48,52},{1439,3199}};
+        for(unsigned i=0;i<4;i++) {
+            unsigned x=xy[i][0],y=xy[i][1];if(x>=width||y>=height){x=width-1;y=height-1;}
+            const volatile unsigned char *p=base+y*stride+x*4;
+            int inside=x>=17&&x<48&&y>=23&&y<52;
+            unsigned b=inside?255:0,g=!inside&&round==1?255:0,r=!inside&&round!=1?255:0;
+            printf("SWEET GLES: shared round=%u xy=%u,%u BGRA=%u,%u,%u,%u expected=%u,%u,%u,255\n",
+                round,x,y,p[0],p[1],p[2],p[3],b,g,r);
+            if(p[0]!=b||p[1]!=g||p[2]!=r||p[3]!=255)fail("shared CPU pixel",round*4+i);
+        }
+        IOSurfaceUnlock(surface,kIOSurfaceLockReadOnly,NULL);
+        glDisable(GL_SCISSOR_TEST);glBindFramebuffer(GL_FRAMEBUFFER,0);
+        glDeleteFramebuffers(1,&fbo);glDeleteTextures(1,&tex);glFinish();
+    }
+    printf("SWEET GLES: shared IOSurface PASS rounds=3 cpu_pixel_checks=12 readback=none\n");
+}
+
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -223,6 +264,8 @@ int main(int argc, char **argv)
         present(frame);
     }
     eagl_probe();
+    if(!OSMesaMakeCurrent(context,window,GL_UNSIGNED_BYTE,16,16))fail("context after EAGL close",0);
+    shared_surface_probe();
     printf("SWEET GLES: PASS shaders=2 draws=4 pixel_checks=9 swaps=4 eagl_api=3 hardware_claim=%d\n",
         SWEET_GLES_HARDWARE);
     sleep(8);

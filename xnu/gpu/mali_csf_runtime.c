@@ -64,14 +64,19 @@ int sweet_csf_runtime_invalidate(const struct sweet_csf_queue_config *c,
     if(as_cmd(c,io,nr,2)||as_cmd(c,io,nr,4)||as_cmd(c,io,nr,3))return -63;
     return 0;
 }
-static void ring(const struct sweet_csf_queue_config *c,const struct sweet_gpu_io *io,
+static void ring_group(const struct sweet_csf_queue_config *c,const struct sweet_gpu_io *io,
     struct sweet_csf_runtime_group *g)
 {
     uint64_t gi=iface(c,c->input_va),go=iface(c,c->output_va);
     uint32_t bit=1u<<g->slot;
-    write32(io,g->input+8,(read32(io,g->input+8)&~1u)|((read32(io,g->output+8)^1u)&1u));
     write32(io,gi+8,(read32(io,gi+8)&~bit)|((read32(io,go+8)^bit)&bit));
     write32(io,c->gpu+0x80000,1);
+}
+static void ring(const struct sweet_csf_queue_config *c,const struct sweet_gpu_io *io,
+    struct sweet_csf_runtime_group *g)
+{
+    write32(io,g->input+8,(read32(io,g->input+8)&~1u)|((read32(io,g->output+8)^1u)&1u));
+    ring_group(c,io,g);
 }
 int sweet_csf_runtime_start(const struct sweet_csf_queue_config *c,const struct sweet_gpu_io *io,
     struct sweet_csf_runtime_group *g,unsigned slot,unsigned nr)
@@ -85,7 +90,7 @@ int sweet_csf_runtime_start(const struct sweet_csf_queue_config *c,const struct 
     uint64_t in=iface(c,read32(io,ctrl+4)),out=iface(c,read32(io,ctrl+8));
     uint64_t ci=iface(c,read32(io,ctrl+0x44)),co=iface(c,read32(io,ctrl+0x48));
     if(!in||!out||!ci||!co||read32(io,ctrl+12)>0x8000||
-       !read32(io,ctrl+12)||(read32(io,out)&7)||(read32(io,co)&7))return -61;
+       !read32(io,ctrl+12)||(read32(io,out)&7))return -61;
     *g=(struct sweet_csf_runtime_group){.input=in,.output=out,.cs_input=ci,.cs_output=co,
         .memory_pa=c->memory_pa+slot*SWEET_CSF_GROUP_BYTES,
         .memory_va=SWEET_CSF_QUEUE_VA+slot*SWEET_CSF_GROUP_BYTES,.slot=slot,.as_nr=nr};
@@ -144,7 +149,8 @@ int sweet_csf_runtime_submit(const struct sweet_csf_queue_config *c,const struct
         io->barrier(io->context);r->polls++;
         r->csg_req=read32(io,g->input);r->csg_ack=read32(io,g->output);
         r->cs_req=read32(io,g->cs_input);r->cs_ack=read32(io,g->cs_output);
-        r->extract=(uint32_t)read64(io,g->memory_pa+0x2000);
+        uint64_t extract=read64(io,g->memory_pa+0x2000);
+        r->extract=(uint32_t)extract;
         r->after=read32(io,g->memory_pa+0x3000);
         r->fault=read32(io,g->cs_output+0x80);r->fatal=read32(io,g->cs_output+0x84);
         r->mmu_raw=read32(io,c->gpu+0x2000);r->as_fault=read32(io,c->gpu+0x241c+g->as_nr*64);
@@ -152,7 +158,7 @@ int sweet_csf_runtime_submit(const struct sweet_csf_queue_config *c,const struct
         if(r->fault||r->fatal||(r->mmu_raw&0xffff)||r->as_fault||read32(io,g->memory_pa+0x3004)) {
             r->error=-64;break;
         }
-        if(r->after==seq&&read64(io,g->memory_pa+0x2000)==g->insert) {
+        if(r->after==seq&&extract==g->insert) {
             r->stage=7;r->error=0;break;
         }
         if(io->ticks(io->context)-start>=budget)break;
@@ -165,10 +171,13 @@ int sweet_csf_runtime_stop(const struct sweet_csf_queue_config *c,const struct s
 {
     if(!valid(c,io)||!g)return -60;
     if(!g->active)return 0;
-    write32(io,g->cs_input,read32(io,g->cs_input)&~7u);ring(c,io,g);
-    int a=wait_bits(c,io,g->cs_output,7,0);
-    write32(io,g->input,read32(io,g->input)&~7u);ring(c,io,g);
-    int b=wait_bits(c,io,g->output,7,0);
-    if(a||b){g->failed=1;return -63;}
+    /* Terminate the group first, as Panthor does. A standalone CS STOP
+     * can wait on resources retained by another live group. CSG TERMINATE
+     * is the lifetime barrier for its queue memory; reset the CS request
+     * only after that acknowledgement, with no separate CS wait. Its old
+     * ACK may survive until the next CSG START. */
+    write32(io,g->input,read32(io,g->input)&~7u);ring_group(c,io,g);
+    if(wait_bits(c,io,g->output,7,0)){g->failed=1;return -63;}
+    write32(io,g->cs_input,read32(io,g->cs_input)&~7u);
     g->active=0;return 0;
 }

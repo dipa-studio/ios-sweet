@@ -1,0 +1,61 @@
+--- a/eagl.c
++++ b/eagl.c
+@@ -650,6 +650,8 @@
+ surface_changed(struct eagl *e, struct image *image)
+ {
+ 	IOSurfaceRef surface = image->surface;
++	/* Imported targets are refreshed by the GPU, without a CPU checksum. */
++	if (image->mirror) return true;
+ 	size_t size = IOSurfaceGetBytesPerRow(surface) * (size_t)(image->height - 1) +
+ 	    (size_t)image->width * bytes_a_pixel(image->format, image->type);
+ 	const uint8_t *base = IOSurfaceGetBaseAddress(surface);
+@@ -684,6 +686,30 @@
+ 	bool alpha_first = image->alpha_first && !planar && pixel == 4;
+ 
+ 	if (image->shared) {
++		return;
++	}
++	if (image->mirror) {
++		/* Both directions stay on the GPU. Keep Mesa's private tiled render
++		 * target for framebuffer fetch, and the shared linear surface for display. */
++		GLint read = 0, draw = 0;
++		GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
++		glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read);
++		glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
++		glTexImage2D(image->to, 0, (GLint)internal_format(image->internal, image->format),
++		    image->width, image->height, 0, image->format, image->type, NULL);
++		if (!e->reader) glGenFramebuffers(1, &e->reader);
++		if (!e->writer) glGenFramebuffers(1, &e->writer);
++		glBindFramebuffer(GL_READ_FRAMEBUFFER, e->reader);
++		glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, image->mirror, 0);
++		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, e->writer);
++		glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, image->texture, 0);
++		glDisable(GL_SCISSOR_TEST);
++		glBlitFramebuffer(0, image->invert ? image->height : 0, image->width,
++		    image->invert ? 0 : image->height, 0, 0, image->width, image->height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
++		if (scissor) glEnable(GL_SCISSOR_TEST);
++		glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read);
++		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw);
++		image->seed = IOSurfaceGetSeed(surface);
+ 		return;
+ 	}
+ 	if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, NULL) != 0) {
+@@ -763,6 +789,7 @@
+ 	if (image->mirror != 0) {
+ 		GLint read = 0, draw = 0;
+ 
++		GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+ 		/* the frame into the surface's memory, by the GPU (blit_targets); upside down if it is drawn so */
+ 		glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read);
+ 		glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
+@@ -776,8 +803,10 @@
+ 		glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, image->texture, 0);
+ 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, e->writer);
+ 		glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, image->mirror, 0);
++		glDisable(GL_SCISSOR_TEST);
+ 		glBlitFramebuffer(0, 0, image->width, image->height, 0, image->invert ? image->height : 0, image->width,
+ 		    image->invert ? 0 : image->height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
++		if (scissor) glEnable(GL_SCISSOR_TEST);
+ 		glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read);
+ 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw);
+ 		if (IOSurfaceLock(surface, 0, NULL) == 0) {

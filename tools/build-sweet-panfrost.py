@@ -143,6 +143,11 @@ needs_exe_wrapper = true
             [f'-D{k.replace("_", "-")}={v}' for k, v in options.items()])
     run(['ninja', '-C', build, f'-j{a.jobs}'])
     out = work / 'out';out.mkdir(exist_ok=True)
+    # Keep the pinned reference immutable. Apply our compositor fixes to a
+    # generated copy so clean builds reproduce the exact tested bridge.
+    frontend = work / 'frontend';frontend.mkdir(exist_ok=True)
+    shutil.copyfile(ref / 'userland/src/eagl.c', frontend / 'eagl.c')
+    run(['patch', '-p1', '-i', ROOT / 'userland/eagl-iosurface.patch'], cwd=frontend)
     library = out / 'libOSMesa.8.dylib'
     shutil.copyfile(build / 'src/gallium/targets/osmesa/libOSMesa.8.dylib', library)
     run(['install_name_tool', '-id', '/usr/local/sweet-gpu/lib/libOSMesa.8.dylib', library])
@@ -160,9 +165,9 @@ needs_exe_wrapper = true
         run([sys.executable, ref / 'userland/mkeagl.py', ref / 'userland/src/eagl_slots.txt',
             src / 'src/mapi/glapi/registry/gl.xml', exports, ref / 'userland/src/eagl.c'], stdout=f)
     run(compiler + ['-O2', '-dynamiclib', '-install_name', '/usr/local/sweet-gpu/lib/libsweet-gles.dylib',
-        '-I' + str(out), '-framework', 'CoreFoundation', '-framework', 'IOKit', '-framework',
+        '-I' + str(out), '-I' + str(ref / 'userland/src'), '-framework', 'CoreFoundation', '-framework', 'IOKit', '-framework',
         'IOSurface', '-lobjc', str(library), '-o', str(out / 'libsweet-gles.dylib'),
-        str(ref / 'userland/src/eagl.c'), str(ref / 'userland/src/gl_osmesa.c')])
+        str(frontend / 'eagl.c'), str(ref / 'userland/src/gl_osmesa.c')])
     run(compiler + ['-O2', '-Wall', '-Wextra', '-I' + str(src / 'include'),
         '-framework', 'CoreFoundation', '-framework', 'IOKit', '-framework', 'IOSurface', '-lobjc',
         str(library), '-DSWEET_GLES_LIBRARY="/usr/local/sweet-gpu/lib/libsweet-gles.dylib"',
@@ -178,6 +183,7 @@ needs_exe_wrapper = true
         renderer='panfrost-v10-csf', hardware_required=True, hardware_verified=False,
         patches={f: hashlib.sha256((ref / 'tools/mesa' / f).read_bytes()).hexdigest() for f in patches},
         transport_sha256=hashlib.sha256((ROOT / 'userland/sweet-panthor-drm.c').read_bytes()).hexdigest(),
+        frontend_patch_sha256=hashlib.sha256((ROOT / 'userland/eagl-iosurface.patch').read_bytes()).hexdigest(),
         target='arm64-apple-ios16.0',
         files={p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in out.iterdir()
                if p.is_file() and p.name != 'manifest.json'}), indent=2) + '\n')

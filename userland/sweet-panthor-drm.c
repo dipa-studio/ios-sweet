@@ -27,6 +27,7 @@ _Static_assert(sizeof(info.gpu)==sizeof(struct drm_panthor_gpu_info),"GPU info A
 _Static_assert(sizeof(info.cs)==sizeof(struct drm_panthor_csif_info),"CSIF info ABI");
 static struct {uint64_t point;unsigned used,signalled;} syncs[OBJECTS];
 static struct {mach_vm_address_t address;mach_vm_size_t size;unsigned refs;} maps[OBJECTS];
+static uint32_t surfaces[OBJECTS];
 static struct {unsigned count;uint32_t bo[65];} heaps[HEAPS];
 static uint64_t heap_va=UINT64_C(1)<<47;
 static unsigned vm_alive;
@@ -102,7 +103,11 @@ static void unmap_bo(uint32_t handle)
     }
 }
 static int close_bo(uint32_t handle)
-{struct sweet_gpu_group r={handle,0};return call(SWEET_GPU_BO_CLOSE,&r,sizeof(r));}
+{
+    struct sweet_gpu_group r={handle,0};int rc=call(SWEET_GPU_BO_CLOSE,&r,sizeof(r));
+    if(!rc&&handle<OBJECTS)surfaces[handle]=0;
+    return rc;
+}
 static int heap_buffer(unsigned h,uint64_t size,uint64_t *va,uint64_t next)
 {
     struct sweet_gpu_bo bo={size,0,0};
@@ -272,9 +277,27 @@ int drmSyncobjTransfer(int fd,uint32_t dst,uint64_t dp,uint32_t src,uint64_t sp,
 int drmPrimeHandleToFD(int fd,uint32_t h,uint32_t flags,int *out)
 {(void)fd;(void)h;(void)flags;(void)out;return error(ENOTSUP);}
 int drmPrimeFDToHandle(int fd,int surface,uint32_t *out)
-{(void)fd;(void)surface;(void)out;return error(ENOTSUP);}
+{
+    (void)fd;if(surface<=0||!out)return error(EINVAL);
+    struct sweet_gpu_surface r={.surface=(uint32_t)surface,.handle=UINT32_MAX};
+    pthread_mutex_lock(&lock);int rc=call(SWEET_GPU_SURFACE,&r,sizeof(r));
+    if(!rc) {
+        if(!r.handle||r.handle>=OBJECTS)rc=error(EOVERFLOW);
+        else {surfaces[r.handle]=r.surface;*out=r.handle;}
+    }
+    pthread_mutex_unlock(&lock);return rc;
+}
 int redwood_drm_surface(int fd,struct redwood_drm_surface *s)
-{(void)fd;(void)s;return error(ENOTSUP);}
+{
+    (void)fd;if(!s)return error(EINVAL);
+    _Static_assert(sizeof(*s)==sizeof(struct sweet_gpu_surface),"surface ABI");
+    struct sweet_gpu_surface r={.surface=s->surface};
+    pthread_mutex_lock(&lock);
+    if(!r.surface&&s->handle<OBJECTS)r.surface=surfaces[s->handle];
+    int rc=r.surface?call(SWEET_GPU_SURFACE,&r,sizeof(r)):error(EINVAL);
+    if(!rc)memcpy(s,&r,sizeof(r));
+    pthread_mutex_unlock(&lock);return rc;
+}
 int drmSyncobjFDToHandle(int fd,int object,uint32_t *h)
 {(void)fd;(void)object;(void)h;return error(ENOTSUP);}
 int drmSyncobjHandleToFD(int fd,uint32_t h,int *object)

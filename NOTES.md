@@ -1,5 +1,35 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
-## >>> ACTIVE 2026-11-09: 2445 HARDWARE GLES PIXELS VERIFIED; UI NEXT <<<
+## >>> ACTIVE 2026-11-09: 2446 HARDWARE UI VERIFIED; 2447 SHARED SURFACES IN PREPARATION <<<
+
+2446 completed with fresh trial2446/kernel2445 and changed persistent log.
+Mali-G710/Panfrost in backboardd,4834 CSF submissions,0 submit failures;
+user confirms faster interactive UI and blur. Low FPS and icon/text missing
+blocks/flicker remain. Recorded median frame107315us,copyout85022us,attach33339us;
+sweetfb_hz=10. Full boot_a restored/verified2931647a...86b1,no pending restore.
+Evidence:research/matisse/20261109-resident-gpu/ui2446-verified.json.
+
+2447 work in progress: shared owned BGRA IOSurface import, matching CPU/GPU
+NC mappings, GPU blits in both directions (no CPU full-screen checksum/upload/
+readback), preserve private render targets and scissor state; group-first CSF
+termination fixes2445 teardown. Not built/booted yet. New snapshot before2447
+verified all128x128MiB chunks; clone live-root-gpu2447.dmg mounted /Volumes/iOSRoot.
+No device root write or boot action this turn. Previous kernel2445 still fallback.
+User says wallpaper disabled by posterd in earlier tests. This root has no
+posterd binary/job; PosterBoard is present and launched twice in2446 with one
+sig5 crash. No disabled switch found yet; do not invent successful restoration.
+Next: host tests,build kernel/Mesa,shared-buffer pixel probe,then60Hz UI trial.
+
+2447 build milestone: full local kernel build exit0; all four changed objects
+(SweetGPU,Surface,CSF runtime,UFS identity) actually rebuilt;0215 reverse check
+PASS. Kernel3aa3b098730e2df8c01d930d91b8ade43f6c20ec6ca1ad198033112dd4524bd3;
+image daa0a87054c1f9471b2220280f729190f58d41f0601fabdd628130eb876cae00,
+26734592B. Hardware Mesa/bridge/probe cross-build+codesign PASS. Six host
+ASan/UBSan tests PASS. Probe includes3 imports and12 direct CPU pixel checks
+of GPU-written surface data,after EAGL group teardown. Not yet run on phone.
+Clone unmounted,fsck/delta preparation underway;runner readonly preflight PASS.
+Do not claim direct surface/performance success until fresh2447 evidence.
+
+## >>> PREVIOUS 2026-11-09: 2445 HARDWARE GLES PIXELS VERIFIED; UI NEXT <<<
 
 2445 hardware GLES PASS: Mali-G710(Panfrost),ES3.1,4 shader draws,9 pixel
 checks incl blending and EAGL API3,4 actual display swaps. User saw blue

@@ -1,0 +1,211 @@
+--- a/iokit/Kernel/arm/SweetGPU.cpp
++++ b/iokit/Kernel/arm/SweetGPU.cpp
+@@ -110,7 +110,7 @@
+ IOReturn SweetGPUUserClient::externalMethod(uint32_t selector,IOExternalMethodArguments *a,
+     IOExternalMethodDispatch *,OSObject *,void *)
+ {
+-    if(selector>=SWEET_GPU_INFO&&selector<=SWEET_GPU_SUBMIT) {
++    if(selector>=SWEET_GPU_INFO&&selector<=SWEET_GPU_SURFACE) {
+         if(!vm||!a||a->scalarInputCount||a->structureInputDescriptor||a->structureOutputDescriptor)
+             return kIOReturnBadArgument;
+         if(selector==SWEET_GPU_INFO) {
+@@ -127,8 +127,8 @@
+             IOLockUnlock(gpu_lock);
+             memcpy(a->structureOutput,&info,sizeof(info));a->structureOutputSize=sizeof(info);return kIOReturnSuccess;
+         }
+-        union {sweet_gpu_bo bo;sweet_gpu_map map;sweet_gpu_group group;sweet_gpu_submit submit;} r;
+-        size_t size=selector==SWEET_GPU_VM_MAP?sizeof(r.map):selector==SWEET_GPU_SUBMIT?sizeof(r.submit):
++        union {sweet_gpu_bo bo;sweet_gpu_map map;sweet_gpu_group group;sweet_gpu_submit submit;sweet_gpu_surface surface;} r;
++        size_t size=selector==SWEET_GPU_SURFACE?sizeof(r.surface):selector==SWEET_GPU_VM_MAP?sizeof(r.map):selector==SWEET_GPU_SUBMIT?sizeof(r.submit):
+             (selector==SWEET_GPU_BO_CREATE?sizeof(r.bo):sizeof(r.group));
+         if(!a->structureInput||a->structureInputSize!=size||!a->structureOutput||a->structureOutputSize<size)
+             return kIOReturnBadArgument;
+@@ -141,6 +141,7 @@
+         case SWEET_GPU_GROUP_CREATE:rc=gpu_group_create(vm,&r.group);break;
+         case SWEET_GPU_GROUP_CLOSE:rc=gpu_group_close(vm,r.group.handle);break;
+         case SWEET_GPU_SUBMIT:rc=gpu_submit(vm,&r.submit);break;
++        case SWEET_GPU_SURFACE:rc=gpu_surface(vm,&r.surface);break;
+         }
+         memcpy(a->structureOutput,&r,size);a->structureOutputSize=size;IOLockUnlock(gpu_lock);return rc;
+     }
+--- a/iokit/Kernel/arm/SweetGPUVM.h
++++ b/iokit/Kernel/arm/SweetGPUVM.h
+@@ -118,6 +118,44 @@
+     v->bo[i].memory=m;v->bo[i].size=size;v->bo[i].flags=r->flags;v->allocated+=size;
+     r->handle=i+1;r->size=size;return kIOReturnSuccess;
+ }
++/* Metadata queries do not create a BO. UINT32_MAX imports the owned,
++ * uncached IOSurface backing; repeat imports return the same live handle.
++ * Borrowed/cacheable memory stays on the explicit texture upload path. */
++static IOReturn gpu_surface(GPUVM *v,struct sweet_gpu_surface *r)
++{
++    if(v->broken)return kIOReturnNotReady;
++    if(!r->surface||(r->handle&&r->handle!=UINT32_MAX))return kIOReturnBadArgument;
++    bool import=r->handle==UINT32_MAX;
++    SweetSurface *s=sweet_surface_copy(r->surface);
++    if(!s)return kIOReturnNotFound;
++    uint64_t size=s->memory?s->memory->getLength():0;
++    if(!OSDynamicCast(IOBufferMemoryDescriptor,s->memory)||s->memoryReadOnly||
++       s->mapCache!=kIOMapWriteCombineCache||s->pixelFormat!='BGRA'||s->planeCount||
++       s->bytesPerElement!=4||!s->width||!s->height||s->width>UINT32_MAX/4||
++       s->bytesPerRow<s->width*4||(s->bytesPerRow&63)||(s->offset&63)||
++       !size||(size&4095)||size>(256ull<<20)||
++       s->offset+(uint64_t)s->bytesPerRow*s->height>size) {
++        s->release();return kIOReturnUnsupported;
++    }
++    r->handle=0;r->size=size;r->offset=s->offset;r->row_bytes=s->bytesPerRow;
++    r->width=s->width;r->height=s->height;r->pixel_format=s->pixelFormat;r->planes=0;
++    if(import) {
++        unsigned slot=GPU_MAX_BO;
++        for(unsigned i=0;i<GPU_MAX_BO;i++) {
++            if(v->bo[i].surface==s){r->handle=i+1;break;}
++            if(slot==GPU_MAX_BO&&!v->bo[i].memory)slot=i;
++        }
++        if(!r->handle) {
++            if(slot==GPU_MAX_BO){s->release();return kIOReturnNoResources;}
++            GPUBuffer *b=&v->bo[slot];b->memory=s->memory;b->memory->retain();
++            b->surface=s;s->retain();b->size=size;r->handle=slot+1;
++            static unsigned logged;
++            if(logged++<24)IOLog("SWEET GPU: surface import id=%u bo=%u %ux%u stride=%u bytes=%llu NC\n",
++                s->id,r->handle,r->width,r->height,r->row_bytes,size);
++        }
++    }
++    s->release();return kIOReturnSuccess;
++}
+ static IOReturn gpu_vm_map(GPUVM *v,struct sweet_gpu_map *r)
+ {
+     if(v->broken)return kIOReturnNotReady;
+@@ -180,7 +218,12 @@
+ {
+     if(!handle||handle>SWEET_CSF_GROUPS||!v->groups[handle-1].active)return kIOReturnNotFound;
+     unsigned slot=handle-1;
+-    if(sweet_csf_runtime_stop(&queue,&gpu_io,&v->groups[slot])){v->broken=true;return kIOReturnIOError;}
++    int rc=sweet_csf_runtime_stop(&queue,&gpu_io,&v->groups[slot]);
++    IOLog("SWEET GPU: group close as=%u group=%u rc=%d csg=%x/%x cs=%x/%x\n",
++        v->as_nr,handle,rc,read_word(NULL,v->groups[slot].input),
++        read_word(NULL,v->groups[slot].output),read_word(NULL,v->groups[slot].cs_input),
++        read_word(NULL,v->groups[slot].cs_output));
++    if(rc){v->broken=true;return kIOReturnIOError;}
+     if(!gpu_unmap_pages(v,SWEET_CSF_QUEUE_VA+slot*SWEET_CSF_GROUP_BYTES,SWEET_CSF_GROUP_BYTES))
+         return kIOReturnIOError;
+     bzero(&v->groups[slot],sizeof(v->groups[slot]));gpu_group_used&=~(1u<<slot);return kIOReturnSuccess;
+--- a/bsd/dev/sweet_gpu_runtime.c
++++ b/bsd/dev/sweet_gpu_runtime.c
+@@ -64,14 +64,19 @@
+     if(as_cmd(c,io,nr,2)||as_cmd(c,io,nr,4)||as_cmd(c,io,nr,3))return -63;
+     return 0;
+ }
+-static void ring(const struct sweet_csf_queue_config *c,const struct sweet_gpu_io *io,
++static void ring_group(const struct sweet_csf_queue_config *c,const struct sweet_gpu_io *io,
+     struct sweet_csf_runtime_group *g)
+ {
+     uint64_t gi=iface(c,c->input_va),go=iface(c,c->output_va);
+     uint32_t bit=1u<<g->slot;
+-    write32(io,g->input+8,(read32(io,g->input+8)&~1u)|((read32(io,g->output+8)^1u)&1u));
+     write32(io,gi+8,(read32(io,gi+8)&~bit)|((read32(io,go+8)^bit)&bit));
+     write32(io,c->gpu+0x80000,1);
++}
++static void ring(const struct sweet_csf_queue_config *c,const struct sweet_gpu_io *io,
++    struct sweet_csf_runtime_group *g)
++{
++    write32(io,g->input+8,(read32(io,g->input+8)&~1u)|((read32(io,g->output+8)^1u)&1u));
++    ring_group(c,io,g);
+ }
+ int sweet_csf_runtime_start(const struct sweet_csf_queue_config *c,const struct sweet_gpu_io *io,
+     struct sweet_csf_runtime_group *g,unsigned slot,unsigned nr)
+@@ -85,7 +90,7 @@
+     uint64_t in=iface(c,read32(io,ctrl+4)),out=iface(c,read32(io,ctrl+8));
+     uint64_t ci=iface(c,read32(io,ctrl+0x44)),co=iface(c,read32(io,ctrl+0x48));
+     if(!in||!out||!ci||!co||read32(io,ctrl+12)>0x8000||
+-       !read32(io,ctrl+12)||(read32(io,out)&7)||(read32(io,co)&7))return -61;
++       !read32(io,ctrl+12)||(read32(io,out)&7))return -61;
+     *g=(struct sweet_csf_runtime_group){.input=in,.output=out,.cs_input=ci,.cs_output=co,
+         .memory_pa=c->memory_pa+slot*SWEET_CSF_GROUP_BYTES,
+         .memory_va=SWEET_CSF_QUEUE_VA+slot*SWEET_CSF_GROUP_BYTES,.slot=slot,.as_nr=nr};
+@@ -144,7 +149,8 @@
+         io->barrier(io->context);r->polls++;
+         r->csg_req=read32(io,g->input);r->csg_ack=read32(io,g->output);
+         r->cs_req=read32(io,g->cs_input);r->cs_ack=read32(io,g->cs_output);
+-        r->extract=(uint32_t)read64(io,g->memory_pa+0x2000);
++        uint64_t extract=read64(io,g->memory_pa+0x2000);
++        r->extract=(uint32_t)extract;
+         r->after=read32(io,g->memory_pa+0x3000);
+         r->fault=read32(io,g->cs_output+0x80);r->fatal=read32(io,g->cs_output+0x84);
+         r->mmu_raw=read32(io,c->gpu+0x2000);r->as_fault=read32(io,c->gpu+0x241c+g->as_nr*64);
+@@ -152,7 +158,7 @@
+         if(r->fault||r->fatal||(r->mmu_raw&0xffff)||r->as_fault||read32(io,g->memory_pa+0x3004)) {
+             r->error=-64;break;
+         }
+-        if(r->after==seq&&read64(io,g->memory_pa+0x2000)==g->insert) {
++        if(r->after==seq&&extract==g->insert) {
+             r->stage=7;r->error=0;break;
+         }
+         if(io->ticks(io->context)-start>=budget)break;
+@@ -165,10 +171,13 @@
+ {
+     if(!valid(c,io)||!g)return -60;
+     if(!g->active)return 0;
+-    write32(io,g->cs_input,read32(io,g->cs_input)&~7u);ring(c,io,g);
+-    int a=wait_bits(c,io,g->cs_output,7,0);
+-    write32(io,g->input,read32(io,g->input)&~7u);ring(c,io,g);
+-    int b=wait_bits(c,io,g->output,7,0);
+-    if(a||b){g->failed=1;return -63;}
++    /* Terminate the group first, as Panthor does. A standalone CS STOP
++     * can wait on resources retained by another live group. CSG TERMINATE
++     * is the lifetime barrier for its queue memory; reset the CS request
++     * only after that acknowledgement, with no separate CS wait. Its old
++     * ACK may survive until the next CSG START. */
++    write32(io,g->input,read32(io,g->input)&~7u);ring_group(c,io,g);
++    if(wait_bits(c,io,g->output,7,0)){g->failed=1;return -63;}
++    write32(io,g->cs_input,read32(io,g->cs_input)&~7u);
+     g->active=0;return 0;
+ }
+--- a/bsd/dev/sweet_gpu_user.h
++++ b/bsd/dev/sweet_gpu_user.h
+@@ -16,6 +16,7 @@
+ struct sweet_gpu_group { uint32_t handle, pad; };
+ struct sweet_gpu_submit { uint32_t group, bytes; uint64_t stream, sequence; };
+ struct sweet_gpu_surface {
++    /* handle=0: query layout only; UINT32_MAX: import/reuse backing BO. */
+     uint32_t surface, handle;
+     uint64_t size;
+     uint32_t offset, row_bytes, width, height, pixel_format, planes;
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -751,8 +751,14 @@
+ 		IOBufferMemoryDescriptor *mem = NULL;
+ 		if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&sweet_surface_wired) +
+ 		    s->allocSize <= SWEET_SURFACE_WIRED_MAX) {
++			/* G710 is not CPU-cache coherent. New owned BGRA surfaces use
++			 * Normal-NC in every CPU mapping, matching the GPU's NC PTEs.
++			 * Borrowed buffers retain their owner's cache policy. */
++			IOOptionBits cache = sweet_surface_gles == 2 && s->pixelFormat == 'BGRA'
++			    ? kIOMapWriteCombineCache : 0;
+ 			mem = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
+-			    kIODirectionInOut | kIOMemoryKernelUserShared, s->allocSize, page_size);
++			    kIODirectionInOut | kIOMemoryKernelUserShared | kIOMemoryMapperNone | cache,
++			    s->allocSize, page_size);
+ 		}
+ 		if (mem == NULL) {
+ 			OSAddAtomic64(-(SInt64)s->allocSize, (volatile SInt64 *)&sweet_surface_wired);
+@@ -760,7 +766,8 @@
+ 		} else {
+ 			bzero(mem->getBytesNoCopy(), s->allocSize);
+ 			s->memory = mem;
+-			s->mapCache = kIOMapDefaultCache;
++			s->mapCache = sweet_surface_gles == 2 && s->pixelFormat == 'BGRA'
++			    ? kIOMapWriteCombineCache : kIOMapDefaultCache;
+ 			if (!sweet_surface_publish(s)) {
+ 				ret = kIOReturnNoResources;
+ 			}
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -823,7 +823,7 @@
+ #define SWEET_MARK_MAX  160
+ 
+ /* Bumped for every locally built kernel that is flashed to the phone. */
+-#define SWEET_BUILD_ID 0x2445u
++#define SWEET_BUILD_ID 0x2447u
+ 
+ struct sweet_mark_rec {
+ 	uint32_t code;
