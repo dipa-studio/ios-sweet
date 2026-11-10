@@ -1,0 +1,36 @@
+name: a510f-probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [a510f]
+    paths:
+      - "a510f/**"
+      - ".github/workflows/a510f-probe.yml"
+
+concurrency:
+  group: a510f-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc gcc-aarch64-linux-gnu device-tree-compiler \
+            libfdt-dev libssl-dev cpio
+
+      - name: Build probe recovery image
+        run: bash a510f/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: a510f-probe
+          path: |
+            a510f/out/a510f-probe-recovery.tar
+            a510f/out/recovery.img
+          if-no-files-found: error
