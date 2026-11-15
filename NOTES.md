@@ -551,3 +551,14 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
   0x6B 00 40 42 0F 00 00 C0 (wait on 0x71), system reset 0x20000024<-0x81, hold M3 <-0x01, uvlo 0x1B<-0x66, autopowerdown 0x68<-0x13;
   FLASH_ADDR_CODE 0, config 0x7C00 (or from the organisation bytes at file offset 280..283), DMA_CHUNK 32, FLASH_CHUNK 32 KB here.
 - .ftb header: signature 0xAA55AA55 @0, ftb ver @4, target 36 39 @8, svn @12, fw ver @16, cfg ver @24, sec sizes @44..56, data @64, 4-byte crc at the end.
+
+### Mi 8 touch works with firmware 0x45 / config 0x19 (2026-11-03) and the iOS integration
+
+- Owner result: burning candidate 2 (`FW 0x45 / config 0x19`, one of the four FTM5 images embedded in the ROM kernel: 0x54/0x24, 0x62/0x31,
+  0x45/0x19, 0x54/0x2a) made touch work in the v15 probe. The e1 file the stock log names (FW 0x51, config 0x21, 94376 + 2656 bytes) was never
+  found on the phone; the uploaded `st_fts_e1.ftb` is candidate 2.
+- iOS path: shim `mi8_touch_bringup()` (called from `loader_boot` after the payload is validated): vddio, avdd (RPMh), reset, firmware burn if the
+  version differs, Sense ON, FIFO flush. XNU `mi8/xnu/mi8_touch.c` (patch `0099-mi8-fts-touch.patch`, `bsd/conf/files` pointed at it by
+  `patch-board.py`): bit-banged I2C on gpio33/34, event FIFO as in ST fts.c, HID through `sweet_hid_touch`. Coordinates: identity onto 1079 x 2247
+  unless boot-args `mi8touchxmax` / `mi8touchymax` give the chip's range. Host tests: `mi8/host/run_tests.sh` (shim probe, bring-up, burn stream
+  against `ref_burn.py`, XNU driver against a simulated chip).

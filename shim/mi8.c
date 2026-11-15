@@ -1206,6 +1206,45 @@ static int fts_burn(const struct ftsfw *fw, const uint8_t *file)
 }
 #endif /* MI8_FTS_FW */
 
+/* Burn the embedded touch firmware if the chip's version differs (r = the 8-byte chip id block read before). */
+static void fts_maybe_burn(uint8_t *r)
+{
+#ifdef MI8_FTS_FW
+	struct ftsfw fw;
+	uint8_t w[5];
+	uint32_t fsize = (uint32_t)(fts_fw_end - fts_fw_start);
+	int prc = fts_parse(fts_fw_start, fsize, &fw);
+	uint32_t chip_fw = (uint32_t)r[4] | ((uint32_t)r[5] << 8);
+	int rc;
+
+	pair("FWFILE", -1, "parse=", (uint32_t)prc, "fw=", fw.fw_ver);
+	pair(" ", -1, "cfg=", fw.cfg_ver, "sec0=", fw.sec0);
+	pair(" ", -1, "sec1=", fw.sec1, "sec2=", fw.sec2);
+	pair("CHIPFW", -1, "fw=", chip_fw, "burn=", (uint32_t)(!prc && fw.fw_ver != chip_fw));
+	flush_log();
+	if (!prc && fw.fw_ver != chip_fw) {
+		int brc;
+
+		bn_i = nl;
+		pair("BURN", -1, "step=", 0, "done=", 0);
+		pair(" ", -1, "total=", fw.sec0 + fw.sec1, 0, 0);
+		brc = fts_burn(&fw, fts_fw_start);
+		bn_i = -1;
+		pair("BURNRC", -1, "rc=", (uint32_t)brc, 0, 0);
+		delay_ms(300);
+		memset_b(r, 0, 8);
+		w[0] = 0xfa; w[1] = 0x20; w[2] = 0x00; w[3] = 0x00; w[4] = 0x00;
+		rc = bb_xfer(FTS_ADDR, w, 5, r, 8);
+		pair("NEWFW", -1, "rc=", (uint32_t)rc, "fw=", (uint32_t)r[4] | ((uint32_t)r[5] << 8));
+		pair(" ", -1, "b0-3=", le32(r), "b4-7=", le32(r + 4));
+		flush_log();
+	}
+#else
+	(void)r;
+	pair("FWFILE", -1, "none=", 1, 0, 0);	/* no mi8/fw/st_fts_e1.ftb at build time: the chip keeps its own firmware */
+#endif
+}
+
 /* one timed window: poll like before (0x86 x 32 bytes while the irq line is low, else 0x85 every 200 ms) */
 static void run_window(int w, const char *title, unsigned seconds, unsigned *irq_low, unsigned *polls, unsigned *events)
 {
@@ -1323,39 +1362,7 @@ void mi8_touch_probe(void)
 	rc = bb_xfer(FTS_ADDR, w, 1, ev, 8);
 	pair("BOOTEV", -1, "rc=", (uint32_t)rc, "b0-3=", le32(ev));
 	pair(" ", -1, "b4-7=", le32(ev + 4), "irq=", (uint32_t)line_get(31));
-#ifdef MI8_FTS_FW
-	{
-		struct ftsfw fw;
-		uint32_t fsize = (uint32_t)(fts_fw_end - fts_fw_start);
-		int prc = fts_parse(fts_fw_start, fsize, &fw);
-		uint32_t chip_fw = (uint32_t)r[4] | ((uint32_t)r[5] << 8);
-
-		pair("FWFILE", -1, "parse=", (uint32_t)prc, "fw=", fw.fw_ver);
-		pair(" ", -1, "cfg=", fw.cfg_ver, "sec0=", fw.sec0);
-		pair(" ", -1, "sec1=", fw.sec1, "sec2=", fw.sec2);
-		pair("CHIPFW", -1, "fw=", chip_fw, "burn=", (uint32_t)(!prc && fw.fw_ver != chip_fw));
-		flush_log();
-		if (!prc && fw.fw_ver != chip_fw) {
-			int brc;
-
-			bn_i = nl;
-			pair("BURN", -1, "step=", 0, "done=", 0);
-			pair(" ", -1, "total=", fw.sec0 + fw.sec1, 0, 0);
-			brc = fts_burn(&fw, fts_fw_start);
-			bn_i = -1;
-			pair("BURNRC", -1, "rc=", (uint32_t)brc, 0, 0);
-			delay_ms(300);
-			memset_b(r, 0, sizeof(r));
-			w[0] = 0xfa; w[1] = 0x20; w[2] = 0x00; w[3] = 0x00; w[4] = 0x00;
-			rc = bb_xfer(FTS_ADDR, w, 5, r, 8);
-			pair("NEWFW", -1, "rc=", (uint32_t)rc, "fw=", (uint32_t)r[4] | ((uint32_t)r[5] << 8));
-			pair(" ", -1, "b0-3=", le32(r), "b4-7=", le32(r + 4));
-			flush_log();
-		}
-	}
-#else
-	pair("FWFILE", -1, "none=", 1, 0, 0);	/* no mi8/fw/st_fts_e1.ftb at build time: the chip keeps its own firmware */
-#endif
+	fts_maybe_burn(r);
 	ev_i = nl;
 	for (int k = 0; k < EV_LINES; k++)
 		pair("EVT", k, "b0-3=", 0, "b4-7=", 0);
@@ -1432,6 +1439,68 @@ void mi8_touch_probe(void)
 	draw_pts();
 	flush_log();
 	delay_ms(20000);
+}
+
+/* iOS boot path (called from shim/loader.c once a payload is found, before XNU is entered): everything the touch chip needs
+ * that XNU's driver must not do: vdd (gpio23) + avdd (pm8998_l28 via RPMh), reset pulse, firmware burn if the chip's version
+ * differs, scan mode "Sense ON" and a FIFO flush. XNU's mi8_touch.c then only talks to the chip. Nothing here is fatal:
+ * if a step fails the boot continues without touch. Takes about 40 s when the firmware has to be burned (every cold boot). */
+void mi8_touch_bringup(void)
+{
+	uint8_t w[5], r[8], ev[8], scan[3], flush[3];
+	int rc, vd, rail;
+
+	nl = 0;
+	tick_i = -1;
+	st_i = ev_i = xy_i = win_i = stat_i = -1;
+#ifdef MI8_FTS_FW
+	bn_i = -1;
+#endif
+	msg("TOUCH", "iOS boot: touch bring-up");
+	vd = vddio_enable();
+	pair("VDDIO", 1, "ok=", (uint32_t)vd, 0, 0);
+	rail = rh_enable_l28();
+	pair("RAIL", -1, "rc=", (uint32_t)rail, 0, 0);
+	flush_log();
+	delay_ms(20);
+	touch_gpio(31, 0, 3, 3, 0);
+	touch_gpio(32, 0, 3, 3, 1);
+	bb_setup(33, 34);
+	delay_ms(20);
+	wr32(pin_cfg(32) + 4, rd32(pin_cfg(32) + 4) & ~2U);	/* reset low */
+	delay_ms(10);
+	wr32(pin_cfg(32) + 4, rd32(pin_cfg(32) + 4) | 2U);	/* reset high */
+	delay_ms(300);
+	rc = bb_xfer(FTS_ADDR, 0, 0, 0, 0);
+	pair("ACK49", -1, "rc=", (uint32_t)rc, 0, 0);
+	w[0] = 0xfa; w[1] = 0x20; w[2] = 0x00; w[3] = 0x00; w[4] = 0x00;
+	memset_b(r, 0, sizeof(r));
+	rc = bb_xfer(FTS_ADDR, w, 5, r, 8);
+	pair("CHIPID", -1, "rc=", (uint32_t)rc, "b0-3=", le32(r));
+	pair(" ", -1, "b4-7=", le32(r + 4), 0, 0);
+	if (!rc) {
+		w[0] = 0x86;
+		memset_b(ev, 0, sizeof(ev));
+		(void)bb_xfer(FTS_ADDR, w, 1, ev, 8);	/* controller-ready event */
+		fts_maybe_burn(r);
+		scan[0] = 0xa0; scan[1] = 0x00; scan[2] = 0xff;	/* Sense ON */
+		rc = bb_xfer(FTS_ADDR, scan, 3, 0, 0);
+		pair("SENSE", -1, "rc=", (uint32_t)rc, 0, 0);
+		delay_ms(200);
+		flush[0] = 0xa4; flush[1] = 0x00; flush[2] = 0x01;	/* FIFO flush */
+		rc = bb_xfer(FTS_ADDR, flush, 3, 0, 0);
+		pair("FLUSH", -1, "rc=", (uint32_t)rc, 0, 0);
+		for (unsigned i = 0; i < 16 && !line_get(31); i++) {	/* drain what is still queued */
+			unsigned rem = 0;
+
+			if (fts_read_fifo(fifo_buf, &rem) == 0xffffffffU)
+				break;
+		}
+		pair("IRQ", -1, "gpio31=", (uint32_t)line_get(31), 0, 0);
+	}
+	flush_log();
+	render(C_BLUE, "touch ready - starting iOS");
+	delay_ms(800);
 }
 
 void mi8_panic_log(const char *stage, uint64_t slot, uint64_t esr, uint64_t elr, uint64_t far)

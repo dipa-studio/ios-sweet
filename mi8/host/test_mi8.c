@@ -227,6 +227,29 @@ int main(void)
 {
 	int bad = 0;
 	if (getenv("BURN_LOG")) burn_log = fopen(getenv("BURN_LOG"), "w");
+	if (getenv("BRINGUP")) {		/* iOS boot path: shim/loader.c calls mi8_touch_bringup() before XNU */
+		uint32_t sz; char *txt;
+		rh_fake_init();
+		pcfg[22] = 1; pcfg[24] = 1;
+		con_fb = fake_fb; con_stride4 = 1080;
+		mi8_touch_bringup();
+		bad += check_zone(ram[0], "TOUCH iOS boot: touch bring-up");
+		bad += check_zone(ram[0], "VDDIO1 ok=00000001");
+		bad += check_zone(ram[0], "RAIL rc=00000000");
+		bad += check_zone(ram[0], "ACK49 rc=00000000");
+		bad += check_zone(ram[0], "CHIPID rc=00000000 b0-3=00033936");
+		bad += check_zone(ram[0], "SENSE rc=00000000");
+		bad += check_zone(ram[0], "FLUSH rc=00000000");
+#ifdef MI8_FTS_FW
+		bad += check_zone(ram[0], "BURNRC rc=00000000");
+		bad += check_zone(ram[0], "NEWFW rc=00000000 fw=00000051");
+#else
+		bad += check_zone(ram[0], "FWFILE none=00000001");
+#endif
+		(void)sz; (void)txt;
+		puts(bad ? "FAIL (bringup)" : "PASS (bringup)");
+		return bad;
+	}
 	/* Zone A and B overlap (B starts 0x20000 into A's console zone, as on real hardware); both must be valid
 	 * from their own start, so check the combined effect through separate buffers: ram[1] mirrors the B copy. */
 	mi8_diag(0x9c000000UL ? 0x85a00000UL : 0);

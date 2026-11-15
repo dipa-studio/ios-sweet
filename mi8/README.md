@@ -1,5 +1,9 @@
 # Mi 8 (dipper, SDM845) bring-up
 
+**Touch for iOS (2026-11-03):** v15 on a real phone: burning FW 0x45 / config 0x19 (candidate 2) fixed touch. For iOS the shim burns it at every cold
+boot (`mi8_touch_bringup`, called from `shim/loader.c`) and the kernel driver `mi8/xnu/mi8_touch.c` (patch 0099, wired in by `patch-board.py`) polls the chip.
+Coordinates are used as reported (1079 x 2247); boot-args `mi8touchxmax=N mi8touchymax=N` rescale if the chip reports another range.
+
 **Touch probe (shim v15: firmware burn):** v14 on a real phone: even with nothing touching it the screen "touched" at the right side
 (x ~ 860, y ~ 1358, z = 0, no contact area), also after flush and force calibration, in every earlier version too. ST's library
 explains why the stock Mi 8 ROM burns the touch firmware on every boot (`load program DONE!`, `load config DONE!`, about 5 s: ROM
