@@ -5,7 +5,7 @@ on:
     inputs:
       macos_version:
         description: macOS release whose xnu to build (13.5 = xnu-8796, iOS 16 era)
-        default: "15"
+        default: "13.5"
       kernel_config:
         description: RELEASE / DEVELOPMENT / DEBUG
         default: DEVELOPMENT
@@ -17,7 +17,7 @@ on:
         default: "true"
       board:
         description: Board constants for the early framebuffer code (mi8 or sweet)
-        default: mi8
+        default: sweet
 
 concurrency:
   group: xnu-${{ github.ref }}
@@ -29,13 +29,11 @@ env:
   MACOS_VERSION: ${{ inputs.macos_version || '13.5' }}
   KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
   MACHINE_CONFIG: ${{ inputs.machine_config || 'SWEET' }}
-  BOARD: ${{ inputs.board || 'mi8' }}
+  BOARD: ${{ inputs.board || 'sweet' }}
 
 jobs:
   build:
-    # macos-14 still ships Xcode 15.x: its iig matches the xnu-8796 IORPC ABI
-    # (Xcode 16's iig emits IORPC.kernelContent, which this xnu lacks)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -59,9 +57,9 @@ jobs:
       - name: Deps
         run: |
           brew install jq gum bash cmake ninja
-          # build.sh only checks that xcodes exists (Xcode is preinstalled); no bottle on macOS 14
-          printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/xcodes >/dev/null
-          sudo chmod +x /usr/local/bin/xcodes
+          # build.sh only checks that xcodes exists (Xcode is preinstalled)
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/xcodes /opt/homebrew/bin/xcodes >/dev/null
+          sudo chmod +x /usr/local/bin/xcodes /opt/homebrew/bin/xcodes
           sw_vers
           ls -d /Applications/Xcode*.app
           XC=$(ls -d /Applications/Xcode_*.app | sort -V | head -1)
@@ -130,7 +128,7 @@ jobs:
   #   fastboot boot mi8-xnu-gz.img        (never `fastboot flash`)
   image:
     needs: build
-    if: ${{ (inputs.board || 'mi8') == 'mi8' }}
+    if: ${{ (inputs.board || 'sweet') == 'mi8' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
