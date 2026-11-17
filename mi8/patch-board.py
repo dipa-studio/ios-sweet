@@ -35,6 +35,9 @@ EDITS = {
         ('fLogicalH = native ? 2400 : 2436;', f'fLogicalH = native ? {FB_H} : 2436;'),
         ('fOffY = (fLogicalH - 2400) / 2;', f'fOffY = (fLogicalH - {FB_H}) / 2;'),
     ],
+    '0071-sweet-touch-edge.patch': [
+        ('y > 2399 - SWEET_TOUCH_EDGE_PX', f'y > {FB_H - 1} - SWEET_TOUCH_EDGE_PX'),
+    ],
 }
 
 
