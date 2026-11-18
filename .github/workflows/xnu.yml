@@ -36,7 +36,7 @@ jobs:
   build:
     # macos-14 still ships Xcode 15.x: its iig matches the xnu-8796 IORPC ABI
     # (Xcode 16's iig emits IORPC.kernelContent, which this xnu lacks)
-    runs-on: macos-latesst
+    runs-on: macos-latest
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
