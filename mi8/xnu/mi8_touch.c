@@ -213,14 +213,16 @@ bb_wbyte(uint8_t v)
 	return ack;
 }
 
-static uint8_t
-bb_rbyte(int ack)
+static int
+bb_rbyte(int ack, uint8_t *value)
 {
 	uint8_t v = 0;
 	line_rel(PIN_SDA);
 	for (int i = 0; i < 8; i++) {
 		bb_delay(3);
-		(void)scl_high();
+		if (scl_high()) {
+			return 2;
+		}
 		bb_delay(3);
 		v = (uint8_t)((v << 1) | (unsigned)line_get(PIN_SDA));
 		bb_delay(2);
@@ -232,12 +234,15 @@ bb_rbyte(int ack)
 		line_rel(PIN_SDA);
 	}
 	bb_delay(3);
-	(void)scl_high();
+	if (scl_high()) {
+		return 2;
+	}
 	bb_delay(5);
 	line_low(PIN_SCL);
 	bb_delay(3);
 	line_rel(PIN_SDA);
-	return v;
+	*value = v;
+	return 0;
 }
 
 /* write nw bytes (may be 0), then if nr: repeated start + read nr bytes. 0 ok, 1 NACK, 2 stuck */
@@ -269,7 +274,10 @@ bb_xfer(uint8_t addr, const uint8_t *w, unsigned nw, uint8_t *r, unsigned nr)
 			return a == 2 ? 2 : 1;
 		}
 		for (unsigned i = 0; i < nr; i++) {
-			r[i] = bb_rbyte(i + 1 < nr);
+			if (bb_rbyte(i + 1 < nr, &r[i])) {
+				bb_stop();
+				return 2;
+			}
 		}
 	}
 	bb_stop();
