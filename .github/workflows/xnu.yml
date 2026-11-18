@@ -17,7 +17,7 @@ on:
         default: "true"
       board:
         description: Board constants for the early framebuffer code (mi8 or sweet)
-        default: sweet
+        default: mi8
 
 concurrency:
   group: xnu-${{ github.ref }}
@@ -146,7 +146,7 @@ jobs:
           python3 tools/mkadt.py shim/out/mi8.adt --highmem --board mi8
           python3 tools/mkpayload.py "xnu/out/kernel.$(echo "$KERNEL_CONFIG" | tr A-Z a-z).$(echo "$MACHINE_CONFIG" | tr A-Z a-z)" \
             shim/out/mi8.adt shim/out/payload.bin \
-            --cmdline 'debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 sweettouch=0 sweetkeys=0 wdt=-1 wdt_test=no_user_checkin'
+            --cmdline 'debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 sweettouch=1 sweettouchdelay=2 sweetkeys=0 wdt=-1 wdt_test=no_user_checkin'
           MI8_PAYLOAD=shim/out/payload.bin bash mi8/build-mi8.sh
       - uses: actions/upload-artifact@v4
         with:
