@@ -1,0 +1,28 @@
+name: mi8-shim
+# Builds the Mi 8 (dipper, SDM845) diagnostic shim. Ubuntu runner, ~1 minute.
+# Run it from the Actions tab, download the "mi8-diag" artifact, then on a PC:
+#   fastboot boot mi8-diag-gz.img      (never `fastboot flash`)
+on:
+  workflow_dispatch:
+    inputs:
+      reset:
+        description: Where the shim resets to when done (android keeps the ramoops log readable)
+        type: choice
+        options: [android, bootloader]
+        default: android
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+      - name: Build (host tests, cross-compile, pack boot images)
+        run: MI8_RESET='${{ inputs.reset }}' bash mi8/build-mi8.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mi8-diag
+          path: |
+            mi8/out/mi8-diag-gz.img
+            mi8/out/mi8-diag-ucomp.img
+            mi8/out/shim.elf

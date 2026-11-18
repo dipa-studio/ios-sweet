@@ -15,11 +15,9 @@ on:
       keep_going:
         description: make -k (collect all compile errors in one run)
         default: "true"
-  push:
-    branches: [main]
-    paths:
-      - "xnu/patches/**"
-      - ".github/workflows/xnu.yml"
+      board:
+        description: Board constants for the early framebuffer code (mi8 or sweet)
+        default: mi8
 
 concurrency:
   group: xnu-${{ github.ref }}
@@ -31,15 +29,18 @@ env:
   MACOS_VERSION: ${{ inputs.macos_version || '13.5' }}
   KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
   MACHINE_CONFIG: ${{ inputs.machine_config || 'SWEET' }}
+  BOARD: ${{ inputs.board || 'sweet' }}
 
 jobs:
   build:
-    # macos-14 still ships Xcode 15.x: its iig matches the xnu-8796 IORPC ABI
-    # (Xcode 16's iig emits IORPC.kernelContent, which this xnu lacks)
-    runs-on: macos-14
+    runs-on: macos-15-intel
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+
+      - name: Board constants
+        run: |
+          if [ "$BOARD" = mi8 ]; then python3 mi8/patch-board.py xnu/patches; fi
 
       - name: Fetch build script
         run: |
@@ -56,7 +57,7 @@ jobs:
       - name: Deps
         run: |
           brew install jq gum bash cmake ninja
-          # build.sh only checks that xcodes exists (Xcode is preinstalled); no bottle on macOS 14
+          # build.sh only checks that xcodes exists (Xcode is preinstalled)
           printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/xcodes >/dev/null
           sudo chmod +x /usr/local/bin/xcodes
           sw_vers
@@ -99,6 +100,7 @@ jobs:
       - name: Inspect closed KDK support libs
         if: always()
         run: |
+          shopt -s nullglob
           mkdir -p out/kdk-libs
           for lib in /Library/Developer/KDKs/*/System/Library/KernelSupport/lib*.a; do
             b=$(basename "$lib" .a)
@@ -122,3 +124,34 @@ jobs:
           name: xnu-kernel
           path: out/
           if-no-files-found: warn
+
+  # Mi 8: kernel -> device tree -> payload -> boot image (header v1, DTB appended). RAM boot only:
+  #   fastboot boot mi8-xnu-gz.img        (never `fastboot flash`)
+  image:
+    needs: build
+    if: ${{ (inputs.board || 'sweet') == 'mi8' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+      - uses: actions/download-artifact@v4
+        with:
+          name: xnu-kernel
+          path: xnu/out
+      - name: Payload and boot image
+        run: |
+          ls -la xnu/out
+          mkdir -p shim/out
+          python3 tools/mkadt.py shim/out/mi8.adt --highmem --board mi8
+          python3 tools/mkpayload.py "xnu/out/kernel.$(echo "$KERNEL_CONFIG" | tr A-Z a-z).$(echo "$MACHINE_CONFIG" | tr A-Z a-z)" \
+            shim/out/mi8.adt shim/out/payload.bin \
+            --cmdline 'debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 sweettouch=1 sweettouchdelay=2 sweetkeys=0 wdt=-1 wdt_test=no_user_checkin'
+          MI8_PAYLOAD=shim/out/payload.bin bash mi8/build-mi8.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mi8-xnu-boot
+          path: |
+            mi8/out/mi8-xnu-gz.img
+            mi8/out/mi8-xnu-ucomp.img
+            shim/out/mi8.adt

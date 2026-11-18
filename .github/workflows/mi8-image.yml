@@ -1,0 +1,46 @@
+name: mi8-image
+# Rebuild the Mi 8 boot images from an EXISTING kernel build (no macOS rebuild): new device tree, new boot-args.
+# Give it the run number of a successful "xnu" run (the digits at the end of its URL:
+#   github.com/<you>/ios-sweet/actions/runs/<RUN_ID>). Artifact: mi8-xnu-boot.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Run ID of a successful xnu workflow run (digits from its URL)
+        required: true
+      cmdline:
+        description: XNU boot-args
+        default: debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 sweettouch=0 sweetkeys=0 wdt=-1 wdt_test=no_user_checkin
+env:
+  KERNEL_CONFIG: DEVELOPMENT
+  MACHINE_CONFIG: SWEET
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+      - uses: actions/download-artifact@v4
+        with:
+          name: xnu-kernel
+          path: xnu/out
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Payload and boot image
+        env:
+          CMDLINE: ${{ inputs.cmdline }}
+        run: |
+          ls -la xnu/out
+          mkdir -p shim/out
+          python3 tools/mkadt.py shim/out/mi8.adt --highmem --board mi8
+          python3 tools/mkpayload.py "xnu/out/kernel.$(echo "$KERNEL_CONFIG" | tr A-Z a-z).$(echo "$MACHINE_CONFIG" | tr A-Z a-z)" \
+            shim/out/mi8.adt shim/out/payload.bin --cmdline "$CMDLINE"
+          MI8_PAYLOAD=shim/out/payload.bin bash mi8/build-mi8.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mi8-xnu-boot
+          path: |
+            mi8/out/mi8-xnu-gz.img
+            mi8/out/mi8-xnu-ucomp.img
+            shim/out/mi8.adt

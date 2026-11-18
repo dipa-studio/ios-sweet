@@ -1,0 +1,450 @@
+--- /dev/null
++++ b/bsd/dev/mi8_touch.c
+@@ -0,0 +1,447 @@
++/*
++ * Xiaomi Mi 8 (dipper, SDM845) touch: ST FTM5 ("FTS") at I2C 0x49 over a GPIO bit-banged bus. Replaces sweet_touch.c for
++ * Mi 8 builds (mi8/patch-board.py points bsd/conf/files at this file and adds this one through 0099-mi8-fts-touch.patch).
++ * Same entry point (sweet_touch_init) and HID call (sweet_hid_touch) as the sweet driver.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(MI8_TOUCH_HOST)
++#ifdef MI8_TOUCH_HOST
++#include "xnu_stubs.h"
++#else
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++/* Mach MIG declaration is not included by BSD's exported thread.h. */
++extern kern_return_t thread_terminate(thread_t);
++extern void delay_for_interval(uint32_t interval, uint32_t scale_factor);
++#endif
++extern void sweet_hid_touch(int finger, int down, int x, int y);
++void sweet_touch_init(void);
++
++#define TOUCH_NORTH_PA		0x03900000u	/* TLMM north tile: gpio31..34 live here (cfg at pin * 0x1000, io at +4) */
++#define TOUCH_GPIO_CFG(n)	((uint32_t)(n) * 0x1000u)
++#define TOUCH_GPIO_IO(n)	(TOUCH_GPIO_CFG(n) + 4u)
++#define TOUCH_MAX		10u
++#define FTS_ADDR		0x49u
++#define PIN_IRQ			31u
++#define PIN_SDA			33u
++#define PIN_SCL			34u
++
++static struct {
++	vm_offset_t gpio;
++	bool started;
++	bool dead;
++	uint32_t active;
++	int x[TOUCH_MAX], y[TOUCH_MAX];
++	int xmax, ymax;		/* FTS coordinate range (inclusive), scaled onto 1079 x 2247 */
++	unsigned errors, events;
++} st;
++#ifndef MI8_TOUCH_HOST
++static int touch_sleep_chan;
++
++static void
++touch_wait(unsigned ms)
++{
++	uint64_t deadline;
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&touch_sleep_chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++#endif
++
++static uint32_t
++touch_rd(vm_offset_t base, uint32_t off)
++{
++#ifdef MI8_TOUCH_HOST
++	return host_mmio_rd(base + off);
++#else
++	uint32_t v = *(volatile uint32_t *)(base + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++#endif
++}
++
++static void
++touch_wr(vm_offset_t base, uint32_t off, uint32_t val)
++{
++#ifdef MI8_TOUCH_HOST
++	host_mmio_wr(base + off, val);
++#else
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + off) = val;
++	__asm__ volatile("dsb osh" ::: "memory");
++#endif
++}
++
++static void
++touch_gpio(unsigned pin, unsigned mux, unsigned pull, unsigned drive, bool out, bool high)
++{
++	uint32_t off = TOUCH_GPIO_CFG(pin);
++	uint32_t cfg = touch_rd(st.gpio, off);
++	if (out) {
++		/* Set the latch before enabling the output. */
++		touch_wr(st.gpio, TOUCH_GPIO_IO(pin),
++		    (touch_rd(st.gpio, TOUCH_GPIO_IO(pin)) & ~2u) | (high ? 2u : 0u));
++	}
++	cfg &= ~0x3ffu;
++	cfg |= (mux << 2) | pull | (drive << 6) | (out ? 0x200u : 0u);
++	touch_wr(st.gpio, off, cfg);
++}
++
++static void
++touch_report(uint32_t mask, const int *x, const int *y)
++{
++	for (unsigned id = 0; id < TOUCH_MAX; ++id) {
++		uint32_t bit = 1u << id;
++		if (mask & bit) {
++			if (!(st.active & bit) || x[id] != st.x[id] || y[id] != st.y[id]) {
++				sweet_hid_touch((int)id, 1, x[id], y[id]);
++			}
++			st.x[id] = x[id];
++			st.y[id] = y[id];
++		} else if (st.active & bit) {
++			sweet_hid_touch((int)id, 0, st.x[id], st.y[id]);
++		}
++	}
++	st.active = mask;
++}
++
++/*
++ * GPIO bit-banged I2C on the touch bus (gpio33 SDA, gpio34 SCL, TLMM north tile). The bus's QUP engine (global SE14) is
++ * GSI/DMA-only on this phone, so the FIFO-mode path used on sweet cannot work. Open drain: low = latch 0 + output enable,
++ * released = output disabled with the pull-up. Ported from the tested shim code (shim/mi8.c bb_*), ~50 kHz.
++ */
++static void
++bb_delay(unsigned us)
++{
++	delay_for_interval(us, NSEC_PER_USEC);
++}
++
++static void
++line_low(unsigned pin)
++{
++	touch_wr(st.gpio, TOUCH_GPIO_IO(pin), touch_rd(st.gpio, TOUCH_GPIO_IO(pin)) & ~2u);
++	touch_wr(st.gpio, TOUCH_GPIO_CFG(pin), touch_rd(st.gpio, TOUCH_GPIO_CFG(pin)) | 0x200u);
++}
++
++static void
++line_rel(unsigned pin)
++{
++	touch_wr(st.gpio, TOUCH_GPIO_CFG(pin), touch_rd(st.gpio, TOUCH_GPIO_CFG(pin)) & ~0x200u);
++}
++
++static int
++line_get(unsigned pin)
++{
++	return (int)(touch_rd(st.gpio, TOUCH_GPIO_IO(pin)) & 1u);
++}
++
++/* release SCL and wait for it to go high (clock stretching): 0 ok, 1 stuck low */
++static int
++scl_high(void)
++{
++	line_rel(PIN_SCL);
++	for (unsigned i = 0; i < 2000; i++) {
++		if (line_get(PIN_SCL)) {
++			return 0;
++		}
++		bb_delay(1);
++	}
++	return 1;
++}
++
++static int
++bb_start(void)
++{
++	if (scl_high() || !line_get(PIN_SDA)) {
++		return 1;
++	}
++	bb_delay(5);
++	line_low(PIN_SDA);
++	bb_delay(5);
++	line_low(PIN_SCL);
++	bb_delay(5);
++	return 0;
++}
++
++static void
++bb_stop(void)
++{
++	line_low(PIN_SDA);
++	bb_delay(5);
++	(void)scl_high();
++	bb_delay(5);
++	line_rel(PIN_SDA);
++	bb_delay(10);
++}
++
++/* write one byte, return the ACK bit (0 = ACK) or 2 on a stuck clock */
++static int
++bb_wbyte(uint8_t v)
++{
++	int ack;
++	for (int i = 7; i >= 0; i--) {
++		if ((v >> i) & 1) {
++			line_rel(PIN_SDA);
++		} else {
++			line_low(PIN_SDA);
++		}
++		bb_delay(3);
++		if (scl_high()) {
++			return 2;
++		}
++		bb_delay(5);
++		line_low(PIN_SCL);
++		bb_delay(3);
++	}
++	line_rel(PIN_SDA);
++	bb_delay(3);
++	if (scl_high()) {
++		return 2;
++	}
++	bb_delay(3);
++	ack = line_get(PIN_SDA);
++	bb_delay(2);
++	line_low(PIN_SCL);
++	bb_delay(3);
++	return ack;
++}
++
++static int
++bb_rbyte(int ack, uint8_t *value)
++{
++	uint8_t v = 0;
++	line_rel(PIN_SDA);
++	for (int i = 0; i < 8; i++) {
++		bb_delay(3);
++		if (scl_high()) {
++			return 2;
++		}
++		bb_delay(3);
++		v = (uint8_t)((v << 1) | (unsigned)line_get(PIN_SDA));
++		bb_delay(2);
++		line_low(PIN_SCL);
++	}
++	if (ack) {
++		line_low(PIN_SDA);
++	} else {
++		line_rel(PIN_SDA);
++	}
++	bb_delay(3);
++	if (scl_high()) {
++		return 2;
++	}
++	bb_delay(5);
++	line_low(PIN_SCL);
++	bb_delay(3);
++	line_rel(PIN_SDA);
++	*value = v;
++	return 0;
++}
++
++/* write nw bytes (may be 0), then if nr: repeated start + read nr bytes. 0 ok, 1 NACK, 2 stuck */
++static int
++bb_xfer(uint8_t addr, const uint8_t *w, unsigned nw, uint8_t *r, unsigned nr)
++{
++	int a;
++	if (bb_start()) {
++		return 2;
++	}
++	a = bb_wbyte((uint8_t)(addr << 1));
++	for (unsigned i = 0; !a && i < nw; i++) {
++		a = bb_wbyte(w[i]);
++	}
++	if (a) {
++		bb_stop();
++		return a == 2 ? 2 : 1;
++	}
++	if (nr) {
++		line_rel(PIN_SDA);
++		bb_delay(5);
++		if (bb_start()) {
++			bb_stop();
++			return 2;
++		}
++		a = bb_wbyte((uint8_t)((addr << 1) | 1));
++		if (a) {
++			bb_stop();
++			return a == 2 ? 2 : 1;
++		}
++		for (unsigned i = 0; i < nr; i++) {
++			if (bb_rbyte(i + 1 < nr, &r[i])) {
++				bb_stop();
++				return 2;
++			}
++		}
++	}
++	bb_stop();
++	return 0;
++}
++
++/*
++ * ST FTM5 event FIFO (ST fts.c fts_interrupt_handler): read one 8-byte event with 0x86; byte 7 & 0x1f is how many are still
++ * queued; read those with a second 0x86 of 8 * remaining bytes. Returns the number of events in buf (8 bytes each),
++ * or -1 if the first transfer failed.
++ */
++static int
++fts_read_fifo(uint8_t *buf)
++{
++	uint8_t cmd = 0x86;
++	unsigned n = 1, rem;
++	if (bb_xfer(FTS_ADDR, &cmd, 1, buf, 8)) {
++		return -1;
++	}
++	if (!buf[0]) {
++		return 0;
++	}
++	rem = buf[7] & 0x1fu;
++	if (rem > 31) {
++		rem = 31;
++	}
++	if (rem) {
++		if (bb_xfer(FTS_ADDR, &cmd, 1, buf + 8, 8 * rem)) {
++			return (int)n;
++		}
++		n += rem;
++	}
++	return (int)n;
++}
++
++/*
++ * One poll: drain the FIFO and turn touch events into HID reports. Event layout (ST fts_lib, matches the Mi 8 captures):
++ * id 0x13 enter / 0x23 motion / 0x33 leave; b1 = touch id << 4 | touch type (0 = none, 1 = finger); x = (b3 & 0xf) << 8 | b2;
++ * y = b4 << 4 | b3 >> 4; b5 = pressure. Returns 0 ok, -1 transfer error.
++ */
++static int
++mi8_touch_poll_once(void)
++{
++	uint8_t buf[256];
++	int x[TOUCH_MAX], y[TOUCH_MAX];
++	uint32_t mask = st.active;
++	int n = fts_read_fifo(buf);
++	if (n < 0) {
++		return -1;
++	}
++	for (unsigned i = 0; i < TOUCH_MAX; i++) {
++		x[i] = st.x[i];
++		y[i] = st.y[i];
++	}
++	for (int k = 0; k < n; k++) {
++		const uint8_t *e = buf + 8 * k;
++		unsigned fid;
++		if (e[0] != 0x13 && e[0] != 0x23 && e[0] != 0x33) {
++			continue;
++		}
++		if (st.events < 8 || (st.events % 2000u) == 0) {
++			printf("MI8 TOUCH: ev %02x %02x %02x %02x %02x %02x %02x %02x\n",
++			    e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7]);
++		}
++		st.events++;
++		fid = e[1] >> 4;
++		if (fid >= TOUCH_MAX) {
++			continue;
++		}
++		if (e[0] == 0x33 || (e[1] & 0x0f) == 0) {
++			mask &= ~(1u << fid);
++		} else {
++			int rx = (int)(((unsigned)(e[3] & 0x0f) << 8) | e[2]);
++			int ry = (int)(((unsigned)e[4] << 4) | (e[3] >> 4));
++			x[fid] = rx * 1079 / (st.xmax > 0 ? st.xmax : 1079);
++			y[fid] = ry * 2247 / (st.ymax > 0 ? st.ymax : 2247);
++			if (x[fid] > 1079) {
++				x[fid] = 1079;
++			}
++			if (y[fid] > 2247) {
++				y[fid] = 2247;
++			}
++			mask |= 1u << fid;
++		}
++		/* Report after every event, not once per poll: a tap that starts and ends inside one backlog would otherwise vanish. */
++		touch_report(mask, x, y);
++	}
++	touch_report(mask, x, y);
++	return 0;
++}
++
++#ifndef MI8_TOUCH_HOST
++static void
++touch_thread(void *arg, wait_result_t result)
++{
++	unsigned delay_s = 20;
++	unsigned ticks = 0;
++	(void)arg;
++	(void)result;
++	/*
++	 * The boot shim (shim/mi8.c mi8_touch_bringup) already did the hard part before XNU started: both rails
++	 * (gpio23 + pm8998_l28 through RPMh), the reset pulse, the firmware burn and "sense on". This thread only talks
++	 * to the chip; it never touches rails, reset, or firmware.
++	 */
++	(void)PE_parse_boot_argn("sweettouchdelay", &delay_s, sizeof(delay_s));
++	printf("MI8 TOUCH: starting in %u s\n", delay_s);
++	touch_wait(delay_s * 1000u);
++	st.gpio = ml_io_map(TOUCH_NORTH_PA, 0x5b000);
++	if (!st.gpio) {
++		printf("MI8 TOUCH: MMIO mapping failed\n");
++		goto out;
++	}
++	touch_gpio(PIN_IRQ, 0, 3, 3, false, false);	/* irq: input, pull-up, 8 mA */
++	touch_gpio(PIN_SDA, 0, 3, 1, false, false);	/* i2c as gpio, pull-up, 4 mA, released */
++	touch_gpio(PIN_SCL, 0, 3, 1, false, false);
++	printf("MI8 TOUCH: irq=%d sda=%d scl=%d; polling FTS at 0x49\n",
++	    line_get(PIN_IRQ), line_get(PIN_SDA), line_get(PIN_SCL));
++	while (!st.dead) {
++		/* the irq line is low while events are queued; also look every 100 ms and while a finger is down */
++		if (st.active || !line_get(PIN_IRQ) || (++ticks % 12u) == 0) {
++			if (mi8_touch_poll_once()) {
++				if ((st.errors++ % 100u) == 0) {
++					printf("MI8 TOUCH: transfer error (%u)\n", st.errors);
++				}
++				if (st.errors == 10) {
++					touch_report(0, st.x, st.y);	/* release after persistent bad reads */
++				}
++			} else {
++				st.errors = 0;
++			}
++		}
++		touch_wait(8);
++	}
++	touch_report(0, st.x, st.y);
++out:
++	(void)thread_terminate(current_thread());
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++void
++sweet_touch_init(void)
++{
++	int enabled = 1;
++	thread_t thread;
++	if (st.started) {
++		return;
++	}
++	st.started = true;
++	st.xmax = 1079;
++	st.ymax = 2247;
++	(void)PE_parse_boot_argn("sweettouch", &enabled, sizeof(enabled));
++	(void)PE_parse_boot_argn("mi8touchxmax", &st.xmax, sizeof(st.xmax));
++	(void)PE_parse_boot_argn("mi8touchymax", &st.ymax, sizeof(st.ymax));
++	if (!enabled) {
++		printf("MI8 TOUCH: disabled (sweettouch=0)\n");
++		return;
++	}
++	kern_return_t kr = kernel_thread_start(touch_thread, NULL, &thread);
++	if (kr == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		printf("MI8 TOUCH: kernel_thread_start failed %d\n", kr);
++	}
++}
++#endif /* !MI8_TOUCH_HOST */
++
++#endif /* ARM64_BOARD_CONFIG_SWEET */

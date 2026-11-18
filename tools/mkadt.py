@@ -2,7 +2,9 @@
 """Build the minimal Apple Device Tree that the SWEET xnu needs to boot.
 
 Only what the early boot path actually reads (see NOTES.md); every MMIO
-address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem]
+address comes from the sweet live FDT. Usage:
+  mkadt.py OUT.adt [--dump] [--qemu] [--highmem] [--board sweet|mi8]
+--board mi8 builds the tree for the Xiaomi Mi 8 (dipper, SDM845); values from its live FDT, see mi8/README.md.
 """
 import hashlib, os, struct, sys
 
@@ -38,6 +40,29 @@ VTIMER_INTID = 19
 # QEMU virt (-M virt,gic-version=3 -cpu cortex-a76): GICD/GICR and the generic timer's CNTFRQ
 QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE = 0x08000000, 0x080a0000, 62500000
 QEMU_VTIMER_INTID = 27
+
+# Per-board values (default: sweet). Same GICv3 and UFS addresses on both SoCs.
+BOARDS = {
+    'sweet': dict(FB=0x9c000000, FB_SIZE=0x1700000, FB_H=2400, HIGH_MEM_SIZE=0xfcc00000,
+                  ECID=0x5357454554000001, BIG_FIRST=6, CLK_SMALL=1804800000, CLK_BIG=2304000000,
+                  CPU_COMPAT=('qcom,kryo470',), SOC_COMPAT=('qcom,sm7150',)),
+    # Mi 8: cpu0-3 Kryo 385 Silver (A55-based), cpu4-7 Gold. ABL splash buffer 0x9d400000 (36 MB region),
+    # 1080x2248; upper DDR bank 0x1_00000000..0x1_fd400000 from the live FDT memory node.
+    'mi8': dict(FB=0x9d400000, FB_SIZE=0x2400000, FB_H=2248, HIGH_MEM_SIZE=0xfd400000,
+                ECID=0x4d49382d00000001, BIG_FIRST=4, CLK_SMALL=1766400000, CLK_BIG=2803200000,
+                # The boot-CPU driver (0018) and AppleKeyStore (0038) match IONameMatch 'qcom,kryo470': keep that string first
+                # and add the real name after it, or no CPU driver attaches and boot stalls.
+                CPU_COMPAT=('qcom,kryo470', 'qcom,kryo385'), SOC_COMPAT=('xiaomi,dipper', 'qcom,sdm845')),
+}
+BOARD = BOARDS['sweet']
+
+
+def set_board(name):
+    global BOARD, FB, FB_SIZE, FB_H, HIGH_MEM_SIZE, SWEET_ECID
+    BOARD = BOARDS[name]
+    FB, FB_SIZE, FB_H = BOARD['FB'], BOARD['FB_SIZE'], BOARD['FB_H']
+    HIGH_MEM_SIZE, SWEET_ECID = BOARD['HIGH_MEM_SIZE'], BOARD['ECID']
+
 
 BOOT_MANIFEST_HASH = hashlib.sha384(b'sweet boot manifest').digest()
 
@@ -138,7 +163,7 @@ def build(seed=None, qemu=False, highmem=False):
         cpu_nodes.append(node(f'cpu{core}', [
             ph(),
             ('device_type', cstr('cpu')),
-            ('compatible', cstr('qcom,kryo470') + cstr('ARM,v8')),
+            ('compatible', b''.join(cstr(c) for c in BOARD['CPU_COMPAT']) + cstr('ARM,v8')),
             ('reg', u32(core << 8)),  # actual MPIDR Aff1:Aff0, NOT logical ID
             ('cpu-id', u32(core)),   # descriptive: XNU assigns IDs by DT order
             ('cluster-id', u32(0)),  # descriptive; see ml_parse_cpu_topology
@@ -149,7 +174,7 @@ def build(seed=None, qemu=False, highmem=False):
             ('l3-cache-id', u32(0)),     # shared L3
             ('state', cstr('running' if core == 0 else 'stopped')),
             ('timebase-frequency', u32(timebase)),
-            ('clock-frequency', u32(2304000000 if core >= 6 else 1804800000)),
+            ('clock-frequency', u32(BOARD['CLK_BIG'] if core >= BOARD['BIG_FIRST'] else BOARD['CLK_SMALL'])),
             ('bus-frequency', u32(100000000)),
             ('memory-frequency', u32(1866000000)),
             ('peripheral-frequency', u32(timebase)),
@@ -231,7 +256,7 @@ def build(seed=None, qemu=False, highmem=False):
     # (iPhone10,3). 'xiaomi,sweet' stays for SweetPlatformExpert matching.
     return node('device-tree', [
         ph(),
-        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('xiaomi,sweet') + cstr('qcom,sm7150') + cstr('AppleARM')),
+        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('xiaomi,sweet') + b''.join(cstr(c) for c in BOARD['SOC_COMPAT']) + cstr('AppleARM')),
         ('model', cstr('iPhone10,3')),
         ('target-type', cstr('D22')),
         ('target-sub-type', cstr('D22AP')),
@@ -242,6 +267,10 @@ def build(seed=None, qemu=False, highmem=False):
 
 
 if __name__ == '__main__':
+    if '--board' in sys.argv:
+        i = sys.argv.index('--board')
+        set_board(sys.argv[i + 1])
+        del sys.argv[i:i + 2]
     root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)

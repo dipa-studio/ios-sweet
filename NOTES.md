@@ -431,3 +431,134 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
      cpu_init, before arm_vm_init.
   5. panic hook at top of panic_trap_to_debugger: va_copy + _doprnt(fmt, &copy, sweet_early_putc, 16).
   Verify with tools/xnu-cc.py (compile+symbols) and patch-order simulation before the single CI run.
+
+## Mi 8 (dipper, SDM845) handoff - 2026-10-24
+
+- Target: Xiaomi Mi 8, UFS, bootloader unlocked, `fastboot boot` works. Added `shim/board.h` (TARGET_MI8), `shim/mi8.c`
+  (display/log diagnostic), `mi8/` (builder, DTB, host test, README) and workflow `mi8-shim`. Default (sweet) build output
+  is unchanged (console host render byte-identical).
+- Observation (live FDT/dmesg): panel `dsi_ss_ea8074_notch_fhd_cmd` = DSI command mode, TE pin, `mdp-trigger none`,
+  `dma-trigger trigger_sw`. cont_splash `0x9d400000`/36 MB. ramoops `0xb0000000` ecc off. Boot image: v1, DTB appended,
+  DTB #1 matches msm-id 321/0x20001 board-id 55.
+- Guess, unverified: SDE register offsets in `shim/mi8.c` come from memory of the Linux msm-4.9 sde_hw_* sources; ABL
+  accepts a gzip'd shim Image + appended DTB (stock layout) - fallback is the UNCOMPRESSED_IMG container.
+- Not done: no CI run yet, nothing booted on hardware. Next: run `mi8-shim`, `fastboot boot` mi8-diag-gz.img, read the
+  pstore log, decide the per-frame trigger, then port UFS/ADT (`tools/mkadt.py`) for 0x1d84000, GIC and the high RAM bank.
+
+### Mi 8 v1 on-device result (2026-10-24, from the owner's photo of the screen)
+
+- Pipeline left by ABL: SSPP0 addr `0x9d400000`, size `0x08c80438` (1080x2248), fmt `0x000237ff`; CTL0 top `0x00020020`;
+  PP0 tear `1`, vsync `0x0018008e`, height `0xffff`, **autorefresh `0x80000001`**; INTF1/2 timing engine off (command mode).
+  The SSPP ystride read at +0x2c returned 0 (wrong offset); 4320 bytes works (text rendered cleanly).
+- v1 sequence seen: red (shim start), blue (no trigger), red (CTL0 START), then no green/purple: manual kicks stop the
+  refresh. No kick is needed. CPU0 `midr=517f803c`, `tg16=1`, parange 2 (40-bit). DTB passed at `0x853fd000`.
+- v2 (this tree): no display writes, colour cycle, then read-only `test_ufs()` on a clean screen, reset to Android.
+
+### Mi 8 v2 on-device result (2026-10-25)
+
+- Colour cycle blue/red/green/purple all visible with no display writes (autorefresh confirmed).
+- sweet's read-only UFS probe worked on the Mi 8 as is: ver 0x210, hcs 0x10f, UTRLBA left by ABL `0x9b9ef000`, ours
+  `0x80096000`; LUN0 last LBA `0xdbffff`, block 4096, GPT ok. Partitions seen: persist 0x4000 (64M), persistbak 0x8000,
+  logdump 0xc000, minidump 0x10000, cust 0x18000 (ext4), recovery 0x4c000, cache 0x50000, system 0x60000 (7168M),
+  userdata 0x220000 (47615 MiB, ext4).
+- Kernel side prepared: `tools/mkadt.py --board mi8`, `mi8/patch-board.py` (0010/0012/0061 constants; 32 MB block stays at
+  0x9c000000, buffer 0x1400000 into it), workflow `xnu` gets `board` input and an `image` job. Untested: no kernel built yet.
+
+### Mi 8 touch facts from the live FDT (2026-10-26)
+
+- `i2c@a98000` = QUPV3_1 SE6 (wrapper `0xac0000`, irq 0x167, GSI dmas present). Children: `fts@49` (`st,fts`, irq GPIO31 level-low
+  `0x2008`, reset GPIO32, `fts,pwr-reg-name avdd`, `bus-reg-name vdd`) and `atmel_mxt_ts_640u@4a` (alternate panel supplier,
+  same pins/rails). avdd = `pm8998_l28` (`rpmh-regulator-ldoa28`, 3.3 V, RPMh); vdd = `disp_vddio_vreg` (`regulator-fixed`).
+- sweet's touch driver assumes ABL left GENI FW loaded and the rail powered ("no RPMh votes"); whether the Mi 8's ABL does
+  the same is unknown: the v3 shim probe measures it. Needed for a real driver: power (RPMh l28 + the fixed vddio), SE6 clocks
+  (GCC wrapper1 S6; sweet's offsets are SM7150's), and an FTS event decoder (mainline `stmfts` is the nearest reference).
+
+### Mi 8 touch probe results (2026-10-27)
+
+- v3: SE at 0xa98000 reads fine (fw 0x300 = I2C proto 3, 32-bit FIFOs) but its clock is off; touch pins 31/32 are in the north
+  tile at 0x3900000, parked as outputs (cfg 0x203, io 0).
+- v4/v5: GCC vote `0x5200c` bits 18-21 and 28 work for wrapper1 core/ahb (branches 0x18004..0x18010 come on); the SE6 branch
+  `0x18864` stays `0x80004220`. v5 `SEINIT rc=1`: sweet's init check failed, most likely `SE_FIFO_IF_DISABLE_RO` (0x64) bit0,
+  i.e. the SE is GSI-only (DT has `dmas`). The Mi 8 touch bus is global SE14: pins gpio33/gpio34, function qup14.
+- v6 (this tree): bit-banged I2C on gpio33/34 through TLMM (cfg bit9 = output enable), tested against a slave model. The
+  model found a real bug (missing R bit on plain reads). Rails (pm8998_l28 via RPMh) are still not touched.
+
+### Mi 8 touch v6 result and v7 (2026-10-28)
+
+- v6: gpio33/34 (north tile, default cfg 0x1 = gpio, pull-down) read low (`idle=0`) as inputs with pull-up (cfg 0x43), so
+  all bit-bang transfers returned stuck; gpio31 pull-up input reads high. Suspects: avdd (pm8998_l28, RPMh, `regulator-boot-on`
+  in DT but unverified) off with the chip clamping the bus, or TLMM writes to those pins not taking effect (v7 self-test).
+- vdd = `disp_vddio_vreg`: regulator-fixed, GPIO23 active-high enable, boot-on (the panel needs it, so it is on).
+- RSC `apps_rsc`: drv-id 2, tcs-config ACTIVE 2 / SLEEP 3 / WAKE 3 / CONTROL 1, reg 0x179e0000 (+0x100) and 0x179e0d00
+  (+0x3000): same geometry as sweet, so sweet_rpmh.c ports with only the base addresses and the resource name changed.
+
+### Mi 8 touch v7 result (2026-10-28)
+
+- Pins: `SELF hi=1 lo=0` on gpio33/34 (north tile, TLMM writes work); released with pull-up (cfg 0x43) they still read 0.
+- RPMh port works on hardware: `RSC id=0x00010100 cfg=0x80008104`, cmd-db pa 0x85fe0000 size 0xdc0 ver 1 magic 0x0c0330db,
+  `ldoa28` VRM address `0x42100`, TCS0 idle=1, cmd status 0x10101 x2, `RAIL rc=0`. Bus unchanged: avdd alone is not the problem.
+- gpio23 (disp_vddio_vreg enable, touch vdd) read cfg 0 io 0 in the north tile: not asserted. v8 enables it (tile discovery
+  + self-test first).
+
+### Mi 8 touch v8 result (2026-10-28): the chip answers
+
+- gpio23 is in the south tile (0x3d00000; north reads 0): `TILE1 p23=0x203 p22=1 p24=1`. Output high (cfg 0x240, io 3) frees the
+  bus. FTS ACKs at 0x49 on SDA=gpio33 / SCL=gpio34 (swapped order NACKs). The chip also ACKed before the l28 vote.
+- Plain read and `0x80` register read return zeros: not the stmfts command set. Stock driver: ST FTS5 lib 5.2.4 (events 8 bytes;
+  `0x85` read one, `0x86` read all; HW register read `0xFA` + 4-byte address; scan mode `0xA0`), per memory, unverified.
+- For the XNU driver: enable gpio23 (south tile) -> reset pulse (gpio32) -> bit-bang gpio33/34 -> poll events; no clocks, no SE.
+
+### Mi 8 touch v9 result (2026-10-28): protocol confirmed, sensing off
+
+- `CHIPID` block = `36 39 03 00 54 00 39 19` (chip id 0x3936, FW 0x0054, SVN 0x1939: matches dmesg `FW VER = 0054`, `SVN REV = 1939`).
+  `BOOTEV` = `03 00 00 00 ...` controller ready; gpio31 low right after reset, no events or irq while touching.
+- v10 tries `A0 00 FF`, `A0 00 01`, `93` (sense on) to start scanning.
+
+### Mi 8 touch v10 result (2026-10-28): irq stuck low
+
+- After the scan-mode commands (A0 00 FF, A0 00 01, 93: all ACKed) gpio31 was low on every poll (`irqlow == polls`, 0x4e2) and every
+  0x85 read had a zero first byte. In v9 (no scan command) the line went high after BOOTEV. Hypotheses: the chip now streams
+  events that 0x85 does not return (v11 reads 0x86 x 32 bytes and logs raw bytes and failures), or the irq pin is held low
+  for another reason (reading gpio31 only; no write).
+
+### Mi 8 touch v11 result (2026-10-28): FTS echoes scan mode, no touches (avdd)
+
+- `EVT0 = 43 01 A0 00 FF 00 00 00` (STATUS_UPDATE / echo of A0 00 FF), `ST85 bad=0`, `ST86 bad=0`: transfers are clean.
+  Only one event and one irq pulse; no 0x13/0x23/0x33. Reading clears the irq (`IRQHI after == low`).
+- Cause hypothesis: avdd (pm8998_l28) was not voted in v9-v11 (it was in v7/v8). v12 restores the vote.
+
+### Mi 8 touch v12 result (2026-10-28): events stream with both rails, meaning unclear
+
+- avdd vote restored (`RAIL rc=0`): the chip now streams events constantly (0x2328 events in ~50 s, ST86 ok=0x8ca bad=0, irq low on
+  every poll). Records: `23 11 5D E3 54 00 00 1E` and `23 01 D0 63 54 00 00 1D` alternating; fts5 decode: (861,1358) type 1 and
+  (976,1350) type 0, z=0, last byte 0x1c-0x1f. Fixed x/y while "touching" => v13 guided windows + markers to tell touch from noise.
+
+### Mi 8 touch v13 result (2026-10-29) and what ST's fts.c says
+
+- Window A (no touch) and B (top-left) both show n ~ 2000-2400 touch events with identical x/y ranges: the stream is not the finger.
+  Events: `23 11 BD B3 62 00 00 1C`, `23 01 D2 B3 56 .. 1D`, `23 21 5E E3 54 .. 1E`: ids 1/0/2 (b1>>4), type finger (b1&0xf), z=0, b7&0x1f = FIFO
+  count 28-31 (saturated).
+- ST fts.c (Pixel 3 tree): events_remaining = b7 & 0x1f; Sense ON = A0 00 FF; flush = A4 00 01; force cal = A4 02 <CAL_* mask>; the
+  stock flow also runs flashProcedure/initialization (Mi 8 log: ROM loads fw 0x51 + config 0x21 each boot, ~5 s). The flash/RAM load
+  code (ftsFlash.c) and the Mi 8 vendor driver are still unread.
+
+### Mi 8 touch v14 result (2026-10-29) and the burn port
+
+- Ghost persists with the FIFO drained (remaining 0-2): one record `23 01 5E E3 54 00 00 xx` (id 0, finger, x=862 y=1358 z=0), ~155/s in
+  hands-off period (`CAL0 n=0x3a5` in 6 s); v14's CAL1 and window lines were not captured (photo ended at `FCAL rc=0`).
+- ST fts_lib (Google fts_touch tree) `flash_burn` is the 5 s `load program/load config` step in the Mi 8 log (same strings). Constants used:
+  HW reg cmd 0xFA, unlock 0x25<-0x20 and 0x6B<-0x00, erase unlock 0xDE<-0x03, erase 0x6A<-0xA0 (wait on 0x6A bit7), DMA config 0x72, DMA start
+  0x6B 00 40 42 0F 00 00 C0 (wait on 0x71), system reset 0x20000024<-0x81, hold M3 <-0x01, uvlo 0x1B<-0x66, autopowerdown 0x68<-0x13;
+  FLASH_ADDR_CODE 0, config 0x7C00 (or from the organisation bytes at file offset 280..283), DMA_CHUNK 32, FLASH_CHUNK 32 KB here.
+- .ftb header: signature 0xAA55AA55 @0, ftb ver @4, target 36 39 @8, svn @12, fw ver @16, cfg ver @24, sec sizes @44..56, data @64, 4-byte crc at the end.
+
+### Mi 8 touch works with firmware 0x45 / config 0x19 (2026-11-03) and the iOS integration
+
+- Owner result: burning candidate 2 (`FW 0x45 / config 0x19`, one of the four FTM5 images embedded in the ROM kernel: 0x54/0x24, 0x62/0x31,
+  0x45/0x19, 0x54/0x2a) made touch work in the v15 probe. The e1 file the stock log names (FW 0x51, config 0x21, 94376 + 2656 bytes) was never
+  found on the phone; the uploaded `st_fts_e1.ftb` is candidate 2.
+- iOS path: shim `mi8_touch_bringup()` (called from `loader_boot` after the payload is validated): vddio, avdd (RPMh), reset, firmware burn if the
+  version differs, Sense ON, FIFO flush. XNU `mi8/xnu/mi8_touch.c` (patch `0099-mi8-fts-touch.patch`, `bsd/conf/files` pointed at it by
+  `patch-board.py`): bit-banged I2C on gpio33/34, event FIFO as in ST fts.c, HID through `sweet_hid_touch`. Coordinates: identity onto 1079 x 2247
+  unless boot-args `mi8touchxmax` / `mi8touchymax` give the chip's range. Host tests: `mi8/host/run_tests.sh` (shim probe, bring-up, burn stream
+  against `ref_burn.py`, XNU driver against a simulated chip).

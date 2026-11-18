@@ -11,9 +11,13 @@
 #include "mmu.h"
 #include "loader.h"
 #include "ufs.h"
+#include "board.h"
+#ifdef TARGET_MI8
+#include "mi8.h"
+#endif
 
-#define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
+#define RESTART_NORMAL		0x77665501U	/* what Linux writes for a plain reboot */
 #define PSHOLD			0x0c264000UL
 
 #define GICD_BASE		0x17a00000UL
@@ -106,7 +110,12 @@ static void __attribute__((noreturn)) reset(unsigned after_s)
 	con_skip();
 	con_str("RESET", after_s > 20 ? "in 40s" : "in 20s");
 	delay_ms(after_s * 1000);
+#if defined(TARGET_MI8) && !defined(MI8_RESET_BOOTLOADER)
+	/* Boot Android next: a single warm reset keeps DDR, so the ramoops log written by mi8.c survives. */
+	wr32(IMEM_RESTART_REASON, RESTART_NORMAL);
+#else
 	wr32(IMEM_RESTART_REASON, RESTART_BOOTLOADER);
+#endif
 	__asm__ volatile("dsb sy" ::: "memory");
 	smc(PSCI_SYSTEM_RESET, 0, 0, 0);
 	wr32(PSHOLD, 0);
@@ -158,6 +167,9 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 	con_hex("X0", regs[0]);
 	con_hex("X1", regs[1]);
 	con_hex("X30", regs[29]);	/* stashed lr is just above the frame */
+#ifdef TARGET_MI8
+	mi8_panic_log(stage, slot, rsr("esr_el1"), rsr("elr_el1"), rsr("far_el1"));
+#endif
 	reset(40);
 }
 
@@ -383,6 +395,19 @@ void shim_main(uint64_t dtb)
 	con_str("LOADER", why);
 	con_skip();
 
+#ifdef TARGET_MI8
+	/* No payload: Mi 8 bring-up. Display dump + colour cycle (no display writes), then the
+	 * read-only UFS probe below on a clean screen, then reset to Android after ~3 min. */
+	stage = "mi8 diag";
+	mi8_diag(dtb);
+	stage = "mi8 touch probe";
+	mi8_touch_probe();
+#ifndef MI8_UFS_PROBE
+	reset(20);	/* UFS already verified on this phone; build with -DMI8_UFS_PROBE to run it again */
+#endif
+	con_clear(BLUE);
+	con_str("MI8", "ufs probe (read-only)");
+#endif
 	/* No payload: probe the internal UFS while the MMU is still off. */
 	stage = "ufs";
 	test_ufs();
