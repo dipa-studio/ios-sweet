@@ -1,0 +1,151 @@
+
+name: xnu-linux
+
+on:
+  workflow_dispatch:
+    inputs:
+      macos_version:
+        description: macOS release (13.5 = XNU 8796)
+        type: choice
+        options:
+          - "13.5"
+        default: "13.5"
+
+  push:
+    branches:
+      - main
+      - angelican/minimal-shim
+    paths:
+      - "xnu/patches/**"
+      - ".github/workflows/xnu-linux.yml"
+
+concurrency:
+  group: xnu-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Linux XNU toolchain and source test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    env:
+      MACOS_VERSION: ${{ inputs.macos_version || '13.5' }}
+      UNIXNU_TOOLCHAIN: /opt/unixnu-linux
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Checkout Linux toolchain
+        run: |
+          git clone --depth 1 \
+            https://github.com/UniXNU/UniXNU.git \
+            linux-toolchain
+
+      - name: Build Linux XNU toolchain
+        run: |
+          cd linux-toolchain
+
+          sudo python3 scripts/linux/setup-toolchain.py \
+            "$UNIXNU_TOOLCHAIN" \
+            --jobs 2
+
+      - name: Verify Linux toolchain
+        run: |
+          set -eux
+
+          TOOLCHAIN="$UNIXNU_TOOLCHAIN"
+
+          "$TOOLCHAIN/llvm/bin/clang" --version
+          "$TOOLCHAIN/CommandLineTools/usr/bin/ld" -v || true
+          "$TOOLCHAIN/CommandLineTools/usr/bin/libtool" -V || true
+
+          test -x "$TOOLCHAIN/llvm/bin/clang"
+          test -x "$TOOLCHAIN/CommandLineTools/usr/bin/ld"
+          test -x "$TOOLCHAIN/CommandLineTools/usr/bin/libtool"
+          test -x "$TOOLCHAIN/CommandLineTools/usr/bin/mig"
+          test -x "$TOOLCHAIN/XcodeDefault.xctoolchain/usr/bin/iig"
+
+          "$TOOLCHAIN/llvm/bin/clang" \
+            -target arm64-apple-ios16.0 \
+            -dM -E -x c /dev/null
+
+      - name: Fetch matching XNU source
+        run: |
+          set -eux
+
+          RELEASE_TAG="macos-${MACOS_VERSION//./}"
+          RELEASE_URL="https://raw.githubusercontent.com/apple-oss-distributions/distribution-macOS/${RELEASE_TAG}/release.json"
+
+          curl -fL "$RELEASE_URL" -o release.json
+
+          XNU_TAG=$(jq -r \
+            '.projects[] | select(.project == "xnu") | .tag' \
+            release.json)
+
+          if [ -z "$XNU_TAG" ] || [ "$XNU_TAG" = "null" ]; then
+            echo "Could not resolve XNU tag"
+            exit 1
+          fi
+
+          echo "XNU_TAG=$XNU_TAG" >> "$GITHUB_ENV"
+
+          git clone --depth 1 \
+            --branch "$XNU_TAG" \
+            https://github.com/apple-oss-distributions/xnu.git \
+            xnu-linux
+
+          git -C xnu-linux rev-parse HEAD
+
+      - name: Test XNU-specific Clang builtins
+        run: |
+          set -eux
+
+          CLANG="$UNIXNU_TOOLCHAIN/llvm/bin/clang"
+
+          printf '%s\n' \
+            '#if __has_builtin(__builtin_xnu_type_summary)' \
+            'XNU_BUILTINS_AVAILABLE' \
+            '#endif' \
+            | "$CLANG" -target arm64-apple-ios16.0 -E -x c -
+
+      - name: Save build diagnostics
+        if: always()
+        run: |
+          mkdir -p out
+
+          {
+            echo "Host:"
+            uname -a
+
+            echo
+            echo "Distribution:"
+            cat /etc/os-release
+
+            echo
+            echo "XNU version:"
+            git -C xnu-linux describe --tags --always 2>&1 || true
+
+            echo
+            echo "Toolchain:"
+            "$UNIXNU_TOOLCHAIN/llvm/bin/clang" --version 2>&1 || true
+
+            echo
+            echo "Tools:"
+            find "$UNIXNU_TOOLCHAIN" \
+              \( -name clang -o -name ld -o -name mig -o -name iig \) \
+              -type f 2>/dev/null || true
+          } > out/diagnostics.txt
+
+          cp release.json out/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xnu-linux-diagnostics
+          path: out/
+          retention-days: 7
