@@ -1,0 +1,763 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -110,6 +110,8 @@
+ bsd/dev/m30s_keys.c			standard
+ bsd/dev/m30s_gpio.c			standard
++bsd/dev/m30s_speedy.c			standard
++bsd/dev/m30s_battery.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -15,6 +15,7 @@
+ iokit/Kernel/arm/SweetWatchdog.cpp                               optional iokitcpp
+ iokit/Kernel/arm/SweetSurface.cpp                                optional iokitcpp
+ iokit/Kernel/arm/SweetFramebuffer.cpp                            optional iokitcpp
++iokit/Kernel/arm/M30SBattery.cpp                                 optional iokitcpp
+ iokit/Kernel/arm/hid/SweetHID.cpp                                optional iokitcpp
+ iokit/Kernel/arm/hid/IOHIDEvent.cpp                              optional iokitcpp
+ iokit/Kernel/arm/hid/IOHIDEventServiceQueue.cpp                  optional iokitcpp
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -77,6 +77,11 @@
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+     "   {"
+     "     'IOClass'         = SweetBattery;"
+     "     'IOProviderClass' = IOResources;"
+     "     'IOMatchCategory' = SweetBattery;"
+     "   },"
++#elif defined(ARM64_BOARD_CONFIG_M30S)
++    "   {"
++    "     'IOClass'         = M30SBattery;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = M30SBattery;"
++    "   },"
+ #endif
+     "   {"
+     "     'IOClass'         = IOPanicPlatform;"
+diff --git a/bsd/dev/m30s_ufs.c b/bsd/dev/m30s_ufs.c
+--- a/bsd/dev/m30s_ufs.c
++++ b/bsd/dev/m30s_ufs.c
+@@ -52,6 +52,8 @@
+ extern int hz;
+ static void m30s_log_start(void);
+ extern void m30s_hsi2c_init(void);
+ extern void m30s_touch_init(void);
+ extern void m30s_keys_init(void);
+ extern void m30s_gpio_init(void);
++extern void m30s_speedy_init(void);
++extern void m30s_battery_init(void);
+
+ #define REG_CAP         0x00
+ #define REG_IS          0x20
+@@ -603,6 +605,9 @@
+ 	m30s_log_start();
+ 	/* Input drivers (HID services in iokit/Kernel/arm/hid/SweetHID.cpp). */
+ 	m30s_hsi2c_init();
+ 	m30s_touch_init();
+ 	m30s_keys_init();
+ 	m30s_gpio_init();
++	/* Battery via Speedy/I2C to S2MPU09 */
++	m30s_speedy_init();
++	m30s_battery_init();
+ 	return 0;
+ }
+--- /dev/null
++++ b/bsd/dev/m30s_speedy.c
+@@ -0,0 +1,300 @@
++/*
++ * M30S Speedy (S2MPU09 PMIC) driver.
++ *
++ * Speedy is a Samsung-specific I2C master at 0x11A10000 that communicates
++ * with the S2MPU09 PMIC. The PMIC is at I2C address 0x00 on the Speedy bus.
++ * This driver provides read-only access to PMIC registers for battery monitoring.
++ * Based on Samsung exynos-speedy and s2mpu09 drivers.
++ */
++#if defined(ARM64_BOARD_CONFIG_M30S)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++void m30s_speedy_init(void);
++int m30s_speedy_read(uint8_t reg, uint8_t *val);
++int m30s_speedy_write(uint8_t reg, uint8_t val);
++
++#define SPEEDY_BASE		0x11A10000
++#define SPEEDY_SIZE		0x2000
++
++/* Speedy register offsets (from Samsung exynos-speedy) */
++#define SPEEDY_CFG		0x00
++#define SPEEDY_TXDATA		0x04
++#define SPEEDY_RXDATA		0x08
++#define SPEEDY_STATUS		0x0c
++#define SPEEDY_IRQ		0x10
++#define SPEEDY_IRQ_MASK		0x14
++#define SPEEDY_CMD		0x18
++#define SPEEDY_SLAVE_ADDR	0x1c
++#define SPEEDY_TIMING		0x20
++
++/* CFG register bits */
++#define CFG_MASTER_EN		(1 << 0)
++#define CFG_10BIT_ADDR		(1 << 1)
++#define CFG_HS_MODE		(1 << 2)
++#define CFG_SLAVE_ADDR_SHIFT	8
++
++/* STATUS register bits */
++#define STATUS_BUSY		(1 << 0)
++#define STATUS_TX_DONE		(1 << 1)
++#define STATUS_RX_DONE		(1 << 2)
++#define STATUS_NACK		(1 << 3)
++#define STATUS_ARB_LOST		(1 << 4)
++
++/* CMD register bits */
++#define CMD_START		(1 << 0)
++#define CMD_STOP		(1 << 1)
++#define CMD_READ		(1 << 2)
++#define CMD_WRITE		(1 << 3)
++
++static vm_offset_t speedy_regs = 0;
++static bool speedy_initialized = false;
++
++static inline uint32_t
++speedy_rd(uint32_t off)
++{
++	return *(volatile uint32_t *)(speedy_regs + off);
++}
++
++static inline void
++speedy_wr(uint32_t off, uint32_t val)
++{
++	*(volatile uint32_t *)(speedy_regs + off) = val;
++	__asm__ volatile("dsb sy" ::: "memory");
++}
++
++static void
++speedy_wait_idle(void)
++{
++	for (int i = 0; i < 10000; i++) {
++		if (!(speedy_rd(SPEEDY_STATUS) & STATUS_BUSY))
++			return;
++		delay(1);
++	}
++}
++
++static int
++speedy_xfer(uint8_t slave_addr, const uint8_t *tx, size_t tx_len, uint8_t *rx, size_t rx_len)
++{
++	if (!speedy_initialized)
++		return ENXIO;
++
++	speedy_wait_idle();
++
++	/* Set slave address */
++	speedy_wr(SPEEDY_SLAVE_ADDR, slave_addr << SPEEDY_SLAVE_ADDR_SHIFT);
++
++	/* Enable master */
++	speedy_wr(SPEEDY_CFG, CFG_MASTER_EN);
++
++	/* Write TX data */
++	for (size_t i = 0; i < tx_len; i++) {
++		speedy_wr(SPEEDY_TXDATA, tx[i]);
++		speedy_wr(SPEEDY_CMD, CMD_WRITE | CMD_START);
++		speedy_wait_idle();
++		if (speedy_rd(SPEEDY_STATUS) & STATUS_NACK) {
++			speedy_wr(SPEEDY_CMD, CMD_STOP);
++			speedy_wait_idle();
++			return ENXIO;
++		}
++	}
++
++	/* Read RX data */
++	for (size_t i = 0; i < rx_len; i++) {
++		speedy_wr(SPEEDY_CMD, CMD_READ | CMD_START | (i == rx_len - 1 ? CMD_STOP : 0));
++		speedy_wait_idle();
++		if (speedy_rd(SPEEDY_STATUS) & STATUS_NACK) {
++			speedy_wr(SPEEDY_CMD, CMD_STOP);
++			speedy_wait_idle();
++			return ENXIO;
++		}
++		rx[i] = (uint8_t)speedy_rd(SPEEDY_RXDATA);
++	}
++
++	/* Send stop */
++	speedy_wr(SPEEDY_CMD, CMD_STOP);
++	speedy_wait_idle();
++
++	return 0;
++}
++
++int
++m30s_speedy_read(uint8_t reg, uint8_t *val)
++{
++	uint8_t tx = reg;
++	return speedy_xfer(0x00, &tx, 1, val, 1);  /* S2MPU09 at address 0x00 */
++}
++
++int
++m30s_speedy_write(uint8_t reg, uint8_t val)
++{
++	uint8_t tx[2] = { reg, val };
++	return speedy_xfer(0x00, tx, 2, NULL, 0);
++}
++
++void
++m30s_speedy_init(void)
++{
++	if (speedy_initialized)
++		return;
++
++	speedy_regs = ml_io_map(SPEEDY_BASE, SPEEDY_SIZE);
++	if (!speedy_regs) {
++		printf("M30S SPEEDY: failed to map registers\n");
++		return;
++	}
++
++	/* Disable master */
++	speedy_wr(SPEEDY_CFG, 0);
++
++	/* Configure timing for 400 kHz fast mode */
++	/* PCLK = 26 MHz */
++	speedy_wr(SPEEDY_TIMING, 0x1234);  /* Placeholder - actual values from Samsung driver */
++
++	/* Mask interrupts (polled mode) */
++	speedy_wr(SPEEDY_IRQ_MASK, 0);
++
++	/* Clear any pending interrupts */
++	speedy_rd(SPEEDY_IRQ);
++
++	speedy_initialized = true;
++	printf("M30S SPEEDY: initialized at 0x%lx (S2MPU09 PMIC)\n", SPEEDY_BASE);
++}
++#endif /* ARM64_BOARD_CONFIG_M30S */
+--- /dev/null
++++ b/bsd/dev/m30s_battery.c
+@@ -0,0 +1,500 @@
++/*
++ * M30S battery driver for SM5713 fuel gauge (via S2MPU09 PMIC on Speedy bus).
++ *
++ * Reads battery voltage, current, temperature, and SOC from SM5713 registers.
++ * Based on Samsung sec-battery and sm5713-fuelgauge drivers.
++ */
++#if defined(ARM64_BOARD_CONFIG_M30S)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern int m30s_speedy_read(uint8_t reg, uint8_t *val);
++extern int m30s_speedy_write(uint8_t reg, uint8_t val);
++void m30s_battery_init(void);
++
++/* SM5713 fuel gauge registers (from Samsung driver) */
++#define FG_REG_DEVICE_ID		0x00
++#define FG_REG_VERSION		0x01
++#define FG_REG_VCELL_L		0x02
++#define FG_REG_VCELL_H		0x03
++#define FG_REG_CURRENT_L		0x04
++#define FG_REG_CURRENT_H		0x05
++#define FG_REG_TEMP_L		0x06
++#define FG_REG_TEMP_H		0x07
++#define FG_REG_SOC		0x08
++#define FG_REG_STATUS		0x09
++#define FG_REG_RSOC		0x0a
++#define FG_REG_FCC_L		0x0c
++#define FG_REG_FCC_H		0x0d
++#define FG_REG_RCE_L		0x0e
++#define FG_REG_RCE_H		0x0f
++#define FG_REG_CONFIG		0x10
++#define FG_REG_MODE		0x11
++
++/* S2MPU09 charger registers */
++#define CHG_REG_STATUS1		0x00
++#define CHG_REG_STATUS2		0x01
++#define CHG_REG_IRQ1		0x02
++#define CHG_REG_IRQ2		0x03
++#define CHG_REG_IRQ_MASK1	0x04
++#define CHG_REG_IRQ_MASK2	0x05
++#define CHG_REG_CNTL1		0x06
++#define CHG_REG_CNTL2		0x07
++#define CHG_REG_CNTL3		0x08
++#define CHG_REG_CNTL4		0x09
++#define CHG_REG_CNTL5		0x0a
++#define CHG_REG_CNTL6		0x0b
++#define CHG_REG_CNTL7		0x0c
++#define CHG_REG_CNTL8		0x0d
++#define CHG_REG_CNTL9		0x0e
++#define CHG_REG_INPUT_LIMIT	0x0f
++#define CHG_REG_FAST_CHG	0x10
++#define CHG_REG_TERM_CURR	0x11
++#define CHG_REG_TERM_VOLT	0x12
++#define CHG_REG_WDT		0x13
++
++static struct {
++	bool started;
++	int battery_sleep_chan;
++	int last_soc;
++	int last_voltage_mv;
++	int last_current_ma;
++	bool charger_online;
++	bool charging;
++} bat;
++
++static void
++battery_wait(unsigned ms)
++{
++	uint64_t deadline;
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&bat.battery_sleep_chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static bool
++battery_read_word(uint8_t reg_lo, uint8_t reg_hi, uint16_t *val)
++{
++	uint8_t lo, hi;
++	if (m30s_speedy_read(reg_lo, &lo) || m30s_speedy_read(reg_hi, &hi))
++		return false;
++	*val = (uint16_t)lo | ((uint16_t)hi << 8);
++	return true;
++}
++
++static int
++battery_read_soc(void)
++{
++	uint8_t soc;
++	if (m30s_speedy_read(FG_REG_SOC, &soc))
++		return -1;
++	return (int)soc;
++}
++
++static int
++battery_read_voltage_mv(void)
++{
++	uint16_t vcell;
++	if (!battery_read_word(FG_REG_VCELL_L, FG_REG_VCELL_H, &vcell))
++		return -1;
++	/* SM5713: 1 LSB = 1 mV (verify from datasheet) */
++	return (int)vcell;
++}
++
++static int
++battery_read_current_ma(void)
++{
++	uint16_t curr;
++	if (!battery_read_word(FG_REG_CURRENT_L, FG_REG_CURRENT_H, &curr))
++		return 0;
++	/* SM5713: signed 16-bit, 1 LSB = 0.5 mA (verify) */
++	int16_t signed_curr = (int16_t)curr;
++	return signed_curr / 2;
++}
++
++static int
++battery_read_temp_degc(void)
++{
++	uint16_t temp;
++	if (!battery_read_word(FG_REG_TEMP_L, FG_REG_TEMP_H, &temp))
++		return 250;  /* Default 25C */
++	/* SM5713: temperature calculation from ADC value */
++	/* Simplified: return 25C for now */
++	return 250;
++}
++
++static bool
++battery_read_charger_status(void)
++{
++	uint8_t status;
++	if (m30s_speedy_read(CHG_REG_STATUS1, &status))
++		return false;
++	bat.charger_online = (status & 0x10) != 0;  /* VBUS present */
++	bat.charging = (status & 0x01) != 0;        /* Charging active */
++	return true;
++}
++
++static void
++battery_publish(int soc, int voltage_mv, int current_ma, bool external,
++    bool capable, bool charging, bool full)
++{
++	/* Use consistent mAh units (from DT: 5020 mAh) */
++	const unsigned capacity = (5020u * (unsigned)soc + 50u) / 100u;
++
++	/* TODO: Publish via IOPMPowerSource or equivalent */
++	/* For now, just log */
++	IOLog("M30S BATTERY: %d%% %dmV %dmA ext=%d cap=%d chg=%d full=%d\n",
++	    soc, voltage_mv, current_ma, external, capable, charging, full);
++}
++
++static void
++battery_thread(void *arg, wait_result_t result)
++{
++	(void)arg;
++	(void)result;
++
++	printf("M30S BATTERY: starting poll thread\n");
++
++	while (true) {
++		int soc = battery_read_soc();
++		int voltage_mv = battery_read_voltage_mv();
++		int current_ma = battery_read_current_ma();
++		int temp_degc = battery_read_temp_degc();
++		battery_read_charger_status();
++
++		if (soc >= 0 && voltage_mv > 0) {
++			bat.last_soc = soc;
++			bat.last_voltage_mv = voltage_mv;
++			bat.last_current_ma = current_ma;
++
++			bool full = bat.charger_online && !bat.charging && soc >= 100;
++			battery_publish(soc, voltage_mv, current_ma, bat.charger_online,
++			    bat.charger_online, bat.charging, full);
++		}
++
++		/* Poll every 30 seconds */
++		battery_wait(30000);
++	}
++}
++
++void
++m30s_battery_init(void)
++{
++	int enabled = 1;
++	thread_t thread;
++
++	if (bat.started)
++		return;
++	bat.started = true;
++
++	(void)PE_parse_boot_argn("m30sbattery", &enabled, sizeof(enabled));
++	if (!enabled) {
++		printf("M30S BATTERY: disabled (m30sbattery=0)\n");
++		return;
++	}
++
++	/* Ensure Speedy is initialized */
++	m30s_speedy_init();
++
++	/* Read initial values */
++	battery_read_soc();
++	battery_read_voltage_mv();
++	battery_read_current_ma();
++	battery_read_charger_status();
++
++	kern_return_t kr = kernel_thread_start(battery_thread, NULL, &thread);
++	if (kr == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		printf("M30S BATTERY: kernel_thread_start failed %d\n", kr);
++	}
++}
++#endif /* ARM64_BOARD_CONFIG_M30S */
+--- /dev/null
++++ b/iokit/Kernel/arm/M30SBattery.cpp
+@@ -0,0 +1,350 @@
++/*
++ * M30S built-in iOS battery service (IOPMPowerSource).
++ *
++ * Reads from SM5713 fuel gauge via S2MPU09 PMIC on Speedy bus.
++ * Publishes battery status to iOS powerd.
++ */
++#if defined(ARM64_BOARD_CONFIG_M30S)
++#include <IOKit/IOLib.h>
++#include <IOKit/IOWorkLoop.h>
++#include <IOKit/IOTimerEventSource.h>
++#include <IOKit/pwr_mgt/IOPMPowerSource.h>
++#include <libkern/c++/OSCollectionIterator.h>
++#include <pexpert/pexpert.h>
++
++extern "C" int m30s_speedy_read(uint8_t reg, uint8_t *val);
++extern "C" int m30s_speedy_write(uint8_t reg, uint8_t val);
++
++class M30SBattery : public IOPMPowerSource {
++    OSDeclareDefaultStructors(M30SBattery);
++public:
++    bool init(OSDictionary *dictionary = NULL) APPLE_KEXT_OVERRIDE;
++    bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++    void stop(IOService *provider) APPLE_KEXT_OVERRIDE;
++    void free(void) APPLE_KEXT_OVERRIDE;
++private:
++    IOWorkLoop *fLoop;
++    IOTimerEventSource *fTimer;
++    bool fTimerAdded, fRunning;
++    int fLastMode;
++    void putNumber(const char *key, UInt32 value);
++    void putBool(const char *key, bool value);
++    void publish(unsigned percent, unsigned mv, int ma, bool external,
++        bool capable, bool charging, bool full, bool measured, bool currentValid);
++    void poll(void);
++    static void timerFired(OSObject *owner, IOTimerEventSource *sender);
++    static IOReturn stopPolling(OSObject *owner, void *, void *, void *, void *);
++    static bool readWord(uint8_t reg_lo, uint8_t reg_hi, uint16_t *value);
++    static unsigned estimatePercent(unsigned mv);
++};
++OSDefineMetaClassAndStructors(M30SBattery, IOPMPowerSource);
++
++bool
++M30SBattery::init(OSDictionary *dictionary)
++{
++    if (!IOPMPowerSource::init()) {
++        return false;
++    }
++    fLoop = NULL;
++    fTimer = NULL;
++    fTimerAdded = fRunning = false;
++    if (dictionary) {
++        OSCollectionIterator *it = OSCollectionIterator::withCollection(dictionary);
++        if (!it) {
++            return false;
++        }
++        OSObject *object;
++        bool ok = true;
++        while ((object = it->getNextObject())) {
++            const OSSymbol *key = OSDynamicCast(OSSymbol, object);
++            if (!key || !setProperty(key, dictionary->getObject(key))) {
++                ok = false;
++                break;
++            }
++        }
++        it->release();
++        if (!ok) {
++            return false;
++        }
++    }
++    fLastMode = -1;
++    return true;
++}
++
++void
++M30SBattery::putNumber(const char *key, UInt32 value)
++{
++    const OSSymbol *symbol = OSSymbol::withCString(key);
++    OSNumber *number = OSNumber::withNumber(value, 32);
++    if (symbol && number) {
++        setPSProperty(symbol, number);
++    }
++    OSSafeReleaseNULL(number);
++    OSSafeReleaseNULL(symbol);
++}
++
++void
++M30SBattery::putBool(const char *key, bool value)
++{
++    const OSSymbol *symbol = OSSymbol::withCString(key);
++    if (symbol) {
++        setPSProperty(symbol, value ? kOSBooleanTrue : kOSBooleanFalse);
++        symbol->release();
++    }
++}
++
++void
++M30SBattery::publish(unsigned percent, unsigned mv, int ma, bool external,
++    bool capable, bool charging, bool full, bool measured, bool currentValid)
++{
++    /* Use consistent mAh units (DT nominal=5020). powerd computes C*100/M. */
++    const unsigned capacity = (5020u * percent + 50u) / 100u;
++    setBatteryInstalled(true);
++    setCurrentCapacity(capacity);
++    setMaxCapacity(5020);
++    setExternalConnected(external);
++    setExternalChargeCapable(capable);
++    setIsCharging(charging);
++    setAtWarnLevel(false);
++    setAtCriticalLevel(false);
++    setVoltage(mv);
++    setAmperage(ma);
++    setTimeRemaining(-1);
++    setCycleCount(0);
++    putBool("FullyCharged", full);
++    putBool("AppleRawExternalConnected", external);
++    putNumber("AppleRawCurrentCapacity", capacity);
++    putNumber("AppleRawMaxCapacity", 5020);
++    putNumber("DesignCapacity", 5020);
++    putNumber("InstantAmperage", (UInt32)ma);
++    putNumber("Temperature", 2500);  /* 25C in centidegrees */
++    putBool("M30SBatteryHardwareSampleValid", measured);
++    putBool("M30SBatteryCurrentValid", currentValid);
++    putBool("M30SBatterySOCEstimated", measured);
++    putBool("M30SBatteryTemperatureEstimated", true);
++    putBool("M30SBatteryFallback", !measured);
++    putNumber("M30SBatteryPercent", percent);
++
++    /* IOPMCopyBatteryInfo's per-source compatibility dictionary. */
++    OSDictionary *legacy = OSDictionary::withCapacity(7);
++    if (legacy) {
++        const char *keys[] = {kIOBatteryCurrentChargeKey, kIOBatteryCapacityKey,
++            kIOBatteryVoltageKey, kIOBatteryAmperageKey, kIOBatteryCycleCountKey,
++            kIOBatteryFlagsKey};
++        UInt32 values[] = {capacity, 5020, mv, (UInt32)ma, 0,
++            (UInt32)(kIOBatteryInstalled | (external ? kIOBatteryChargerConnect : 0) |
++            (charging ? kIOBatteryCharge : 0))};
++        for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
++            OSNumber *number = OSNumber::withNumber(values[i], 32);
++            if (number) {
++                legacy->setObject(keys[i], number);
++                number->release();
++            }
++        }
++        setLegacyIOBatteryInfo(legacy);
++        legacy->release();
++    }
++    updateStatus();
++    int mode = measured ? 1 : 0;
++    if (mode != fLastMode) {
++        IOLog("M30S BATTERY: %s, %u%% %umV external=%d charging=%d\n",
++            measured ? "SM57150 / estimated SOC" : "static fallback",
++            percent, mv, external, charging);
++        fLastMode = mode;
++    }
++}
++
++bool
++M30SBattery::readWord(uint8_t reg_lo, uint8_t reg_hi, uint16_t *value)
++{
++    uint16_t previous = 0;
++    for (unsigned attempt = 0; attempt < 4; ++attempt) {
++        uint8_t lo, hi;
++        if (m30s_speedy_read(reg_lo, &lo) ||
++            m30s_speedy_read(reg_hi, &hi)) {
++            return false;
++        }
++        uint16_t next = (uint16_t)((unsigned)lo | ((unsigned)hi << 8));
++        if (attempt && next == previous) {
++            *value = next;
++            return true;
++        }
++        previous = next;
++    }
++    return false;
++}
++
++unsigned
++M30SBattery::estimatePercent(unsigned mv)
++{
++    /* Generic single-cell curve, intentionally NOT advertised as QG SOC. */
++    static const unsigned volts[] = {3400, 3500, 3600, 3700, 3800, 3900,
++        4000, 4100, 4200, 4350};
++    static const unsigned soc[] = {1, 5, 10, 20, 40, 60, 75, 85, 93, 100};
++    if (mv <= volts[0]) {
++        return soc[0];
++    }
++    for (unsigned i = 1; i < sizeof(volts) / sizeof(volts[0]); ++i) {
++        if (mv < volts[i]) {
++            return soc[i - 1] + (mv - volts[i - 1]) * (soc[i] - soc[i - 1]) /
++                   (volts[i] - volts[i - 1]);
++        }
++    }
++    return 100;
++}
++
++void
++M30SBattery::poll(void)
++{
++    uint8_t vcell_lo, vcell_hi, curr_lo, curr_hi, temp_lo, temp_hi, soc, status;
++    bool valid = true;
++
++    if (m30s_speedy_read(0x02, &vcell_lo) ||
++        m30s_speedy_read(0x03, &vcell_hi) ||
++        m30s_speedy_read(0x04, &curr_lo) ||
++        m30s_speedy_read(0x05, &curr_hi) ||
++        m30s_speedy_read(0x06, &temp_lo) ||
++        m30s_speedy_read(0x07, &temp_hi) ||
++        m30s_speedy_read(0x08, &soc) ||
++        m30s_speedy_read(0x00, &status)) {  /* CHG_REG_STATUS1 */
++        valid = false;
++    }
++
++    unsigned mv = valid ? ((unsigned)vcell_lo | ((unsigned)vcell_hi << 8)) : 0;
++    valid = valid && mv >= 2800 && mv <= 4600;
++
++    if (!valid) {
++        publish(100, 4200, 0, true, true, false, true, false, false);
++        return;
++    }
++
++    bool external = (status & 0x10) != 0;  /* VBUS present */
++    bool capable = external;
++    bool charging = (status & 0x01) != 0;  /* Charging active */
++    bool full = external && !charging && soc >= 100;
++
++    int16_t signed_curr = (int16_t)((unsigned)curr_lo | ((unsigned)curr_hi << 8));
++    int ma = signed_curr / 2;  /* 0.5 mA per LSB */
++
++    publish(full ? 100 : soc, mv, ma, external, capable, charging, full, true, true);
++}
++
++void
++M30SBattery::timerFired(OSObject *owner, IOTimerEventSource *sender)
++{
++    M30SBattery *self = OSDynamicCast(M30SBattery, owner);
++    if (self && self->fRunning) {
++        self->poll();
++        sender->setTimeoutMS(30000);
++    }
++}
++
++bool
++M30SBattery::start(IOService *provider)
++{
++    if (!IOPMPowerSource::start(provider)) {
++        return false;
++    }
++
++    int real = 0;
++    (void)PE_parse_boot_argn("m30sbattery", &real, sizeof(real));
++
++    if (real == 1) {
++        fLoop = IOWorkLoop::workLoop();
++        fTimer = IOTimerEventSource::timerEventSource(this, &M30SBattery::timerFired);
++        if (fLoop && fTimer && fLoop->addEventSource(fTimer) == kIOReturnSuccess) {
++            fTimerAdded = true;
++            fRunning = true;
++            fTimer->setTimeoutMS(30000);
++        } else {
++            IOLog("M30S BATTERY: timer unavailable; static fallback\n");
++        }
++    }
++
++    /* Publish initial state */
++    poll();
++    registerService();
++    return true;
++}
++
++void
++M30SBattery::stop(IOService *provider)
++{
++    if (fLoop && fTimerAdded) {
++        (void)fLoop->runAction(&M30SBattery::stopPolling, this);
++        fLoop->removeEventSource(fTimer);
++        fTimerAdded = false;
++    }
++    IOPMPowerSource::stop(provider);
++}
++
++IOReturn
++M30SBattery::stopPolling(OSObject *owner, void *, void *, void *, void *)
++{
++    M30SBattery *self = OSDynamicCast(M30SBattery, owner);
++    if (!self) {
++        return kIOReturnBadArgument;
++    }
++    self->fRunning = false;
++    self->fTimer->cancelTimeout();
++    self->fTimer->disable();
++    return kIOReturnSuccess;
++}
++
++void
++M30SBattery::free(void)
++{
++    OSSafeReleaseNULL(fTimer);
++    OSSafeReleaseNULL(fLoop);
++    IOPMPowerSource::free();
++}
++#endif /* ARM64_BOARD_CONFIG_M30S */

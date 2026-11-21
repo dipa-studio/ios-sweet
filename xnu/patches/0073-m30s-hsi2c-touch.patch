@@ -1,0 +1,470 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -106,6 +106,8 @@
+ bsd/dev/m30s_ufs.c			standard
++bsd/dev/m30s_hsi2c.c			standard
++bsd/dev/m30s_touch.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+diff --git a/bsd/dev/m30s_ufs.c b/bsd/dev/m30s_ufs.c
+--- a/bsd/dev/m30s_ufs.c
++++ b/bsd/dev/m30s_ufs.c
+@@ -47,6 +47,8 @@
+ extern int hz;
+ static void m30s_log_start(void);
++extern void m30s_hsi2c_init(void);
++extern void m30s_touch_init(void);
+
+ #define REG_CAP         0x00
+ #define REG_IS          0x20
+@@ -599,6 +601,9 @@
+ 	    mu.writable ? "read-write" : "read-only", mu.dma_pa);
+ 	m30s_log_start();
++	/* Input drivers (HID services in iokit/Kernel/arm/hid/SweetHID.cpp). */
++	m30s_hsi2c_init();
++	m30s_touch_init();
+ 	return 0;
+ }
+
+--- /dev/null
++++ b/bsd/dev/m30s_hsi2c.c
+@@ -0,0 +1,350 @@
++/*
++ * M30S HSI2C (High-Speed I2C) driver for Exynos 9611.
++ *
++ * Controls HSI2C4 at 0x13870000 for the Melfas MSS100 touch controller.
++ * Based on Samsung exynos5-hsi2c driver.
++ */
++#if defined(ARM64_BOARD_CONFIG_M30S)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <kern/clock.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++void m30s_hsi2c_init(void);
++
++#define HSI2C4_BASE		0x13870000
++#define HSI2C_SIZE		0x1000
++
++/* HSI2C register offsets (from exynos5-hsi2c) */
++#define HSI2C_CON		0x00
++#define HSI2C_TAR		0x04
++#define HSI2C_SAR		0x08
++#define HSI2C_DATA_CMD		0x10
++#define HSI2C_SS_SCL_HCNT	0x14
++#define HSI2C_SS_SCL_LCNT	0x18
++#define HSI2C_FS_SCL_HCNT	0x1c
++#define HSI2C_FS_SCL_LCNT	0x20
++#define HSI2C_HS_SCL_HCNT	0x24
++#define HSI2C_HS_SCL_LCNT	0x28
++#define HSI2C_INTR_STAT		0x2c
++#define HSI2C_INTR_MASK		0x30
++#define HSI2C_RAW_INTR_STAT	0x34
++#define HSI2C_RX_TL		0x38
++#define HSI2C_TX_TL		0x3c
++#define HSI2C_CLR_INTR		0x40
++#define HSI2C_CLR_RX_UNDER	0x44
++#define HSI2C_CLR_RX_OVER	0x48
++#define HSI2C_CLR_TX_OVER	0x4c
++#define HSI2C_CLR_RD_REQ	0x50
++#define HSI2C_CLR_TX_ABRT	0x54
++#define HSI2C_CLR_RX_DONE	0x58
++#define HSI2C_CLR_ACTIVITY	0x5c
++#define HSI2C_CLR_STOP_DET	0x60
++#define HSI2C_CLR_START_DET	0x64
++#define HSI2C_CLR_GEN_CALL	0x68
++#define HSI2C_ENABLE		0x6c
++#define HSI2C_STATUS		0x70
++#define HSI2C_TXFLR		0x74
++#define HSI2C_RXFLR		0x78
++#define HSI2C_SDA_HOLD		0x7c
++#define HSI2C_TX_ABRT_SOURCE	0x80
++#define HSI2C_SLV_DATA_NACK	0x88
++#define HSI2C_DMA_CR		0x8c
++#define HSI2C_DMA_TDLR		0x90
++#define HSI2C_DMA_RDLR		0x94
++#define HSI2C_SDA_SETUP		0x98
++#define HSI2C_ACK_GEN_CALL	0x9c
++#define HSI2C_ENABLE_STATUS	0x9c
++
++/* CON register bits */
++#define CON_MASTER_MODE		(1 << 0)
++#define CON_SPEED_STD		(0 << 1)
++#define CON_SPEED_FAST		(1 << 1)
++#define CON_SPEED_HIGH		(2 << 1)
++#define CON_10BIT_ADDR		(1 << 3)
++#define CON_RESTART_EN		(1 << 5)
++#define CON_SLAVE_DISABLE	(1 << 6)
++
++/* STATUS register bits */
++#define STATUS_ACTIVITY		(1 << 0)
++#define STATUS_TFNF		(1 << 1)
++#define STATUS_TFE		(1 << 2)
++#define STATUS_RFNE		(1 << 3)
++#define STATUS_RFF		(1 << 4)
++#define STATUS_MST_ACTIVITY	(1 << 5)
++#define STATUS_SLV_ACTIVITY	(1 << 6)
++
++/* ENABLE register bits */
++#define ENABLE_ENABLE		(1 << 0)
++#define ENABLE_ABORT		(1 << 1)
++
++/* DATA_CMD register bits */
++#define CMD_READ		(1 << 8)
++#define CMD_WRITE		(0 << 8)
++#define CMD_STOP		(1 << 9)
++#define CMD_RESTART		(1 << 10)
++
++static vm_offset_t hsi2c4_regs = 0;
++static bool hsi2c4_initialized = false;
++
++static inline uint32_t
++hsi2c_rd(uint32_t off)
++{
++	return *(volatile uint32_t *)(hsi2c4_regs + off);
++}
++
++static inline void
++hsi2c_wr(uint32_t off, uint32_t val)
++{
++	*(volatile uint32_t *)(hsi2c4_regs + off) = val;
++	__asm__ volatile("dsb sy" ::: "memory");
++}
++
++static void
++hsi2c_wait_idle(void)
++{
++	for (int i = 0; i < 10000; i++) {
++		if (!(hsi2c_rd(HSI2C_STATUS) & STATUS_ACTIVITY))
++			return;
++		delay(1);
++	}
++}
++
++static int
++hsi2c_xfer(uint16_t addr, const uint8_t *tx, size_t tx_len, uint8_t *rx, size_t rx_len)
++{
++	if (!hsi2c4_initialized)
++		return ENXIO;
++
++	hsi2c_wait_idle();
++
++	/* Set target address */
++	hsi2c_wr(HSI2C_TAR, addr);
++
++	/* Enable controller */
++	hsi2c_wr(HSI2C_ENABLE, ENABLE_ENABLE);
++
++	/* Write TX data */
++	for (size_t i = 0; i < tx_len; i++) {
++		uint32_t cmd = CMD_WRITE | tx[i];
++		if (i == tx_len - 1 && rx_len == 0)
++			cmd |= CMD_STOP;
++		else if (i == tx_len - 1 && rx_len > 0)
++			cmd |= CMD_RESTART;
++		hsi2c_wr(HSI2C_DATA_CMD, cmd);
++	}
++
++	/* Read RX data */
++	for (size_t i = 0; i < rx_len; i++) {
++		uint32_t cmd = CMD_READ;
++		if (i == rx_len - 1)
++			cmd |= CMD_STOP;
++		hsi2c_wr(HSI2C_DATA_CMD, cmd);
++		rx[i] = (uint8_t)hsi2c_rd(HSI2C_DATA_CMD);
++	}
++
++	hsi2c_wait_idle();
++
++	/* Disable controller */
++	hsi2c_wr(HSI2C_ENABLE, 0);
++
++	return 0;
++}
++
++int
++m30s_hsi2c_read(uint16_t addr, uint16_t reg, bool wide, uint8_t *buf, size_t len)
++{
++	uint8_t reg_buf[2] = { (uint8_t)(reg >> 8), (uint8_t)reg };
++	int err = hsi2c_xfer(addr, wide ? reg_buf : reg_buf + 1, wide ? 2 : 1, NULL, 0);
++	if (err)
++		return err;
++	return hsi2c_xfer(addr, NULL, 0, buf, len);
++}
++
++int
++m30s_hsi2c_write(uint16_t addr, uint16_t reg, bool wide, const uint8_t *buf, size_t len)
++{
++	uint8_t tx_buf[256];
++	size_t tx_len = 0;
++
++	if (wide) {
++		tx_buf[tx_len++] = (uint8_t)(reg >> 8);
++		tx_buf[tx_len++] = (uint8_t)reg;
++	} else {
++		tx_buf[tx_len++] = (uint8_t)reg;
++	}
++	memcpy(tx_buf + tx_len, buf, len);
++	tx_len += len;
++
++	return hsi2c_xfer(addr, tx_buf, tx_len, NULL, 0);
++}
++
++void
++m30s_hsi2c_init(void)
++{
++	if (hsi2c4_initialized)
++		return;
++
++	hsi2c4_regs = ml_io_map(HSI2C4_BASE, HSI2C_SIZE);
++	if (!hsi2c4_regs) {
++		printf("M30S HSI2C: failed to map registers\n");
++		return;
++	}
++
++	/* Disable controller first */
++	hsi2c_wr(HSI2C_ENABLE, 0);
++
++	/* Configure for fast mode (400 kHz) */
++	/* PCLK = 26 MHz (from Exynos clock controller) */
++	/* FS_SCL_HCNT = PCLK * t_HIGH = 26M * 0.6us = 15600 */
++	/* FS_SCL_LCNT = PCLK * t_LOW = 26M * 1.3us = 33800 */
++	hsi2c_wr(HSI2C_FS_SCL_HCNT, 15600);
++	hsi2c_wr(HSI2C_FS_SCL_LCNT, 33800);
++
++	/* Configure CON register: master mode, fast mode, 7-bit addr, restart enabled */
++	hsi2c_wr(HSI2C_CON, CON_MASTER_MODE | CON_SPEED_FAST | CON_RESTART_EN | CON_SLAVE_DISABLE);
++
++	/* Set RX/TX FIFO thresholds */
++	hsi2c_wr(HSI2C_RX_TL, 0);
++	hsi2c_wr(HSI2C_TX_TL, 0);
++
++	/* Mask all interrupts (polled mode) */
++	hsi2c_wr(HSI2C_INTR_MASK, 0);
++
++	/* Clear any pending interrupts */
++	hsi2c_rd(HSI2C_CLR_INTR);
++
++	hsi2c4_initialized = true;
++	printf("M30S HSI2C4: initialized at 0x%lx (400 kHz fast mode)\n", HSI2C4_BASE);
++}
++#endif /* ARM64_BOARD_CONFIG_M30S */
+--- /dev/null
++++ b/bsd/dev/m30s_touch.c
+@@ -0,0 +1,500 @@
++/*
++ * M30S touch driver for Melfas MSS100 (I2C address 0x48 on HSI2C4).
++ *
++ * Called once after scheduler is running; all work runs on one thread.
++ * Requires HSI2C4 initialized and TSP LDO enabled (3.0V fixed regulator).
++ * Firmware: tsp_melfas/mss100_m30s.fw
++ */
++#if defined(ARM64_BOARD_CONFIG_M30S)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++/* Mach MIG declaration is not included by BSD's exported thread.h. */
++extern kern_return_t thread_terminate(thread_t);
++extern void sweet_hid_touch(int finger, int down, int x, int y);
++void m30s_touch_init(void);
++
++#define TOUCH_I2C_ADDR		0x48
++#define TOUCH_MAX		10
++#define TOUCH_INT_GPIO		0x0	/* gph0-0 */
++
++#define MMS_TS_INFO		0x00
++#define MMS_TS_STATUS		0x01
++#define MMS_TS_X_LOW		0x02
++#define MMS_TS_X_HIGH		0x03
++#define MMS_TS_Y_LOW		0x04
++#define MMS_TS_Y_HIGH		0x05
++#define MMS_TS_PRESSURE		0x06
++#define MMS_TS_AREA		0x07
++#define MMS_TS_EVENT		0x08
++#define MMS_TS_ID		0x09
++
++static struct {
++	bool started, dead;
++	int kind;
++	uint32_t active;
++	int x[TOUCH_MAX], y[TOUCH_MAX];
++	int touch_sleep_chan;
++} st;
++
++extern int m30s_hsi2c_read(uint16_t addr, uint16_t reg, bool wide, uint8_t *buf, size_t len);
++extern int m30s_hsi2c_write(uint16_t addr, uint16_t reg, bool wide, const uint8_t *buf, size_t len);
++
++static void
++touch_wait(unsigned ms)
++{
++	uint64_t deadline;
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&st.touch_sleep_chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static bool
++touch_read_info(void)
++{
++	uint8_t buf[4];
++	int err = m30s_hsi2c_read(TOUCH_I2C_ADDR, MMS_TS_INFO, false, buf, sizeof(buf));
++	if (err) {
++		printf("M30S TOUCH: read info failed: %d\n", err);
++		return false;
++	}
++	printf("M30S TOUCH: IC info: vendor=0x%02x, product=0x%02x, version=0x%02x, config=0x%02x\n",
++	    buf[0], buf[1], buf[2], buf[3]);
++	return true;
++}
++
++static void
++touch_report(uint32_t mask, const int *x, const int *y)
++{
++	for (unsigned id = 0; id < TOUCH_MAX; id++) {
++		uint32_t bit = 1u << id;
++		if (mask & bit) {
++			if (!(st.active & bit) || x[id] != st.x[id] || y[id] != st.y[id]) {
++				sweet_hid_touch((int)id, 1, x[id], y[id]);
++			}
++			st.x[id] = x[id];
++			st.y[id] = y[id];
++		} else if (st.active & bit) {
++			sweet_hid_touch((int)id, 0, st.x[id], st.y[id]);
++		}
++	}
++	st.active = mask;
++}
++
++static int
++touch_poll_once(void)
++{
++	uint8_t status;
++	int err = m30s_hsi2c_read(TOUCH_I2C_ADDR, MMS_TS_STATUS, false, &status, 1);
++	if (err) {
++		return err;
++	}
++
++	if (!(status & 0x80)) {
++		/* No touch event */
++		return 0;
++	}
++
++	uint32_t mask = 0;
++	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
++	unsigned n = status & 0x0f;  /* Number of touch points */
++
++	if (n > TOUCH_MAX)
++		n = TOUCH_MAX;
++
++	for (unsigned i = 0; i < n; i++) {
++		uint8_t buf[6];
++		err = m30s_hsi2c_read(TOUCH_I2C_ADDR, MMS_TS_X_LOW + i * 6, false, buf, 6);
++		if (err)
++			return err;
++
++		unsigned id = buf[5] & 0x0f;
++		if (id >= TOUCH_MAX)
++			continue;
++
++		unsigned px = buf[0] | ((buf[1] & 0x0f) << 8);
++		unsigned py = buf[2] | ((buf[3] & 0x0f) << 8);
++		unsigned event = (buf[4] >> 6) & 0x03;  /* 0: down, 1: up, 2: move */
++
++		if (event == 1) {
++			/* Up event - handled by mask clearing */
++			continue;
++		}
++
++		if (px > 1079 || py > 2399) {
++			continue;
++		}
++
++		mask |= 1u << id;
++		x[id] = (int)px;
++		y[id] = (int)py;
++	}
++
++	touch_report(mask, x, y);
++	return 0;
++}
++
++static void
++touch_thread(void *arg, wait_result_t result)
++{
++	unsigned delay_s = 5;
++	(void)arg;
++	(void)result;
++
++	(void)PE_parse_boot_argn("m30stouchdelay", &delay_s, sizeof(delay_s));
++	printf("M30S TOUCH: starting in %u s\n", delay_s);
++	touch_wait(delay_s * 1000);
++
++	/* Read touch IC info */
++	if (!touch_read_info()) {
++		st.dead = true;
++		goto out;
++	}
++
++	/* Optional: load firmware here if needed */
++	/* For now, assume firmware is pre-loaded by bootloader */
++
++	printf("M30S TOUCH: Melfas MSS100 @ 0x48, 1080x2340, poll=10ms\n");
++	unsigned errors = 0;
++
++	while (!st.dead) {
++		int err = touch_poll_once();
++		if (err) {
++			if ((errors++ % 100) == 0) {
++				printf("M30S TOUCH: poll err=%d\n", err);
++			}
++			if (errors == 10) {
++				touch_report(0, st.x, st.y); /* release after persistent bad reads */
++			}
++		} else {
++			errors = 0;
++		}
++		touch_wait(10);
++	}
++
++	touch_report(0, st.x, st.y);
++out:
++	(void)thread_terminate(current_thread());
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++void
++m30s_touch_init(void)
++{
++	int enabled = 1;
++	thread_t thread;
++
++	if (st.started)
++		return;
++	st.started = true;
++
++	(void)PE_parse_boot_argn("m30stouch", &enabled, sizeof(enabled));
++	if (!enabled) {
++		printf("M30S TOUCH: disabled (m30stouch=0)\n");
++		return;
++	}
++
++	kern_return_t kr = kernel_thread_start(touch_thread, NULL, &thread);
++	if (kr == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		printf("M30S TOUCH: kernel_thread_start failed %d\n", kr);
++	}
++}
++#endif /* ARM64_BOARD_CONFIG_M30S */

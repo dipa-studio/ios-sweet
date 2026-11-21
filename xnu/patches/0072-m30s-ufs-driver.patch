@@ -1,0 +1,579 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -104,6 +104,7 @@
+ bsd/dev/random/randomdev.c		standard
+
+ bsd/dev/memdev.c			standard
++bsd/dev/m30s_ufs.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -766,6 +766,24 @@
+ 		}
+ 	}
+
++#if defined(ARM64_BOARD_CONFIG_M30S)
++//
++//	M30S: root on a GPT partition of the internal UFS (bsd/dev/m30s_ufs.c)
++//
++	if (strcmp(rdBootVar, "ufsroot0") == 0) {
++		extern int m30s_ufs_rootdev(dev_t *dev);
++		OSSafeReleaseNULL(matching);
++		int ufs_error = m30s_ufs_rootdev(root);
++		if (ufs_error) {
++			panic("IOFindBSDRoot: M30S UFS root %s unavailable: %d", rdBootVar, ufs_error);
++		}
++		strlcpy(rootName, rdBootVar, rootNameSize);
++		IOLog("BSD root: %s, major %d, minor %d\n", rootName, major(*root), minor(*root));
++		*oflags = 0;
++		goto iofrootx;
++	}
++#endif
++
+  //
+  //	Now check if we are trying to root on a memory device
+  //
+diff --git a/bsd/dev/m30s_ufs.c b/bsd/dev/m30s_ufs.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/m30s_ufs.c
+@@ -0,0 +1,550 @@
++/*
++ * M30S internal UFS root device (read-only).
++ *
++ * The Exynos 9611 UFS host (ufshc@13520000) is left enabled with the link up
++ * by the bootloader, which loaded our boot image from it. This driver reuses
++ * that state: it points the transfer request list at its own memory (verifying
++ * the host took it before ringing any doorbell) and issues polled SCSI commands,
++ * one at a time, to LUN 0. It finds one GPT partition by name (boot-arg
++ * ufsroot=, default "userdata") and exposes it as the BSD disk ufsroot0
++ * (rufsroot0), with 512-byte logical sectors over the device's 4 KiB blocks.
++ * Root on it with rd=ufsroot0.
++ *
++ * All DMA goes through one physically contiguous allocation (descriptors and
++ * a 1 MiB bounce buffer); the host is not cache coherent, so caches are
++ * cleaned/invalidated around each command. Writes are refused.
++ */
++#if defined(ARM64_BOARD_CONFIG_M30S)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/buf.h>
++#include <sys/conf.h>
++#include <sys/disk.h>
++#include <sys/errno.h>
++#include <sys/proc.h>
++#include <sys/uio.h>
++#include <miscfs/devfs/devfs.h>
++#include <kern/locks.h>
++#include <kern/clock.h>
++#include <machine/machine_routines.h>
++#include <arm/caches_internal.h>
++#include <vm/pmap.h>
++#include <vm/vm_kern.h>
++#include <pexpert/pexpert.h>
++#include <pexpert/device_tree.h>
++#include <libkern/libkern.h>
++
++extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
++/* osfmk/arm/machine_routines.h, not exported to the BSD layer */
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++#define REG_IS          0x20
++#define REG_IE          0x24
++#define REG_HCS         0x30
++#define REG_HCE         0x34
++#define REG_UTRLBA      0x50
++#define REG_UTRLBAU     0x54
++#define REG_UTRLDBR     0x5c
++#define REG_UTRLRSR     0x60
++
++#define HCS_DP          (1u << 0)
++#define HCS_UTRLRDY     (1u << 1)
++
++#define UFS_BLOCK       4096u
++#define BOUNCE_SIZE     (1u << 20)
++#define PRDT_CHUNK      (256u << 10)            /* PRDT byte count field: 18 bits */
++#define PRDT_MAX        (BOUNCE_SIZE / PRDT_CHUNK)
++#define CMD_TIMEOUT_NS  (5ull * NSEC_PER_SEC)
++
++struct utrd {
++	uint32_t dw0, dw1, dw2, dw3;
++	uint32_t ucdba, ucdbau;
++	uint32_t resp;          /* [31:16] response UPIU offset, [15:0] length, DWORDs */
++	uint32_t prdt;          /* [31:16] PRDT offset (DWORDs), [15:0] entries */
++};
++
++struct ucd {
++	uint8_t cmd[512];
++	uint8_t resp[512];
++	struct {
++		uint32_t addr_lo, addr_hi, rsvd, dbc;
++	} prdt[PRDT_MAX];
++};
++
++/* Layout of the contiguous DMA allocation. */
++#define DMA_UTRL        0x0000                  /* 1 KiB aligned */
++#define DMA_UCD         0x1000                  /* 128 byte aligned */
++#define DMA_BOUNCE      0x4000
++#define DMA_SIZE        (DMA_BOUNCE + BOUNCE_SIZE)
++
++static struct {
++	vm_offset_t regs;
++	vm_offset_t dma;                        /* kernel VA of the DMA allocation */
++	uint64_t dma_pa;
++	uint8_t lun;
++	uint8_t tag;
++	uint64_t first_block, nblocks;          /* partition, in 4 KiB device blocks */
++	uint32_t secsize;                       /* logical sector size for the BSD layer */
++	int bmajor, cmajor;
++	dev_t bdev;
++	bool ready;
++} mu;
++
++static LCK_GRP_DECLARE(m30s_ufs_grp, "m30s_ufs");
++static LCK_MTX_DECLARE(m30s_ufs_lock, &m30s_ufs_grp);
++
++static inline uint32_t
++ufs_rd(uint32_t off)
++{
++	return *(volatile uint32_t *)(mu.regs + off);
++}
++
++static inline void
++ufs_wr(uint32_t off, uint32_t v)
++{
++	*(volatile uint32_t *)(mu.regs + off) = v;
++}
++
++static void
++dma_sync(uint32_t off, uint32_t len)
++{
++	flush_dcache64((addr64_t)(mu.dma_pa + off), len, TRUE);
++}
++
++/*
++ * One SCSI command in slot 0, data (if any) to/from the bounce buffer.
++ * Read direction only. Returns 0 or an errno.
++ */
++static int
++ufs_scsi(const uint8_t *cdb, unsigned cdb_len, uint32_t len)
++{
++	struct utrd *utrd = (struct utrd *)(mu.dma + DMA_UTRL);
++	struct ucd *ucd = (struct ucd *)(mu.dma + DMA_UCD);
++	uint64_t ucd_pa = mu.dma_pa + DMA_UCD, bounce_pa = mu.dma_pa + DMA_BOUNCE;
++
++	assert(len <= BOUNCE_SIZE);
++	bzero(utrd, sizeof(*utrd));
++	bzero(ucd, sizeof(*ucd));
++
++	ucd->cmd[0] = 0x01;                     /* COMMAND UPIU */
++	ucd->cmd[1] = len ? 0x40 : 0x00;        /* R: data in */
++	ucd->cmd[2] = mu.lun;
++	ucd->cmd[3] = ++mu.tag;
++	ucd->cmd[12] = (uint8_t)(len >> 24);
++	ucd->cmd[13] = (uint8_t)(len >> 16);
++	ucd->cmd[14] = (uint8_t)(len >> 8);
++	ucd->cmd[15] = (uint8_t)len;
++	memcpy(&ucd->cmd[16], cdb, cdb_len);
++
++	utrd->dw0 = (1u << 28) | ((len ? 2u : 0u) << 25) | (1u << 24);
++	utrd->dw2 = 0x0f;                       /* OCS invalid until updated */
++	utrd->ucdba = (uint32_t)ucd_pa;
++	utrd->ucdbau = (uint32_t)(ucd_pa >> 32);
++	utrd->resp = (512u / 4) << 16 | (512u / 4);
++	if (len) {
++		uint32_t n = 0;
++		for (uint32_t done = 0; done < len; done += PRDT_CHUNK, n++) {
++			uint32_t chunk = MIN(PRDT_CHUNK, len - done);
++			ucd->prdt[n].addr_lo = (uint32_t)(bounce_pa + done);
++			ucd->prdt[n].addr_hi = (uint32_t)((bounce_pa + done) >> 32);
++			ucd->prdt[n].dbc = chunk - 1;
++		}
++		utrd->prdt = (1024u / 4) << 16 | n;
++	}
++
++	dma_sync(DMA_UTRL, sizeof(*utrd));
++	dma_sync(DMA_UCD, sizeof(*ucd));
++	if (len) {
++		dma_sync(DMA_BOUNCE, len);
++	}
++	__builtin_arm_dsb(0xf);
++
++	ufs_wr(REG_UTRLDBR, 1);
++	uint64_t deadline;
++	nanoseconds_to_absolutetime(CMD_TIMEOUT_NS, &deadline);
++	deadline += mach_absolute_time();
++	while (ufs_rd(REG_UTRLDBR) & 1) {
++		if (mach_absolute_time() > deadline) {
++			ufs_wr(REG_UTRLCLR, ~1u);
++			printf("M30S UFS: command 0x%02x timed out\n", cdb[0]);
++			return ETIMEDOUT;
++		}
++		delay(1);
++	}
++	__builtin_arm_dsb(0xf);
++	ufs_wr(REG_IS, ufs_rd(REG_IS));         /* acknowledge completion status */
++
++	dma_sync(DMA_UTRL, sizeof(*utrd));
++	dma_sync(DMA_UCD, sizeof(*ucd));
++	if (len) {
++		dma_sync(DMA_BOUNCE, len);
++	}
++
++	uint32_t ocs = utrd->dw2 & 0xff;
++	if (ocs || ucd->resp[0] != 0x21 || ucd->resp[6] || ucd->resp[7]) {
++		printf("M30S UFS: command 0x%02x failed: ocs 0x%x upiu 0x%x response 0x%x status 0x%x\n",
++		    cdb[0], ocs, ucd->resp[0], ucd->resp[6], ucd->resp[7]);
++		return EIO;
++	}
++	return 0;
++}
++
++/* READ(10) of count device blocks at lba into the bounce buffer. */
++static int
++ufs_read_blocks(uint64_t lba, uint32_t count)
++{
++	if (lba > UINT32_MAX || count > BOUNCE_SIZE / UFS_BLOCK) {
++		return EINVAL;
++	}
++	uint8_t cdb[10] = {
++		0x28, 0,
++		(uint8_t)(lba >> 24), (uint8_t)(lba >> 16), (uint8_t)(lba >> 8), (uint8_t)lba,
++		0, (uint8_t)(count >> 8), (uint8_t)count, 0
++	};
++	return ufs_scsi(cdb, sizeof(cdb), count * UFS_BLOCK);
++}
++
++static int
++ufs_find_partition(const char *want)
++{
++	const uint8_t *b = (const uint8_t *)(mu.dma + DMA_BOUNCE);
++	int error = ufs_read_blocks(1, 1);
++	if (error) {
++		return error;
++	}
++	if (memcmp(b, "EFI PART", 8) != 0) {
++		printf("M30S UFS: LUN %u has no GPT\n", mu.lun);
++		return ENXIO;
++	}
++	uint64_t entry_lba;
++	uint32_t nent, esz;
++	memcpy(&entry_lba, b + 72, 8);
++	memcpy(&nent, b + 80, 4);
++	memcpy(&esz, b + 84, 4);
++	if (esz != 128 || nent == 0 || nent * esz > BOUNCE_SIZE) {
++		printf("M30S UFS: unsupported GPT entries %u x %u\n", nent, esz);
++		return ENXIO;
++	}
++	error = ufs_read_blocks(entry_lba, (nent * esz + UFS_BLOCK - 1) / UFS_BLOCK);
++	if (error) {
++		return error;
++	}
++	for (uint32_t i = 0; i < nent; i++) {
++		const uint8_t *e = b + i * esz;
++		char name[37];
++		unsigned c;
++		for (c = 0; c < 36; c++) {
++			uint16_t ch = (uint16_t)(e[56 + 2 * c] | e[57 + 2 * c] << 8);
++			if (ch == 0 || ch > 0x7f) {
++				break;
++			}
++			name[c] = (char)ch;
++		}
++		name[c] = 0;
++		if (strcmp(name, want) != 0) {
++			continue;
++		}
++		uint64_t first, last;
++		memcpy(&first, e + 32, 8);
++		memcpy(&last, e + 40, 8);
++		if (last < first) {
++			return ENXIO;
++		}
++		mu.first_block = first;
++		mu.nblocks = last - first + 1;
++		return 0;
++	}
++	printf("M30S UFS: no GPT partition named \"%s\"\n", want);
++	return ENOENT;
++}
++
++static int
++ufs_take_over_host(void)
++{
++	uint32_t hce = ufs_rd(REG_HCE), hcs = ufs_rd(REG_HCS);
++	if (!(hce & 1) || !(hcs & HCS_DP) || !(hcs & HCS_UTRLRDY)) {
++		printf("M30S UFS: host not ready (hce 0x%x hcs 0x%x)\n", hce, hcs);
++		return ENXIO;
++	}
++	if (ufs_rd(REG_UTRLDBR)) {
++		printf("M30S UFS: requests outstanding from the bootloader\n");
++		return EBUSY;
++	}
++	ufs_wr(REG_IE, 0);                      /* polled operation */
++	ufs_wr(REG_IS, ufs_rd(REG_IS));
++	ufs_wr(REG_UTRLRSR, 0);
++	uint64_t list = mu.dma_pa + DMA_UTRL;
++	ufs_wr(REG_UTRLBA, (uint32_t)list);
++	ufs_wr(REG_UTRLBAU, (uint32_t)(list >> 32));
++	ufs_wr(REG_UTRLRSR, 1);
++	/* Never ring a doorbell unless the host uses our list. */
++	if (ufs_rd(REG_UTRLBA) != (uint32_t)list || ufs_rd(REG_UTRLBAU) != (uint32_t)(list >> 32) ||
++	    !(ufs_rd(REG_UTRLRSR) & 1)) {
++		printf("M30S UFS: host did not take our request list\n");
++		return EIO;
++	}
++	return 0;
++}
++
++static int
++m30s_ufs_open(__unused dev_t dev, int flags, __unused int devtype, __unused struct proc *p)
++{
++	if (!mu.ready) {
++		return ENXIO;
++	}
++	return (flags & FWRITE) ? EROFS : 0;
++}
++
++static int
++m30s_ufs_close(__unused dev_t dev, __unused int flags, __unused int devtype, __unused struct proc *p)
++{
++	return 0;
++}
++
++static void
++m30s_ufs_strategy(buf_t bp)
++{
++	int error = 0;
++	caddr_t vaddr = NULL;
++	uint64_t off = (uint64_t)buf_blkno(bp) * mu.secsize;
++	uint32_t count = buf_count(bp);
++	uint64_t part_bytes = mu.nblocks * UFS_BLOCK;
++
++	buf_setresid(bp, count);
++	if (!(buf_flags(bp) & B_READ)) {
++		error = EROFS;
++		goto done;
++	}
++	if (off > part_bytes || count > part_bytes - off) {
++		error = EINVAL;
++		goto done;
++	}
++	if (count == 0) {
++		goto done;
++	}
++	if (buf_map(bp, &vaddr)) {
++		error = EIO;
++		goto done;
++	}
++
++	lck_mtx_lock(&m30s_ufs_lock);
++	for (uint32_t done = 0; done < count;) {
++		uint64_t pos = off + done;
++		uint64_t lba = pos / UFS_BLOCK;
++		uint32_t skip = (uint32_t)(pos % UFS_BLOCK);
++		uint32_t want = MIN(count - done, BOUNCE_SIZE - skip);
++		uint32_t blocks = (skip + want + UFS_BLOCK - 1) / UFS_BLOCK;
++		error = ufs_read_blocks(mu.first_block + lba, blocks);
++		if (error) {
++			break;
++		}
++		memcpy(vaddr + done, (const void *)(mu.dma + DMA_BOUNCE + skip), want);
++		done += want;
++		buf_setresid(bp, count - done);
++	}
++	lck_mtx_unlock(&m30s_ufs_lock);
++	buf_unmap(bp);
++
++done:
++	if (error) {
++		buf_seterror(bp, error);
++	}
++	buf_biodone(bp);
++}
++
++static int
++m30s_ufs_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
++    __unused struct proc *p, int is_char)
++{
++	uint32_t *f = (uint32_t *)data;
++	uint64_t *o = (uint64_t *)data;
++
++	switch (cmd) {
++	case DKIOCGETBLOCKSIZE:
++		*f = mu.secsize;
++		return 0;
++	case DKIOCSETBLOCKSIZE:
++		if (is_char) {
++			return ENODEV;
++		}
++		if (*f < DEV_BSIZE || *f > UFS_BLOCK || (*f & (*f - 1))) {
++			return EINVAL;
++		}
++		mu.secsize = *f;
++		return 0;
++	case DKIOCGETPHYSICALBLOCKSIZE:
++		*f = UFS_BLOCK;
++		return 0;
++	case DKIOCGETBLOCKCOUNT:
++		*o = mu.nblocks * UFS_BLOCK / mu.secsize;
++		return 0;
++	case DKIOCISWRITABLE:
++		*f = 0;
++		return 0;
++	case DKIOCGETMAXBLOCKCOUNTREAD:
++		*o = BOUNCE_SIZE / mu.secsize;
++		return 0;
++	case DKIOCGETMAXBLOCKCOUNTWRITE:
++		*o = 0;
++		return 0;
++	case DKIOCGETMAXSEGMENTCOUNTREAD:
++	case DKIOCGETMAXSEGMENTCOUNTWRITE:
++		*o = 1;
++		return 0;
++	default:
++		return ENOTTY;
++	}
++}
++
++static int
++m30s_ufs_bioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
++{
++	return m30s_ufs_ioctl(dev, cmd, data, flag, p, 0);
++}
++
++static int
++m30s_ufs_cioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
++{
++	return m30s_ufs_ioctl(dev, cmd, data, flag, p, 1);
++}
++
++static int
++m30s_ufs_psize(__unused dev_t dev)
++{
++	return mu.ready ? (int)MIN(mu.nblocks * UFS_BLOCK / mu.secsize, INT_MAX) : -1;
++}
++
++static int
++m30s_ufs_read(dev_t dev, struct uio *uio, __unused int ioflag)
++{
++	return physio(m30s_ufs_strategy, NULL, dev, B_READ, minphys, uio, (int)mu.secsize);
++}
++
++static int
++m30s_ufs_write(__unused dev_t dev, __unused struct uio *uio, __unused int ioflag)
++{
++	return EROFS;
++}
++
++static const struct bdevsw m30s_ufs_bdevsw = {
++	.d_open     = m30s_ufs_open,
++	.d_close    = m30s_ufs_close,
++	.d_strategy = m30s_ufs_strategy,
++	.d_ioctl    = m30s_ufs_bioctl,
++	.d_dump     = eno_dump,
++	.d_psize    = m30s_ufs_psize,
++	.d_type     = D_DISK,
++};
++
++static const struct cdevsw m30s_ufs_cdevsw = {
++	.d_open       = m30s_ufs_open,
++	.d_close      = m30s_ufs_close,
++	.d_read       = m30s_ufs_read,
++	.d_write      = m30s_ufs_write,
++	.d_ioctl      = m30s_ufs_cioctl,
++	.d_stop       = eno_stop,
++	.d_reset      = eno_reset,
++	.d_ttys       = NULL,
++	.d_select     = eno_select,
++	.d_mmap       = eno_mmap,
++	.d_strategy   = eno_strat,
++	.d_reserved_1 = eno_getc,
++	.d_reserved_2 = eno_putc,
++	.d_type       = D_DISK,
++};
++
++static int
++m30s_ufs_init(void)
++{
++	DTEntry node;
++	uintptr_t const *reg = NULL;
++	unsigned int size = 0;
++	char want[64] = "userdata";
++	int error;
++
++	if (SecureDTLookupEntry(NULL, "/ufs", &node) != kSuccess ||
++	    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess ||
++	    size < 2 * sizeof(uintptr_t)) {
++		printf("M30S UFS: no /ufs node in the device tree\n");
++		return ENXIO;
++	}
++	PE_parse_boot_argn("ufsroot", want, sizeof(want));
++
++	mu.regs = ml_io_map(reg[0], reg[1]);
++	if (kmem_alloc_contig(kernel_map, &mu.dma, DMA_SIZE, PAGE_MASK, 0, 0,
++	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++		printf("M30S UFS: no contiguous DMA memory\n");
++		return ENOMEM;
++	}
++	ppnum_t pn = pmap_find_phys(kernel_pmap, (addr64_t)mu.dma);
++	if (!pn) {
++		return ENOMEM;
++	}
++	mu.dma_pa = ptoa_64(pn);
++	mu.lun = 0;
++	mu.secsize = DEV_BSIZE;
++
++	lck_mtx_lock(&m30s_ufs_lock);
++	error = ufs_take_over_host();
++	if (!error) {
++		static const uint8_t tur[6] = { 0x00 };
++		/* The first command after the bootloader may report a unit attention. */
++		for (int i = 0; i < 3 && (error = ufs_scsi(tur, sizeof(tur), 0)); i++) {
++		}
++	}
++	if (!error) {
++		error = ufs_find_partition(want);
++	}
++	lck_mtx_unlock(&m30s_ufs_lock);
++	if (error) {
++		return error;
++	}
++
++	mu.bmajor = bdevsw_add(-1, &m30s_ufs_bdevsw);
++	if (mu.bmajor < 0) {
++		return ENXIO;
++	}
++	mu.cmajor = cdevsw_add_with_bdev(-1, &m30s_ufs_cdevsw, mu.bmajor);
++	if (mu.cmajor < 0) {
++		return ENXIO;
++	}
++	mu.bdev = makedev(mu.bmajor, 0);
++	devfs_make_node(mu.bdev, DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0640, "ufsroot0");
++	devfs_make_node(makedev(mu.cmajor, 0), DEVFS_CHAR, UID_ROOT, GID_OPERATOR, 0640, "rufsroot0");
++	mu.ready = true;
++	printf("M30S UFS: \"%s\" on LUN %u: first block 0x%llx, %llu MiB, read-only\n",
++	    want, mu.lun, mu.first_block, mu.nblocks * UFS_BLOCK >> 20);
++	return 0;
++}
++
++/* Root device for rd=ufsroot0 (IOFindBSDRoot). */
++int m30s_ufs_rootdev(dev_t *dev);
++
++int
++m30s_ufs_rootdev(dev_t *dev)
++{
++	if (!mu.ready) {
++		int error = m30s_ufs_init();
++		if (error) {
++			return error;
++		}
++	}
++	*dev = mu.bdev;
++	return 0;
++}
++#endif /* ARM64_BOARD_CONFIG_M30S */

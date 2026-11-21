@@ -1,0 +1,306 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -108,6 +108,8 @@
+ bsd/dev/m30s_hsi2c.c			standard
+ bsd/dev/m30s_touch.c			standard
++bsd/dev/m30s_keys.c			standard
++bsd/dev/m30s_gpio.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+diff --git a/bsd/dev/m30s_ufs.c b/bsd/dev/m30s_ufs.c
+--- a/bsd/dev/m30s_ufs.c
++++ b/bsd/dev/m30s_ufs.c
+@@ -50,6 +50,8 @@
+ extern int hz;
+ static void m30s_log_start(void);
+ extern void m30s_hsi2c_init(void);
+ extern void m30s_touch_init(void);
++extern void m30s_keys_init(void);
++extern void m30s_gpio_init(void);
+
+ #define REG_CAP         0x00
+ #define REG_IS          0x20
+@@ -601,6 +603,9 @@
+ 	m30s_log_start();
+ 	/* Input drivers (HID services in iokit/Kernel/arm/hid/SweetHID.cpp). */
+ 	m30s_hsi2c_init();
+ 	m30s_touch_init();
++	m30s_keys_init();
++	m30s_gpio_init();
+ 	return 0;
+ }
+--- /dev/null
++++ b/bsd/dev/m30s_gpio.c
+@@ -0,0 +1,250 @@
++/*
++ * M30S GPIO driver for Exynos 9611 pinctrl.
++ *
++ * Provides access to GPIO controllers for buttons, touch IRQ, etc.
++ * Pinctrl blocks:
++ *   0x11850000 - GPA0-GPA2, GPQ0
++ *   0x11C20000 - GPM0-GPM25 (keys, HSI2C, SPI, UART)
++ *   0x14A60000 - GPB0-GPB2
++ *   0x13490000 - GPF0-GPF2
++ *   0x139B0000 - GPP0-GPP2, GPC0-GPC2, GPG0-GPG4
++ *   0x11080000 - GPH0-GPH1 (HSI2C0/1, SPI0, UART1)
++ */
++#if defined(ARM64_BOARD_CONFIG_M30S)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++void m30s_gpio_init(void);
++
++/* GPIO register offsets (Samsung Exynos) */
++#define GP_DAT		0x00
++#define GP_DAT_SET	0x04
++#define GP_DAT_CLR	0x08
++#define GP_CON		0x0c
++#define GP_PUD		0x10
++#define GP_DRV		0x14
++#define GP_CON_PDN	0x18
++#define GP_PUD_PDN	0x1c
++
++/* Pinctrl base addresses */
++#define PINCTRL0_BASE	0x11850000
++#define PINCTRL1_BASE	0x11c20000
++#define PINCTRL2_BASE	0x14a60000
++#define PINCTRL3_BASE	0x13490000
++#define PINCTRL4_BASE	0x139b0000
++#define PINCTRL5_BASE	0x11080000
++
++static vm_offset_t pinctrl_regs[6] = {0};
++static bool gpio_initialized = false;
++
++static inline uint32_t
++gpio_rd(vm_offset_t base, uint32_t off)
++{
++	return *(volatile uint32_t *)(base + off);
++}
++
++static inline void
++gpio_wr(vm_offset_t base, uint32_t off, uint32_t val)
++{
++	*(volatile uint32_t *)(base + off) = val;
++	__asm__ volatile("dsb sy" ::: "memory");
++}
++
++static void
++gpio_set_input(vm_offset_t base, int pin)
++{
++	/* Clear CON bits for this pin (input mode = 0) */
++	uint32_t con = gpio_rd(base, GP_CON);
++	con &= ~(0xf << (pin * 4));
++	gpio_wr(base, GP_CON, con);
++
++	/* Enable pull-up */
++	uint32_t pud = gpio_rd(base, GP_PUD);
++	pud |= (0x1 << (pin * 2));
++	gpio_wr(base, GP_PUD, pud);
++}
++
++static void
++gpio_set_output(vm_offset_t base, int pin, int value)
++{
++	/* Set CON bits for this pin (output mode = 1) */
++	uint32_t con = gpio_rd(base, GP_CON);
++	con &= ~(0xf << (pin * 4));
++	con |= (0x1 << (pin * 4));
++	gpio_wr(base, GP_CON, con);
++
++	/* Set value */
++	if (value)
++		gpio_wr(base, GP_DAT_SET, 1 << pin);
++	else
++		gpio_wr(base, GP_DAT_CLR, 1 << pin);
++}
++
++static int
++gpio_read(vm_offset_t base, int pin)
++{
++	return (gpio_rd(base, GP_DAT) >> pin) & 1;
++}
++
++void
++m30s_gpio_init(void)
++{
++	if (gpio_initialized)
++		return;
++
++	/* Map all pinctrl blocks */
++	pinctrl_regs[0] = ml_io_map(PINCTRL0_BASE, 0x1000);
++	pinctrl_regs[1] = ml_io_map(PINCTRL1_BASE, 0x1000);
++	pinctrl_regs[2] = ml_io_map(PINCTRL2_BASE, 0x1000);
++	pinctrl_regs[3] = ml_io_map(PINCTRL3_BASE, 0x1000);
++	pinctrl_regs[4] = ml_io_map(PINCTRL4_BASE, 0x1000);
++	pinctrl_regs[5] = ml_io_map(PINCTRL5_BASE, 0x1000);
++
++	for (int i = 0; i < 6; i++) {
++		if (!pinctrl_regs[i]) {
++			printf("M30S GPIO: failed to map pinctrl%d\n", i);
++			return;
++		}
++	}
++
++	/*
++	 * Configure GPIOs from M30s overlay:
++	 *
++	 * PINCTRL1 (0x11C20000) - GPM0-GPM25:
++	 *   gpm5-15 = VOLUME_UP (input, pull-up)
++	 *   gpm6-15 = VOLUME_DOWN (input, pull-up)
++	 *   gpm7-15 = POWER (input, pull-up, wakeup)
++	 *
++	 * PINCTRL5 (0x11080000) - GPH0-GPH1:
++	 *   gph0-0 = TOUCH_IRQ (input, pull-up)
++	 *   gph0-1 = HSI2C0 SDA
++	 *   gph0-2 = HSI2C0 SCL
++	 *   gph0-3 = HSI2C1 SDA / SPI0 CS
++	 */
++
++	/* Volume Up: GPM5 pin 15 */
++	gpio_set_input(pinctrl_regs[1], 5 * 16 + 15);
++
++	/* Volume Down: GPM6 pin 15 */
++	gpio_set_input(pinctrl_regs[1], 6 * 16 + 15);
++
++	/* Power: GPM7 pin 15 */
++	gpio_set_input(pinctrl_regs[1], 7 * 16 + 15);
++
++	/* Touch IRQ: GPH0 pin 0 */
++	gpio_set_input(pinctrl_regs[5], 0);
++
++	/* HSI2C0 pins (GPH0-1, GPH0-2) - configured by pinctrl */
++	/* HSI2C1 pins (GPH0-3, ...) - configured by pinctrl */
++
++	gpio_initialized = true;
++	printf("M30S GPIO: initialized 6 pinctrl blocks\n");
++}
++
++/* Public API for keys driver */
++int
++m30s_gpio_read_key(int key)
++{
++	if (!gpio_initialized)
++		return -1;
++
++	/* Key mapping:
++	 * 0 = POWER (GPM7-15)
++	 * 1 = VOLUME_UP (GPM5-15)
++	 * 2 = VOLUME_DOWN (GPM6-15)
++	 */
++	switch (key) {
++	case 0: return gpio_read(pinctrl_regs[1], 7 * 16 + 15);
++	case 1: return gpio_read(pinctrl_regs[1], 5 * 16 + 15);
++	case 2: return gpio_read(pinctrl_regs[1], 6 * 16 + 15);
++	default: return -1;
++	}
++}
++
++int
++m30s_gpio_read_touch_irq(void)
++{
++	if (!gpio_initialized)
++		return -1;
++	return gpio_read(pinctrl_regs[5], 0);
++}
++#endif /* ARM64_BOARD_CONFIG_M30S */
+--- /dev/null
++++ b/bsd/dev/m30s_keys.c
+@@ -0,0 +1,300 @@
++/*
++ * M30S minimal polled keys driver (Power, Volume Up/Down).
++ *
++ * GPIO-based (not PMIC/SPMI like sweet):
++ *   POWER:      GPM7-15 (pinctrl1) - active low, wakeup capable
++ *   VOLUME_UP:  GPM5-15 (pinctrl1) - active low
++ *   VOLUME_DOWN: GPM6-15 (pinctrl1) - active low
++ */
++#if defined(ARM64_BOARD_CONFIG_M30S)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern void sweet_hid_key(int key, int down);
++void m30s_keys_init(void);
++
++static bool keys_started = false;
++static int keys_sleep_chan;
++
++static void
++keys_wait(void)
++{
++	uint64_t deadline;
++	clock_interval_to_deadline(20, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&keys_sleep_chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static void
++keys_thread(void *arg, wait_result_t result)
++{
++	int state[3] = {0, 0, 0};  /* POWER, VOL_UP, VOL_DOWN */
++	unsigned errors = 0;
++	(void)arg;
++	(void)result;
++
++	for (;;) {
++		int now[3];
++		now[0] = !m30s_gpio_read_key(0);  /* POWER: active low */
++		now[1] = !m30s_gpio_read_key(1);  /* VOL_UP: active low */
++		now[2] = !m30s_gpio_read_key(2);  /* VOL_DOWN: active low */
++
++		if (now[0] < 0 || now[1] < 0 || now[2] < 0) {
++			if ((errors++ % 250) == 0) {
++				printf("M30S KEYS: GPIO read error\n");
++			}
++		} else {
++			errors = 0;
++		}
++
++		for (int k = 0; k < 3; k++) {
++			if (now[k] != state[k]) {
++				state[k] = now[k];
++				printf("M30S KEYS: key=%d down=%d\n", k, state[k]);
++				sweet_hid_key(k, state[k]);
++			}
++		}
++		keys_wait();
++	}
++}
++
++void
++m30s_keys_init(void)
++{
++	int enabled = 1;
++	thread_t thread;
++
++	if (keys_started)
++		return;
++	keys_started = true;
++
++	(void)PE_parse_boot_argn("m30skeys", &enabled, sizeof(enabled));
++	if (!enabled) {
++		printf("M30S KEYS: disabled (m30skeys=0)\n");
++		return;
++	}
++
++	/* Ensure GPIO is initialized */
++	m30s_gpio_init();
++
++	kern_return_t kr = kernel_thread_start(keys_thread, NULL, &thread);
++	if (kr == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		printf("M30S KEYS: kernel_thread_start failed %d\n", kr);
++	}
++}
++#endif /* ARM64_BOARD_CONFIG_M30S */
