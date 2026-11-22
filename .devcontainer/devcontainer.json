@@ -1,0 +1,20 @@
+{
+	"name": "ios-sweet-m30s",
+	"image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+	"features": {
+		"ghcr.io/devcontainers/features/docker-in-docker:1": {},
+		"ghcr.io/devcontainers/features/github-cli:1": {}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-vscode.cpptools",
+				"ms-python.python",
+				"github.vscode-github-actions"
+			]
+		}
+	},
+	"postCreateCommand": "bash .devcontainer/setup.sh",
+	"forwardPorts": [],
+	"remoteUser": "vscode"
+}
