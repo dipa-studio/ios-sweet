@@ -4,7 +4,7 @@
 
 This checkout supports only the Redmi Note 10 Pro (`sweet`, Qualcomm SM7150). The user confirmed `PRODUCT NAME: SM-G950F` in Download Mode, establishing the handset as a separate, unimplemented Exynos 8895 target—not the Qualcomm board used by SWEET.
 
-The user reports the Odin firmware/build string `G950FXXUCDUD1` and installed custom ROM label `hadesRom_Q_OneUI_v3.0-FUK2`. Hades settings report model strings `SM-N960N` and `SAOMC_SM-N960F_OXM_BTU_QQ_0027`, with `BTU/BTU/BTU`; these appear inconsistent with the confirmed G950F hardware and should be treated as ROM-provided values, not the stock CSC. A separate device identifier was included in chat and intentionally not recorded. No stock firmware package has been inspected.
+The installed custom ROM label is reported as `hadesRom_Q_OneUI_v3.0-FUK2`. Hades settings report model strings `SM-N960N` and `SAOMC_SM-N960F_OXM_BTU_QQ_0027`, with `BTU/BTU/BTU`; these are ROM-provided values and conflict with the confirmed hardware. TWRP ADB reports device `dreamlte`, model Galaxy S8, bootloader `G950FXXUCDVG4`, carrier BTU, and verified-boot state `orange`. The user had earlier reported `G950FXXUCDUD1` from Odin, but that differs from the current TWRP bootloader value. A separate device identifier was included in chat and intentionally not recorded. No stock firmware package has been inspected.
 
 No G950F firmware package has been inspected, no target code or image has been produced, and no commands have been run against the phone. Do not boot or flash the existing SWEET image on the S8.
 
@@ -27,9 +27,11 @@ These are platform dependencies, not settings that can safely be changed by subs
 
 ## Current development blockers
 
-- The product name is user-confirmed as SM-G950F, but the matching stock firmware package remains unverified, so there is no Samsung boot image or DTB to inspect yet. Web lookups of the reported build on SamFW were blocked (HTTP 403); search engines did not provide verifiable results, and no package was downloaded.
+- The product name and current BOOT partition are confirmed, but no install image is available. Web lookups of the earlier reported firmware string on SamFW were blocked (HTTP 403); search engines did not provide verifiable results, and no firmware package was downloaded.
 - The user has explicitly authorized replacing BOOT and erasing USERDATA, but not unlocking the bootloader. No phone partitions have been modified.
-- Google Platform Tools 37.0.3 are staged at `F:\AndroidTools\platform-tools`; Windows enumerates a Samsung USB device, but `adb devices -l` lists no phone. This workstation also lacks `aarch64-linux-gnu-gcc`, `gh`, `fastboot`, and a WSL distribution. No target build or write operation has been attempted.
+- TWRP ADB is reachable with Google Platform Tools 37.0.3 staged at `F:\AndroidTools\platform-tools`.
+- Read-only partition map on this handset: BOOT is `/dev/block/platform/11120000.ufs/by-name/BOOT` -> `sda7` (40 MiB); USERDATA is `/dev/block/platform/11120000.ufs/by-name/USERDATA` -> `sda26` (55,249,448,960 bytes). The third-party install guide's `sda24` USERDATA path is wrong for this device. A validated 40 MiB copy of the current BOOT partition is kept locally at `F:\iOS Galaxy\backup\G950F-BOOT-before-ios.img` (ignored by Git).
+- This workstation lacks `aarch64-linux-gnu-gcc`, `gh`, `fastboot`, and a WSL distribution. There is no G950F install image or iOS root image in this checkout. No target build or phone write operation has been attempted.
 - The SWEET target conditionals are spread over 51 XNU patches. A G950F target needs a separate 4 KiB-page, Cortex-A53/Mongoose, GIC-400, Samsung S-Boot/boot-image and Exynos UFS bring-up; aliasing it to SWEET would use incompatible hardware assumptions.
 
 ## First engineering milestone
