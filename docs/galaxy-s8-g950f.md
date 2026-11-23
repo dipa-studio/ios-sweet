@@ -4,7 +4,9 @@
 
 This checkout supports only the Redmi Note 10 Pro (`sweet`, Qualcomm SM7150). The Galaxy S8 SM-G950F is a separate, unimplemented target. The reported model number identifies the Exynos 8895 variant, not the Qualcomm board used by SWEET.
 
-No G950F firmware has been inspected, no target code or image has been produced, and no commands have been run against the phone. Do not boot or flash the existing SWEET image on the S8.
+The user reports the Odin firmware/build string `G950FXXUCDUD1` and installed custom ROM label `hadesRom_Q_OneUI_v3.0-FUK2`. The Hades ROM settings report `SM-N960N`, which may be spoofed. These details have not been independently verified against a stock firmware package; the custom-ROM label is not sufficient to identify the stock firmware/CSC.
+
+No G950F firmware package has been inspected, no target code or image has been produced, and no commands have been run against the phone. Do not boot or flash the existing SWEET image on the S8.
 
 ## Existing public project
 
@@ -25,7 +27,7 @@ These are platform dependencies, not settings that can safely be changed by subs
 
 ## Current development blockers
 
-- The exact stock firmware/build for this handset is unknown, so there is no matching Samsung boot image or DTB to inspect.
+- The CSC/region and matching stock firmware package for this handset are unknown, so there is no Samsung boot image or DTB to inspect yet.
 - The Windows environment currently has Python and Git, but no `aarch64-linux-gnu-gcc`, `gh`, `adb`, or `fastboot`. No target kernel build or phone communication was attempted.
 - The SWEET target conditionals are spread over 51 XNU patches. A G950F target needs a separate 4 KiB-page, Cortex-A53/Mongoose, GIC-400, Samsung S-Boot/boot-image and Exynos UFS bring-up; aliasing it to SWEET would use incompatible hardware assumptions.
 

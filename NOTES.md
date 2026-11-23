@@ -4,10 +4,11 @@
 
 - Workspace: `F:\iOS Galaxy`; upstream checkout at `45263be` (`main`), initially clean.
 - The user reports the Download Mode product name as `G950F`. No device, firmware, or bootloader was accessed by this session.
+- The user reports the firmware/build string `G950FXXUCDUD1` from Odin and the installed custom ROM label `hadesRom_Q_OneUI_v3.0-FUK2` (2026-11-23). Hades ROM settings report `SM-N960N`, which may be a spoof; neither the phone nor a stock firmware package has been independently inspected. Treat the HadesROM label as custom-ROM information, not the matching Samsung stock build/CSC.
 - Static inspection confirms the code and boot image are SWEET-specific: Qualcomm SM7150 addresses and CPU topology in `tools/mkadt.py`, a Qualcomm UFS node, a SWEET-only XNU machine config, and a shim packaging path that expects the SWEET stock DTB. No G950F target code or image has been created.
 - Found a separate public project, `Floppikrob/ios-galaxy-s8`. Its progress notes claim a physical SM-G950F lock-screen boot; its latest listed main commit claims later UI features. This is contributor-reported and was not independently verified. Its install guide requires an unlocked bootloader and TWRP, writes BOOT, and erases USERDATA. No G950F code was copied into this checkout; its root listing had no LICENSE file, so do not import its additions without authorization/licensing.
 - A separate GPL-licensed [LinuxS8 project](https://github.com/MakrSas/LinuxS8) reports mainline Linux booting on `dreamlte` through uniLoader; it is boot-chain prior art, not iOS or a no-write test path.
-- Local tool check: Python and Git exist; `aarch64-linux-gnu-gcc`, `gh`, `adb`, and `fastboot` are absent. Firmware/build is unknown.
+- Local tool check: Python and Git exist; `aarch64-linux-gnu-gcc`, `gh`, `adb`, and `fastboot` are absent. CSC/region and matching stock package are unknown.
 - Read [docs/galaxy-s8-g950f.md](docs/galaxy-s8-g950f.md) for the prior-art references, port boundary, and safe next milestone.
 - Next: obtain and inspect the exact G950F stock boot/DTB artifacts and determine its bootloader's supported temporary-boot path. Keep this read-only; do not unlock, flash, repartition, or erase the device without separate explicit confirmation.
 
