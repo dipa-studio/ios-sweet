@@ -6,6 +6,8 @@ This project ports Apple's open-source XNU kernel (xnu-8796, the iOS 16 generati
 
 As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock it, open Settings, pull down Control Center and the notification center, and use the touchscreen and the hardware buttons. Rendering runs entirely on the CPU; there is no GPU driver.
 
+**This checkout supports only the Redmi Note 10 Pro (`sweet`).** A separate project reports a Galaxy S8 SM-G950F bring-up, but it is not integrated here; do not boot or flash SWEET images on the S8. See [the G950F bring-up assessment](docs/galaxy-s8-g950f.md).
+
 > Experimental bring-up, not a usable phone OS. Many things are missing or stubbed (see below), and Apple's security model is mostly switched off. It installs into the `userdata` partition and so **erases Android's user data**.
 
 ## What works
