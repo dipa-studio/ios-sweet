@@ -28,7 +28,8 @@ These are platform dependencies, not settings that can safely be changed by subs
 ## Current development blockers
 
 - The product name is user-confirmed as SM-G950F, but the matching stock firmware package remains unverified, so there is no Samsung boot image or DTB to inspect yet. Web lookups of the reported build on SamFW were blocked (HTTP 403); search engines did not provide verifiable results, and no package was downloaded.
-- The Windows environment currently has Python and Git, but no `aarch64-linux-gnu-gcc`, `gh`, `adb`, or `fastboot`. No target kernel build or phone communication was attempted.
+- The user has explicitly authorized replacing BOOT and erasing USERDATA, but not unlocking the bootloader. No phone partitions have been modified.
+- Google Platform Tools 37.0.3 are staged at `F:\AndroidTools\platform-tools`; Windows enumerates a Samsung USB device, but `adb devices -l` lists no phone. This workstation also lacks `aarch64-linux-gnu-gcc`, `gh`, `fastboot`, and a WSL distribution. No target build or write operation has been attempted.
 - The SWEET target conditionals are spread over 51 XNU patches. A G950F target needs a separate 4 KiB-page, Cortex-A53/Mongoose, GIC-400, Samsung S-Boot/boot-image and Exynos UFS bring-up; aliasing it to SWEET would use incompatible hardware assumptions.
 
 ## First engineering milestone
