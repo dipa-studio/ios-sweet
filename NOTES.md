@@ -2,6 +2,12 @@
 
 ## New target request: Galaxy S8 SM-G950F (2026-11-23)
 
+### Current GPU/ACPM handoff (2026-11-24)
+
+- Fresh read-only TWRP inspection reports `firmware_class.path=/vendor/firmware`. The exact `exynos8895_acpm_dvfs.fw` file was not found in the active recovery root filesystem or in the preserved SYSTEM and VENDOR ext4 partitions. SYSTEM and VENDOR were mounted with `ro,noload` and unmounted after inspection. TWRP's earlier dmesg reports a successful firmware load, so its prior source/lifecycle remains unexplained; do not treat that log as proof the blob is available to XNU.
+- No ACPM client/firmware loader, GPU power/clock sequence, IOMMU/job interface, GLES/EAGL/CoreAnimation path, kernel build, or GPU-enabled OS image exists. No device partitions were written. The saved kernel artifact is for A5XELTE, not DREAMLTE, and cannot validate the S8 driver.
+- Next concrete action: identify the exact firmware source used during TWRP boot and establish a permitted on-device loading path; separately ground and test the ACPM protocol, G3D sequencing, IOMMU, and job interface before any XNU GPU implementation. Do not map GPU MMIO or flash a discovery stub.
+
 ### Wallpaper investigation and offline fix (2026-11-24)
 
 - Read-only Sleuth Kit inspection of `research\ios-galaxy-s8\out\ios16-20H320-root-migration-fix.img` (17,179,869,184 bytes; existing SHA-256 `fda54defe183cd0e773c7d7f96d9277311bdc567f1c5071a897cc11bef206876`) found 48 `.HEIC` files under `/Library/Wallpaper/Collections`. Sample `main.caml` descriptors explicitly reference these layers, including URL-escaped names such as `Head%20Mask.HEIC`.
