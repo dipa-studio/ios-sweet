@@ -8,6 +8,8 @@
 - No ACPM client/firmware loader, GPU power/clock sequence, IOMMU/job interface, GLES/EAGL/CoreAnimation path, kernel build, or GPU-enabled OS image exists. No device partitions were written. The saved kernel artifact is for A5XELTE, not DREAMLTE, and cannot validate the S8 driver.
 - Next concrete action: identify the exact firmware source used during TWRP boot and establish a permitted on-device loading path; separately ground and test the ACPM protocol, G3D sequencing, IOMMU, and job interface before any XNU GPU implementation. Do not map GPU MMIO or flash a discovery stub.
 
+- Recovery-image follow-up: a read-only copy of the active RECOVERY partition was inspected from session scratch and then deleted. Its LZMA-compressed cpio archive has 3,541 entries and contains no ACPM/DVFS firmware file; the firmware-name string in the image is not evidence that the blob is bundled. The successful TWRP firmware-load log still has no identified source.
+
 ### Wallpaper investigation and offline fix (2026-11-24)
 
 - Read-only Sleuth Kit inspection of `research\ios-galaxy-s8\out\ios16-20H320-root-migration-fix.img` (17,179,869,184 bytes; existing SHA-256 `fda54defe183cd0e773c7d7f96d9277311bdc567f1c5071a897cc11bef206876`) found 48 `.HEIC` files under `/Library/Wallpaper/Collections`. Sample `main.caml` descriptors explicitly reference these layers, including URL-escaped names such as `Head%20Mask.HEIC`.
