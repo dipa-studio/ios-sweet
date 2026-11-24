@@ -2,6 +2,15 @@
 
 ## New target request: Galaxy S8 SM-G950F (2026-11-23)
 
+### Wallpaper investigation and offline fix (2026-11-24)
+
+- Read-only Sleuth Kit inspection of `research\ios-galaxy-s8\out\ios16-20H320-root-migration-fix.img` (17,179,869,184 bytes; existing SHA-256 `fda54defe183cd0e773c7d7f96d9277311bdc567f1c5071a897cc11bef206876`) found 48 `.HEIC` files under `/Library/Wallpaper/Collections`. Sample `main.caml` descriptors explicitly reference these layers, including URL-escaped names such as `Head%20Mask.HEIC`.
+- Observation: the layer assets are HEIC/HEVC, and a sample alpha mask converts to an RGBA PNG. On the host, `heif-convert` without its HEVC plugin reports `Unsupported codec`; with `libheif-plugin-libde265`, the sample decodes successfully. This makes unsupported HEVC decoding a plausible cause of missing wallpaper layers; the iOS boot log has not directly confirmed a decode failure.
+- Added `tools\dreamlte\wallpaper_heic.py` and integrated it into `tools\sweet-root-tweaks.py`. Root finishing now preserves each HEIC, writes a `.HEIC.png` twin, and updates only wallpaper CAML `src` references. Missing HEVC conversion support fails explicitly. Updated the S8 README and install requirements. S8 code commit: `567a480ad295cb958be0c51c04676114bc5cc909`.
+- Validation: 3 new converter tests pass; 4 existing Mali inventory tests pass; Python compilation and `git diff --check` pass. A full three-layer wallpaper sample converted and all three CAML references changed. All 48 real wallpaper assets extracted read-only from the root image decoded successfully; their PNGs total 46,679,556 bytes. The HFSX image reported 1,136,186 free 4 KiB blocks (~4.65 GB).
+- No root image was rebuilt or modified, and no phone partitions were accessed or written. WSL's current kernel does not expose an HFS+ mount driver; the installed `hfsplus` user-space tools reject this case-sensitive HFSX image, so applying the converter to the existing image remains blocked here. The last documented BOOT test is CPU-only; this change adds neither GPU acceleration nor a performance fix.
+- Next: run the existing root-finishing workflow in a Linux environment with HFSX read/write mount support, verify the finished image and hash, then request confirmation for that exact USERDATA image before any device write. Reconfirm current TWRP/device state before proceeding.
+
 - Workspace: `F:\iOS Galaxy`; upstream checkout at `45263be` (`main`), initially clean.
 - The user reports the Download Mode product name as `G950F`. No device, firmware, or bootloader was accessed by this session.
 - Follow-up confirmation: user read `PRODUCT NAME: SM-G950F` in Download Mode (2026-11-23). TWRP ADB independently reports `dreamlte` / Galaxy S8, bootloader `G950FXXUCDVG4`, carrier BTU, and verified-boot state `orange`. The Hades ROM-reported Note 9 model strings are spoofed/mismatched. The earlier reported `G950FXXUCDUD1` is not the bootloader string currently reported by TWRP; no firmware package has been downloaded.
