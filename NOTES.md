@@ -146,10 +146,15 @@
   Compared with the validated candidate, BOOT differs only in bytes 0-47;
   bytes 48 onward match. The exact original USERDATA header bytes/full image
   are not currently present in the expected local output directories, and no
-  USERDATA repair has been attempted. No other partition write was issued.
-  The phone is back in TWRP with ADB connected. Do not reboot. Ask the user
-  before restoring BOOT; do not write USERDATA without a verified source and
-  explicit approval.
+  USERDATA repair has been attempted. The same malformed command overwrote
+  USERDATA bytes 0-51. Read-only inspection shows its HFSX volume signature
+  (`HX`) at offset 1024 remains present; filesystem integrity has not been
+  checked. No other partition write was issued. The phone returned to TWRP.
+- Per the user's explicit BOOT-only authorization, rewrote the validated
+  19,118,096-byte image to `/dev/block/sda7`; exact-length readback SHA-256
+  again matched `56105bb3f5c2b96ef207e5ddbeed9ff1dd0add454773b64e74658443f0e7608c`.
+  TWRP remained connected. No reboot was issued and USERDATA was not touched
+  during this repair. The current USERDATA's first 52 bytes remain altered.
 - The overlay is configured to write `/usr/appleinternal/sbin/launchd.s8` and
   `/System/Library/Extensions/S8MaliMetal.bundle/` (plugin, plist, and shader
   cache) into the iOS root after `rootrw=1`; the user authorized those writes.
@@ -161,11 +166,12 @@
   remains authorized to enable continued work; remove it by exact-line match
   when the user asks to close Mac access. The one-off Mac link directory and
   transfer archives were removed after retrieving the binaries.
-- **Next:** ask whether to restore BOOT from the validated candidate only,
-  leaving USERDATA unchanged while locating a verified original header. Do
-  not reboot until the BOOT header is repaired and readback-verified. Keep
-  GPU readiness/acceleration unclaimed until GPU init and a real
-  CoreAnimation draw are observed.
+- **Next:** no reboot or USERDATA write until the user explicitly authorizes
+  the next action. BOOT is repaired and hash-verified; USERDATA begins with
+  the accidental text but its HFSX volume signature at offset 1024 is intact.
+  The original USERDATA header source remains unavailable locally. Do not
+  claim GPU readiness/acceleration until GPU init and a real CoreAnimation
+  draw are observed.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
