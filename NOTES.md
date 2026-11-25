@@ -77,8 +77,8 @@
 - User observation (2026-11-25 20:01 UTC): during the candidate attempt, the
   handset displayed a console for about three minutes before the user returned
   it to TWRP. This is consistent with the S8 loader's text console, but the
-  last displayed stage is not yet known. Ask whether it showed `JUMP TO XNU`
-  or a `FAIL:` line; do not infer kernel progress from "console" alone.
+  user does not recall the last line/stage. Do not infer kernel progress from
+  "console" alone.
 - The overlay is configured to write `/usr/appleinternal/sbin/launchd.s8` and
   `/System/Library/Extensions/S8MaliMetal.bundle/` (plugin, plist, and shader
   cache) into the iOS root after `rootrw=1`; the user authorized those writes.
