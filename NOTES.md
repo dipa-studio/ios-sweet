@@ -283,8 +283,13 @@
   XNU `bsd/net/dlil.c`, the matching `ifnet_attach` message says all interface
   threads were scheduled and “Proceeding”; it is a progress marker, not a
   wait/failure message. The precise final line and later blocked stage remain
-  unknown. Source progress is current through `42eeb5d`. No further reboot
-  or partition write without fresh approval.
+  unknown. Source progress was committed as `42eeb5d`.
+- User authorized returning to TWRP for read-only log capture. The handset is
+  still at the console with no ADB or fastboot connection, so the agent cannot
+  initiate that restart remotely. No restart or partition write has been
+  issued since the diagnostic boot. Await the user using hardware buttons to
+  enter TWRP, then capture logs read-only; do not flash or boot again.
+  Source progress is current through `1fdb286`.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
