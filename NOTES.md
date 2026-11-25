@@ -24,6 +24,9 @@
   the last hosted draw-test run, #11 (`45657021116`), tested earlier commit
   `826902b`, not this fix. The Xcode iPhoneOS SDK is not present in WSL, so no
   stage-3 bundle or BOOT image was built.
+- User agreed to reconnect the Mac for the next build. Windows has no SSH
+  config alias or default Ed25519 key, so no connection was attempted; no
+  remote authorized_keys files were accessed or changed.
 - No phone GPU MMIO, boot, partition, or CoreAnimation draw was accessed.
   Real acceleration remains unproven; ACPM firmware rights/loading and safe
   G3D power/clock sequencing remain unresolved. Keep the existing boot and
