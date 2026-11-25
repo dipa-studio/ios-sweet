@@ -86,8 +86,7 @@
   `sweetfb_gpu=1` and `s8metal=1` but **omits `s8gpu=1`**. The loader only
   requests the G3D rail and runs its GPU probe when `s8gpu=1` is present.
   Even a successful XNU boot with this candidate would not demonstrate an
-  initialized GPU. Do not retry this image; build a corrected candidate with
-  the required boot arg and inspect loader progress before another boot.
+  initialized GPU. Do not retry this old image.
 - User observation (2026-11-25 20:01 UTC): during the candidate attempt, the
   handset displayed a console for about three minutes before the user returned
   it to TWRP. This is consistent with the S8 loader's text console, but the
@@ -99,6 +98,29 @@
   it is not itself a panic, boot failure, or GPU status. The adjacent screen
   output is unknown. The persistent ring remains unchanged, so this report
   alone cannot prove how far the current candidate booted.
+- Corrected candidate built from the previously validated loader/payload by
+  changing only the SWEETXNU command line to add `s8gpu=1`; it retains
+  `sweetfb_gpu=1`, `s8metal=1`, and `s8autotwrp=90`. The loader and DT compare
+  byte-for-byte with the prior candidate; all payload bytes outside the
+  608-byte command-line field are unchanged. Image:
+  `F:\ios-sweet-temp\stage3-overlay-27.2\s8-stage3-candidate-gpu-enabled.img`,
+  19,118,096 bytes, SHA-256
+  `56105bb3f5c2b96ef207e5ddbeed9ff1dd0add454773b64e74658443f0e7608c`.
+- Before the replacement, saved a read-only 40 MiB copy of the exact current
+  BOOT partition to
+  `F:\iOS Galaxy\backup\G950F-BOOT-before-corrected-stage3-20261125.img`;
+  its SHA-256 is
+  `497e77d076aa4e2494af2dcd7bb0ad5a2022bf922d5a7d43ee316399bf5be883`.
+- After 2026-11-25 20:18 UTC, with the connected device confirmed as
+  SM-G950F/`dreamlte` in TWRP and BOOT `/dev/block/sda7` (40 MiB), wrote only
+  the corrected image bytes to BOOT. The script's exact-length readback hash
+  matched `56105bb3f5c2b96ef207e5ddbeed9ff1dd0add454773b64e74658443f0e7608c`
+  and then issued the reboot. No other partition was deliberately written.
+- After reboot, ADB did not reconnect within five minutes and `fastboot
+  devices` remained empty. This does not distinguish loader hang, kernel
+  progress, or the auto-return timer not running. No screen/serial capture is
+  available, and no GPU initialization/draw is demonstrated. Do not issue
+  another write or reboot until the user reports the current screen/state.
 - The overlay is configured to write `/usr/appleinternal/sbin/launchd.s8` and
   `/System/Library/Extensions/S8MaliMetal.bundle/` (plugin, plist, and shader
   cache) into the iOS root after `rootrw=1`; the user authorized those writes.
@@ -110,11 +132,11 @@
   remains authorized to enable continued work; remove it by exact-line match
   when the user asks to close Mac access. The one-off Mac link directory and
   transfer archives were removed after retrieving the binaries.
-- **Next:** no further phone changes until code/image diagnosis. Correct the
-  missing `s8gpu=1`, validate S-Boot/loader handoff from a trustworthy console
-  source, and review the current candidate's observed behavior. The persistent
-  XNU log was unchanged, and the user cannot recall the final loader console
-  line; do not claim XNU entry or GPU initialization.
+- **Next:** ask what the phone currently displays. If still on the loader
+  console, capture its last visible line; if it is stuck, have the user return
+  it to TWRP, then read current pstore/logs and verify BOOT read-only. Diagnose
+  the handoff before any further flash/reboot. Do not claim GPU readiness or
+  acceleration until the phone logs GPU init and a real CoreAnimation draw.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
