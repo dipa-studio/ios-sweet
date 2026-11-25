@@ -70,10 +70,8 @@
   Therefore this log does **not** verify the stage-3 candidate boot or overlay
   installation. It may be from an earlier iOS boot; the time in the log is
   1969-12-31, and no pre-attempt ring snapshot exists to compare.
-- TWRP's current pmsg ramoops is only 2,250 bytes and is garbled after the
-  forced reboot; it provides no reliable loader/kernel diagnosis. The screen
-  during the attempt and whether the candidate reached XNU remain unknown.
-  Do not reboot or write again until those observations are reconciled.
+- The 20:01 TWRP pmsg capture was short/garbled and supplied no reliable
+  handoff marker for the first candidate attempt.
 - Follow-up TWRP check at 20:16 UTC: the newly read 4,198,400-byte USERDATA
   ring area has the exact same SHA-256 as the 20:01 capture
   (`26cd3324cbce7fd243e8f3f8ca0f28ff25e4bb35edcde835b6a45940d56802de`);
@@ -125,11 +123,33 @@
   reached S8 touch-driver startup. It does not confirm GPU probe/init, root
   mount, or any CoreAnimation draw. The expected `s8autotwrp=90` recovery
   return did not happen within five minutes; its execution is unverified.
-- **Next:** have the user return the phone to TWRP without wiping or flashing,
-  then capture current pstore and the persistent log read-only and verify the
-  BOOT prefix hash. Use those records to determine whether the XNU log thread
-  started and why auto-return did not occur. No further BOOT write until this
-  is understood; do not claim GPU readiness or acceleration.
+- On the subsequent TWRP return, the authoritative by-name mapping is
+  USERDATA `/dev/block/sda26` (55,249,448,960 bytes); `sda24` is only
+  5,242,880 bytes. A mistaken `sda24` diagnostic read was all zeroes and is
+  not USERDATA. The correct last-1025-block USERDATA capture matches the
+  prior ring-area SHA-256 `26cd3324cbce7fd243e8f3f8ca0f28ff25e4bb35edcde835b6a45940d56802de`
+  and decoded log SHA-256
+  `4e1c6298c15fa5c30ae262a15b852585cb1c250f61cc4bfbd904667eb2b6cf8b`
+  (flush #81). It is stale and does not contain this attempt. Current pmsg is
+  951 bytes and garbled. Fixed `tools\dreamlte\pull-sweetlog.ps1` to resolve
+  USERDATA by its by-name link and decode with local Python; the corrected
+  script was run successfully.
+- **Unintended write — agent error, 2026-11-25:** a malformed TWRP partition
+  mapping diagnostic used nested shell quotes around `echo "$p -> ..."`.
+  TWRP parsed `>` as shell redirection. It overwrote the first 48 bytes of
+  BOOT with `/dev/block/platform/11120000.ufs/by-name/BOOT -` plus newline,
+  and the first 52 bytes of USERDATA with the corresponding `USERDATA` text.
+  The current full 40 MiB BOOT snapshot is preserved at
+  `F:\iOS Galaxy\backup\G950F-BOOT-after-corrected-stage3-20261125.img`,
+  SHA-256
+  `e32fd218f9d6d961f7b1e466ab8bcf3219151668fa42cf9674eae82ad95ccf9f`.
+  Compared with the validated candidate, BOOT differs only in bytes 0-47;
+  bytes 48 onward match. The exact original USERDATA header bytes/full image
+  are not currently present in the expected local output directories, and no
+  USERDATA repair has been attempted. No other partition write was issued.
+  The phone is back in TWRP with ADB connected. Do not reboot. Ask the user
+  before restoring BOOT; do not write USERDATA without a verified source and
+  explicit approval.
 - The overlay is configured to write `/usr/appleinternal/sbin/launchd.s8` and
   `/System/Library/Extensions/S8MaliMetal.bundle/` (plugin, plist, and shader
   cache) into the iOS root after `rootrw=1`; the user authorized those writes.
@@ -141,11 +161,11 @@
   remains authorized to enable continued work; remove it by exact-line match
   when the user asks to close Mac access. The one-off Mac link directory and
   transfer archives were removed after retrieving the binaries.
-- **Next:** ask what the phone currently displays. If still on the loader
-  console, capture its last visible line; if it is stuck, have the user return
-  it to TWRP, then read current pstore/logs and verify BOOT read-only. Diagnose
-  the handoff before any further flash/reboot. Do not claim GPU readiness or
-  acceleration until the phone logs GPU init and a real CoreAnimation draw.
+- **Next:** ask whether to restore BOOT from the validated candidate only,
+  leaving USERDATA unchanged while locating a verified original header. Do
+  not reboot until the BOOT header is repaired and readback-verified. Keep
+  GPU readiness/acceleration unclaimed until GPU init and a real
+  CoreAnimation draw are observed.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
