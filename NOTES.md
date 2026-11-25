@@ -55,12 +55,25 @@
   No other partition was written. The prior 40 MiB live BOOT is preserved at
   `F:\iOS Galaxy\backup\G950F-BOOT-live-pre-stage3-20261125.img`, verified
   SHA-256 `086da7a053e87b4ddbee6c5be82b4303d8e05948e10295c4947d5e41530db8c1`.
-- `adb reboot` was issued after readback verification. At 2026-11-25
-  19:59:18 UTC, neither ADB nor fastboot had re-enumerated after 240 seconds. The screen
-  state, whether the kernel reached iOS, and whether the authorized overlay
-  writes ran are **unknown**. Do not issue another reboot or partition write.
-  Ask the user what the phone currently displays; if needed, have them return
-  it to TWRP before reading the persistent XNU log and re-verifying BOOT.
+- The user returned the handset to TWRP and ADB reconnected at 20:01 UTC.
+  Read-only verification confirms `/dev/block/sda7` starts with the exact
+  candidate bytes (SHA-256 of first 19,118,096 bytes matches
+  `1ee126acb4db0c5e1091fa26f430c9377e92c4687c021d4ba0f9ff78960d06e5`);
+  the full 40 MiB partition hash is
+  `497e77d076aa4e2494af2dcd7bb0ad5a2022bf922d5a7d43ee316399bf5be883`.
+- Read the USERDATA persistent XNU ring read-only into
+  `F:\ios-sweet-temp\stage3-overlay-27.2\s8-stage3-postboot.log`.
+  It reports 299,431 bytes, flush #81, and contains a normal iOS boot through
+  SpringBoard/backboardd plus touch events. It has no `S8 OVERLAY`, `S8 MALI`,
+  or GPU-init messages; the recorded launchd boot-args line ends at
+  `sweetfb_hz=30` and does not include `sweetfb_gpu=1` or `s8metal=1`.
+  Therefore this log does **not** verify the stage-3 candidate boot or overlay
+  installation. It may be from an earlier iOS boot; the time in the log is
+  1969-12-31, and no pre-attempt ring snapshot exists to compare.
+- TWRP's current pmsg ramoops is only 2,250 bytes and is garbled after the
+  forced reboot; it provides no reliable loader/kernel diagnosis. The screen
+  during the attempt and whether the candidate reached XNU remain unknown.
+  Do not reboot or write again until those observations are reconciled.
 - The overlay is configured to write `/usr/appleinternal/sbin/launchd.s8` and
   `/System/Library/Extensions/S8MaliMetal.bundle/` (plugin, plist, and shader
   cache) into the iOS root after `rootrw=1`; the user authorized those writes.
@@ -72,11 +85,10 @@
   remains authorized to enable continued work; remove it by exact-line match
   when the user asks to close Mac access. The one-off Mac link directory and
   transfer archives were removed after retrieving the binaries.
-- **Next:** wait for the user to report the display/boot state. If TWRP
-  reconnects, capture the boot log and inspect whether the G3D driver initialized
-  and whether CoreAnimation draws reached Mali. If not, do not repeat the
-  partition write; use the preserved exact live BOOT backup for rollback only
-  with user direction.
+- **Next:** ask what the user saw during the candidate boot (Apple logo,
+  SpringBoard, recovery, or other). Do not repeat the BOOT write. The saved
+  console ring currently cannot confirm the candidate; investigate why its
+  requested args and overlay/GPU markers are absent before another attempt.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
