@@ -118,6 +118,30 @@
 - Source fix/test commit: `02acba6`; this milestone's handoff commit:
   `11b5872`.
 
+### Foreign Metal pipeline diagnostics (2026-11-25 23:09 UTC)
+
+- Inspected the iOS 27.2 public Metal headers. `MTLFunction` exposes its name
+  and function-constant metadata, but no source or AIR/IR extraction API was
+  found. A name-only mapping to the QuartzCore cache would be speculative, so
+  no foreign shader translation or cache substitution was added.
+- Updated the stage-3 pipeline path to report foreign shaders as unsupported
+  when the Mali draw path is active, and to return an error rather than a
+  successful pipeline with a null GPU pipeline when a cached shader is
+  missing. The existing stage-2 CPU-clear fallback remains when the draw path
+  is unavailable.
+- Validation: the iOS stage-2 plugin cross-compiles (139,008-byte bundle);
+  the host Mali descriptor/job-chain regression passes (`4 submits, 0
+  failures`, both passes 3 draws, 0 skipped). A stage-3 build compiled its
+  objects but could not link because `ld64.lld-18` rejects the SDK's
+  `arm64e.x1-ios` target in `libSystem.tbd`; this is not a successful
+  stage-3 build.
+- This is diagnostic/error-path hardening, not a fix for private shaders.
+  There is still no fresh boot log, iOS UI, touch verification, or real
+  CoreAnimation GPU frame. Confidence remains 25%, below the user's 50%
+  minimum before another attempt. No device action was taken; do not retry
+  without reaching that evidence threshold and receiving fresh authorization.
+- Source change is pending commit.
+
 ### Offline boot-stall review (2026-11-25 21:53 UTC)
 
 - The old SWEETLOG contains the exact `ifnet_attach` completion line the user
