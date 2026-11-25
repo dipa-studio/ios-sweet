@@ -163,6 +163,23 @@
   CoreAnimation, below the earlier 50% pre-attempt threshold. No new
   end-to-end evidence was obtained.
 
+### User reports no boot after five minutes (2026-11-25 23:32 UTC)
+
+- User reports the phone has not booted after about five minutes. This is a
+  user observation; the current display/last console line has not been
+  independently observed.
+- Read-only host check at report time: `adb devices -l` listed no devices and
+  `fastboot devices -l` was empty. Therefore current mode and boot stage are
+  unknown; this does not establish a kernel panic or identify a cause.
+- No new recovery or XNU logs exist in the local artifact directory since
+  20:16 UTC; the saved SWEETLOG/pmsg artifacts are stale and cannot diagnose
+  this attempt. The last verified BOOT candidate hash remains
+  `56105bb3f5c2b96ef207e5ddbeed9ff1dd0add454773b64e74658443f0e7608c`.
+- No commands were issued to reboot or write any partition. Do not retry or
+  modify the device without new, explicit authorization. Ask for the visible
+  screen/last line or wait until recovery reconnects, then capture logs
+  read-only before proposing a cause.
+
 ### Offline boot-stall review (2026-11-25 21:53 UTC)
 
 - The old SWEETLOG contains the exact `ifnet_attach` completion line the user
