@@ -59,6 +59,31 @@
   write was performed. A fresh explicit approval is required before testing
   the touch-enabled candidate.
 
+### Authorized touch-enabled diagnostic boot (2026-11-25)
+
+- User explicitly authorized one BOOT write and one diagnostic reboot. Before
+  writing, the candidate was verified at 19,118,096 bytes with SHA-256
+  `56105bb3f5c2b96ef207e5ddbeed9ff1dd0add454773b64e74658443f0e7608c`;
+  the preserved 40 MiB BOOT backup hash was verified as
+  `086da7a053e87b4ddbee6c5be82b4303d8e05948e10295c4947d5e41530db8c1`.
+  The device was confirmed as `dreamlte` in TWRP and its prior BOOT prefix
+  matched the touch-disabled image. Wrote exactly 19,118,096 bytes to
+  `/dev/block/sda7`; readback matched the candidate hash. No USERDATA or other
+  partition was written.
+- Issued the single authorized `adb reboot`. ADB and fastboot remained absent
+  after two 90-second waits (180 seconds total). User reports the static
+  kernel console showed `S8 TOUCH: down id=7 x=0 y=0`, or
+  `Failed to write boot-picker-bringup-reason to NVRAM`. XNU's touch code logs
+  contacts but forwards only IDs 0-4 to Sweet HID, so ID 7 does not prove
+  touch reached iOS. The NVRAM warning is a previously observed nonfatal
+  diagnostic, not an identified cause. The last line and boot stage remain
+  user-reported/uncertain; no fresh persistent log or UI/GPU frame is
+  available.
+- This attempt does not meet the goal or identify a source fix. Confidence
+  remains 25% for touch-enabled iOS plus a verified GPU-rendered CoreAnimation
+  frame. Do not issue another reboot or partition write without fresh explicit
+  authorization.
+
 ### Offline boot-stall review (2026-11-25 21:53 UTC)
 
 - The old SWEETLOG contains the exact `ifnet_attach` completion line the user
