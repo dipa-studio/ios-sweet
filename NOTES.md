@@ -115,6 +115,8 @@
   the complete goal, below the user's 50% minimum for another attempt. No
   device action was taken; do not retry until evidence reaches 50% and fresh
   authorization is given.
+- Source fix/test commit: `02acba6`; this milestone's handoff commit:
+  `11b5872`.
 
 ### Offline boot-stall review (2026-11-25 21:53 UTC)
 
