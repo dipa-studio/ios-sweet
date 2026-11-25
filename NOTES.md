@@ -235,6 +235,13 @@
   this handoff update: `3e5b0a7`. Need fresh boot-specific evidence before
   identifying or claiming a complete fix; preserve the no-reboot constraint
   and get explicit authorization before another test boot.
+  At 2026-11-25 21:26 UTC, after the user's explicit authorization, issued
+  exactly one `adb reboot` from recovery to test the installed BOOT candidate.
+  ADB did not reconnect during 180 seconds, and `fastboot devices` also
+  listed no device. No second reboot or manual partition write was issued.
+  Whether the kernel reached root, whether the configured USERDATA overlay/log
+  writes ran, and the handset's current screen are unknown. Stop here and get
+  the user's current screen state before any further device action.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
