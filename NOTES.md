@@ -118,9 +118,18 @@
   and then issued the reboot. No other partition was deliberately written.
 - After reboot, ADB did not reconnect within five minutes and `fastboot
   devices` remained empty. This does not distinguish loader hang, kernel
-  progress, or the auto-return timer not running. No screen/serial capture is
-  available, and no GPU initialization/draw is demonstrated. Do not issue
-  another write or reboot until the user reports the current screen/state.
+  progress, or the auto-return timer not running.
+- User then reported that the console's last visible line is
+  `S8 TOUCH: worker started`. This exact string is printed by the XNU S8
+  touchscreen worker in `dreamlte_touch.c`, so the loader handed off and XNU
+  reached S8 touch-driver startup. It does not confirm GPU probe/init, root
+  mount, or any CoreAnimation draw. The expected `s8autotwrp=90` recovery
+  return did not happen within five minutes; its execution is unverified.
+- **Next:** have the user return the phone to TWRP without wiping or flashing,
+  then capture current pstore and the persistent log read-only and verify the
+  BOOT prefix hash. Use those records to determine whether the XNU log thread
+  started and why auto-return did not occur. No further BOOT write until this
+  is understood; do not claim GPU readiness or acceleration.
 - The overlay is configured to write `/usr/appleinternal/sbin/launchd.s8` and
   `/System/Library/Extensions/S8MaliMetal.bundle/` (plugin, plist, and shader
   cache) into the iOS root after `rootrw=1`; the user authorized those writes.
