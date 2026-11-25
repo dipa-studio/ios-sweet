@@ -142,6 +142,27 @@
   without reaching that evidence threshold and receiving fresh authorization.
 - Source fix commit: `95143f8`; root handoff commit: `db58a0d`.
 
+### User-authorized BOOT-only check (2026-11-25 23:13 UTC)
+
+- User selected writing the existing `s8-stage3-candidate-gpu-enabled.img`
+  to BOOT only, with no reboot. Revalidated the connected device as
+  `dreamlte` in TWRP 3.7.0_9-0; `/dev/block/platform/11120000.ufs/by-name/BOOT`
+  resolves to `/dev/block/sda7`, size 40 MiB.
+- Captured a fresh 40 MiB read-only BOOT backup at
+  `backup/G950F-BOOT-before-reflash-20261125-2314.img`, SHA-256
+  `4f8b072f9a3eee7c920efc83f64e9510bc07aef8613976d354b355eae0cdb2dd`.
+  It exactly matches the previously preserved pre-touch-off BOOT backup.
+  The first 19,118,096 bytes of live BOOT hash to
+  `56105bb3f5c2b96ef207e5ddbeed9ff1dd0add454773b64e74658443f0e7608c`,
+  exactly matching the authorized candidate. Therefore no BOOT write was
+  needed or issued; the phone remains in TWRP. No reboot was issued.
+- The installed candidate predates source commit `95143f8`; the latest
+  pipeline diagnostic fix is not in this image. Stage-3 linking has not
+  succeeded, so do not claim the fix was installed or boot-tested.
+- Confidence remains 25% for complete boot + touch + verified GPU
+  CoreAnimation, below the earlier 50% pre-attempt threshold. No new
+  end-to-end evidence was obtained.
+
 ### Offline boot-stall review (2026-11-25 21:53 UTC)
 
 - The old SWEETLOG contains the exact `ifnet_attach` completion line the user
