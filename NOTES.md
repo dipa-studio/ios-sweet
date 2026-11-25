@@ -25,10 +25,15 @@
   MMIO, boot, or partition write occurred. ACPM firmware rights/loading and
   safe G3D power/clock sequencing remain unverified.
 - Source branch `claude/zealous-planck-oi3hse` is at `11229c8`, ahead of its
-  remote by three commits; it has not been pushed. The temporary Mac SSH key
+  remote by four commits; it has not been pushed. The temporary Mac SSH key
   remains authorized to enable continued work; remove it by exact-line match
-  when the user asks to close Mac access. Mac build scratch is under
-  `~/ios-sweet-link-20261125`.
+  when the user asks to close Mac access. The one-off Mac link directory and
+  transfer archives were removed after retrieving the binaries.
+- **Next:** obtain/build a current DREAMLTE XNU kernel that includes the
+  matching `S8MALI_MAP_SURFACE` interface. Then verify ACPM firmware rights,
+  G3D power/clock sequencing, and hardware MMU/job/fault handling before
+  considering any boot. No candidate boot or partition write without fresh
+  explicit user approval.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
