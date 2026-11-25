@@ -161,17 +161,17 @@
   No on-device GPU draw, visual correctness, touch, or stability result has
   been obtained. ACPM firmware/clock availability and the absent optional
   D22AP `/product` node remain caveats.
-- Source branch `claude/zealous-planck-oi3hse` is at `6f017da`, ahead of its
-  remote by 17 commits; it has not been pushed. The temporary Mac SSH key
+- Source branch `claude/zealous-planck-oi3hse` is at `36e783f`, ahead of its
+  remote by 18 commits; it has not been pushed. The temporary Mac SSH key
   remains authorized to enable continued work; remove it by exact-line match
   when the user asks to close Mac access. The one-off Mac link directory and
   transfer archives were removed after retrieving the binaries.
-- **Next:** no reboot or USERDATA write until the user explicitly authorizes
-  the next action. BOOT is repaired and hash-verified; USERDATA begins with
-  the accidental text but its HFSX volume signature at offset 1024 is intact.
-  The original USERDATA header source remains unavailable locally. Do not
-  claim GPU readiness/acceleration until GPU init and a real CoreAnimation
-  draw are observed.
+- User explicitly chose to leave the phone in TWRP and not reboot. Respect
+  that; no reboot or USERDATA write is authorized. BOOT is repaired and
+  hash-verified; USERDATA begins with the accidental text but its HFSX volume
+  signature at offset 1024 is intact. The original USERDATA header source
+  remains unavailable locally. Do not claim GPU readiness/acceleration until
+  GPU init and a real CoreAnimation draw are observed.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
