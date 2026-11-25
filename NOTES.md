@@ -182,6 +182,17 @@
   another reboot/write. The USERDATA header prefix remains altered; that may
   affect boot/root discovery, but is not yet demonstrated as this console
   stall's cause.
+- At 2026-11-25 21:01 UTC, user reports the phone is back in TWRP. ADB confirms
+  `recovery`, Galaxy S8 / `dreamlte`, BOOT `/dev/block/sda7` and USERDATA
+  `/dev/block/sda26`. A read-only hash of the first 19,118,096 BOOT bytes
+  matches the corrected candidate SHA-256
+  `56105bb3f5c2b96ef207e5ddbeed9ff1dd0add454773b64e74658443f0e7608c`.
+  The latest USERDATA ring still decodes to 299,431 bytes, flush #81, with
+  the exact same area and text hashes as the older capture; it contains no
+  evidence from this boot. The 951-byte pmsg is garbled. No partition write
+  or reboot was issued during this diagnostic. Leave the phone in TWRP; do
+  not retry boot or modify USERDATA until the header issue is understood and
+  the user explicitly authorizes next steps.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
