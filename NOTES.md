@@ -29,6 +29,15 @@
   remote authorized_keys files were accessed or changed.
 - User is unsure how to establish that connection. Next: guide them to enable
   a supported remote session, then use the installed Xcode SDK for stage 3.
+- Mac Remote Login is now enabled; user provided account `leo-mroz` at
+  `192.168.0.251`. TCP/22 is reachable from this PC. Verified the server's
+  presented ED25519 fingerprint against the Mac-reported fingerprint:
+  `SHA256:vKU4BI7Kr0X7gH5DiMPEbHt7YHpBJ6cSd5CwkjL2N7c`.
+- Created a dedicated temporary client key at
+  `C:\Users\leomr\.ssh\ios-sweet-mac-temp` (public key only to be added).
+  No authorized_keys edit has been made. Before appending, user should inspect
+  `~/.ssh/authorized_keys` and restore any missing pre-existing entries from
+  backup, because the earlier cleanup incident may have removed lines.
 - No phone GPU MMIO, boot, partition, or CoreAnimation draw was accessed.
   Real acceleration remains unproven; ACPM firmware rights/loading and safe
   G3D power/clock sequencing remain unresolved. Keep the existing boot and
