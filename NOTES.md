@@ -303,6 +303,12 @@
   At 21:48 UTC, repeated the read-only capture after the user returned to
   TWRP: same SWEETLOG/pmsg hashes, no new boot evidence; diagnostic BOOT hash
   remains correct. Latest source progress commit: `5e98270`.
+- Communication / device-test preference (2026-11-25 21:50 UTC): user does not
+  want routine reports about failed boots or repeated flash attempts; report
+  back when there is a complete, verified fix. Stop speculative test flashing.
+  Work offline to identify and validate a substantive fix first. Do not write
+  BOOT or reboot for further experiments unless the user specifically approves
+  a necessary test after being told what it can establish and what it changes.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
