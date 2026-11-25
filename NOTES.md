@@ -153,8 +153,20 @@
 - Per the user's explicit BOOT-only authorization, rewrote the validated
   19,118,096-byte image to `/dev/block/sda7`; exact-length readback SHA-256
   again matched `56105bb3f5c2b96ef207e5ddbeed9ff1dd0add454773b64e74658443f0e7608c`.
-  TWRP remained connected. No reboot was issued and USERDATA was not touched
-  during this repair. The current USERDATA's first 52 bytes remain altered.
+  TWRP remained connected. No reboot was issued.
+- User subsequently explicitly authorized restoring exactly 52 zero bytes to
+  USERDATA offset 0, with no reboot. Immediately before writing, the device
+  was confirmed as `dreamlte` in TWRP, USERDATA `/dev/block/sda26`; bytes 0-51
+  matched the recorded accidental path string, bytes 52-1023 were all zero,
+  and the HFSX primary header at offset 1024 was intact. The original 52
+  bytes were not recovered from an image; zero is a strong inference from
+  `tools\mkiosroot.sh` creating a new output with `truncate` before
+  `mkfs.hfsplus`, plus the remaining zero boot-block area. Wrote exactly 52
+  zero bytes using `dd bs=1 count=52 conv=fsync`. Readback verified bytes
+  0-51 are zero, bytes 52-4095 match the pre-write capture exactly, and the
+  HFSX header remains at offset 1024. The first 1024 bytes now read as zero.
+  No fsck or boot was run; this repairs the accidental prefix but does not
+  establish that iOS will boot.
 - The overlay is configured to write `/usr/appleinternal/sbin/launchd.s8` and
   `/System/Library/Extensions/S8MaliMetal.bundle/` (plugin, plist, and shader
   cache) into the iOS root after `rootrw=1`; the user authorized those writes.
@@ -166,12 +178,13 @@
   remains authorized to enable continued work; remove it by exact-line match
   when the user asks to close Mac access. The one-off Mac link directory and
   transfer archives were removed after retrieving the binaries.
-- User explicitly chose to leave the phone in TWRP and not reboot. Respect
-  that; no reboot or USERDATA write is authorized. BOOT is repaired and
-  hash-verified; USERDATA begins with the accidental text but its HFSX volume
-  signature at offset 1024 is intact. The original USERDATA header source
-  remains unavailable locally. Do not claim GPU readiness/acceleration until
-  GPU init and a real CoreAnimation draw are observed.
+- User explicitly chose to leave the phone in TWRP and not reboot; that
+  instruction still stands. The only later USERDATA authorization was to
+  zero bytes 0-51; that exact write was readback-verified. BOOT's candidate
+  prefix remains hash-verified. Do not reboot or modify other USERDATA ranges
+  without fresh authorization. No filesystem check or post-repair boot has
+  occurred. Do not claim GPU readiness/acceleration until GPU init and a real
+  CoreAnimation draw are observed.
 - At 2026-11-25 20:48 UTC, user reported they then tried booting iOS themselves
   and the console appears stuck after a line transcribed as
   `ifnet_attach: All kernel threads created for interface stf0 have been
