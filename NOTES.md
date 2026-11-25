@@ -35,6 +35,30 @@
   remaining caveats, and the exact scope of the estimate; hardware success
   still requires an explicitly authorized test and direct verification.
 
+### Follow-up read-only recheck (2026-11-25)
+
+- Pulled the current recovery logs again. USERDATA still reports 299,431 bytes
+  and flush #81; the decoded SWEETLOG SHA-256 is unchanged at
+  `4e1c6298c15fa5c30ae262a15b852585cb1c250f61cc4bfbd904667eb2b6cf8b`.
+  The 951-byte pmsg remains garbled. This is the old boot log, not evidence
+  from the latest attempt; it ends after SpringBoard/touch activity from an
+  earlier successful boot.
+- ADB confirms the phone is in TWRP. Read-only hashing confirms the installed
+  BOOT prefix is still the touch-disabled diagnostic image
+  (`b47ce02749d82fd8f43567243933ea9a96f2400b34769fcb405dea52e6742b2d`).
+  A touch-enabled stage-3 candidate exists locally
+  (`s8-stage3-candidate-gpu-enabled.img`, SHA-256
+  `56105bb3f5c2b96ef207e5ddbeed9ff1dd0add454773b64e74658443f0e7608c`),
+  but it has not been installed or booted in this follow-up.
+- Re-reading the pipeline path confirms foreign/private Metal functions can
+  yield a pipeline object with no Mali pipeline; the encoder binds null and
+  render execution skips those draws (at most applying a CPU clear). No safe
+  translation or fallback fix was established, so no source edit was made.
+- Confidence remains 25% for the complete goal (touch-enabled iOS plus a
+  verified GPU-rendered CoreAnimation frame). No reboot, flash, or partition
+  write was performed. A fresh explicit approval is required before testing
+  the touch-enabled candidate.
+
 ### Offline boot-stall review (2026-11-25 21:53 UTC)
 
 - The old SWEETLOG contains the exact `ifnet_attach` completion line the user
