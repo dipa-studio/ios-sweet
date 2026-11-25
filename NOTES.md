@@ -7,6 +7,7 @@
 - Removed all nine ignored, untracked `*.img` outputs from `research/ios-galaxy-s8/out`: five 16 GiB iOS root images plus four generated boot/kernel images (about 80 GiB total). These were local build artifacts; the user explicitly requested removing images to speed up `scp -r`.
 - Removed the duplicate 182 MiB llvm-mingw ZIP after verifying its extracted toolchain directory contains 9,069 files.
 - Preserved all three `backup/G950F-BOOT-*.img` device backups. No tracked files or source changes were removed. Root and S8 Git object packs total under 1 MiB each; the XNU worktree packs are about 33 MiB, not the transfer bottleneck.
+- Follow-up cleanup (2026-11-25 12:57 UTC): removed eight ignored `.ipsw`/`.dmg` files (the two 5.75 GiB restore downloads and extracted disk images) plus 44 ignored generated dyld shared-cache files, freeing 28.54 GiB logical size. Kept the small IPSW tooling/ADT metadata, WSL kernel source checkout and extracted Windows toolchain. Final workspace file-size inventory is about 2.8 GiB excluding `.git`; the remaining largest research items are `research/ios-galaxy-s8/research/wsl-kernel` (~1.43 GiB) and `research/toolchains/llvm-mingw-20261117-ucrt-x86_64` (~0.70 GiB), neither required for an XNU build on macOS. All three BOOT backups remain intact.
 - Remaining user changes are untouched: root `docs/galaxy-s8-g950f.md`, S8 `.gitignore`, `shim/dreamlte/build.sh`, `tools/dreamlte/make-boot.sh`, and three untracked `*.lf.sh` scripts.
 
 ### Current GPU/ACPM handoff (2026-11-24)
