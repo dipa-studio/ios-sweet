@@ -278,8 +278,13 @@
   `b47ce02749d82fd8f43567243933ea9a96f2400b34769fcb405dea52e6742b2d`.
   Issued one `adb reboot`; ADB did not reconnect within 180 seconds. This
   test has not established that disabling touch fixes or moves the stall.
-  The current screen after this diagnostic boot is not yet reported. No
-  further reboot or partition write without fresh approval.
+  User reports the current console remains at an `ifnet_attach` kernel-thread
+  message for over five minutes; `S8 TOUCH: disabled` was not seen. In Apple
+  XNU `bsd/net/dlil.c`, the matching `ifnet_attach` message says all interface
+  threads were scheduled and “Proceeding”; it is a progress marker, not a
+  wait/failure message. The precise final line and later blocked stage remain
+  unknown. Source progress is current through `42eeb5d`. No further reboot
+  or partition write without fresh approval.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
