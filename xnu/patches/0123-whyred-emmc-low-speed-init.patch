@@ -1,0 +1,318 @@
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -1,10 +1,9 @@
+ /*
+- * Whyred read-only eMMC command probe.
++ * Whyred read-only eMMC initialization and metadata probe.
+  *
+- * This opt-in diagnostic uses the bootloader's existing SDCC1 power/clock
+- * state. It sends CMD13 (SEND_STATUS) and, only when the card reports the
+- * Transfer state, CMD8 (SEND_EXT_CSD) using bounded polling PIO. It never
+- * issues a user-area read or any media-write command.
++ * This opt-in diagnostic preserves the existing SDCC1 power rails, returns
++ * the card and host to the eMMC legacy 1-bit initialization mode, then reads
++ * only EXT_CSD. It never reads user sectors or issues a media-write command.
+  */
+ #include <sys/param.h>
+ #include <sys/systm.h>
+@@ -21,6 +20,8 @@
+ #define SDHCI_CLOCK_CONTROL              0x2c
+ #define SDHCI_INT_STATUS                 0x30
+ #define SDHCI_SIGNAL_ENABLE              0x38
++#define SDHCI_HOST_CONTROL2              0x3e
++#define SDHCI_CAPABILITIES               0x40
+ #define SDHCI_ARGUMENT                   0x08
+ #define SDHCI_BLOCK_SIZE                 0x04
+ #define SDHCI_BLOCK_COUNT                0x06
+@@ -28,6 +29,8 @@
+ #define SDHCI_COMMAND                    0x0e
+ #define SDHCI_RESPONSE                   0x10
+ #define SDHCI_BUFFER                     0x20
++#define SDHCI_CORE_DLL_STATUS            0x108
++#define SDHCI_CORE_VENDOR_SPEC           0x10c
+ #define SDHCI_PSTATE_CMD_INHIBIT         0x00000001
+ #define SDHCI_PSTATE_DATA_INHIBIT        0x00000002
+ #define SDHCI_PSTATE_DATA_AVAILABLE      0x00000800
+@@ -37,7 +40,17 @@
+ #define SDHCI_CLOCK_CARD_ENABLE          0x0004
+ #define SDHCI_CLOCK_INT_STABLE           0x0002
+ #define SDHCI_CLOCK_INT_ENABLE           0x0001
++#define SDHCI_CLOCK_DIV_MASK             0xffc0
+ #define SDHCI_POWER_ENABLE               0x01
++#define SDHCI_HOST_HIGH_SPEED            0x04
++#define SDHCI_HOST_DMA_MASK              0x18
++#define SDHCI_HOST_8BIT                   0x20
++#define SDHCI_HOST_WIDTH_AND_MODE_MASK   0x3e
++#define SDHCI_HOST2_UHS_MASK             0x0007
++#define SDHCI_CORE_MCLK_SEL_MASK         0x00000300
++#define SDHCI_CORE_MCLK_SEL_DEFAULT      0x00000200
++#define SDHCI_CORE_HC_SELECT_IN_EN       0x00040000
++#define SDHCI_CORE_HC_SELECT_IN_MASK     0x00380000
+ #define SDHCI_INT_RESPONSE               0x00000001
+ #define SDHCI_INT_DATA_END               0x00000002
+ #define SDHCI_INT_DATA_AVAILABLE         0x00000020
+@@ -49,7 +62,16 @@
+ #define SDHCI_CMD_DATA_PRESENT           0x0020
+ #define SDHCI_CMD_SEND_STATUS            13
+ #define SDHCI_CMD_SEND_EXT_CSD           8
++#define SDHCI_CMD_GO_IDLE                0
++#define SDHCI_CMD_SEND_OP_COND           1
++#define SDHCI_CMD_ALL_SEND_CID           2
++#define SDHCI_CMD_SET_RCA                3
++#define SDHCI_CMD_SELECT_CARD            7
+ #define WHYRED_EMMC_RCA                  1
++#define WHYRED_EMMC_OCR                  0x40ff8000
++#define WHYRED_SDCC1_CLOCK_SOURCE_MAX_HZ 384000000ULL
++#define WHYRED_EMMC_INIT_CLOCK_HZ        200000
++#define WHYRED_EMMC_OCR_READY            0x80000000
+ #define WHYRED_EXT_CSD_BYTES             512
+ #define WHYRED_EMMC_TIMEOUT_MS           1000
+ #define WHYRED_EMMC_STATUS_TRANSFER      4
+@@ -64,6 +86,12 @@
+ 	return *(volatile uint16_t *)(base + offset);
+ }
+ 
++static uint8_t
++whyred_emmc_read8(volatile uint8_t *base, unsigned int offset)
++{
++	return *(volatile uint8_t *)(base + offset);
++}
++
+ static uint32_t
+ whyred_emmc_read32(volatile uint8_t *base, unsigned int offset)
+ {
+@@ -74,6 +102,12 @@
+ whyred_emmc_write16(volatile uint8_t *base, unsigned int offset, uint16_t value)
+ {
+ 	*(volatile uint16_t *)(base + offset) = value;
++}
++
++static void
++whyred_emmc_write8(volatile uint8_t *base, unsigned int offset, uint8_t value)
++{
++	*(volatile uint8_t *)(base + offset) = value;
+ }
+ 
+ static void
+@@ -97,6 +131,99 @@
+ 	}
+ 	uint64_t ticks = (frequency * WHYRED_EMMC_TIMEOUT_MS) / 1000;
+ 	return ticks ? ticks : 1;
++}
++
++static void
++whyred_emmc_delay_us(uint32_t usec)
++{
++	uint64_t frequency = __builtin_arm_rsr64("CNTFRQ_EL0");
++	if (frequency == 0) {
++		return;
++	}
++	uint64_t ticks = (frequency * usec) / 1000000;
++	uint64_t start = whyred_emmc_counter();
++	while ((whyred_emmc_counter() - start) < ticks) {
++	}
++}
++
++static int
++whyred_emmc_set_200khz_clock(volatile uint8_t *base, uint32_t caps,
++	uint32_t *divider_out)
++{
++	uint32_t base_mhz = (caps >> 8) & 0xff;
++	if (base_mhz == 0) {
++		printf("WHYRED EMMC INIT: SDHCI base clock is zero; abort\n");
++		return -1;
++	}
++	uint64_t source_hz = (uint64_t)base_mhz * 1000000;
++	if (source_hz < WHYRED_SDCC1_CLOCK_SOURCE_MAX_HZ) {
++		source_hz = WHYRED_SDCC1_CLOCK_SOURCE_MAX_HZ;
++	}
++	uint32_t divider = (uint32_t)((source_hz +
++	    (2 * WHYRED_EMMC_INIT_CLOCK_HZ - 1)) /
++	    (2 * WHYRED_EMMC_INIT_CLOCK_HZ));
++	if (divider == 0) {
++		divider = 1;
++	}
++	if (divider > 1023) {
++		printf("WHYRED EMMC INIT: 200kHz divider out of range: %u\n",
++		    divider);
++		return -1;
++	}
++
++	uint16_t clock = whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL);
++	clock &= (uint16_t)~(SDHCI_CLOCK_CARD_ENABLE | SDHCI_CLOCK_DIV_MASK |
++	    SDHCI_CLOCK_INT_STABLE);
++	clock |= (uint16_t)(((divider & 0xff) << 8) |
++	    ((divider & 0x300) >> 2) | SDHCI_CLOCK_INT_ENABLE);
++	whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, clock);
++
++	uint64_t frequency = __builtin_arm_rsr64("CNTFRQ_EL0");
++	if (frequency == 0) {
++		printf("WHYRED EMMC INIT: CNTFRQ is zero while changing clock\n");
++		return -1;
++	}
++	uint64_t timeout = frequency / 10; /* 100 ms */
++	uint64_t start = whyred_emmc_counter();
++	while ((whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL) &
++	    SDHCI_CLOCK_INT_STABLE) == 0) {
++		if ((whyred_emmc_counter() - start) >= timeout) {
++			printf("WHYRED EMMC INIT: internal clock did not stabilize\n");
++			return -1;
++		}
++	}
++
++	clock = whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL);
++	clock |= SDHCI_CLOCK_CARD_ENABLE;
++	whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, clock);
++	*divider_out = divider;
++	printf("WHYRED EMMC INIT: source upper=%lluHz caps base=%uMHz divider=%u target=%uHz output<=%lluHz\n",
++	    (unsigned long long)source_hz, base_mhz, divider,
++	    WHYRED_EMMC_INIT_CLOCK_HZ,
++	    (unsigned long long)(source_hz / (2 * divider)));
++	return 0;
++}
++
++static void
++whyred_emmc_select_legacy_mode(volatile uint8_t *base)
++{
++	uint8_t host = whyred_emmc_read8(base, SDHCI_HOST_CONTROL);
++	host &= (uint8_t)~SDHCI_HOST_WIDTH_AND_MODE_MASK;
++	whyred_emmc_write8(base, SDHCI_HOST_CONTROL, host);
++
++	uint16_t host2 = whyred_emmc_read16(base, SDHCI_HOST_CONTROL2);
++	host2 &= (uint16_t)~SDHCI_HOST2_UHS_MASK;
++	whyred_emmc_write16(base, SDHCI_HOST_CONTROL2, host2);
++
++	uint32_t vendor = whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC);
++	vendor &= ~(SDHCI_CORE_MCLK_SEL_MASK | SDHCI_CORE_HC_SELECT_IN_EN |
++	    SDHCI_CORE_HC_SELECT_IN_MASK);
++	vendor |= SDHCI_CORE_MCLK_SEL_DEFAULT;
++	whyred_emmc_write32(base, SDHCI_CORE_VENDOR_SPEC, vendor);
++	(void)whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC);
++	printf("WHYRED EMMC INIT: host set to 1-bit legacy; host2=0x%04x vendor=0x%08x\n",
++	    whyred_emmc_read16(base, SDHCI_HOST_CONTROL2),
++	    whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC));
+ }
+ 
+ static int
+@@ -265,11 +392,16 @@
+ 	uint32_t present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
+ 	uint16_t clock = whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL);
+ 	uint8_t power = *(volatile uint8_t *)(base + SDHCI_POWER_CONTROL);
+-	uint8_t host = *(volatile uint8_t *)(base + SDHCI_HOST_CONTROL);
++	uint8_t host = whyred_emmc_read8(base, SDHCI_HOST_CONTROL);
++	uint16_t host2 = whyred_emmc_read16(base, SDHCI_HOST_CONTROL2);
++	uint32_t caps = whyred_emmc_read32(base, SDHCI_CAPABILITIES);
++	uint32_t vendor = whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC);
++	uint32_t dll_status = whyred_emmc_read32(base, SDHCI_CORE_DLL_STATUS);
+ 	uint32_t signal_enable = whyred_emmc_read32(base, SDHCI_SIGNAL_ENABLE);
+ 
+-	printf("WHYRED EMMC: PIO probe present=0x%08x host=0x%02x power=0x%02x clock=0x%04x signal=0x%08x\n",
+-	    present, (unsigned int)host, (unsigned int)power, clock, signal_enable);
++	printf("WHYRED EMMC INIT: initial present=0x%08x host=0x%02x host2=0x%04x power=0x%02x clock=0x%04x caps=0x%08x vendor=0x%08x dll=0x%08x signal=0x%08x\n",
++	    present, (unsigned int)host, host2, (unsigned int)power, clock,
++	    caps, vendor, dll_status, signal_enable);
+ 	if ((present & (SDHCI_PSTATE_CMD_INHIBIT | SDHCI_PSTATE_DATA_INHIBIT |
+ 	    SDHCI_PSTATE_DATA_AVAILABLE)) != 0 ||
+ 	    (present & SDHCI_PSTATE_CMD_LEVEL) == 0 ||
+@@ -293,12 +425,91 @@
+ 		whyred_emmc_write32(base, SDHCI_SIGNAL_ENABLE, 0);
+ 	}
+ 
++	uint32_t divider = 0;
++	if (whyred_emmc_set_200khz_clock(base, caps, &divider) != 0) {
++		whyred_emmc_restore_signals(base, signal_enable);
++		return;
++	}
++
++	/* CMD0 returns the eMMC from inherited boot/transfer state to Idle. */
++	uint32_t response = 0;
++	if (whyred_emmc_command(base, 0, 0, &response) != 0) {
++		printf("WHYRED EMMC INIT: CMD0 did not complete; card state left untouched by further commands\n");
++		whyred_emmc_restore_signals(base, signal_enable);
++		return;
++	}
++	printf("WHYRED EMMC INIT: CMD0 complete at <=200kHz\n");
++	whyred_emmc_delay_us(1000);
++	whyred_emmc_select_legacy_mode(base);
++
++	/* eMMC CMD1 R3: 2.7-3.6V OCR window plus sector-addressing request. */
++	uint16_t cmd1 = (SDHCI_CMD_SEND_OP_COND << 8) | 0x0002;
++	uint32_t ocr = 0;
++	int ready = 0;
++	for (unsigned int attempt = 0; attempt < 100; attempt++) {
++		if (whyred_emmc_command(base, WHYRED_EMMC_OCR, cmd1, &ocr) != 0) {
++			printf("WHYRED EMMC INIT: CMD1 did not complete at attempt=%u\n",
++			    attempt + 1);
++			whyred_emmc_restore_signals(base, signal_enable);
++			return;
++		}
++		if ((ocr & WHYRED_EMMC_OCR_READY) != 0) {
++			ready = 1;
++			break;
++		}
++		whyred_emmc_delay_us(10000);
++	}
++	if (!ready) {
++		printf("WHYRED EMMC INIT: CMD1 OCR timeout last=0x%08x\n", ocr);
++		whyred_emmc_restore_signals(base, signal_enable);
++		return;
++	}
++	printf("WHYRED EMMC INIT: CMD1 ready OCR=0x%08x attempts<=100\n", ocr);
++
++	/* Identify the device, assign RCA 1, and put it in Transfer state. */
++	uint16_t cmd2 = (SDHCI_CMD_ALL_SEND_CID << 8) | 0x0001;
++	if (whyred_emmc_command(base, 0, cmd2, &response) != 0) {
++		printf("WHYRED EMMC INIT: CMD2 (CID) failed\n");
++		whyred_emmc_restore_signals(base, signal_enable);
++		return;
++	}
++	printf("WHYRED EMMC INIT: CMD2 CID received\n");
++	uint16_t cmd3 = (SDHCI_CMD_SET_RCA << 8) |
++	    SDHCI_CMD_RESP_SHORT_CRC_INDEX;
++	if (whyred_emmc_command(base, WHYRED_EMMC_RCA << 16, cmd3,
++	    &response) != 0) {
++		printf("WHYRED EMMC INIT: CMD3 RCA assignment failed\n");
++		whyred_emmc_restore_signals(base, signal_enable);
++		return;
++	}
++	printf("WHYRED EMMC INIT: CMD3 RCA=%u assigned\n",
++	    (unsigned int)WHYRED_EMMC_RCA);
++	uint16_t cmd7 = (SDHCI_CMD_SELECT_CARD << 8) | 0x001b;
++	if (whyred_emmc_command(base, WHYRED_EMMC_RCA << 16, cmd7,
++	    &response) != 0) {
++		printf("WHYRED EMMC INIT: CMD7 select failed\n");
++		whyred_emmc_restore_signals(base, signal_enable);
++		return;
++	}
++	uint64_t busy_timeout = whyred_emmc_timeout_ticks();
++	uint64_t busy_start = whyred_emmc_counter();
++	while ((whyred_emmc_read32(base, SDHCI_PRESENT_STATE) &
++	    SDHCI_PSTATE_DATA_INHIBIT) != 0) {
++		if ((whyred_emmc_counter() - busy_start) >= busy_timeout) {
++			printf("WHYRED EMMC INIT: CMD7 busy timeout present=0x%08x\n",
++			    whyred_emmc_read32(base, SDHCI_PRESENT_STATE));
++			whyred_emmc_restore_signals(base, signal_enable);
++			return;
++		}
++	}
++	printf("WHYRED EMMC INIT: CMD7 selected; host/card remain 1-bit legacy\n");
++
+ 	uint32_t card_status = 0;
+ 	uint16_t cmd13 = (SDHCI_CMD_SEND_STATUS << 8) |
+ 	    SDHCI_CMD_RESP_SHORT_CRC_INDEX;
+ 	if (whyred_emmc_command(base, WHYRED_EMMC_RCA << 16, cmd13,
+ 	    &card_status) != 0) {
+-		printf("WHYRED EMMC: CMD13 did not complete; no reinit attempted\n");
++		printf("WHYRED EMMC INIT: CMD13 did not complete after initialization\n");
+ 		whyred_emmc_restore_signals(base, signal_enable);
+ 		return;
+ 	}
+@@ -308,7 +519,7 @@
+ 	    (card_status & WHYRED_EMMC_STATUS_READY) != 0);
+ 	if (state != WHYRED_EMMC_STATUS_TRANSFER ||
+ 	    (card_status & WHYRED_EMMC_STATUS_READY) == 0) {
+-		printf("WHYRED EMMC: card not ready in Transfer state; no CMD8 sent\n");
++		printf("WHYRED EMMC INIT: card not ready in Transfer state; no CMD8 sent\n");
+ 		whyred_emmc_restore_signals(base, signal_enable);
+ 		return;
+ 	}

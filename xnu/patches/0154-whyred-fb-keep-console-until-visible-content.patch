@@ -1,0 +1,65 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -345,6 +345,7 @@
+ 	uint64_t pixels = 0;
+ 	/* Full scans only accompany the bounded presentation diagnostics. */
+ 	bool inspect = sweet_fb_should_inspect(++fPresentAttempts);
++	uint64_t source_rgb_pixels = 0;
+ 	struct sweet_fb_image panel = {
+ 		(uint8_t *)fPixels, fSurface->memory->getLength(),
+ 		fWidth, fHeight, fRowBytes, 0, SWEET_FB_BGRA
+@@ -367,6 +368,7 @@
+ 		uint64_t copied = sweet_fb_blit(&image, &panel, fLogicalW, fLogicalH, source, target);
+ 		if (inspect) {
+ 			struct sweet_fb_content content = sweet_fb_measure(&image);
++			source_rgb_pixels += content.rgb_pixels;
+ 			IOLog("WHYRED FB: source swap=%u layer=%u surface=%u size=%ux%u stride=%u offset=%u "
+ 			    "src=%d,%d,%d,%d dst=%d,%d,%d,%d pixels=%llu rgb=%llu alpha=%llu box=%u,%u,%u,%u copied=%llu\n",
+ 			    get32(rec, 0x50), layer, s->id, s->width, s->height, s->bytesPerRow, s->offset,
+@@ -390,13 +392,6 @@
+ 	}
+ 	/* Publish stores through the write-combined mapping before reporting a frame. */
+ 	__sync_synchronize();
+-	if (!fConsolePaused) {
+-		int quiet = 0;
+-		fConsolePaused = true;
+-		if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
+-			sweet_console_muted = 1; /* only fbcon observes it; UART keeps running */
+-		}
+-	}
+ 	uint64_t count = ++fPresented;
+ 	if (inspect) {
+ 		uint32_t first = get32((const uint8_t *)fPixels, 0);
+@@ -409,6 +404,13 @@
+ 		IOLog("WHYRED FB: presented count=%llu swap=%u layers=%u pixels=%llu sample=%08x,%08x\n",
+ 		    count, get32(rec, 0x50), layers, pixels, first, center);
+ 	}
++	if (!fConsolePaused && sweet_fb_should_mute_console(inspect, source_rgb_pixels)) {
++		int quiet = 0;
++		fConsolePaused = true;
++		if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
++			sweet_console_muted = 1; /* only fbcon observes it; UART keeps running */
++		}
++	}
+ }
+ 
+ bool
+
+--- a/iokit/Kernel/arm/SweetFramebufferBlit.h
++++ b/iokit/Kernel/arm/SweetFramebufferBlit.h
+@@ -36,6 +36,13 @@
+ sweet_fb_should_inspect(uint64_t attempt)
+ {
+ 	return attempt != 0 && (attempt <= 8 || attempt % 300 == 0);
++}
++
++/* Keep the kernel console visible until a scanned source frame has RGB. */
++static inline int
++sweet_fb_should_mute_console(int inspected, uint64_t frame_rgb_pixels)
++{
++	return inspected && frame_rgb_pixels != 0;
+ }
+ 
+ /* Inspect visible pixels only: padding and allocation tails are not image data. */
+
+

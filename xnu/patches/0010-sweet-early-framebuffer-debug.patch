@@ -96,7 +96,7 @@ index ccbb188..777aca4 100644
  
 +#if defined(SWEET)
 +	/* Stage 0: white 64x32 band, no stack or page tables needed. */
-+	MOV64	x0, (0x9c000000 + 2368 * 4320)
++	MOV64	x0, (0x9d400000 + 2128 * 4320)
 +	mov		w1, #-1
 +	mov		x2, #32
 +	mov		x4, #4320
@@ -147,7 +147,7 @@ index 0000000..8f4c808
 +++ b/osfmk/arm64/sweet_early.c
 @@ -0,0 +1,130 @@
 +/*
-+ * Redmi Note 10 Pro bootstrap console. No allocation, locks, ADT parsing or
++ * Redmi Note 5 (whyred) bootstrap console. No allocation, locks, ADT parsing or
 + * per-CPU state: panic() can reach this before a current thread exists.
 + * start.s maps the splash framebuffer VA=PA as Normal Non-Cacheable memory.
 + * Stop using that mapping before arm_vm_init tears down bootstrap TTBR0.
@@ -158,9 +158,9 @@ index 0000000..8f4c808
 +#include <stdint.h>
 +#include <kern/misc_protos.h>
 +
-+#define EARLY_FB ((volatile uint32_t *)(uintptr_t)0x9c000000)
++#define EARLY_FB ((volatile uint32_t *)(uintptr_t)0x9d400000)
 +#define EARLY_WIDTH 1080u
-+#define EARLY_HEIGHT 2400u
++#define EARLY_HEIGHT 2160u
 +#define EARLY_STRIDE (4320u / 4)
 +#define EARLY_SCALE 2u
 +#define EARLY_CELL_W (8u * EARLY_SCALE)

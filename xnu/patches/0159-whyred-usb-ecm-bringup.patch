@@ -1,0 +1,1114 @@
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -1,17 +1,11 @@
+-/*
+- * SWEET: USB bring-up, step 1 - read-only state probe.
+- *
+- * The phone's USB is a Synopsys DWC3 (USB 2.0 only, maximum-speed
+- * high-speed) at 0x0a600000 behind Qualcomm's dwc-usb3-msm wrapper, with a
+- * QUSB2 PHY at 0x088e2000; its power domain is the USB30_PRIM GDSC and its
+- * clocks come from GCC (offsets from Linux gcc-sdmmagpie.c). ABL uses this
+- * controller for fastboot; this probe only reports what state it is left
+- * in after `fastboot boot`. It never writes a register, and it touches the
+- * DWC3 / PHY register blocks only when the GCC status registers say their
+- * power domain and clocks are on (an access to a gated block would hang).
++/* whyred USB CDC-ECM and volatile UDP console. Explicit whyred-usb=2 only.
++ * The board helper checks the powered bootloader handoff before device takeover.
++ * No UFS initialization, media writes, PMIC/PLL changes or SMMU programming.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
++#include <machine/atomic.h>
++#include "whyred_usb_hw.h"
+ #include <sys/systm.h>
+ #include <kern/clock.h>
+ #include <kern/thread.h>
+@@ -42,96 +36,70 @@
+ static void sweet_usb_gadget_start(vm_offset_t dwc);
+ extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+ 
+-#define GCC_PA                  0x00100000
+-#define GCC_SIZE                0x00090000
+-#define GCC_USB30_PRIM_GDSCR    0x0f004         /* bit 31: power on */
+-#define CBCR_CLK_OFF            (1u << 31)
+-
+-static const struct {
+-	const char *name;
+-	uint32_t    off;
+-} usb_cbcr[] = {
+-	{ "master", 0x0f010 },
+-	{ "sleep", 0x0f014 },
+-	{ "utmi", 0x0f018 },
+-	{ "cfg-noc-axi", 0x0502c },
+-	{ "aggre-axi", 0x8201c },
+-	{ "ahb2phy", 0x6a004 },
+-	{ "clkref", 0x8c010 },
+-};
+-
+-#define DWC3_PA                 0x0a600000
+-#define DWC3_SIZE               0x0000d000
+-#define QUSB2_PA                0x088e2000
+-#define QUSB2_SIZE              0x00000400
++
++static struct whyred_usb_hw usb_hw;
++static uint32_t usb_attempted;
+ 
+ static uint32_t
+ usb_rd(vm_offset_t base, uint32_t off)
+ {
+-	uint32_t v = *(volatile uint32_t *)(base + off);
++	uint32_t value = *(volatile uint32_t *)(base + off);
+ 	__asm__ volatile ("dmb oshld" ::: "memory");
+-	return v;
+-}
++	return value;
++}
++
++static uintptr_t
++whyred_usb_map(void *context __unused, uintptr_t pa, size_t size)
++{
++	return (uintptr_t)ml_io_map((vm_offset_t)pa, (vm_size_t)size);
++}
++
++static uint32_t
++whyred_usb_read(void *context __unused, uintptr_t base, uint32_t off)
++{
++	return usb_rd((vm_offset_t)base, off);
++}
++
++static void
++whyred_usb_write(void *context __unused, uintptr_t base, uint32_t off, uint32_t value)
++{
++	*(volatile uint32_t *)(base + off) = value;
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++
++static void
++whyred_usb_delay(void *context __unused, unsigned int us)
++{
++	delay(us);
++}
++
++static const struct whyred_usb_io usb_io = {
++	.map = whyred_usb_map, .read = whyred_usb_read,
++	.write = whyred_usb_write, .delay_us = whyred_usb_delay
++};
+ 
+ void
+ sweet_usb_probe(void)
+ {
+-	int enabled = 1;
+-	uint32_t gdscr, cbcr[sizeof(usb_cbcr) / sizeof(usb_cbcr[0])];
+-	bool clocks_on = true;
+-
+-	/* sweetusb=0 off, 1 (default) report state only, 2 also start the USB device */
+-	PE_parse_boot_argn("sweetusb", &enabled, sizeof(enabled));
+-	if (!enabled) {
++	int mode = 0;
++	PE_parse_boot_argn("whyred-usb", &mode, sizeof(mode));
++	if (mode != 1 && mode != 2) return;
++	if (!os_atomic_cmpxchg(&usb_attempted, 0, 1, acq_rel)) return;
++	enum whyred_usb_hw_status status = whyred_usb_hw_prepare(&usb_io, mode, &usb_hw);
++	printf("WHYRED USB: mode=%d handoff=%u GDSCR=0x%08x BCR=0x%08x PHY_POWER=0x%08x PHY_PLL=0x%08x ID=0x%08x\n",
++	    mode, (unsigned int)status, usb_hw.gdscr, usb_hw.reset,
++	    usb_hw.phy_power, usb_hw.phy_pll, usb_hw.id);
++	for (unsigned int i = 0; i < WHYRED_USB_CLOCKS; i++) {
++		if (!(usb_hw.sampled_clocks & (1u << i))) continue;
++		printf("WHYRED USB: GCC offset=0x%x value=0x%08x\n", whyred_usb_clocks[i], usb_hw.clocks[i]);
++	}
++	printf("WHYRED USB: ref_gate=0x%08x ref_vote=0x%08x GCTL=0x%08x PHYCFG=0x%08x\n",
++	    usb_hw.ref_gate, usb_hw.ref_vote, usb_hw.gctl, usb_hw.phy_cfg);
++	if (status != WHYRED_USB_HW_OK) {
++		printf("WHYRED USB: handoff unavailable; controller not started (cold PHY power-up unsupported)\n");
+ 		return;
+ 	}
+-	vm_offset_t gcc = ml_io_map(GCC_PA, GCC_SIZE);
+-	if (gcc == 0) {
+-		printf("SWEET USB: GCC map failed\n");
+-		return;
+-	}
+-	gdscr = usb_rd(gcc, GCC_USB30_PRIM_GDSCR);
+-	printf("SWEET USB: GDSC usb30_prim 0x%08x (%s)\n", gdscr, (gdscr & (1u << 31)) ? "on" : "off");
+-	for (unsigned i = 0; i < sizeof(usb_cbcr) / sizeof(usb_cbcr[0]); i++) {
+-		cbcr[i] = usb_rd(gcc, usb_cbcr[i].off);
+-		printf("SWEET USB: clk %-12s CBCR 0x%08x (%s)\n", usb_cbcr[i].name, cbcr[i],
+-		    (cbcr[i] & CBCR_CLK_OFF) ? "off" : "on");
+-	}
+-	/* DWC3 registers need the GDSC, the master clock and the config-NoC path. */
+-	clocks_on = (gdscr & (1u << 31)) && !(cbcr[0] & CBCR_CLK_OFF) && !(cbcr[3] & CBCR_CLK_OFF);
+-	if (!clocks_on) {
+-		printf("SWEET USB: controller unpowered or unclocked; DWC3 not read\n");
+-		return;
+-	}
+-	vm_offset_t dwc = ml_io_map(DWC3_PA, DWC3_SIZE);
+-	if (dwc == 0) {
+-		printf("SWEET USB: DWC3 map failed\n");
+-		return;
+-	}
+-	printf("SWEET USB: DWC3 GSNPSID 0x%08x GCTL 0x%08x GSTS 0x%08x GUSB2PHYCFG 0x%08x\n",
+-	    usb_rd(dwc, 0xc120), usb_rd(dwc, 0xc110), usb_rd(dwc, 0xc118), usb_rd(dwc, 0xc200));
+-	printf("SWEET USB: DWC3 DCFG 0x%08x DCTL 0x%08x DEVTEN 0x%08x DSTS 0x%08x DALEPENA 0x%08x\n",
+-	    usb_rd(dwc, 0xc700), usb_rd(dwc, 0xc704), usb_rd(dwc, 0xc708), usb_rd(dwc, 0xc70c),
+-	    usb_rd(dwc, 0xc720));
+-	printf("SWEET USB: DWC3 GEVNTADR 0x%08x%08x GEVNTSIZ 0x%08x GEVNTCOUNT 0x%08x GHWPARAMS0 0x%08x\n",
+-	    usb_rd(dwc, 0xc404), usb_rd(dwc, 0xc400), usb_rd(dwc, 0xc408), usb_rd(dwc, 0xc40c),
+-	    usb_rd(dwc, 0xc140));
+-	if (enabled >= 2) {
+-		sweet_usb_gadget_start(dwc);
+-	}
+-	if (cbcr[5] & CBCR_CLK_OFF) {
+-		printf("SWEET USB: ahb2phy clock off; QUSB2 PHY not read\n");
+-		return;
+-	}
+-	vm_offset_t phy = ml_io_map(QUSB2_PA, QUSB2_SIZE);
+-	if (phy == 0) {
+-		return;
+-	}
+-	/* DT qcom,qusb-phy-reg-offset order (Linux phy-msm-qusb-v2.c): PORT_TUNE1 0x240,
+-	 * PLL_COMMON_STATUS_ONE 0x1a0, PWR_CTRL1 0x210, INTR_CTRL 0x230,
+-	 * PLL_CORE_INPUT_OVERRIDE 0x0a8, TEST1 0x254. */
+-	printf("SWEET USB: QUSB2 PLL_STATUS 0x%08x PWR_CTRL1 0x%08x PORT_TUNE1 0x%08x TEST1 0x%08x\n",
+-	    usb_rd(phy, 0x1a0), usb_rd(phy, 0x210), usb_rd(phy, 0x240), usb_rd(phy, 0x254));
++	if (mode == 2) sweet_usb_gadget_start((vm_offset_t)usb_hw.dwc);
+ }
+ 
+ /*
+@@ -167,7 +135,7 @@
+  * session; Linux dwc3-qcom forces that in software when the charger
+  * reports a cable (dwc3_qcom_vbus_override_enable).
+  */
+-#define QSCRATCH_PA             0x0a6f8800
++#define QSCRATCH_PA             WHYRED_USB_QS_PA
+ #define QSCRATCH_HS_PHY_CTRL    0x10
+ #define   UTMI_OTG_VBUS_VALID   (1u << 20)
+ #define   SW_SESSVLD_SEL        (1u << 28)
+@@ -181,6 +149,10 @@
+ #define DEPCMD_SETEPCONFIG      1
+ #define DEPCMD_SETTRANSFRESOURCE 2
+ #define DEPCMD_SETSTALL         4
++#define DEPCMD_CLEARSTALL       5
++#define DEPCMD_ENDTRANSFER      8
++#define DEPCMD_CMDIOC           (1u << 8)
++#define DEPCMD_HIPRI_FORCERM    (1u << 11)
+ #define DEPCMD_STARTTRANSFER    6
+ #define DEPCMD_DEPSTARTCFG      9
+ #define DEPCMD_CMDACT           (1u << 10)
+@@ -194,17 +166,17 @@
+ #define TRBCTL_STATUS3  (4u << 4)
+ #define TRBCTL_DATA     (5u << 4)
+ 
+-/* DMA area layout */
++/* DMA area layout. Each TRB/buffer has a distinct 128-byte cache granule. */
+ #define UD_EVT          0x0000          /* event buffer, 4 KiB */
+ #define UD_EVT_SIZE     0x1000
+ #define UD_TRB_OUT      0x1000          /* ep0 OUT TRB */
+-#define UD_TRB_IN       0x1010          /* ep0 IN TRB */
+-#define UD_TRB_RX       0x1020          /* ep1 OUT (bulk, host -> phone) */
+-#define UD_TRB_TX       0x1030          /* ep1 IN (bulk, phone -> host) */
+-#define UD_TRB_INT      0x1050          /* ep2 IN (interrupt, notifications) */
+-#define UD_SETUP        0x1040          /* 8-byte setup packet */
+-#define UD_DATA         0x1100          /* ep0 data stage, 512 bytes */
+-#define UD_NOTIFY       0x1300          /* 16-byte notification */
++#define UD_TRB_IN       0x1080          /* ep0 IN TRB */
++#define UD_TRB_RX       0x1100          /* ep1 OUT (bulk, host -> phone) */
++#define UD_TRB_TX       0x1180          /* ep1 IN (bulk, phone -> host) */
++#define UD_TRB_INT      0x1200          /* ep2 IN (interrupt, notifications) */
++#define UD_SETUP        0x1280          /* 8-byte setup packet */
++#define UD_DATA         0x1300          /* ep0 data stage, 512 bytes */
++#define UD_NOTIFY       0x1500          /* 16-byte notification */
+ #define UD_RX           0x2000          /* one received frame */
+ #define UD_TX           0x2800          /* one frame to send */
+ #define UD_FRAME_MAX    0x800
+@@ -228,6 +200,10 @@
+ 	bool        data_in;        /* data stage direction */
+ 	uint32_t    events;
+ 	bool        configured;
++	uint32_t    failed;
++	uint8_t     resource[6];
++	uint16_t    max_packet;
++	uint16_t    packet_filter;
+ 	uint8_t     data_alt;       /* data interface alternate setting */
+ 	/* network */
+ 	ifnet_t     ifp;
+@@ -252,6 +228,15 @@
+ }
+ 
+ static void
++ud_fail(const char *reason)
++{
++	if (!os_atomic_cmpxchg(&ud.failed, 0, 1, acq_rel)) return;
++	printf("WHYRED USB: stopped: %s\n", reason);
++	dwc_wr(DEVTEN, 0);
++	dwc_wr(DCTL, dwc_rd(DCTL) & ~DCTL_RUN_STOP);
++}
++
++static void
+ ud_sync(uint32_t off, uint32_t len)
+ {
+ 	flush_dcache64((addr64_t)(ud.dma_pa + off), len, TRUE);
+@@ -269,6 +254,7 @@
+ static int
+ ud_epcmd(unsigned ep, uint32_t cmd, uint32_t p0, uint32_t p1, uint32_t p2)
+ {
++	if (ep >= 6 || os_atomic_load(&ud.failed, acquire)) return -1;
+ 	dwc_wr(DEPCMDPAR0(ep), p0);
+ 	dwc_wr(DEPCMDPAR1(ep), p1);
+ 	dwc_wr(DEPCMDPAR2(ep), p2);
+@@ -278,22 +264,35 @@
+ 		if (!(v & DEPCMD_CMDACT)) {
+ 			uint32_t status = (v >> 12) & 0xf;
+ 			if (status) {
+-				printf("SWEET USB: ep%u cmd 0x%x status %u\n", ep, cmd & 0xf, status);
++				printf("WHYRED USB: ep%u cmd 0x%x status %u\n", ep, cmd & 0xf, status);
++				ud_fail("endpoint command status");
+ 				return -1;
+ 			}
++			if ((cmd & 0xf) == DEPCMD_STARTTRANSFER) {
++				ud.resource[ep] = (uint8_t)((v >> 16) & 0x7f);
++				if (!ud.resource[ep]) { ud_fail("missing transfer resource"); return -1; }
++			}
++			if ((cmd & 0xf) == DEPCMD_ENDTRANSFER) ud.resource[ep] = 0;
+ 			return 0;
+ 		}
+ 		delay(1);
+ 	}
+-	printf("SWEET USB: ep%u cmd 0x%x timeout\n", ep, cmd & 0xf);
++	printf("WHYRED USB: ep%u cmd 0x%x timeout\n", ep, cmd & 0xf);
++	ud_fail("endpoint command timeout");
+ 	return -1;
+ }
+ 
+ /* One TRB (at DMA offset trb) on physical endpoint ep. */
+-static void
++static int
+ ud_start_trb(unsigned ep, uint32_t trb, uint32_t buf, uint32_t len, uint32_t ctl)
+ {
++	if (ep >= 6 || (trb & 15u) || trb > UD_SIZE - 16u || buf > UD_SIZE ||
++	    len > UD_SIZE - buf || ud.resource[ep] || os_atomic_load(&ud.failed, acquire)) {
++		ud_fail("invalid or active DMA transfer"); return -1;
++	}
+ 	volatile uint32_t *t = (volatile uint32_t *)(ud.dma + trb);
++	ud_sync(trb, 16);
++	if (t[3] & TRB_HWO) { ud_fail("TRB still owned by controller"); return -1; }
+ 	uint64_t bpa = ud.dma_pa + buf;
+ 
+ 	t[0] = (uint32_t)bpa;
+@@ -305,20 +304,20 @@
+ 		ud_sync(buf, len);
+ 	}
+ 	uint64_t tpa = ud.dma_pa + trb;
+-	ud_epcmd(ep, DEPCMD_STARTTRANSFER, (uint32_t)(tpa >> 32), (uint32_t)tpa, 0);
+-}
+-
+-static void
++	return ud_epcmd(ep, DEPCMD_STARTTRANSFER, (uint32_t)(tpa >> 32), (uint32_t)tpa, 0);
++}
++
++static int
+ ud_start(unsigned ep, uint32_t buf, uint32_t len, uint32_t ctl)
+ {
+-	ud_start_trb(ep, ep ? UD_TRB_IN : UD_TRB_OUT, buf, len, ctl);
+-}
+-
+-static void
++	return ud_start_trb(ep, ep ? UD_TRB_IN : UD_TRB_OUT, buf, len, ctl);
++}
++
++static int
+ ud_start_setup(void)
+ {
+ 	ud.state = EP0_SETUP;
+-	ud_start(0, UD_SETUP, 8, TRBCTL_SETUP);
++	return ud_start(0, UD_SETUP, 8, TRBCTL_SETUP);
+ }
+ 
+ static void
+@@ -351,7 +350,7 @@
+ };
+ /* The host side's MAC (ECM iMACAddress); the phone's own is ..:02 */
+ static const char *const ud_strings[] = {
+-	NULL, "ios-sweet", "Sweet iOS (USB Ethernet)", "0001", "02005E77EE01",
++	NULL, "whyred-port", "Whyred iOS (USB Ethernet)", "0001", "02005E77EE01",
+ };
+ static const uint8_t ud_phone_mac[ETHER_ADDR_LEN] = { 0x02, 0x00, 0x5e, 0x77, 0xee, 0x02 };
+ 
+@@ -376,9 +375,33 @@
+ 	return n;
+ }
+ 
++/* USB 2.0 device qualifier and speed-dependent configuration descriptors. */
++static const uint8_t ud_qualifier[10] = {10, 6, 0, 2, 2, 0, 0, 64, 1, 0};
++
++static uint32_t
++ud_configuration(uint8_t *out, bool other_speed)
++{
++	uint16_t packet = ud.max_packet;
++	if (packet != 64 && packet != 512) return 0;
++	if (other_speed) packet = packet == 512 ? 64 : 512;
++	memcpy(out, ud_cfg_desc, sizeof(ud_cfg_desc));
++	if (other_speed) out[1] = 7;
++	for (uint32_t at = 0; at + 2 <= sizeof(ud_cfg_desc);) {
++		uint32_t length = out[at];
++		if (length < 2 || length > sizeof(ud_cfg_desc) - at) return 0;
++		if (out[at + 1] == 5 && length == 7 && (out[at + 3] & 3) == 2) {
++			out[at + 4] = (uint8_t)packet;
++			out[at + 5] = (uint8_t)(packet >> 8);
++		}
++		at += length;
++	}
++	return sizeof(ud_cfg_desc);
++}
++
+ static void ud_rx_arm(void);
+ static void ud_tx_kick_locked(void);
+ static void ud_link_event(bool up);
++static void ud_data_stop(bool unconfigure);
+ 
+ /* NETWORK_CONNECTION notification: the host brings its link up on it. */
+ static void
+@@ -393,27 +416,29 @@
+ }
+ 
+ /* SET_CONFIGURATION(1): bulk IN/OUT and the interrupt endpoint. */
+-static void
++static int
+ ud_configure(void)
+ {
+-	if (ud.configured) {
+-		return;
+-	}
++	if (ud.configured) ud_data_stop(true);
++	if (os_atomic_load(&ud.failed, acquire)) return -1;
+ 	if (ud_epcmd(0, DEPCMD_DEPSTARTCFG | (2u << 16), 0, 0, 0) ||
+-	    ud_epcmd(EP_RX, DEPCMD_SETEPCONFIG, (2u << 1) | (512u << 3), (1u << 8) | ((uint32_t)EP_RX << 25), 0) ||
++	    ud_epcmd(EP_RX, DEPCMD_SETEPCONFIG, (2u << 1) | ((uint32_t)ud.max_packet << 3), (1u << 8) | ((uint32_t)EP_RX << 25), 0) ||
+ 	    ud_epcmd(EP_RX, DEPCMD_SETTRANSFRESOURCE, 1, 0, 0) ||
+-	    ud_epcmd(EP_TX, DEPCMD_SETEPCONFIG, (2u << 1) | (512u << 3) | (1u << 17), (1u << 8) | ((uint32_t)EP_TX << 25), 0) ||
++	    ud_epcmd(EP_TX, DEPCMD_SETEPCONFIG, (2u << 1) | ((uint32_t)ud.max_packet << 3) | (1u << 17), (1u << 8) | ((uint32_t)EP_TX << 25), 0) ||
+ 	    ud_epcmd(EP_TX, DEPCMD_SETTRANSFRESOURCE, 1, 0, 0) ||
+ 	    ud_epcmd(EP_INT, DEPCMD_SETEPCONFIG, (3u << 1) | (16u << 3) | (2u << 17),
+ 	    (1u << 8) | (8u << 16) | ((uint32_t)EP_INT << 25), 0) ||
+ 	    ud_epcmd(EP_INT, DEPCMD_SETTRANSFRESOURCE, 1, 0, 0)) {
+-		printf("SWEET USB: data endpoints setup failed\n");
+-		return;
++		printf("WHYRED USB: data endpoints setup failed\n");
++		return -1;
+ 	}
+ 	dwc_wr(DALEPENA, dwc_rd(DALEPENA) | (1u << EP_RX) | (1u << EP_TX) | (1u << EP_INT));
++	lck_mtx_lock(ud.lock);
+ 	ud.configured = true;
+-	ud_rx_arm();
+-	printf("SWEET USB: ECM endpoints configured\n");
++	ud.data_alt = 0;
++	lck_mtx_unlock(ud.lock);
++	printf("WHYRED USB: ECM endpoints configured\n");
++	return 0;
+ }
+ 
+ static void
+@@ -427,64 +452,60 @@
+ 	uint16_t length = (uint16_t)(st[6] | st[7] << 8);
+ 	uint32_t n = 0;
+ 	bool ok = true;
+-
+-	printf("SWEET USB: setup %02x %02x %04x %04x len %u\n", type, req, value, index, length);
++	/* A new SETUP must not overwrite the previous IN transfer's data. */
++	ud_sync(UD_TRB_IN, 16);
++	if (ud.resource[1] || (((volatile uint32_t *)(ud.dma + UD_TRB_IN))[3] & TRB_HWO)) {
++		ud_fail("control IN still active at SETUP"); return;
++	}
+ 	ud.data_in = (type & 0x80) != 0;
+-	if ((type & 0x60) == 0x20) {    /* class request (e.g. SET_ETHERNET_PACKET_FILTER) */
+-		ok = (length == 0);
+-	} else if ((type & 0x60) != 0) {
+-		ok = false;
+-	} else if (req == 6) {          /* GET_DESCRIPTOR */
++	if (type == 0x21 && req == 0x43 && index == 0 && length == 0 && !(value & ~0x1fu) && ud.configured) {
++		lck_mtx_lock(ud.lock); ud.packet_filter = value; lck_mtx_unlock(ud.lock);
++	} else if (type == 0x80 && req == 6) {
+ 		switch (value >> 8) {
+-		case 1: memcpy(data, ud_dev_desc, sizeof(ud_dev_desc)); n = sizeof(ud_dev_desc); break;
+-		case 2: memcpy(data, ud_cfg_desc, sizeof(ud_cfg_desc)); n = sizeof(ud_cfg_desc); break;
++		case 1: if ((value & 0xff) || index) { ok = false; break; }
++			memcpy(data, ud_dev_desc, sizeof(ud_dev_desc)); n = sizeof(ud_dev_desc); break;
++		case 2: if ((value & 0xff) || index) { ok = false; break; }
++			n = ud_configuration(data, false); ok = n != 0; break;
+ 		case 3: n = ud_string(value & 0xff, data); ok = n != 0; break;
++		case 6: if ((value & 0xff) || index) { ok = false; break; }
++			memcpy(data, ud_qualifier, sizeof(ud_qualifier)); n = sizeof(ud_qualifier); break;
++		case 7: if ((value & 0xff) || index) { ok = false; break; }
++			n = ud_configuration(data, true); ok = n != 0; break;
+ 		default: ok = false; break;
+ 		}
+-	} else if (req == 5) {          /* SET_ADDRESS: takes effect now (DWC3 handles the timing) */
+-		uint32_t dcfg = dwc_rd(DCFG) & ~(0x7fu << 3);
+-		dwc_wr(DCFG, dcfg | ((uint32_t)(value & 0x7f) << 3));
+-		printf("SWEET USB: address %u\n", value & 0x7f);
+-	} else if (req == 9) {          /* SET_CONFIGURATION */
+-		if (value == 1) {
+-			ud_configure();
+-		}
+-		printf("SWEET USB: configured (%u)\n", value);
+-	} else if (req == 8) {          /* GET_CONFIGURATION */
++	} else if (type == 0 && req == 5 && value <= 127 && !index && !length && !ud.configured) {
++		dwc_wr(DCFG, (dwc_rd(DCFG) & ~(0x7fu << 3)) | ((uint32_t)value << 3));
++	} else if (type == 0 && req == 9 && value <= 1 && !index && !length) {
++		if (value == 1) ok = ud_configure() == 0;
++		else ud_data_stop(true);
++	} else if (type == 0x80 && req == 8 && !value && !index && length == 1) {
+ 		data[0] = ud.configured ? 1 : 0; n = 1;
+-	} else if (req == 0) {          /* GET_STATUS */
++	} else if ((type == 0x80 || type == 0x81) && req == 0 && !value && length == 2 && index <= 1) {
+ 		data[0] = 0; data[1] = 0; n = 2;
+-	} else if (req == 11) {         /* SET_INTERFACE */
+-		if (index == 1) {
+-			ud.data_alt = (uint8_t)value;
+-			if (value == 1 && ud.configured) {
+-				ud_notify_connected();
+-				ud_link_event(true);
+-			}
+-		}
+-	} else if (req == 10) {         /* GET_INTERFACE */
++	} else if (type == 1 && req == 11 && index == 1 && value <= 1 && !length && ud.configured) {
++		if (!value) ud_data_stop(false);
++		else if (!ud.data_alt) {
++			lck_mtx_lock(ud.lock); ud.data_alt = 1; lck_mtx_unlock(ud.lock);
++			ud_rx_arm();
++			ud_notify_connected();
++			if (!os_atomic_load(&ud.failed, acquire)) ud_link_event(true);
++		}
++	} else if (type == 0x81 && req == 10 && !value && index <= 1 && length == 1 && ud.configured) {
+ 		data[0] = index == 1 ? ud.data_alt : 0; n = 1;
+-	} else if (req == 1 || req == 3) { /* CLEAR/SET_FEATURE (halt, remote wakeup) */
++	} else if (type == 2 && req == 1 && !value && !length && (index == 0x01 || index == 0x81 || index == 0x82)) {
++		unsigned ep = (index & 0x0f) * 2u + ((index & 0x80) ? 1u : 0u);
++		ok = ud.configured && ud_epcmd(ep, DEPCMD_CLEARSTALL, 0, 0, 0) == 0;
+ 	} else {
+ 		ok = false;
+ 	}
+-	if (!ok) {
+-		ud_stall();
+-		return;
+-	}
+-	if (length == 0) {
+-		ud.state = EP0_WAIT_STATUS2;    /* status stage on XferNotReady */
+-		return;
+-	}
++	if (os_atomic_load(&ud.failed, acquire)) return;
++	if (!ok) { ud_stall(); return; }
++	if (!length) { ud.state = EP0_WAIT_STATUS2; return; }
++	/* All accepted data stages are IN, bounded by the actual descriptor size. */
++	if (!ud.data_in) { ud_stall(); return; }
++	if (n > length) n = length;
+ 	ud.state = EP0_DATA;
+-	if (ud.data_in) {
+-		if (n > length) {
+-			n = length;
+-		}
+-		ud_start(1, UD_DATA, n, TRBCTL_DATA);
+-	} else {
+-		ud_start(0, UD_DATA, 64, TRBCTL_DATA);  /* OUT data is not used here */
+-	}
++	(void)ud_start(1, UD_DATA, n, TRBCTL_DATA);
+ }
+ 
+ /* ---- network interface (ue0) ---- */
+@@ -492,15 +513,19 @@
+ static void
+ ud_rx_arm(void)
+ {
+-	ud_start_trb(EP_RX, UD_TRB_RX, UD_RX, UD_FRAME_MAX, TRBCTL_NORMAL);
++	if (ud.configured && ud.data_alt == 1 && !os_atomic_load(&ud.failed, acquire))
++		(void)ud_start_trb(EP_RX, UD_TRB_RX, UD_RX, UD_FRAME_MAX, TRBCTL_NORMAL);
+ }
+ 
+ static void
+ ud_rx_done(void)
+ {
++	if (!ud.configured || ud.data_alt != 1 || os_atomic_load(&ud.failed, acquire)) return;
+ 	volatile uint32_t *t = (volatile uint32_t *)(ud.dma + UD_TRB_RX);
+ 	ud_sync(UD_TRB_RX, 16);
+-	uint32_t len = UD_FRAME_MAX - (t[2] & 0xffffff);
++	uint32_t residual = t[2] & 0xffffff;
++	if (residual > UD_FRAME_MAX || (t[3] & TRB_HWO) || ((t[2] >> 28) & 0xfu)) { ud_fail("invalid RX TRB ownership/status/residual"); return; }
++	uint32_t len = UD_FRAME_MAX - residual;
+ 	ud_sync(UD_RX, UD_FRAME_MAX);
+ 	if (ud.ifp != NULL && len >= ETHER_HDR_LEN && len <= ETHER_MAX_LEN) {
+ 		/*
+@@ -536,25 +561,30 @@
+ static void
+ ud_tx_kick_locked(void)
+ {
+-	while (!ud.tx_busy && ud.txq_count > 0 && ud.configured) {
++	while (!ud.tx_busy && ud.txq_count > 0 && ud.configured && ud.data_alt == 1 &&
++	    ud.packet_filter && !os_atomic_load(&ud.failed, acquire)) {
++		ud_sync(UD_TRB_TX, 16);
++		if (ud.resource[EP_TX] || (((volatile uint32_t *)(ud.dma + UD_TRB_TX))[3] & TRB_HWO)) {
++			ud_fail("TX buffer still owned by controller"); break;
++		}
+ 		mbuf_t m = ud.txq[ud.txq_head];
+ 		ud.txq_head = (ud.txq_head + 1) % UD_TXQ;
+ 		ud.txq_count--;
+ 		size_t len = mbuf_pkthdr_len(m);
+-		if (len > ETHER_MAX_LEN - ETHER_CRC_LEN) {
++		if (len < ETHER_HDR_LEN || len > ETHER_MAX_LEN - ETHER_CRC_LEN) {
+ 			mbuf_freem(m);
+ 			continue;
+ 		}
+-		mbuf_copydata(m, 0, len, (void *)(ud.dma + UD_TX));
++		if (mbuf_copydata(m, 0, len, (void *)(ud.dma + UD_TX)) != 0) { mbuf_freem(m); continue; }
+ 		mbuf_freem(m);
+ 		/* A frame of a multiple of 512 bytes would need a zero-length
+ 		 * packet to end it; one pad byte does the same (IP ignores it). */
+-		if ((len % 512) == 0) {
++		if ((len % ud.max_packet) == 0) {
+ 			((uint8_t *)(ud.dma + UD_TX))[len++] = 0;
+ 		}
+ 		ud.tx_busy = true;
++		if (ud_start_trb(EP_TX, UD_TRB_TX, UD_TX, (uint32_t)len, TRBCTL_NORMAL) != 0) { ud.tx_busy = false; break; }
+ 		ud.tx_frames++;
+-		ud_start_trb(EP_TX, UD_TRB_TX, UD_TX, (uint32_t)len, TRBCTL_NORMAL);
+ 	}
+ }
+ 
+@@ -562,7 +592,7 @@
+ ud_if_output(ifnet_t ifp, mbuf_t m)
+ {
+ 	lck_mtx_lock(ud.lock);
+-	if (ud.txq_count == UD_TXQ || !ud.configured) {
++	if (ud.txq_count == UD_TXQ || !ud.configured || ud.data_alt != 1 || !ud.packet_filter || os_atomic_load(&ud.failed, acquire)) {
+ 		lck_mtx_unlock(ud.lock);
+ 		mbuf_freem(m);
+ 		ifnet_stat_increment_out(ifp, 0, 0, 1);
+@@ -587,6 +617,68 @@
+ 	if (ud.ifp != NULL) {
+ 		dlil_post_msg(ud.ifp, KEV_DL_SUBCLASS, up ? KEV_DL_LINK_ON : KEV_DL_LINK_OFF, NULL, 0, FALSE);
+ 	}
++}
++
++/* End data transfers before reusing their single TRBs on alt/reset/disconnect. */
++static void
++ud_data_stop(bool unconfigure)
++{
++	lck_mtx_lock(ud.lock);
++	ud.data_alt = 0;
++	ud.packet_filter = 0;
++	if (unconfigure) ud.configured = false;
++	const unsigned endpoints[] = { EP_RX, EP_TX, EP_INT };
++	for (unsigned i = 0; i < sizeof(endpoints) / sizeof(endpoints[0]); i++) {
++		unsigned ep = endpoints[i];
++		if (ud.resource[ep] && !os_atomic_load(&ud.failed, acquire)) {
++			int error = ud_epcmd(ep, DEPCMD_ENDTRANSFER | DEPCMD_CMDIOC | DEPCMD_HIPRI_FORCERM |
++			    ((uint32_t)ud.resource[ep] << 16), 0, 0, 0);
++			delay(100); /* SDM660 Linux waits for interconnect retirement after ENDTRANSFER. */
++			if (!error) {
++				uint32_t offset = ep == EP_RX ? UD_TRB_RX : ep == EP_TX ? UD_TRB_TX : UD_TRB_INT;
++				ud_sync(offset, 16);
++				((volatile uint32_t *)(ud.dma + offset))[3] &= ~TRB_HWO;
++				ud_sync(offset, 16);
++			}
++		}
++	}
++	while (ud.txq_count) {
++		mbuf_freem(ud.txq[ud.txq_head]);
++		ud.txq_head = (ud.txq_head + 1) % UD_TXQ;
++		ud.txq_count--;
++	}
++	ud.tx_busy = false;
++	if (unconfigure && !os_atomic_load(&ud.failed, acquire)) dwc_wr(DALEPENA, 3);
++	lck_mtx_unlock(ud.lock);
++	ud_link_event(false);
++}
++
++static bool
++ud_link_ready(void)
++{
++	lck_mtx_lock(ud.lock);
++	bool ready = ud.configured && ud.data_alt == 1 && ud.packet_filter &&
++	    !os_atomic_load(&ud.failed, acquire);
++	lck_mtx_unlock(ud.lock);
++	return ready;
++}
++
++static void
++ud_control_reset(void)
++{
++	if (ud.state == EP0_SETUP || os_atomic_load(&ud.failed, acquire)) return;
++	for (unsigned ep = 0; ep < 2; ep++) {
++		if (ud.resource[ep]) {
++			if (ud_epcmd(ep, DEPCMD_ENDTRANSFER | DEPCMD_CMDIOC | DEPCMD_HIPRI_FORCERM |
++			    ((uint32_t)ud.resource[ep] << 16), 0, 0, 0)) return;
++			delay(100);
++			uint32_t offset = ep ? UD_TRB_IN : UD_TRB_OUT;
++			ud_sync(offset, 16);
++			((volatile uint32_t *)(ud.dma + offset))[3] &= ~TRB_HWO;
++			ud_sync(offset, 16);
++		}
++	}
++	(void)ud_start_setup();
+ }
+ 
+ static errno_t
+@@ -601,9 +693,9 @@
+ 		    CAST_USER_ADDR_T(((struct ifmediareq32 *)ifmr)->ifmu_ulist);
+ 		int media = IFM_ETHER | IFM_AUTO;
+ 		ifmr->ifm_current = media;
+-		ifmr->ifm_active = ud.configured ? (IFM_ETHER | IFM_1000_T | IFM_FDX) : media;
++		ifmr->ifm_active = (ud.configured && ud.data_alt == 1) ? (IFM_ETHER | IFM_1000_T | IFM_FDX) : media;
+ 		ifmr->ifm_mask = 0;
+-		ifmr->ifm_status = IFM_AVALID | (ud.configured ? IFM_ACTIVE : 0);
++		ifmr->ifm_status = IFM_AVALID | ((ud.configured && ud.data_alt == 1) ? IFM_ACTIVE : 0);
+ 		if (list != USER_ADDR_NULL && ifmr->ifm_count > 0) {
+ 			ifmr->ifm_count = 1;
+ 			return copyout(&media, list, sizeof(media));
+@@ -630,7 +722,7 @@
+ }
+ 
+ /* ue0, 192.168.7.2/24 (the host side is 192.168.7.1). */
+-static void
++static int
+ ud_if_create(void)
+ {
+ 	struct ifnet_init_eparams init;
+@@ -660,9 +752,9 @@
+ 	init.broadcast_addr = etherbroadcastaddr;
+ 	init.broadcast_len = ETHER_ADDR_LEN;
+ 	if (ifnet_allocate_extended(&init, &ud.ifp) != 0) {
+-		printf("SWEET USB: ifnet_allocate failed\n");
++		printf("WHYRED USB: ifnet_allocate failed\n");
+ 		ud.ifp = NULL;
+-		return;
++		return -1;
+ 	}
+ 	ifnet_set_addrlen(ud.ifp, ETHER_ADDR_LEN);
+ 	ifnet_set_hdrlen(ud.ifp, sizeof(struct ether_header));
+@@ -670,9 +762,10 @@
+ 	ifnet_set_baudrate(ud.ifp, 480000000);
+ 	ifnet_set_flags(ud.ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST, 0xffff);
+ 	if (ifnet_attach(ud.ifp, NULL) != 0) {
+-		printf("SWEET USB: ifnet_attach failed\n");
++		printf("WHYRED USB: ifnet_attach failed\n");
++		ifnet_release(ud.ifp);
+ 		ud.ifp = NULL;
+-		return;
++		return -1;
+ 	}
+ 	ifnet_set_lladdr(ud.ifp, ud_phone_mac, ETHER_ADDR_LEN);
+ 
+@@ -700,8 +793,9 @@
+ 		err = sock_ioctl(so, SIOCAIFADDR, &ifra);
+ 		sock_close(so);
+ 	}
+-	ifnet_set_flags(ud.ifp, IFF_UP | IFF_RUNNING, IFF_UP | IFF_RUNNING);
+-	printf("SWEET USB: ue0 192.168.7.2/24 %s (err %d)\n", err ? "NOT configured" : "up", err);
++	if (!err) ifnet_set_flags(ud.ifp, IFF_UP | IFF_RUNNING, IFF_UP | IFF_RUNNING);
++	printf("WHYRED USB: ue0 192.168.7.2/24 %s (err %d)\n", err ? "NOT configured" : "up", err);
++	return err ? -1 : 0;
+ }
+ 
+ static void
+@@ -710,31 +804,46 @@
+ 	if (ev & 1) {                   /* device event */
+ 		uint32_t type = (ev >> 8) & 0xf;
+ 		if (type == 1) {        /* USB reset */
++			ud_data_stop(true);
++			ud_control_reset();
+ 			dwc_wr(DCFG, dwc_rd(DCFG) & ~(0x7fu << 3));
+-			printf("SWEET USB: bus reset\n");
++			printf("WHYRED USB: bus reset\n");
+ 		} else if (type == 2) { /* connect done */
+ 			uint32_t speed = dwc_rd(DSTS) & 7;
++			if (speed != 0 && speed != 1 && speed != 3) { ud_fail("unsupported negotiated speed"); return; }
++			lck_mtx_lock(ud.lock);
++			ud.max_packet = speed == 0 ? 512 : 64;
++			lck_mtx_unlock(ud.lock);
++			if (ud.ifp) ifnet_set_baudrate(ud.ifp, speed == 0 ? 480000000 : 12000000);
+ 			/* ep0 max packet: 64 at high/full speed (modify action) */
+-			ud_epcmd(0, DEPCMD_SETEPCONFIG, (0u << 1) | (64u << 3) | (2u << 30),
+-			    (1u << 8) | (1u << 10) | (0u << 25), 0);
+-			ud_epcmd(1, DEPCMD_SETEPCONFIG, (0u << 1) | (64u << 3) | (2u << 30),
+-			    (1u << 8) | (1u << 10) | (1u << 25), 0);
+-			printf("SWEET USB: connected, speed %u\n", speed);
++			if (ud_epcmd(0, DEPCMD_SETEPCONFIG, (0u << 1) | (64u << 3) | (2u << 30),
++			    (1u << 8) | (1u << 10) | (0u << 25), 0) ||
++			    ud_epcmd(1, DEPCMD_SETEPCONFIG, (0u << 1) | (64u << 3) | (2u << 30),
++			    (1u << 8) | (1u << 10) | (1u << 25), 0)) return;
++			printf("WHYRED USB: connected, speed %u\n", speed);
+ 		} else if (type == 0) {
+-			printf("SWEET USB: disconnect\n");
++			ud_data_stop(true);
++			ud_control_reset();
++			printf("WHYRED USB: disconnect\n");
++		} else if (type == 11) {
++			ud_fail("event buffer overflow");
+ 		}
+ 		return;
+ 	}
+ 	unsigned ep = (ev >> 1) & 0x1f;
+ 	unsigned type = (ev >> 6) & 0xf;
+ 	unsigned status = (ev >> 12) & 0xf;
+-
++	if (ep < 6 && ep != EP_TX && type == 1) ud.resource[ep] = 0;
++	if (os_atomic_load(&ud.failed, acquire)) return;
++
++	if (type == 1 && (status & 1u)) { ud_fail("transfer bus error"); return; }
+ 	if (ep == EP_RX && type == 1) {
+ 		ud_rx_done();
+ 		return;
+ 	}
+ 	if (ep == EP_TX && type == 1) {
+ 		lck_mtx_lock(ud.lock);
++		ud.resource[EP_TX] = 0;
+ 		ud.tx_busy = false;
+ 		ud_tx_kick_locked();
+ 		lck_mtx_unlock(ud.lock);
+@@ -780,21 +889,24 @@
+ {
+ 	uint32_t ticks = 0;
+ 	for (;;) {
++		if (os_atomic_load(&ud.failed, acquire)) { ud_data_stop(true); return; }
+ 		uint32_t count = dwc_rd(GEVNTCOUNT) & 0xffff;
++		if (count > UD_EVT_SIZE || (count & 3u)) { ud_fail("invalid event byte count"); continue; }
+ 		if (count) {
+ 			ud_sync(UD_EVT, UD_EVT_SIZE);
+ 			for (uint32_t done = 0; done < count; done += 4) {
+ 				uint32_t ev = *(volatile uint32_t *)(ud.dma + UD_EVT + ud.evt_pos);
+ 				ud.evt_pos = (ud.evt_pos + 4) % UD_EVT_SIZE;
+ 				if (ud.events++ < 200) {
+-					printf("SWEET USB: event 0x%08x\n", ev);
++					printf("WHYRED USB: event 0x%08x\n", ev);
+ 				}
+ 				ud_event(ev);
++				if (os_atomic_load(&ud.failed, acquire)) break;
+ 			}
+ 			dwc_wr(GEVNTCOUNT, count);
+ 		}
+ 		if ((++ticks % 30000) == 0) {
+-			printf("SWEET USB: ue0 rx %llu tx %llu frames\n", ud.rx_frames, ud.tx_frames);
++			printf("WHYRED USB: ue0 rx %llu tx %llu frames\n", ud.rx_frames, ud.tx_frames);
+ 		}
+ 		ud_sleep_ms(1);
+ 	}
+@@ -826,24 +938,26 @@
+ 	to.sin_addr.s_addr = htonl(0xc0a80701);         /* 192.168.7.1 */
+ 	for (;;) {
+ 		ud_sleep_ms(100);
+-		if (!ud.configured) {
+-			continue;
+-		}
++		if (os_atomic_load(&ud.failed, acquire)) { if (so) sock_close(so); return; }
++		if (!ud_link_ready()) continue;
+ 		if (so == NULL && sock_socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP, NULL, NULL, &so) != 0) {
+ 			so = NULL;
+ 			continue;
+ 		}
+-		uint32_t n;
+-		while ((n = sweet_log_copy(&pos, chunk, sizeof(chunk))) > 0) {
++		for (unsigned batch = 0; batch < 8; batch++) {
++			uint64_t next = pos;
++			uint32_t n = sweet_log_copy(&next, chunk, sizeof(chunk));
++			if (!n) break;
+ 			struct iovec iov = { .iov_base = chunk, .iov_len = n };
+ 			struct msghdr msg = {
+ 				.msg_name = &to, .msg_namelen = sizeof(to),
+ 				.msg_iov = &iov, .msg_iovlen = 1,
+ 			};
+ 			size_t sent = 0;
+-			if (sock_send(so, &msg, 0, &sent) != 0) {
+-				break;          /* no route/ARP yet: retry later */
++			if (sock_send(so, &msg, MSG_DONTWAIT, &sent) != 0 || sent != n) {
++				break;          /* retain cursor: no route/ARP yet */
+ 			}
++			pos = next;
+ 		}
+ 	}
+ }
+@@ -854,17 +968,27 @@
+ 	thread_t thread;
+ 
+ 	ud.dwc = dwc;
++	ud.max_packet = 512;
++	if (!whyred_usb_hw_select_utmi(&usb_io, &usb_hw)) { ud_fail("UTMI mux readback"); return; }
++	/* Stop the bootloader controller before installing any new DMA addresses. */
++	dwc_wr(DCTL, dwc_rd(DCTL) & ~DCTL_RUN_STOP);
++	unsigned halt;
++	for (halt = 0; halt < 500 && !(dwc_rd(DSTS) & DSTS_DEVCTRLHLT); halt++) delay(1000);
++	if (!(dwc_rd(DSTS) & DSTS_DEVCTRLHLT)) { ud_fail("bootloader controller did not halt"); return; }
+ 	if (kmem_alloc_contig(kernel_map, &ud.dma, UD_SIZE, PAGE_MASK, 0, 0,
+ 	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+-		printf("SWEET USB: no DMA memory\n");
+-		return;
++		printf("WHYRED USB: no DMA memory\n");
++		ud_fail("DMA allocation"); return;
+ 	}
+ 	ppnum_t pn = pmap_find_phys(kernel_pmap, (addr64_t)ud.dma);
+-	if (!pn) {
+-		return;
+-	}
++	if (!pn) { ud_fail("DMA physical address unavailable"); return; }
+ 	ud.dma_pa = ptoa_64(pn);
+-	ud_if_create();
++	if ((ud.dma_pa & PAGE_MASK) || ud.dma_pa > 0x100000000ULL - UD_SIZE) {
++		ud_fail("DMA not aligned below 4 GiB"); return;
++	}
++	/* Publish KMA_ZERO writes before the device owns the event ring or TRBs. */
++	ud_sync(0, UD_SIZE);
++	if (ud_if_create() != 0) { ud_fail("network interface/address setup"); return; }
+ 
+ 	/* Device controller soft reset (PHY and global setup stay as ABL left them). */
+ 	dwc_wr(DCTL, DCTL_CSFTRST);
+@@ -872,11 +996,13 @@
+ 	for (i = 0; i < 500 && (dwc_rd(DCTL) & DCTL_CSFTRST); i++) {
+ 		delay(1000);
+ 	}
+-	printf("SWEET USB: soft reset %s after %d ms, GCTL 0x%08x DCFG 0x%08x\n",
++	printf("WHYRED USB: soft reset %s after %d ms, GCTL 0x%08x DCFG 0x%08x\n",
+ 	    (dwc_rd(DCTL) & DCTL_CSFTRST) ? "STUCK" : "done", i, dwc_rd(GCTL), dwc_rd(DCFG));
+-	if (dwc_rd(DCTL) & DCTL_CSFTRST) {
+-		return;
+-	}
++	if (dwc_rd(DCTL) & DCTL_CSFTRST) { ud_fail("device reset timeout"); return; }
++	/* Device mode, no clock gating; retain all other bootloader global fields. */
++	dwc_wr(GCTL, (dwc_rd(GCTL) & ~(3u << 12)) | (2u << 12) | 1u);
++	/* Keep UTMI awake for commands and polled transfers (no runtime PHY PM). */
++	dwc_wr(0xc200, dwc_rd(0xc200) & ~((1u << 6) | (1u << 8)));
+ 
+ 	dwc_wr(GEVNTADRLO, (uint32_t)(ud.dma_pa + UD_EVT));
+ 	dwc_wr(GEVNTADRHI, (uint32_t)((ud.dma_pa + UD_EVT) >> 32));
+@@ -888,44 +1014,47 @@
+ 	uint32_t dcfg = dwc_rd(DCFG) & ~(7u | (0x7fu << 3));
+ 	dwc_wr(DCFG, dcfg | 0);
+ 	/* Events: disconnect, USB reset, connect done */
+-	dwc_wr(DEVTEN, 0x7);
+-
+-	/* Endpoint 0 OUT/IN: start config, control type, max packet 512 until connect done. */
++	dwc_wr(DEVTEN, 0x7 | (1u << 11));
++
++	/* Endpoint 0 OUT/IN: USB2 control endpoints use 64-byte packets. */
+ 	if (ud_epcmd(0, DEPCMD_DEPSTARTCFG, 0, 0, 0) ||
+-	    ud_epcmd(0, DEPCMD_SETEPCONFIG, (0u << 1) | (512u << 3), (1u << 8) | (1u << 10) | (0u << 25), 0) ||
++	    ud_epcmd(0, DEPCMD_SETEPCONFIG, (0u << 1) | (64u << 3), (1u << 8) | (1u << 10) | (0u << 25), 0) ||
+ 	    ud_epcmd(0, DEPCMD_SETTRANSFRESOURCE, 1, 0, 0) ||
+-	    ud_epcmd(1, DEPCMD_SETEPCONFIG, (0u << 1) | (512u << 3), (1u << 8) | (1u << 10) | (1u << 25), 0) ||
++	    ud_epcmd(1, DEPCMD_SETEPCONFIG, (0u << 1) | (64u << 3), (1u << 8) | (1u << 10) | (1u << 25), 0) ||
+ 	    ud_epcmd(1, DEPCMD_SETTRANSFRESOURCE, 1, 0, 0)) {
+-		printf("SWEET USB: endpoint 0 setup failed\n");
+-		return;
++		printf("WHYRED USB: endpoint 0 setup failed\n");
++		ud_fail("control endpoint configuration"); return;
+ 	}
+ 	dwc_wr(DALEPENA, 0x3);
+-	ud_start_setup();
+-
+-	vm_offset_t qs = ml_io_map(QSCRATCH_PA, 0x100);
++	if (ud_start_setup() != 0) return;
++
++	vm_offset_t qs = (vm_offset_t)usb_hw.qs;
+ 	if (qs != 0) {
+ 		uint32_t hs = usb_rd(qs, QSCRATCH_HS_PHY_CTRL), ss = usb_rd(qs, QSCRATCH_SS_PHY_CTRL);
+-		printf("SWEET USB: QSCRATCH HS_PHY_CTRL 0x%08x SS_PHY_CTRL 0x%08x GENERAL_CFG 0x%08x\n",
++		printf("WHYRED USB: QSCRATCH HS_PHY_CTRL 0x%08x SS_PHY_CTRL 0x%08x GENERAL_CFG 0x%08x\n",
+ 		    hs, ss, usb_rd(qs, 0x08));
+ 		*(volatile uint32_t *)(qs + QSCRATCH_HS_PHY_CTRL) = hs | UTMI_OTG_VBUS_VALID | SW_SESSVLD_SEL;
+ 		*(volatile uint32_t *)(qs + QSCRATCH_SS_PHY_CTRL) = ss | LANE0_PWR_PRESENT;
+ 		__asm__ volatile ("dsb sy" ::: "memory");
+-		printf("SWEET USB: VBUS override on: HS_PHY_CTRL 0x%08x SS_PHY_CTRL 0x%08x\n",
++		printf("WHYRED USB: VBUS override on: HS_PHY_CTRL 0x%08x SS_PHY_CTRL 0x%08x\n",
+ 		    usb_rd(qs, QSCRATCH_HS_PHY_CTRL), usb_rd(qs, QSCRATCH_SS_PHY_CTRL));
+ 	}
++	if ((usb_rd(qs, QSCRATCH_HS_PHY_CTRL) & (UTMI_OTG_VBUS_VALID | SW_SESSVLD_SEL)) !=
++	    (UTMI_OTG_VBUS_VALID | SW_SESSVLD_SEL)) { ud_fail("VBUS override readback"); return; }
++	if (kernel_thread_start(ud_thread, NULL, &thread) != KERN_SUCCESS) { ud_fail("event thread unavailable"); return; }
++	thread_deallocate(thread);
+ 
+ 	dwc_wr(DCTL, dwc_rd(DCTL) | DCTL_RUN_STOP);
+ 	for (i = 0; i < 500 && (dwc_rd(DSTS) & DSTS_DEVCTRLHLT); i++) {
+ 		delay(1000);
+ 	}
+-	printf("SWEET USB: running (DSTS 0x%08x after %d ms), DMA at 0x%llx\n", dwc_rd(DSTS), i, ud.dma_pa);
+-	if (kernel_thread_start(ud_thread, NULL, &thread) == KERN_SUCCESS) {
+-		thread_deallocate(thread);
+-	}
++	printf("WHYRED USB: running (DSTS 0x%08x after %d ms), DMA at 0x%llx\n", dwc_rd(DSTS), i, ud.dma_pa);
++	if (dwc_rd(DSTS) & DSTS_DEVCTRLHLT) { ud_fail("controller did not run"); return; }
+ 	int livelog = 1;
+ 	PE_parse_boot_argn("sweetusblog", &livelog, sizeof(livelog));
+-	if (livelog && ud.ifp != NULL && kernel_thread_start(ud_log_thread, NULL, &thread) == KERN_SUCCESS) {
+-		thread_deallocate(thread);
++	if (livelog && ud.ifp != NULL) {
++		if (kernel_thread_start(ud_log_thread, NULL, &thread) == KERN_SUCCESS) thread_deallocate(thread);
++		else printf("WHYRED USB: live-log thread unavailable\n");
+ 	}
+ }
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
+--- /dev/null
++++ b/bsd/dev/whyred_usb_hw.h
+@@ -0,0 +1,153 @@
++/* whyred SDM636/SDM660 USB2 handoff. No PMIC, PLL, reset or SMMU programming.
++ * Register provenance: MiCode whyred-o-oss efbbb9cce47475c49f28d227b2a52eca6f0d02a7
++ * gcc-sdm660.c, phy-msm-qusb.c, dwc3-msm.c and the saved board device tree.
++ * This first port requires the bootloader's powered, locked QUSB2 PHY.
++ */
++#ifndef WHYRED_USB_HW_H
++#define WHYRED_USB_HW_H
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++#define WHYRED_USB_GCC_PA 0x00100000u
++#define WHYRED_USB_GCC_SIZE 0x00090000u
++#define WHYRED_USB_GDSCR 0x0f004u
++#define WHYRED_USB_BCR 0x0f000u
++#define WHYRED_USB_DWC_PA 0x0a800000u
++#define WHYRED_USB_DWC_SIZE 0x0000d000u
++#define WHYRED_USB_PHY_PA 0x0c012000u
++#define WHYRED_USB_PHY_SIZE 0x180u
++#define WHYRED_USB_QS_PA 0x0a8f8800u
++#define WHYRED_USB_QS_SIZE 0x100u
++#define WHYRED_USB_CLK_OFF (1u << 31)
++#define WHYRED_USB_PLL_LOCK (1u << 5)
++#define WHYRED_USB_PHY_POWERDOWN 0xb4u
++#define WHYRED_USB_PHY_PLL_STATUS 0x38u
++#define WHYRED_USB_CLOCKS 6u
++#define WHYRED_USB_CLOCK_POLLS 1000u
++
++static const uint32_t whyred_usb_clocks[WHYRED_USB_CLOCKS] = {
++    0xf008, 0xf00c, 0xf010, 0x05018, 0xf03c, 0x6a004
++}; /* master, sleep, UTMI, cfg-NoC, aggre2, AHB2PHY */
++
++struct whyred_usb_io {
++    void *context;
++    uintptr_t (*map)(void *, uintptr_t, size_t);
++    uint32_t (*read)(void *, uintptr_t, uint32_t);
++    void (*write)(void *, uintptr_t, uint32_t, uint32_t);
++    void (*delay_us)(void *, unsigned int);
++};
++
++enum whyred_usb_hw_status {
++    WHYRED_USB_HW_OK = 0, WHYRED_USB_HW_OFF, WHYRED_USB_HW_MAP,
++    WHYRED_USB_HW_POWER, WHYRED_USB_HW_RESET, WHYRED_USB_HW_CLOCK,
++    WHYRED_USB_HW_PHY, WHYRED_USB_HW_CORE
++};
++
++struct whyred_usb_hw {
++    uintptr_t gcc, dwc, phy, qs;
++    uint32_t gdscr, reset, clocks[WHYRED_USB_CLOCKS], changed_clocks, sampled_clocks;
++    uint32_t ref_gate, ref_vote, phy_power, phy_pll, id, gctl, phy_cfg;
++};
++
++/* Only undo branch enable bits introduced by this attempt, before DMA starts. */
++static void
++whyred_usb_hw_rollback(const struct whyred_usb_io *io, struct whyred_usb_hw *hw)
++{
++    for (unsigned int i = WHYRED_USB_CLOCKS; i-- > 0;) {
++        if (hw->changed_clocks & (1u << i)) {
++            uint32_t value = io->read(io->context, hw->gcc, whyred_usb_clocks[i]);
++            io->write(io->context, hw->gcc, whyred_usb_clocks[i], value & ~1u);
++        }
++    }
++    hw->changed_clocks = 0;
++}
++
++/* 0/invalid: no MMIO; 1: read-only snapshot; 2: bounded branch votes + handoff.
++ * Never access the DWC3/PHY while the domain is off, reset asserted or bus gated.
++ */
++static enum whyred_usb_hw_status
++whyred_usb_hw_prepare(const struct whyred_usb_io *io, int mode, struct whyred_usb_hw *hw)
++{
++    *hw = (struct whyred_usb_hw){0};
++    if (mode != 1 && mode != 2) return WHYRED_USB_HW_OFF;
++    hw->gcc = io->map(io->context, WHYRED_USB_GCC_PA, WHYRED_USB_GCC_SIZE);
++    if (!hw->gcc) return WHYRED_USB_HW_MAP;
++    hw->gdscr = io->read(io->context, hw->gcc, WHYRED_USB_GDSCR);
++    hw->reset = io->read(io->context, hw->gcc, WHYRED_USB_BCR);
++    if (!(hw->gdscr & (1u << 31))) return WHYRED_USB_HW_POWER;
++    if (hw->reset & 1u) return WHYRED_USB_HW_RESET;
++    for (unsigned int i = 0; i < WHYRED_USB_CLOCKS; i++) {
++        uint32_t value = io->read(io->context, hw->gcc, whyred_usb_clocks[i]);
++        hw->clocks[i] = value;
++        hw->sampled_clocks |= 1u << i;
++        if (!(value & WHYRED_USB_CLK_OFF)) continue;
++        if (mode != 2) return WHYRED_USB_HW_CLOCK;
++        if (!(value & 1u)) {
++            io->write(io->context, hw->gcc, whyred_usb_clocks[i], value | 1u);
++            hw->changed_clocks |= 1u << i;
++        }
++        unsigned int poll;
++        for (poll = 0; poll < WHYRED_USB_CLOCK_POLLS; poll++) {
++            hw->clocks[i] = io->read(io->context, hw->gcc, whyred_usb_clocks[i]);
++            if (!(hw->clocks[i] & WHYRED_USB_CLK_OFF)) break;
++            io->delay_us(io->context, 1);
++        }
++        if (poll == WHYRED_USB_CLOCK_POLLS) {
++            whyred_usb_hw_rollback(io, hw);
++            return WHYRED_USB_HW_CLOCK;
++        }
++    }
++    hw->ref_gate = io->read(io->context, hw->gcc, 0x88018);
++    hw->ref_vote = io->read(io->context, hw->gcc, 0x88014);
++    hw->phy = io->map(io->context, WHYRED_USB_PHY_PA, WHYRED_USB_PHY_SIZE);
++    if (!hw->phy) goto map_error;
++    hw->phy_power = io->read(io->context, hw->phy, WHYRED_USB_PHY_POWERDOWN);
++    hw->phy_pll = io->read(io->context, hw->phy, WHYRED_USB_PHY_PLL_STATUS);
++    if ((hw->phy_power & 0x23u) != 0x22u || !(hw->phy_pll & WHYRED_USB_PLL_LOCK)) {
++        whyred_usb_hw_rollback(io, hw);
++        return WHYRED_USB_HW_PHY;
++    }
++    hw->dwc = io->map(io->context, WHYRED_USB_DWC_PA, WHYRED_USB_DWC_SIZE);
++    if (!hw->dwc) goto map_error;
++    hw->id = io->read(io->context, hw->dwc, 0xc120);
++    if ((hw->id >> 16) != 0x5533u) {
++        whyred_usb_hw_rollback(io, hw);
++        return WHYRED_USB_HW_CORE;
++    }
++    hw->gctl = io->read(io->context, hw->dwc, 0xc110);
++    hw->phy_cfg = io->read(io->context, hw->dwc, 0xc200);
++    if ((hw->gctl & (1u << 11)) || (hw->phy_cfg & (1u << 31))) {
++        whyred_usb_hw_rollback(io, hw);
++        return WHYRED_USB_HW_CORE;
++    }
++    hw->qs = io->map(io->context, WHYRED_USB_QS_PA, WHYRED_USB_QS_SIZE);
++    if (!hw->qs) goto map_error;
++    return WHYRED_USB_HW_OK;
++map_error:
++    whyred_usb_hw_rollback(io, hw);
++    return WHYRED_USB_HW_MAP;
++}
++
++/* Exact high/full-speed-only PIPE mux sequence from SDM660 dwc3-msm.c.
++ * Use the already running UTMI clock, without touching QMP/PHY or PLL registers.
++ */
++static bool
++whyred_usb_hw_select_utmi(const struct whyred_usb_io *io, struct whyred_usb_hw *hw)
++{
++    uint32_t before = io->read(io->context, hw->qs, 0x08);
++    io->write(io->context, hw->qs, 0x08, before | (1u << 8));
++    io->delay_us(io->context, 5);
++    uint32_t value = io->read(io->context, hw->qs, 0x08);
++    io->write(io->context, hw->qs, 0x08, value | 1u | (1u << 3));
++    io->delay_us(io->context, 5);
++    value = io->read(io->context, hw->qs, 0x08);
++    io->write(io->context, hw->qs, 0x08, value & ~(1u << 8));
++    value = io->read(io->context, hw->qs, 0x08);
++    if ((value & ((1u << 8) | 1u | (1u << 3))) == (1u | (1u << 3))) return true;
++    /* Restore only the owned mux bits if readback refused the change. */
++    uint32_t mask = (1u << 8) | 1u | (1u << 3);
++    io->write(io->context, hw->qs, 0x08, (value & ~mask) | (before & mask));
++    return false;
++}
++#endif
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -895,6 +895,12 @@
+ 	net_init_run();
+ #endif /* NETWORKING */
+ 
++#if defined(SWEET)
++	/* USB networking is independent of root-storage discovery. Opt-in only. */
++	extern void sweet_usb_probe(void);
++	sweet_usb_probe();
++#endif
++
+ 	bsd_init_kprintf("calling inittodr\n");
+ 	inittodr(0);
+ 

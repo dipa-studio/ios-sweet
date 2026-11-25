@@ -1,433 +1,3095 @@
-# iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
+## Active103/UI: REAL LOCK SCREEN OBSERVED;103 boot candidate NOT FLASHED (2026-11-04 Minsk)
 
-## Agent handoff / active work (2026-10-15, latest)
+- User's latest 'делай' asks to continue UI. Current installed STILL boot99/
+  System102. At about39m43s device uptime SpringBoard26 actually built its UI.
+  USER then saw lock screen; three photos show wallpaper, camera, home indicator,
+  red/orange top banner and incomplete large pale upper rectangle. UI appears
+  briefly, then BLACK WITH BACKLIGHT between flashes. Actual photos privately
+  retained graphics-v103/user-photos. This supersedes 'only Apple logo' above.
+  Full/stable UI and touch still NOT established. Do not reflash without readiness.
+- Fresh102 read-only UI sample owner36808 FINISHED; slide4e4b8000, SpringBoard26
+  LS store wait and lsd93 MobileGestalt Wi-Fi matching wait at that EARLIER sample.
+  UI later progressed without MG cache mutation; do not call the old wait permanent.
+- Important new disk bug: d_psize returns sector CAPACITY, while exact XNU8796
+  specfs set_blocksize consumes BLOCK BYTES. Persist32MiB gets65536-byte v_specsize
+  and spec_read rejects above16KiB. Source0178 now returns512; real specfs/driver
+  host harness PASS29 checks+3HFS; unmodified driver NEGATIVE fails512-unit check.
+- Experimental local signed iOS helper f6c879b9 attempted bounded read-only
+ 16KiB persist probe after upload/readback/selftest PASS. VFS explicitly forbids
+  user SETBLOCKSIZE: gotEPERM,0bytes. No media writes/no valid factory dump/MAC.
+  Helper source cleaned to GET/read-only and locally rebuilt/signed, SHA
+  dca4981a92e74c8a65fbc922b8e854b2e5a83af0ca6dd3c2946a7da4995cad6f.
+  Final helper is NOT yet uploaded/tested on corrected kernel. NEVER bypass
+  VFS policy or use fake MAC.
+- Prepared pinned layout-preserving backport builder + source0178. PRIVATE FINAL
+  graphics-v103/boot-v103-candidate image22347776B SHA
+ 69422ec4e548fe51391829559bba76a38024f92a7359f5f8b0c3ad7109fb72c1.
+  Kernel SHA7809054ed5e0965d2950086d7dc317b510958bcb7d5995e881b9b02b54545a52.
+  Changes ONE instruction atfffffe000795ec3c (csinc->movw0,512), Android header
+  ID and append sweetnull=-; all old args/addresses/shim/ADT unchanged. Kernel99
+  layout UUID intentionally PRESERVED for installed102 display ABI; this IS a
+  modified kernel identified by SHA, not an unchanged99/full newCI build.
+  Earlier geometry-only ab6fac candidate moved to DO-NOT-FLASH directory.
+- sweetnull default tees backboardd/SpringBoard /dev/null writes synchronously
+  to UART. Current UI produced a flood of AppleM2ScalerCSCDriver matching errors.
+  New sweetnull=- disables that DEBUG TEE, preserving kernel USB/panic logs.
+  CPU starvation/frame overwrite explanations remain hypotheses, not proven fixes.
+- Held31558 currently NOT FREE: lockscreen snapshot owner40440 exited after
+ 110s timeout reading display log. First ps completed (SpringBoard26,lsd93,
+  backboard55,display114 alive). Held log57BEGIN/56END, pending CAT since17:28:09Z;
+  do not queue commands. Its planned invalid 'hid' mode was NEVER reached, so no
+  HID event sent. Correct mode is power-key; prefer non-toggle wake if state unknown.
+- Separate single wake attempt41268 via new SSH ended255 BANNER TIMEOUT; no
+  request delivery proven. Current receiver9727 still logs. Last observed eMMC
+  errors/fallbacks0; searchd235 SIGABRT seen later; no kernel panic. New GUI
+  screenshot cannot yet be read because SSH is stalled. No manual presenter added.
+- Candidate independent byte/opcode/ID checks,4 packaging refusal tests,
+  GET/read-only helper native tests and files-only guard now PASS;
+  guard rejects flash without readiness. PRIVATE tools/flash_kernel103.py sealed
+  to69422ec4 image. See WHYRED-BOOT103.md for exact scope and limits. Retain
+  full99 rollback and System102. Preserve evidence; user has NOT approved103
+  flash/readiness yet. After concrete reviewable103 ready, request Fastboot for
+  BOOT-ONLY test; then prepared ssh-v90/check_boot103.py --start verifies
+  authoritative103 flash + ABI and exports bounded private factory data via
+  GET/read-only helper (selftest/probe/full32MiB, no SET ioctl), fresh held only.
+  Then parse REAL metadata and check
+  quiet logging/GUI stability. Boot103 alone does not promise complete UI fix.
 
-### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<
+## Active102: INSTALLED + LIVE PROFILE/DISPLAY PASS (2026-11-04 Minsk)
 
-**STATE at end of 2026-10-18 (evening):**
-- On the phone: userdata = **image v15** (`/run/media/dipa/android/ios-sweet-ipsw/ios16-root-20H392-v15.img/.simg`; = v14 + `/private/var/preferences/SystemConfiguration/preferences.plist` with one network service "USB Ethernet": Interface DeviceName ue0 Type Ethernet, IPv4 Manual 192.168.7.2/24 router 192.168.7.1, DNS 1.1.1.1 8.8.8.8, set "Automatic" as CurrentSet). Fallback image v14 (v12/v13 deleted).
-- Kernels: **0078** = all 8 cores (`cpus=8`, cpu6/7 = A76, homogeneous SMP; mkadt now emits 8 CPU nodes; ADT `shim/out/sweet-0078hi.adt`); **0079** = display off/on via IOMFB selector 12 kern_RequestPowerChange(state) (fade over 6 vsyncs, then black; verified: power button gives "SWEET FB: display off/on"); **0080** = `SWEET NET: <proc> route add/delete/change ...` and `... add/delete address ...` trace (built, `shim/out/shim-boot-0080s.img`, NOT booted yet).
-- **Internet over USB: not working yet.** Host side is ready (temporary iptables: FORWARD accept for 192.168.7.0/24 + MASQUERADE, comment "ios-sweet"; lost on host reboot). With v15 the phone sent no DNS and no outbound traffic (only mDNS/ARP) -> configd probably did not apply the service (or did, without default route/DNS). Next: boot 0080s on v15, watch `SWEET NET` lines (does configd add 192.168.7.2 / default route on ue0?). If configd ignores ue0 (not an IOKit IONetworkInterface; configd 1241.140.6 source in `research/configd-1241`, SCNetworkInterface createInterface needs IONetworkInterface -> controller (IOMACAddress, SelfNamed) -> bus), add IOKit stand-ins and/or rename the ifnet to en*.
-- Live log listener (`nc -ukl 5140`) may still be running, writing `logs/live-0078s.txt`.
+- Completed latest startup-optimization request: installed boot99/System102,
+  all81System writes+reboot independently confirmed. Source implementation
+  dd1013a. No boot/GPT/other partition writes. NEVER rerun completed102 installer.
+  Image5386178560B SHA6e6851e0f9789de382d38bfa3a113030bfb47b05969ce2ce68397295b958a912.
+  Native19-job list, exact offline proofs and scope: WHYRED-BOOT-PROFILE.md.
+- Actual102 device readbacks PASS: exact99 UUID, unchanged display27b binary,
+  unchanged native128MiB display policy, entire expected launchd cache and ALL19
+  native hardware plists. ALL19 selected hardware processes absent in FOUR
+  process snapshots; SpringBoard/backboardd/dropbear/display remain present.
+  Bluetoothd/FairPlay remain disabled from95. No fake services or deleted binaries.
+- Automatic display PID114 UID501 persisted across100/110/120/140 frames,
+  errors0 throughout, hashc3d72fb8 (Apple logo). Captures~3.7..8.3s while cold
+  IO continued; do not claim1fps. USER physically confirmed automatic102 Apple
+  logo on black. No manual presenter/marker. Full SpringBoard UI still UNPROVED;
+  no physical touch producer,0177 kernel remains unflashed. No long-run leak proof.
+- Currentboot through1133740032 I/O bytes: errors0/fallbacks0, no observed panic,
+  CRASH or RAMFS PRESSURE. Ordinary FSERR traces still exist; do NOT claim all
+  filesystem/API problems fixed. Source99 single-block PIO remains~1.3MiB/s.
+- First successful rootSSH observed533.528s (~8m54s) after explicit reboot result
+ 16:44:55.396Z. Prior101 host log/login-file mtime proxy727.314s (~12m07s).
+  About194s faster in this ONE run; polling/host-mtime proxies and differing
+  process-sample boot ages mean no controlled/repeated speedup or RAM-savings proof.
+  Private baseline101-host-timing.json +102 runtime-acceptance.json retain limits.
+- LIVE held31558: audit/graphics102-device-20261104T164514Z/held. Observer29161,
+  validator29546 and installer29160 all FINISHED. Held shell FREE. Never reuse
+  obsolete101 held17333. Passive timing observer29277 stopped after acceptance;
+  invalid launchd_cache_loader substring marker discarded, no fake PID1 timing.
+- UDP listener9727 remains running. audit/current-whyred-usb.log ->
+  graphics100-usb-session.log; isolate102 using graphics102-boot-boundary.json.
+  ExactUSB en1/192.168.7.1 restored automatically, no OS-admin prompt/UART needed.
+  Private flash/transfer/runtime/physical receipts retained; valid101 raw rollback,
+ 95/100/boot backups/keys unchanged. Complete102 raw+81sparse packets retained.
+- Additional render CI41869522922 (dd1013a) finished run=failure, job
+ 126712462849=cancelled with EMPTY steps/runner_name;16:39:22..16:54:24Z.
+  No code/build step ran and no new CI-pass claim; cancellation cause unknown.
+  Installed102 reuses prior CI/physically verified27b binary. Actual local
+  builder/comparator/fixtures and hardware checks above PASSED.
+- NEXT: startup profile work is complete. Continue actual SpringBoard UI beyond
+  the boot logo if requested;101's earlier LS/MobileGestalt Wi-Fi wait is only
+  a historical snapshot, NOT a new102 diagnosis. Preserve the working102 setup
+  and inspect current state via the FREE held shell before changing anything.
 
-**LIVE LOG over USB (0077, boot 0077s): no more recovery round-trips.** Boot an image with `sweetusb=2`, run `tools/sweet-usbnet.sh logs/live-NAME.txt` on the PC: it waits for the phone's CDC-ECM interface, sets 192.168.7.1/24 (sudo) and prints/saves the kernel console the phone streams every 100 ms as UDP to 192.168.7.1:5140 (starts with the last 64 KiB). `ping 192.168.7.2` checks the link. Current image: `shim/out/shim-boot-0077s.img` (kernel 0077, ADT sweet-0069hi, cpus=6, sweetfb_noconsole=1, sweetfb_hz=30, sweetusb=2). The recovery pull (`tools/sweet-log-pull.sh`) is still the way after a panic/hang before USB comes up.
+## Active102: INSTALLED81/81 + reboot PASS; automatic boot checks running (2026-11-04 Minsk)
 
-**🎉 USB networking works (boot 0076s, 18:24 local): `ping 192.168.7.2` from the PC answers in ~1 ms, 0 % loss (200-packet burst, 1500-byte frames, 512/1024-byte frames).** 0075: CDC-ECM function (bulk 0x81/0x01, interrupt 0x82 NETWORK_CONNECTION; host MAC 02:00:5e:77:ee:01) + kernel ethernet ifnet `ue0` (legacy output, header strip like if_fake) with 192.168.7.2/24 set from the kernel (proto_plumb + SIOCAIFADDR on an in-kernel socket). 0076: received frames into one cluster mbuf (mbuf_allocpacket gave a first mbuf of length 0 -> panic "Failed mbuf validity check: len -14"). Host side (Linux cdc_ether, interface `enp0s20f0u3u1`): `nmcli dev set IF managed no; sudo ip addr add 192.168.7.1/24 dev IF; sudo ip link set IF up`. Boot image `shim/out/shim-boot-0076s.img` (`sweetusb=2`). iOS itself does not see ue0 yet (configd needs an IONetworkInterface in IOKit).
+- Fresh user Fastboot answer authorized concrete102. Guarded installer29160
+  FINISHED all81System writes/rebootOKAY, independently reviewed ALL81 transfer
+  results. Private audit/display102-flash.json and transfer-review.json. ONLY
+  System written; boot99 retained. Installed now boot99/System102. DO NOT rerun
+  installer. Exact102 SHA6e6851e0f9789de382d38bfa3a113030bfb47b05969ce2ce68397295b958a912.
+- Before-write graphics102-boot-boundary.json retained; isolate newboot log at
+  that offset. UDP listener9727 continues graphics100-usb-session.log via alias
+  current-whyred-usb.log. Old101 held17333 is OBSOLETE after reboot.
+- SOLE observer29161 waits freshUDP then check_graphics102.py --start; new
+  timestamped graphics102-device-* status/held will own new SSH commands.
+  SOLE validation follower29546 waits observer's installed cache/19native job/
+  absence proofs before automatic frame/memory samples. Do NOT queue parallel
+  held commands. Passive log observer29277 records1s host observation times.
+- Reboot confirmed2026-11-04T16:44:55Z. No new102 SSH/service/display or speedup
+  proof yet. Source implementation/offline checks commitdd1013a. No manual
+  renderer; no new kernel. Full SpringBoard UI and physical touch remain unproved.
+- NEXT: confirm USB address/fresh logs; follow observer and validator through
+  actual102 disabled-process/critical-job/automatic-frame checks. No UART.
 
-**USB device mode works (boot 0074s, 17:45 local): the host enumerates the phone at high speed as `1209:0001 ios-sweet "Sweet iOS (USB bring-up)"`.** 0072 read-only probe: ABL leaves the USB30_PRIM GDSC and all 7 USB clocks on, DWC3 v3.20a (GSNPSID 0x5533320a) in device mode (GCTL 0x00112000), halted (DCTL RUN_STOP 0, DSTS 0x00d3de04), event buffer still at ABL's 0xfdfc8000, QUSB2 PHY alive. 0073 (`sweetusb=2`): DCTL soft reset, own event buffer (polled, interrupt masked), ep0 DEPSTARTCFG/SETEPCONFIG/SETTRANSFRESOURCE, setup TRB, RUN_STOP; control-transfer state machine as Linux ep0.c; descriptors: vendor class, no data endpoints. It ran but no event came: **0074** forces the VBUS session in the Qualcomm wrapper (QSCRATCH 0xa6f8800: HS_PHY_CTRL |= UTMI_OTG_VBUS_VALID(20)|SW_SESSVLD_SEL(28), SS_PHY_CTRL |= LANE0_PWR_PRESENT(24), as Linux dwc3_qcom_vbus_override_enable) -> connect + enumeration. Image `shim/out/shim-boot-0074s.img`. Black Phone app: main thread waits in -[VMVoicemailManager fetchAccounts] (sync XPC; voicemail needs the modem).
+## Active102: AUTHORIZED INSTALL RUNNING; do not start another flasher (2026-11-04 Minsk)
 
-**Navigation works (boot 0071s on v14, log `logs/boot-0071s.txt`):** swipe up from the bottom edge returns to the home screen; app switcher works. Two fixes: **0070** pid_hibernate (syscall 435 was nosys on the macOS config -> SIGSYS killed SpringBoard in -[SBToAppsWorkspaceTransaction _didComplete] when an app left the foreground; the only CONFIG_EMBEDDED-only entry in syscalls.master); **0071** touches starting within 48 px of an edge carry kIOHIDDigitizerEventFromEdgeTip (UIKit `_UIEventHIDTouchEdgeTypeForHIDEvent` reads the digitizer EventMask 0xb0007 bits 0x800/0x1000/0x2000/0x40000). Diagnosed, not fixed: Settings (Preferences) SIGTRAP in PodcastsUI func_1cdc47c58: force-unwrap of `URL.volumeTotalCapacity` (nil on our HFS+ root). Phone/Photos/Messages show black (MobilePhone launches, no crash) - next: stack samples via boot-arg `sweetsample=MobilePhone,MobileSlideShow,MobileSMS,SpringBoard` (image `shim/out/shim-boot-0071s.img`).
+- User freshly confirmed Fastboot for concrete System102. Exact private baseline
+  device matched. Guarded detached flasher29160 started with --flash --ready-answer;
+  audit/display102-flash-process.json and graphics-v102/flash-system102.log.
+  It rehashes candidate/rollback/packets before writing ONLYSystem,81packets.
+  Boot99 retained. DO NOT start a second installer even before first receipt.
+- BEFORE-write graphics102-boot-boundary.json preserved current USB file offset.
+  Existing bounded UDP listener9727 retained. Old101 heldSSH17333 OBSOLETE.
+  Sole observer29161 waits for confirmed81/reboot/freshUDP before starting
+  check_graphics102.py with fresh held shell. Passive host timing observer29277
+  writes graphics-v102/boot-log-observations.json (1s host observation resolution).
+- Source profile/tests/full-image/sparse/preflight completed in dd1013a; exact
+  imageSHA6e6851e0f9789de382d38bfa3a113030bfb47b05969ce2ce68397295b958a912.
+  No102 device behavior or startup speedup proved yet. No manual presenter.
+- NEXT: confirm ALL81 writes + reboot from receipt, restore exact USB address
+  only if necessary, follow sole102 observer, then automatic display/service
+  checks. Never queue a command into any held shell while its owner runs.
 
-**🎉🎉 MILESTONE 2026-10-18 ~15:30 local: iOS 16.7 SPRINGBOARD HOME SCREEN ON THE PHONE** (boot `shim/out/shim-boot-0069s.img` = kernel 0069 + ADT `shim/out/sweet-0069hi.adt`, image **v14**; log `logs/boot-0069s-v14-HOMESCREEN.txt`). Home screen with a few apps, Settings opens, Control Center / lock screen / notification center work, touch + buttons work, 6 A55 cores (`cpus=6`), `sweetfb_noconsole=1 sweetfb_hz=30`. Known issue: cannot leave Settings (home gesture / AssistiveTouch home do nothing) - to investigate.
-What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user client), 0059 iPhone X identity (hw.product etc.), 0060 SPMI keys + GENI touch, 0061 1125x2436 presented display, 0062 RPMh L11C touch power + IOPMPowerSource battery, 0063 GENI FIFO packing (Goodix GT9896), 0064 PRIV_WORK_INTERVAL grant (SpringBoard "Failed to create work interval"), 0065 SMP via PSCI (6 A55), 0066 crash map regions, 0067 console mute without cons_ops write, 0068 IOSurface lookup of an already-mapped surface returns base -1 (backboardd snapshot crash), 0069 UFS log flush 10 s. Image v13: CommCenter removed from launchd.plist, BKNoWatchdogs. **Image v14** = v13 + Setup skipped (`/var/mobile/Library/Preferences/com.apple.purplebuddy.plist` SetupDone/SetupFinishedAllSteps true, SetupVersion 11, daemonizeNeedsToRun false; purplebuddy.notbackedup mini-buddy flags false; managedconfiguration.notbackedup LockdownActivationIndicatesCloudConfigurationAvailable false; springboard MCForceShowCloudConfigurationUI false) + mobileactivationd data ark seeded (`/private/var/containers/Data/System/D90C94C4-F94E-4FCF-8A28-A93BE3846D8E/Library/internal/data_ark.plist`, -ActivationState Activated etc.) + MediaToolbox D22/D221/Default SubServerConfiguration StartRecorderServer=false (mediaserverd crash loop: portrait-filter prewarm called NULL GL). **Activation:** ADT /chosen certificate-production-status 0, effective-production-status-ap 0, certificate-security-mode 1, effective-security-mode-sep 1 -> mobileactivationd's native Hactivation branch (Codex `codex/activation/report.md`; alternative 4-byte daemon patch documented there). Fallback image v13; v12 deleted.
+## Active102: READY hardware-profile candidate; fresh Fastboot answer pending;101 installed (2026-11-04 Minsk)
 
-**🎉 TOUCH WORKS (boot 0063u on image v13, 2026-10-18 ~13:15 local):** tapping (i) on Setup's Hello opens the device-info sheet; swipe-up is recognised (spinner, then back to Hello - under investigation). Chain: RPMh L11C vote (0062, `bsd/dev/sweet_rpmh.c`) -> GT9896 @0x5d on GENI SE7 (0063 fixed FIFO packing: register address went out byte-swapped) -> sweet_hid_touch -> SweetHIDTouch -> backboardd. Battery icon OK (0062 SweetBattery IOPMPowerSource, static 100 %). **Image v13** (= v12 + CommCenter jobs removed from launchd.plist + `BKNoWatchdogs`=true and `FBLaunchWatchdogExceptions{com.apple.purplebuddy:100}` in /var/mobile/Library/Preferences/com.apple.springboard.plist): Setup no longer killed by the scene-create watchdog (it blocked in CoreTelephony getSubscriptionInfo -> CommCenter, Codex `codex/setup/report.md`; that report also lists how to skip Setup: SetupDone/SetupFinishedAllSteps/SetupVersion=11 in com.apple.purplebuddy.plist + activation check). v9 deleted, fallback = v12. Input latency ~1 min with 1 CPU -> Codex task 11 = SMP via PSCI (`codex/smp/`).
+- Latest user requested startup optimization by disabling unused Wi-Fi/Bluetooth/
+  camera/NFC services. Implemented explicit19-job minimal-hardware profile in
+  tools/whyred_boot_profile.py, integrated opt-in System102 builder/comparator.
+  Changes ONLY Disabled=true in BOTH native plist and embedded cache; preserves
+  all532 jobs, other fields, working101 display client/native128MiB budget,
+  SSH/USB/UI/API/security/logging providers. No fake processes/IPC. Default100/
+ 101 behavior unchanged. Exact list and acceptance: WHYRED-BOOT-PROFILE.md.
+- Actual101 snapshot found active radio coexistence, bluetoothuserd,nfcd,
+  wifianalyticsd,awdd; camera and several Wi-Fi jobs were dormant. CPU profiler
+  FAILED BEFORE first CPU result (threads40 command timeout). Do not claim CPU
+  savings or measured startup gain. Single-block boot99 PIO~1.3MiB/s remains a
+  separate bottleneck. Physical Apple logo confirmation for101 now recorded.
+- IMPORTANT: held17333 still has outstanding framed BEGIN67d2c2309faca3ddf2b3541bb85b6979
+  and NO END. Do NOT queue more commands. profiler23067 EXITED; private status
+  boot-service-profile.json=failed-review-required. No phone configuration changed.
+  Last read-only UI snapshots: SpringBoard waits LaunchServices store, lsd worker
+  waits inside MobileGestalt's Wi-Fi lookup. Not proof of permanent deadlock.
+  chosen lacks mac-address-wifi0. Factory persist cat attempt returnedEINVAL/
+  zero bytes, no writes; empty dump is INVALID. No fake identity/cache seed added.
+- Local4 profile tests PASS incl7 refusal cases and exactC/Python path parity;
+  strict C compilation PASS;6 hardware comparator positive/negative cases +9
+  retained display/budget fixtures PASS. Actual full-source overlay previewPASS.
+- FULL102 IMAGE PASS: graphics-v102/system-v102-candidate,5386178560B,
+  SHA6e6851e0f9789de382d38bfa3a113030bfb47b05969ce2ce68397295b958a912.
+  Independent95 comparison63022nodes/45744files/16607dirs/671symlinks,
+ 8613999393 unchanged old bytes;3additions/21explicit exceptions. All24 overlay
+  byte/metadata checksPASS. Actual101->102 cache comparison:19Disabled fields,
+ 513otherjobs equal. ALL81 sparse packets and exact payload
+  reconstruction PASS. build-status.json=offline-ready. See finish.log and
+  system-v102-candidate/offline-readiness.json. Private flash_display102.py is
+  sealed to exact102 SHA/size, rejects --flash without fresh readiness; file-only
+  preflight28531 FINISHED exit0 (files-preflight-status.json/log), no device
+  writes. Fastboot scan0devices. Concrete102 installation readiness PENDING.
+  Initial foreground build disappeared without manifest; incomplete spool was
+  discarded, plan/log retained under interrupted-do-not-flash. Detached build
+ 26521 now owns the successful complete pipeline. No duplicate build started.
+  Installed phone remains boot99/System101. NO102 flash/physical test/readiness.
+  Reclaimed ONLY81 reproducible101 sparse transport packets after rehashing
+  raw101+allpackets and validating confirmed81/reboot receipt. Valid raw101,
+ 95/100/boot backups/keys retained. Private audit/display102-space-reclaimed.json.
+- NEXT: obtain fresh Fastboot readiness for the concrete102 System-only test. Prepared ssh-v90/check_graphics102.py authenticates
+  actual99 UUID/binary/budget/cache/19native files and absence of19processes;
+  checks essential UI/SSH/display presence. No manual renderer; no kernel build.
+  Isolate new boot log with a fresh graphics102-boot-boundary.json BEFORE flash;
+  use fresh held shell only. Preserve101 rollback; never rerun101 flasher.
 
-**INPUT WORKS (boot 0060u on a freshly flashed v12, log `logs/boot-0060u.txt`):** power, volume up, volume down reach iOS (PMIC -> sweet_keys.c -> SweetHIDButtons -> backboardd). Power locks/unlocks (screen "off" shows the kernel console because the panel never really turns off). **Device identity fixed: iPhone X** (home indicator, Face-ID-style Setup). Earlier test (0059u, `sweethidtest=15` fake Home presses) advanced Setup from Hello to the language list.
-- **0058** HID: `iokit/Kernel/arm/hid/`: IOHIDEventServiceUserClient + IOHIDEventServiceQueue + IOHIDEvent compiled UNCHANGED from Apple IOHIDFamily-1915.140.3 (= exact version of the iOS 16.7 IOHIDLib, clone in `research/iohid-1915`) over our minimal IOHIDEventService (SweetHID.cpp: SweetHIDButtons consumer page 0x0C power 0x30 / vol 0xE9/0xEA / menu 0x40; SweetHIDTouch digitizer collections). C hooks `sweet_hid_key(key, down)` (0 power, 1 vol+, 2 vol-, 3 home) and `sweet_hid_touch(finger, down, x, y)`. HID logs go to IOLog. Boot-arg `sweethidtest=N` = fake Home press every N s.
-- **0059** identity: hw.machine/hw.model/hw.target/hw.product from the ADT (macOS-config kernel used to answer "iPad8,6"/"Redmi Note 10 Pro"). mkadt: root compatible `D22AP|iPhone10,3|xiaomi,sweet|...`, model iPhone10,3, target-type D22, `/product` copied from the real D22AP device tree (`research/ipsw-x/d22ap.adt`, extracted from the IPSW, NOT in git), `/buttons home-button-type 2`. Codex report `codex/mg/report.md`: MG ProductType = sysctl **hw.product** (unrecognized -> iPod), HWModelStr = hw.target, HomeButtonType = `/buttons/home-button-type`; disk cache `/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist` (keyed by build + UUID only -> stale iPod answers survived; reflashed clean v12 to clear it).
-- **0060** drivers by Codex (`codex/input/hw-report.md`): `bsd/dev/sweet_keys.c` (SPMI arbiter v5 observer reads, PON 0x810 bits KPDPWR/RESIN SID0, PM6150L GPIO2 SID4 0xc110; works), `bsd/dev/sweet_touch.c` (GENI SE7 I2C @0xa84000, starts 45 s after boot). Touch result: SE7 fw ok (proto 3) but **0x5d and 0x38 both time out -> touch IC unpowered** (L11C LDO needs an RPMh vote). Codex task 8 = RPMh client (`codex/rpmh/`), task 7 = battery (`codex/battery/`).
-- **0061** (CI 39117078444): red status bar "rdar:45025538" = UIKit "No status bar visual provider for screen" (360x800 pt is no real iPhone). AppleCLCD now presents **1125x2436** (iPhone X) and shows the centered 1080x2400; touch mapped the same; ADT canvas 1125x2436. `sweetfb_native=1` reverts.
-- Images: `shim/out/shim-boot-0060b.img` (0060 + /buttons ADT `sweet-0060hi.adt`). Next: 0061 image with ADT from current mkadt.
+## Active101: AUTOMATIC FRAME OUTPUT + SCENE CHANGE PASS (2026-11-04 Minsk)
 
-### >>> HANDOFF 2026-10-17 late (read this first) <<<
+- Installed boot99/System101, all81 writes+reboot confirmed earlier. Exact99 UUID,
+  installed27b executable and native128MiB D22 table readback PASS. Current held
+  SSH17333: audit/graphics101-device-20261104T153514Z/held. Observer13898,
+  validator14610 and scene exec85413 all FINISHED. Later CPU profiler timed
+  out after framed BEGIN of diag threads40: held shell is NOT FREE; see top.
+- Actual automatic launchd process119 UID501, no manual presenter started.
+  Four samples across120s: frames20/30/40/60, errors0/0/0/0, samePID. Wired pages
+ 12456/13353/13994/14253, compressor0 while cold boot kept loading; this is NOT
+  a long-run leak proof. Capture samples~2..8.4s during heavy single-block PIO;
+  do not claim1fps achieved. Early attempts exited after3 capture errors before
+  display server readiness; launchd retried and final instance stayed alive.
+- Stronger actual AUTO scene proof: exact previously signed marker a1279cc5
+  uploaded/readback. Created a temporary named-LCD red layer for10s, no manual
+  presentation loop. Marker capture0->1024pixels, normalchildexit0/timeout0,
+  context INVALIDATED. Automatic process119 stayed unchanged, its journal
+  frames130->160/errors0/changes0->2 and logo hashc3d72fb8 restored. Thus current
+  autostart captures real scene changes. Private autostart-scene.json/acceptance.json.
+- USER physically confirmed automatic101 Apple logo on black background.
+  Private acceptance.json and physical-observation.json record this. This
+  confirms panel output; ready SpringBoard UI remains UNPROVED. No marker
+  remains running. Later warm samples through650 frames retained0errors.
+- Current detached UDP listener9727, log audit/current-whyred-usb.log ->
+  graphics100-usb-session.log. Isolate101 with graphics101-boot-boundary.json.
+  No observed fresh storage failure/fallback/panic. No UART required.
+- The optional runtime-budget diagnostic experiment was NEVER deployed/used;
+  its queued CI runs were cancelled before steps. Restored tools/whyreddiag.c
+  and its workflow EXACTLY to previously verified65bb011 baseline. Direct
+  Jetsam ips established the cause; final fix uses native per-job policy only.
+- Technical automatic-output milestone PASS. NEXT: incorporate user's physical
+ 101 screen answer when provided, then diagnose actual SpringBoard startup/UI
+  and finish real touch bus work separately. Do not reflash a working101 or run
+  another live presenter merely to keep output going. Physical input producer
+  remains absent;0177 touch kernel still unflashed.
 
-**STATE: iOS 16.7 Setup.app "Hello" screen is ON THE PHONE** (boot `shim/out/shim-boot-0057u.img` on image v12). Photo `/run/media/dipa/android/ios-sweet-work/MILESTONE-setup-hello-2026-10-17.jpg`. SpringBoard + backboardd + Setup run; nothing crashes in the GUI path. Remaining crash/relaunch loops: installcoordinationd (should be fixed by 0057, unverified), mediaserverd (VirtualAudio removed in v12, unverified), mobileactivationd (~100/boot, not analysed), bluetoothd + fairplayd.H2 relaunch constantly (no hardware).
+## Active101: INSTALLED81/81; automatic boot validation running (2026-11-04 Minsk)
 
-**What is on the phone now:** userdata = image **v12** (`/run/media/dipa/android/ios-sweet-ipsw/ios16-root-20H392-v12.img` + `.simg` + `.sha256`; v9 kept as fallback, v8/v10/v11 deleted or superseded). Kernel **0057** (`xnu/out-0057`, CI `39067532732`). ADT **`shim/out/sweet-0057hi.adt`** (QEMU twin `research/q0057-hi.adt`). Boot image **`shim/out/shim-boot-0057u.img`**. Boot args: `debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1`.
+- User freshly confirmed Fastboot. Exact file/sparse reconstruction, rollback95+
+ 100/boot99, private device identity/geometry PASS. ALL81 confirmed System writes
+  and reboot OKAY. ONLYSystem written; installed phone nowboot99/System101.
+  SHAac49c87fb422b11cc9fc03f201db2c80eb457f91efad6a04e65a16743f392ff1,
+  5386182656B. PRIVATE audit/display101-flash.json and transfer-review.json.
+  DO NOT rerun installer. Installer13830 finished; oldSSH7448 obsolete.
+- Fresh USB/en1 address restored and new UDP confirmed. Same detached listener
+ 9727 and audit/current-whyred-usb.log -> graphics100-usb-session.log retained;
+  isolate101 via audit/graphics101-boot-boundary.json BEFORE-write offset.
+- SOLE observer13898 now check_graphics101.py --start; fresh timestamped
+  audit/graphics101-device-* status/held. Waiting for SSH, then actual99 UUID,
+  exact installed27b binary and D22 budget-file readbacks. No manual renderer.
+- SOLE validation follower14610 waits until observer releases new held shell,
+  then runs verify_graphics101_autostart.py. It checks singlemobilePID501,
+  counter progress/0errors over40s, memory and only fresh101 storage records.
+  See audit/graphics101-validation.stdout and newdevice/autostart-check.json.
+  Do NOT issue another held command while either observer or validator runs.
+- All offline101 proofs/current failure cause below remain valid. Budget128MiB
+  is INSTALLED but actual automatic frames/visible result/long-run behavior
+  still PENDING. No user panel observation for101 yet. Optional C diagnostic
+  CI41854513477/41855581854 CANCELLED before build; unchanged27b used instead.
+- NEXT: follow new101 status/validation, inspect increasing clean automatic
+  counters, request physical panel observation only after actual frames/power
+  state are known. No UART; no0177 touch kernel/I2C producer; UI still unproved.
 
-**Build a phone image** (kernel K, ADT A): `python3 tools/mkpayload.py $K $A shim/out/payload-X.bin --cmdline "$B" && (cd shim && ./build.sh ../shim/out/payload-X.bin && cp out/shim-boot.img out/shim-boot-X.img)` then check `python3 tools/unpack_bootv2.py shim/out/shim-boot-X.img shim/out/check-X && cmp shim/out/check-X/ramdisk shim/out/payload-X.bin`. QEMU smoke test: `python3 tools/mkpayload.py $K research/q0057-hi.adt $S/csq/payloadX.bin --ramdisk $S/csq/root-fork.img --cmdline "debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=md0"` + `PATH=~/swift/usr/bin:$PATH python3 tools/qemu-sweet.py ... --secs 40 --kernel $K --fail-on-panic` (S = scratchpad; root-fork.img lives in the session scratchpad csq/ dir and may be gone in a new session).
+## LIVE101 INSTALL IN PROGRESS; DO NOT START ANOTHER FLASHER (2026-11-04 Minsk)
 
-**Kernel workflow:** edit `research/bt28/xnu/...` (keep the pre-edit copy in `research/preNNNN/`), syntax check `python3 tools/xnu-cc.py research/run28.log research/bt28 <file>`, make `xnu/patches/NNNN-*.patch` with `diff -u pre bt28 | sed` path rewrite, add new/changed files to `research/check-patch-order.py` list, run it (must say applied + MATCH), commit + push -> GitHub Actions `xnu` builds (~8 min) -> `gh run download <id> -R dipa-studio/ios-sweet -n xnu-kernel -D xnu/out-NNNN`. **Repo is PUBLIC since 2026-10-17** (private macOS runner minutes ran out: "recent account payments have failed"); public = free runners. Commit trailer: only `Co-Authored-By: dipa-studio <183933817+dipa-studio@users.noreply.github.com>`.
+- User freshly answered Already in Fastboot for the concrete System101/System-only
+  test. Detached guarded installer13830 now running, graphics-v101/flash-system101.log;
+  audit/display101-flash-process.json. It first rehashes allfiles, then verifies
+  private device identity/geometry, writes81 packets, reboots only afterALL81.
+  No duplicate invocation, even before audit/display101-flash.json first appears.
+- Current100 heldSSH7448 is OBSOLETE after user's Fastboot transition. Boundary
+  audit/graphics101-boot-boundary.json saved BEFORE install. Listener9727 stays
+  bound/appending graphics100-usb-session.log; current alias unchanged.
+- Sole detached observer wrapper13898 waits for confirmedALL81/reboot and new
+  UDP bytes, then execs check_graphics101.py/new timestamped held shell. See
+  audit/graphics101-observer-process.json/.stdout. Never start a second observer.
+- Optional new diagnostic CI41854513477 and41855581854 were CANCELLED before
+  any steps. No iOS compile/pass claim for that helper. This does not change
+ 101 image proof: it retains the old full-CI/physically-tested27b binary; native
+  builder/policy/comparator/full-image checks above passed independently.
+- NEXT: follow installer record; on full success await new observer and run only
+  prepared read-only automatic progression check. On any error inspect exact
+  attempted/confirmed packet counts; NEVER blindly retry or claim full install.
 
-**Phone workflow (user does buttons, Claude runs commands):**
-- Boot test kernel: phone in fastboot -> `fastboot boot shim/out/shim-boot-X.img`. NEVER `fastboot getvar`.
-- **Read logs WITHOUT filming:** after a test the user holds Power+VolDown -> fastboot -> `fastboot boot recovery/recovery.img` (OrangeFox, temp) -> wait for `adb shell true` -> `tools/sweet-log-pull.sh /run/media/dipa/android/ios-sweet-work/logs/<name>.txt` (reads the 4 MiB console ring the kernel keeps in the last 1025 blocks of userdata; patch 0047). Then `adb reboot bootloader` brings the phone back to fastboot without the user.
-- **Flash a root image:** `fastboot flash -S 512M userdata <img>.simg` (7 min, 25 chunks). After a big flash the Xiaomi ABL fastboot hangs: next `fastboot boot` stalls at "Sending" -> the USER must re-enter fastboot by hand (Power+VolDown). Do not retry commands against the hung ABL. A flash right after `adb reboot bootloader` once failed on chunk 1 (USB protocol error): just retry. User must NOT unplug during flash (once interrupted at 25/25 -> reflash).
-- **Edit the phone root without reflashing (same-length only):** find the file's raw offset in the local image (it is one extent; search the image for its first 4 KiB), compare with `adb exec-out dd if=/dev/block/sda34 ...`, then `adb push` changed 4 KiB blocks and `dd of=/dev/block/sda34 seek=... conv=notrunc,fsync`, read back. Recovery kernel has no hfsplus.
-- **Pull the whole phone root** (12 min): `adb exec-out "dd if=/dev/block/sda34 bs=1048576 count=16384" > img`; mount ro with udisksctl or `sudo mount -t hfsplus -o loop,ro`. To write into a pulled image: `sudo fsck.hfsplus -fy` first (volume is never cleanly unmounted -> Linux mounts ro even with -o force), then `sudo mount -t hfsplus -o loop,force`.
-- Making images: copy latest img with `cp --sparse=always`, mount rw with force, change, `sync; umount`, `sha256sum`, `img2simg`. Keep only the latest image + one fallback on the SSD (/home is ~98% full; big work files live in `/run/media/dipa/android/ios-sweet-work/`, old kernels/images archived in `.../ios-sweet-work/archive/`).
+## Active101: complete verified candidate; fresh Fastboot answer PENDING (2026-11-04 Minsk)
 
-**Diagnostics built into the kernel (all SWEET-only):** persistent console log (0047, boot-arg sweetlog=0 off; flush every ~1 s); `|name| text` copies of /dev/null writes for processes in `sweetnull` (default backboardd,SpringBoard; 0048); `IOK name:` IOKit lookup/open trace for `sweetiolog` (default backboardd,SpringBoard; 0049/0054, 400 lines max); `SWEET Sandbox: proc op N` (0050); `STR ...` heap text dump on SIGABRT/SIGTRAP for `sweetscan` (default backboardd,SpringBoard; 0051/0053) - this is how NSException/BSAssert reasons were found; `SMP name tN pc .. bt ..` user stack sampler for `sweetsample` (default SpringBoard,backboardd; first at 90 s then every 120 s, 40 samples, 16 frames; 0054/0055); `SWEET FB: N swaps` every 1000 swaps; `CRASH name ...` crash reports (0043/0044). Symbolicate cache addresses with `ipsw dyld a2s research/dsc/dyld_shared_cache_arm64 <addr - slide>`; main-binary addresses: addr - mh + 0x100000000.
+- Installed phone STILL boot99/System100, iOS running with held SSH7448;101 NOT
+  flashed. User last confirmed TEXT. Actual JetsamEvent ips read over SSH proves
+  whyred-display per-process-limit, rpages719/page16384 (~11.2MiB); configured
+  exact limit is NOT included. PRIVATE100-device/display-jetsam-evidence.json.
+  This direct OS report replaces waiting for the optional new diagnostic merely
+  to establish the failure cause. No runtime memory-budget mutation performed.
+- System101 FULL IMAGE VERIFIED, PRIVATE graphics-v101/system-v101-candidate:
+  5386182656B SHAac49c87fb422b11cc9fc03f201db2c80eb457f91efad6a04e65a16743f392ff1.
+  Exact same signed/live-tested27b binary and launchd job as100; only add own
+  org.whyred.display Active/InactiveHardMemoryLimit128 in native D22 table.
+  All530 old overrides/other policy fields preserved; cache byte-equivalent100.
+  Independent full comparison8614013385 old bytes,63022nodes/45744files/
+  16607dirs/671symlinks;3added/2explicitexceptions;5 exact byte+metadata checks
+  PASS. Finite128MiB budget is a hardware candidate, NOT proved working yet.
+- ALL81 private sparse slices generated and files-only guarded preflight EXIT0:
+  raw/sparse exact reconstruction, rollback95+100, boot99, binary pilot proofs
+  PASS. audit/display101-files-verified.json. tools/flash_display101.py sealed
+  to exact101 SHA/size; refuses any preexisting101 flash record. Do not use100
+  flasher again. Its reproducible slices were reclaimed AFTER full100 success.
+- Disk headroom restored by discarding only agent-generated explicitly
+  DO-NOT-FLASH interrupted92 raw/spool and reproducible100 sparse packets.
+  Retained valid92/95/100 raw images, keys/backups/receipts unchanged. Private
+  audit/display101-reclaimed-* receipts. Current101 raw/slices remain private.
+- No new C helper delivered: diagnostic CI41854513477 Intel and41855581854 ARM
+  remain QUEUED; neither failed nor passed. Builder/native/comparator/full-image
+  tests above are actual local proofs. New helper is not needed for101 image,
+  which keeps previously authenticated27b signed executable unchanged.
+- Prepared101 observer/check_graphics101.py validates new flash81/reboot,
+  exact99 UUID and both installed live binary/native memory-policy readbacks;
+  verify_graphics101_autostart.py checks single UID501 process, increasing
+  automatic frame counter/0errors, VM snapshots and only fresh boot storage log.
+  Neither started. Current listener9727 appends graphics100-usb-session.log;
+  current-whyred-usb.log alias correct. Preserve boundary BEFORE101 flash/reboot.
+- Asked fresh physical readiness for SYSTEM101 after concrete preflight PASS:
+  user must put currently-running phone in Fastboot. Await actual answer; no
+  timeout implies approval. Once ready, guarded101 flasher --flash --ready-answer,
+  confirmALL81/reboot, new held SSH only, check autostart WITHOUT manual renderer.
+  No UART; no real touch producer; full SpringBoard UI still unverified.
 
-**Patches added today (0046-0057, all CI-built):** 0046 IOSurface (IOCoreSurfaceRoot) + IOMobileFramebuffer (AppleCLCD on /arm-io/disp0) + arm-io nubs; 0047 persistent log; 0048 /dev/null tee; 0049 IOKit trace; 0050 permissive "Sandbox" MAC policy; 0051/0053 heap text on crash; 0052 RENAME_SWAP via exchangedata on HFS; 0054/0055 sampler, swap counter, AKS selectors 35 (extended device state = 17) and 101; 0056 panel copy from the vsync timer at 10 Hz (sweetfb_hz) instead of every swap; 0057 no config_ext_resolver (ACL group entries resolve without memberd). ADT (tools/mkadt.py): /arm-io/disp0, /chosen/display-scale 3, /chosen/unique-chip-id (synthetic 0x5357454554000001) + chip-id 0x8015 -> IOPlatformUUID A9683613-3704-53F2-95D0-98A8FB574E78. Image v9-v12: /private/var/containers/{Bundle,Data/System,Shared/SystemGroup,Temp}; launchd.plist StandardOut/ErrorPath renamed to ...PatX (pointing jobs at /dev/console stops them launching: EACCES); v12: LastSystemVersion=20H392 in plain /var/mobile/Library/Preferences/com.apple.migration.plist (stops the 1-hour data migration that ran every boot), VirtualAudio.plugin moved to /Library/Audio/Plug-Ins/HAL.disabled/.
+## Active100 memory correction: native policy proof; signed helper queued (2026-11-04 Minsk)
 
-**Codex helper** (`codex exec --skip-git-repo-check -m gpt-6.1-sol -c model_reasoning_effort=high -s workspace-write -C /run/media/dipa/android/ios-sweet-work/codex -o OUT "$(cat task.md)" < /dev/null`, run detached with setsid nohup; config already defaults to gpt-6.1-sol high). Reports in `/run/media/dipa/android/ios-sweet-work/codex/`: mediaserverd-report.md, installcoordinationd-report.md (-> 0057), ufs-performance.md (ranked UFS speed plan), **ufs/0058-sweet-ufs-faster.patch** (READY, not yet applied: ufslogsecs default 10 s log flush batching, optional ufscache=1 directional cache ops, optional ufswait=1 spin-then-sleep; syntax-checked, host-stub verified; see ufs/README.md). Apply it as patch 0058 after review.
+- Actual held SSH7448 remains accessible. Current display log: repeated begin,
+  no first frame, SIGKILL reason1/7 per-process memory limit; not a working job.
+- Old foreground receiver2635 ended between turns without final status. Confirmed
+  no listener, started detached bounded append receiver9727; same graphics100
+  log/alias preserved. Gap approximately15:02:52..15:08:34 UTC, so no claim of
+  uninterrupted coverage. New datagrams verified; no UART. Current storage has
+  no failures/fallbacks in observed records through>1.5GB.
+- Diagnostic source a3dd836 CI41854513477/job126659373169 remains QUEUED in Intel
+  pool. Native strict compile/retainedselftest/11 refusals PASS. Retrying through
+  generic ARM64-host macos15 runner; target remains genericARM64/iOS16.4, same
+  actual source logic and signed rights. No budget mutation yet.
+- Verified exact launchd binary selects com.apple.jetsamproperties.D22.plist;
+  Daemon/Override holds530 entries. Added opt-in101 builder --display-memory-mb
+  128: add only own label with Active/InactiveHardMemoryLimit128. All existing
+  dictionary fields deeply preserved, job/live binary/rights unchanged.
+  Native full D22 merge/collision/invalid checks PASS. Independent comparator
+  strictcompile and4 budget opt-in/path/other-bytes/mode cases +6 retained
+  positive/negative fixtures PASS. Private graphics-v101 receipts/preview.
+- System101 NOT built/flashed. Need signed diagnostic actual limits/footprint
+  and current-process128MiB experiment first; then build101 and full metadata/
+  old-bytes comparison. Available disk ~7GiB: do not start full image before
+  reclaiming only proven disposable intermediates; keep95/100 raw rollback,
+  keys/backups/flash receipts. No physical touch producer yet.
 
-**Claude safety-classifier note:** several messages about QuartzCore renderer selection / writing an HFS reader tool were cut off by an automatic classifier (false positives, user agrees). Keep those topics short or let them be; they are not blockers now (rendering already works).
+## Active100: autostart memory-limit failure; diagnostic candidate (2026-11-04 Minsk)
 
-**NEXT STEPS (in order):**
-1. **Input** (Setup stuck on Hello): touch + power + volume as IOHIDEventService/IOHIDDevice services backboardd matches (log shows backboardd matching IOHIDDevice with DeviceUsagePairs and IOService with HIDServiceSupport=true). Phone hardware: Goodix/Focaltech touch over I2C/SPI (check live DT `dtb/`), buttons via PMIC (pon) and GPIO keys. Start with a fake HID service (e.g. power button via a timer or boot-arg) to learn the ABI, then real drivers.
-2. **Device identity**: MobileGestalt reports iPod + Home button. Add /product node / product-type (iPhone10,3, D22AP), device class iPhone, home-button-less (Face ID) properties in mkadt; find exact MG keys (MGIOMFBSupport.c, `IODeviceTree:/product` lookups seen in backboardd trace).
-3. **Battery**: AppleSmartBattery/IOPMPowerSource style service (status bar shows empty red battery).
-4. Apply Codex 0058 (UFS speed), consider cpus>1, check whether installcoordinationd/mediaserverd loops are gone, analyse mobileactivationd.
-5. Hide kernel console over the GUI when not debugging: boot-arg sweetfb_noconsole=1 (but then panics are not on screen).
+- System100 full81-slice install/reboot confirmed, boot99 retained. Fresh observer
+  FINISHED; exact99 UUID,3 helpers and installed display readback PASS. Current
+  held SSH7448: PRIVATE audit/graphics100-device-20261104T144954Z/held. Only this
+  shell is current; old99 held97326 died with Mac reboot. Observer is NOT running.
+- Automatic display log contains repeated live-begin records, no first frame.
+  UDP confirms whyred-display SIGKILL, OS_REASON_JETSAM1/code7: exact XNU8796
+  JETSAM_REASON_MEMORY_PERPROCESSLIMIT. USER sees TEXT. Finite manual pilots
+  inherited a different budget; they did not test launchd's own process limit.
+  Global VM snapshot free23945/wired12190/compressor0 pages; not system OOM proof.
+  No storage errors/fallbacks through998920192 bytes this boot.
+- Preparing explicit whyreddiag memlimits PID (read-only) / display-budget PID:
+  fixed finite128MiB experimental floor, root+exact99 UUID+mobile/name/installed
+  path/starttime checks, preservefatal flags and unlimited/larger limits,
+  readback required. Applies only current process, not persistent or a global
+  override. Native strict compile/retainedselftest/11 invalid/physical refusals
+  PASS; signed iOS CI/artifact/device budget readback still PENDING.
+- Actual launchd binary indicates legacy JetsamMemoryLimit is ignored and own
+  JetsamProperties job dictionary maps to a no-op. Do not guess a job key or
+  disable global jetsam. Inspect actual limits, test addressed runtime floor,
+  then choose persistent integration backed by the measured footprint.
+- UDP receiver2635/current-whyred-usb.log stays on graphics100-usb-session.log.
+  NEXT: obtain signed updated diagnostic, readback/inspect actual display budget,
+  apply explicit current-process experiment and verify fresh frames before any
+  further flash. No UART needed; physical touch still absent.
 
-- **🎉 MILESTONE: iOS GUI ON THE PHONE - Setup.app "Hello" screen (2026-10-17 ~21:30 UTC, boot 0057u on image v12).** Photo: `/run/media/dipa/android/ios-sweet-work/MILESTONE-setup-hello-2026-10-17.jpg` (animated "dobar d(an)" hello lettering, status bar "iPod" + battery icon, bottom "Pritisnite Home za otvaranje" = "Press Home to open" (locale hr), (i) button). Rendered by iOS 16.7 SpringBoard/Setup through CoreAnimation -> backboardd -> kernel IOSurface (IOCoreSurfaceRoot) -> kernel AppleCLCD swaps -> ABL panel memory. What made it: data migration finally skipped (v12: `LastSystemVersion` 20H392 in the plain `/var/mobile/Library/Preferences/com.apple.migration.plist`; ADT `/chosen/unique-chip-id` + `chip-id` for IOPlatformUUID), 0057 (no ext resolver -> ACL containers work), plus everything before (0046 display/IOSurface, 0050 Sandbox policy, display-scale 3, containers dirs, RENAME_SWAP, AKS 35/101, 10 Hz present).
-  **Missing (next work, in rough order):**
-  - **Input: no touch, no power button, no volume buttons** (no HID drivers; backboardd looks for IOHIDDevice / HIDServiceSupport services). Setup is stuck on "Hello".
-  - **Device identity: it thinks it is an iPod with a Home button** (status bar "iPod", "Press Home to open"): MobileGestalt has no product/model identity (no /product node, product-type, etc.) - give it iPhone10,3 / home-button-less (Face ID class) identity.
-  - **No battery detection** (no battery/charger/PMIC service; status bar battery shows empty/red).
-  - Locale came up Croatian (hr) - harmless.
-  - Performance: cpus=1, polled UFS (Codex UFS patch in progress: `codex/ufs/`), backboardd presents at 60 Hz.
-- **README refreshed (2026-10-17):** read the full notes and updated the public overview through patch 0045, v7 hardware observations and prepared v8 diagnostics. Documents real Apple userspace, the missing display/IOSurface GUI work, limited security services, highmem, persistent userdata root, current tooling and build examples. Documentation only; no kernel build, tests, flashing or phone boot performed.
+## Active100: System installed; first automatic boot verification pending (2026-11-04 Minsk)
 
-- **v11 still migrated (boot 0056u, 20:32 UTC, `logs/boot-0056u-v11.txt`).** On iOS kCFPreferencesCurrentHost lands in the plain plist: all DMEnvironment setters (setLastBuildVersionPref, setUserDataDispositionPref, ...) use CurrentHost and the phone's `/var/mobile/Library/Preferences/com.apple.migration.plist` holds DMUserDataDisposition; datamigrator's XPC service runs with `_RoleAccount: mobile`. **Image v12** = v11 + `LastSystemVersion` = 20H392 added to that plain `com.apple.migration.plist` (keeps DMUserDataDisposition, 501:501 0600) + `/Library/Audio/Plug-Ins/HAL/VirtualAudio.plugin` moved to `/Library/Audio/Plug-Ins/HAL.disabled/` (Codex: stops the mediaserverd SIGSEGV loop; untested). **installcoordinationd loop explained (Codex `codex/installcoordinationd-report.md`):** os_crash "Failed to create data directory" EACCES for `/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.installcoordinationd/Library/InstallCoordination`: `Library`/`Library/Caches` in the container are ACL-only (uid/gid 0xfffffffe, mode 0000, ACE for group GUID ...012B = gid 299 systemusers); with `config_ext_resolver` the kernel asks an identity resolver (memberd/opendirectoryd) that iOS does not run -> EWOULDBLOCK -> ACE skipped -> EACCES. **Patch 0057**: drop config_ext_resolver from FILESYS_BASE (compatibility UID/GID<->GUID mapping is used instead), likely fixes other ACL-protected containers too. Codex task 3: UFS driver performance design (`codex/ufs-performance.md`).
-- **mediaserverd SIGSEGV loop explained (Codex report `/run/media/dipa/android/ios-sweet-work/codex/mediaserverd-report.md`):** the fault (FAR 0x390) is in the HAL plug-in `/Library/Audio/Plug-Ins/HAL/VirtualAudio.plugin/VirtualAudio` (ApplyBeamFormerPreference <- VirtualAudio_PlugIn::SetPropertyData <- HALS_AHPPlugIn::ObjectSetPropertyData <- AudioObjectSetPropertyData <- MediaExperience vaemVADSerializationListener): the default virtual audio device ('vdef', VirtualAudioDevice_Default) does not exist (no audio hardware/driver, no /product/audio). Proposed workaround for GUI bring-up: move VirtualAudio.plugin out of /Library/Audio/Plug-Ins/HAL/ in the next root image (untested). v11 reflashed OK after an interrupted flash (USB unplugged at chunk 25/25). Codex task 2: installcoordinationd crash loop.
-- **ROOT CAUSE of the endless migration: no IOPlatformUUID (2026-10-17).** datamigrator's `-[DMMigrator isMigrationNeededWithBuildVersion:lastBuildVersion:clientPID:]` gets lastBuildVersion from `-[DMEnvironment lastBuildVersionPref]` = `CFPreferencesCopyValue("LastSystemVersion", "com.apple.migration", kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)` -> a ByHost file. The phone had `/var/mobile/Library/Preferences/com.apple.migration.plist` (only DMUserDataDisposition) and NO `Preferences/ByHost` directory at all. On arm XNU publishes IOPlatformUUID (gethostuuid) only from `/chosen/unique-chip-id` (8 bytes) + `/chosen/chip-id` (4 bytes) (IOPlatformExpertDevice::generatePlatformUUID, called from IOPlatformExpert::start); the SWEET ADT had neither, so every CurrentHost preference write failed. Fix: mkadt adds `unique-chip-id` = 0x5357454554000001 (synthetic) and `chip-id` = 0x8015 -> UUID `A9683613-3704-53F2-95D0-98A8FB574E78` (same SHA1 namespace computation as the kernel). ADT `shim/out/sweet-0057hi.adt`, boot image `shim/out/shim-boot-0056u.img` (0056 kernel + 0057hi ADT, QEMU OK). **Image v11** = v10 + `Preferences/ByHost/com.apple.migration.<UUID upper and lower>.plist` {LastSystemVersion: 20H392} (501:501, dir 0755 files 0600). Flashing v11 2026-10-17 ~20:10 UTC. Codex (gpt-6.1-sol high) analysing the mediaserverd SIGSEGV loop in `/run/media/dipa/android/ios-sweet-work/codex/` (report `mediaserverd-report.md`).
-- **v10 did NOT stop the migration (boot 0056n on v10, 19:18 UTC, `logs/boot-0056n-v10.txt`):** datamigrator + migrationpluginwrapper ran again, backboardd drew the progress UI (13000+ swaps in ~5 min). So `com.apple.DataMigration.plist`/LastSystemVersion is not the deciding input. What is known about the decision (datamigrator XPC service `DataMigration.framework/XPCServices/com.apple.datamigrator.xpc/com.apple.datamigrator`, strings): `Migration sentinel present. Migration necessary.` (sentinel `/private/var/datamigrator/migrate`, created and removed by datamigrator itself; absent in v10), `System build version changed from %@ to %@. Migration necessary.` / `...unchanged... not necessary`, `Disposition dictionary with build version %@ is out of date relative to current build version %@`, `SyntheticDidUpgrade`, DMUserDataDispositionManager; previous build source not found yet (not in the binary's plain strings; likely in DataMigration.framework's DMUserDataDispositionManager / preferences domain `com.apple.migration`). backboardd calls `DMPerformMigrationIfNeeded` and holds SpringBoard in `checkInAndWaitForDataMigration` until it returns. NEXT: find where the previous build version / disposition dictionary is stored (disassemble DataMigration.framework DMUserDataDispositionManager + datamigrator's isMigrationNeeded path), write it into the image; or get datamigrator's os_log out (OS_ACTIVITY_DT_MODE needs a launchd env change).
-- **Data migration never records completion -> skip it (image v10, 2026-10-17).** Boot 0056n (18:16 UTC, `logs/boot-0056n.txt`, 30 min): 10 Hz panel copies, backboardd still presents at ~60 Hz (107k swaps), SpringBoard still in `BKSSystemShellService _checkIn` at sample 14. Every migration run takes 1+ hour on cpus=1 and repeats each boot. DataMigration decides from `/var/mobile/Library/Preferences/com.apple.DataMigration.plist` key `LastSystemVersion` (vs ProductBuildVersion 20H392); the pulled phone root (21:01 local) had NO such file. **v10** = that pulled phone state + fsck.hfsplus -fy (volume was marked not cleanly unmounted -> Linux mounts it read-only even with -o force; fsck found only hard-link counts + minor volume header, repaired) + `com.apple.DataMigration.plist` {LastSystemVersion: 20H392} (501:501 0600). `/run/media/dipa/android/ios-sweet-ipsw/ios16-root-20H392-v10.img` (+ .sha256, .simg); v8 files deleted, v9 kept as fallback.
-- **Repo made PUBLIC (2026-10-17, user request) so GitHub-hosted macOS runners are free:** the 0056 CI run was refused ("recent account payments have failed or your spending limit needs to be increased"). Checked before: no device dumps, serials, IMEI or Apple binaries in the history (.gitignore keeps backup/, dtb/, recovery/, research/ out); commit author emails are public now. 0056 rerun `39056660104` passed -> `xnu/out-0056`, QEMU OK, image `shim/out/shim-boot-0056n.img` booted 18:16 UTC.
-- **Boot 0055n (17:16 UTC, ~65 min, `logs/boot-0055n.txt`): migration bar reached 99% in ~30 min (was ~60), then crawled.** Root cause of the slowness: backboardd presents the progress UI at ~58 Hz (**167,000 swaps in ~48 min**) and AppleCLCD copied the full 10 MB frame into the panel on every swap -> ~600 MB/s memcpy on the single CPU (cpus=1), starving everything (polled UFS I/O too). Sampler (16 frames): **SpringBoard waits in `-[BKSSystemShellService _checkIn]`** (synchronous BSXPC call to backboardd, from FBSystemShellInitialize <- SBSystemAppMain) - backboardd holds the system shell check-in until the data migration ends, so the migration is the gate to SpringBoard UI. **Patch 0056**: swap only records the latest swap record; the vsync timer copies it to the panel every 60/sweetfb_hz ticks (default 10 Hz); `SWEET FB: N swaps` every 1000.
-- **Boot 0054n (16:53 UTC, ~12 min, `logs/boot-0054n.txt`, patch 0054 sampler):** the data migration runs AGAIN on every boot (it completed once in the 0053s run) - completion is not being recorded. backboardd keeps swapping the progress UI (3700+ swaps in ~10 min, `SWEET FB: N swaps`). Sample during migration: SpringBoard main thread blocked in a synchronous XPC call (`mach_msg2_trap <- dispatch_mach_send_and_wait_for_reply <- xpc_connection_send_message_with_reply_sync <- -[BSXPCServiceConnectionMessage _sendSynchronously:] <- BSXPCServiceConnectionProxy ...`). Unsupported AKS selectors seen: 101 `aks_assert_consume`, 93 `aks_get_internal_info`, 34 `_aks_stash_load` (datamigrator), **35 `aks_get_extended_device_state`** (SpringBoard, chronod, remindd, searchd, symptomsd...). **Patch 0055**: AKS 35 answered like 17 (same DER device state), 101 succeeds; sampler backtraces 16 frames, 40 samples (~80 min).
-- **MILESTONE: FIRST iOS PIXELS ON THE PANEL (boot 0053s long run, 15:33 UTC, ~60 min; photos IMG_20261017_183029/183222/183419; log `/run/media/dipa/android/ios-sweet-work/logs/boot-0053s-long.txt`, 407 KB, 1428 flushes).** The iOS data-migration boot screen (Apple logo + progress bar) was shown and the bar advanced to full in ~60 minutes. It is drawn by **backboardd through our kernel display path**: `SWEET SURF: backboardd create id 2/3 1080x2400 fmt 0x42475241 (BGRA) bpe 4 bpr 4352 size 10452992 keys 11`, IOSurface sels 9, 27, 5, 34 and traps 2/3 (lock/unlock), IOMFB SwapBegin (4) / SwapEnd (5, 1132-byte struct) / GetLayerDefaultSurface (3) / 68 / 55, then `SWEET FB: swap N layer 0 surface 2|3 1080x2400 ... a 0,0 1080x2400 b 0,0 1080x2400` alternating (double buffering; only the first 16 swaps are logged). Triggered by `com.apple.datamigrator` (AKS sels 101/93/34 return unsupported) and `com.apple.migrationpluginwrapper`. Probably ProgressUI-style CoreGraphics drawing into IOSurfaces (no GPU used). After the migration: SpringBoard and backboardd stay up (exec once each, no crash), nothing new drawn; crash loops only for mediaserverd, installcoordinationd, mobileactivationd (~108 each in the hour); bluetoothd and fairplayd.H2 relaunch constantly (no hardware). Kernel console text overlays the image (sweetfb_noconsole=1 would hide it).
-- **MILESTONE: SpringBoard and backboardd both stay up (boot 0053s on v9, 15:29 UTC, `logs/boot-0053s.txt`).** With /chosen/display-scale = 3: `exec SpringBoard` once, `exec backboardd` once, no CRASH for either; MobileGestaltHelper reads IOMFB size/dot pitch; backboardd opens AppleCLCD (sels 57,15,22,29,33,79,74 as before). No IOSurface creates and no swaps: backboardd keeps polling `IOProviderClass IOAcceleratorES` (-> 0 found) and AGXAccelerator/IOAcceleratorESLegacy - no GPU, so no CoreAnimation renderer yet. Log goes quiet after ~47 s (only 47 flushes): the system idles. NEXT WALL: CoreAnimation rendering without a GPU (CPU path) so the window server produces frames.
-- **SpringBoard's invalid mode = scale 0 (boot 0053n, 15:19 UTC, `logs/boot-0053n.txt`, heap scan):** `FBSDisplayMode cannot be configured as requested : <FBSDisplayMode: ...; infxinf@0x (1080x2400/0) 60Hz sRGB SDR>` - pixel size and 60 Hz are fine, scale is 0. libMobileGestalt (MGIOMFBSupport.c, sub_19c560a54) reads `display-scale` (u32, default 0) and `display-rotation` from **IODeviceTree:/chosen**, pixel size via IOMobileFramebufferGetDisplaySize (MobileGestaltHelper sel 8/28 in the log). mkadt now adds `/chosen/display-scale` = 3 (1080x2400 @3x = 360x800 pt). ADT `shim/out/sweet-0054hi.adt` (QEMU `research/q0054-hi.adt`), image `shim/out/shim-boot-0053s.img` = 0053 kernel + 0054hi ADT. Possible catch: MobileGestalt may have cached scale 0 in `/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/...`.
-- **MILESTONE: backboardd survives and opens the display (boot 0052n on v9, 15:07 UTC, `logs/boot-0052n.txt`).** No `CRASH backboardd`. It walks `IODeviceTree:/arm-io` children, matches IOMobileFramebuffer, `open AppleCLCD type 0 -> 0x0`, calls IOMFB selectors 57, 15, 22, 29, 33, 79 (GetBlock, out 1580/40), 74 (SupportedFrameInfo), 12, 6, 27, 17, 84, 50; opens IOCoreSurfaceRoot (sel 13); looks for AGXAccelerator / IOAcceleratorES / IOAcceleratorESLegacy (none, repeatedly), `IODeviceTree:/product` (none, repeatedly), `/buttons`, aop-smart-cover, IOPMrootDomain. No swaps yet. **SpringBoard now gets past display discovery** and dies (sig 5) in `-[FBSDisplayMode _initWithWidth:height:preferredScale:scaleOverride:refreshRate:gamut:hdr:rotation:virtual:validityCheck:]+580` <- `_initWithCADisplayMode:scale:rotation:` <- `FBSDisplayConfiguration _initWithImmutableDisplay:` <- `FBSDisplaySource initWithDisplay:` <- `FBSDisplayMonitor` (slide 0x14504000): "FBSDisplayMode cannot be configured as requested". Checks: width/height >= 2, preferredScale > 0, scaleOverride >= 0, refreshRate non-zero, valid gamut/HDR/rotation. Suspects: refresh rate 0 (IOMFB timing blocks answered with zeros) and/or scale 0 (MobileGestalt main-screen-scale; no /product node in the ADT). **Patch 0053**: heap text scan also on SIGTRAP and for SpringBoard (default sweetscan list backboardd,SpringBoard) to read the exact mode description.
-- **Image v9 (2026-10-17) = v8 + `/private/var/containers/{Bundle,Data/System,Shared/SystemGroup,Temp}` (root:wheel 0755; on iOS these live on the data volume, absent from the rootfs) + launchd.plist with StandardOutPath/StandardErrorPath renamed to ...PatX (the in-place phone fix; daemons' stdout reaches the log via the 0048 /dev/null tee).** `/run/media/dipa/android/ios-sweet-ipsw/ios16-root-20H392-v9.img` SHA256 aa9f9139...6e67, `.simg` 12,145,303,864 bytes; written through `sudo mount -t hfsplus -o loop,force`. **Patch 0052** (`xnu/patches/0052-sweet-hfs-rename-swap.patch`, CI `39042761826` -> `xnu/out-0052`, QEMU OK, image `shim/out/shim-boot-0052n.img`): vn_rename falls back to VNOP_EXCHANGE when VNOP_RENAMEX(RENAME_SWAP) returns ENOTSUP for two regular files on one volume (HFS exchange swaps data and cnode descriptors = swap semantics). Flashing v9 started 2026-10-17 ~15:00 UTC.
-- **backboardd EXCEPTION FOUND (boot 0051n, 14:41 UTC, `logs/boot-0051n.txt`, patch 0051 heap scan):** `*** Terminating app due to uncaught exception 'NSInvalidArgumentException', reason: '*** -[NSURL initFileURLWithPath:]: nil string parameter'`. First-throw stack (slide 0x337f0000): `+[NSURL fileURLWithPath:]` <- `-[BSSystemContainerForCurrentProcessPathProvider libraryPath]` <- `cachesPath` <- backboardd main+0x1d858 (StartWindowServer, shader cache path). BaseBoard: libraryPath = `BSSystemSharedResourcesDirectoryForIdentifier` = `BSSystemSharedDirectoryForIdentifier(id)` + "/Library"; that calls `container_system_path_for_identifier` (libsystem_containermanager -> `_container_legacy_lookup` -> containermanagerd XPC), which returned NULL (BaseBoard logs "Error getting shared system container ..."). With 0050 the sandbox denials are gone. containermanagerd.log.0 in the pulled (pre-0050) image: "Did not receive any persona attributes", "Expected to find at least one persona", notify_register_dispatch failed 9; `/private/var/containers` does NOT exist in the root image (on iOS it lives on the data volume). usermanagerd does create kernel personas 99/199/1000, but fails to save `/private/var/keybags/usersession.kb` and `persona.kb`: "Failed to atomically swap writing file: Operation not supported (45)" (HFS has no RENAME_SWAP). NEXT: create `/private/var/containers` (and check what containermanagerd needs for system group containers), fix or emulate RENAME_SWAP on HFS, then re-check backboardd.
-- **Disk housekeeping (2026-10-17):** /home was at 4 GiB free. Moved (not deleted) `xnu/out-0010..0044` and old `shim/out/*.img`/`payload-*.bin` (everything before 0046) to `/run/media/dipa/android/ios-sweet-work/archive/{xnu,shim-out}` (6.3 GiB); /home now 8.7 GiB free. Large work files (phone-root.img 16 GiB, logs, tracev3 dumps) live in `/run/media/dipa/android/ios-sweet-work/`. **Patch 0051** (`xnu/patches/0051-sweet-crash-heap-strings.patch`, CI `39041440935`): on SIGABRT of a process in boot-arg `sweetscan` (default backboardd) the crash log prints heap text runs as `STR ...` (to find the NSException reason). Boot 0051n 14:41 UTC.
-- **Boot 0049n (14:11 UTC, `logs/boot-0049n.txt`, patch 0049 trace): backboardd's IOKit lookups before it dies** (each run): `IODeviceTree:/arm-io/pearl-sep` -> none, matching ApplePearlSEPDriver -> none, `IOService:/IOResources/AppleKeyStore` open OK, matching IOHIDDevice (DeviceUsagePairs) / `HIDServiceSupport` notifications, `usb-drd,t8027` notification; **never any IOMobileFramebuffer / display lookup** - the exception happens before display detection. launchd (tracev3) shows backboardd's mach lookups denied with `error = 159: Sandbox restriction`: com.apple.mobilegestalt.xpc, com.apple.iohideventsystem, com.apple.system.notification_center, com.apple.logd, containermanagerd, ACCHWComponentAuthService, oscard. libsystem_sandbox uses `__mac_syscall("Sandbox", op, arg)` (ops: 1 init, 2 check, 3 note, 4 container path, 5/6/7/8 extensions, 0x15 check_bulk, ...); with no policy named "Sandbox" every call gets ENOPOLICY. **Patch 0050** (`xnu/patches/0050-sweet-sandbox-policy.patch`): built-in permissive MAC policy "Sandbox" in sweet_amfi.c (mpo_policy_syscall returns 0, container/extension ops ENOENT; logs first use of each op as `SWEET Sandbox: proc op N`).
-- **Phone root pulled (16 GiB, 12 min, `adb exec-out dd if=/dev/block/sda34`) to `/run/media/dipa/android/ios-sweet-work/phone-root.img` (loop-mounted ro at /run/media/dipa/iOSRoot).** No .ips crash reports. logd tracev3 (Persist, LZ4 `bv41` blocks, decompressed strings in `ios-sweet-work/tracev3/all.txt`): /private/var/db/uuidtext is EMPTY so only launchd's own messages are readable. Findings: v8 launch failure = `Service could not initialize: posix_spawn(/usr/libexec/backboardd), error 0xd - Permission denied` (xpcproxy exit 78) - /dev/console not openable for the mobile user; backboardd[98] spawned `com.apple.MTLCompilerService` before SIGABRT; **launchd denies many mach lookups with `error = 159: Sandbox restriction`** (mediaserverd -> com.apple.backboard.display.services, remoted, mobiletimerd -> sleepd, identityservicesd -> apsd) and **tccd exits OS_REASON_SANDBOX "profile not found"** - no Sandbox kext/profiles on SWEET; likely cause of many daemon crash loops (next wall after the display). CF's uncaught-exception text never reaches stderr for daemons (no CF handler; libc++abi prints only the type). **Patch 0049** (`xnu/patches/0049-sweet-iokit-trace.patch`): `IOK name: ...` console lines for registry path lookups, child iterators, matching (with result count/class), matching notifications and IOServiceOpen of the processes in boot-arg `sweetiolog` (default backboardd), max 400 lines.
-- **CONFIRMED: launchd StandardOut/ErrorPath=/dev/console stops backboardd from launching.** After the in-place rename (boot 0047n-b, log `logs/boot-0047n-b.txt`) backboardd launches again and dies as on v7: sig 6, `___pthread_kill <- abort <- demangling_terminate_handler <- _objc_terminate <- std::terminate <- _dispatch_client_callout <- _dispatch_once_callout <- main+0x9334` (window-server dispatch_once). It never opened AppleCLCD or IOCoreSurfaceRoot (no `SWEET FB/SURF: backboardd` lines) -> throws before/at display detection. **Patch 0048** (`xnu/patches/0048-sweet-devnull-tee.patch`, CI `39037749668` -> `xnu/out-0048`, image `shim/out/shim-boot-0048n.img`): writes to /dev/null by processes named in boot-arg `sweetnull` (default `backboardd,SpringBoard`) are printed as `|name| text`. Boot 0048n (13:48 UTC, log `logs/boot-0048n.txt`): only `|backboardd| libc++abi: terminating due to uncaught exception of type NSException` (CF's reason line goes to os_log, not stderr, despite CFLOG_FORCE_STDERR/OS_ACTIVITY_DT_MODE). Next: pull the whole 16 GiB root from recovery (`adb exec-out dd if=/dev/block/sda34`) to `/run/media/dipa/android/ios-sweet-work/phone-root.img` and read ReportCrash .ips files / logd tracev3 for the exception reason.
-- **Persistent log WORKS (boot 0047n on v8, 13:31 UTC; pulled from OrangeFox: 70 KB, 111 flushes, `/run/media/dipa/android/ios-sweet-work/logs/boot-0047n.txt`).** In 3 min **backboardd was never exec'd** (v7 ran it), ~70 bare `exec xpcproxy`, SpringBoard loops on FBSDisplayMonitor (no display), mediaserverd sig 11 loop, locationd, lockdownd sig 5. Suspect the v8 plist (StandardOut/ErrorPath=/dev/console on backboardd). **In-place plist edit from recovery (no reflash):** launchd.plist is one extent at image/partition byte offset 0x1e025f000 (195 blocks; verified bytes identical on phone vs local v8 mount); renamed StandardOutPath->StandardOutPatX and StandardErrorPath->StandardErrorPatX (same length, both jobs) in blocks 68 and 105 via `adb push` + `dd of=/dev/block/sda34 seek=... conv=notrunc,fsync`, read back VERIFIED. Phone now differs from local v8 image in those 2 blocks (files in `/run/media/dipa/android/ios-sweet-work/`). Test boot 0047n 13:38:42 UTC. Recovery kernel has no hfsplus (raw block edits only).
-- **Patch 0047: persistent console log (CI `39036478663` -> `xnu/out-0047`, QEMU no panic; phone image `shim/out/shim-boot-0047n.img` = 0047 + sweet-0046hi.adt + 0045n cmdline).** `_cnputs` (all console output: kernel printf + daemons' /dev/console) also appends to a 4 MiB ring in sweet_ufs.c; after the UFS partition is ready and writable (ufsrw=1) a thread writes new ring blocks + header to the LAST 1025 blocks (4 KiB) of userdata every ~1 s and SYNCHRONIZE CACHE (prints `SWEET LOG: console log to the last 4100 KiB ...`). Read: phone to fastboot -> `fastboot boot recovery/recovery.img` (OrangeFox) -> `tools/sweet-log-pull.sh OUT.txt` (adb dd of that area + `tools/sweet-log.py`). Not yet verified on the phone. Panics after the last flush are not in it (screen still shows them). 2x font attempt reverted: XNU's v_scale only scales the progress icon.
-- **Boot 0046n on v8 (13:05 UTC, VID_20261017_150522_HSR_120):** phone prints `SWEET SURF: IOCoreSurfaceRoot registered` and `SWEET FB: AppleCLCD 1080x2400 stride 4320 at 0x9c000000, default surface 1` (nubs + match work on hardware). Visible userspace: early boot tasks, launchd_cache_loader, `exec SpringBoard`; no `exec backboardd` / `SWEET FB: backboardd` line seen in the readable frames (video blurry). Frame 00:47: lower half of the screen shows OLDER console text (16:01:12) below newer lines -> unconfirmed hint that a swap copied an old snapshot of the panel (CA reads the default/displayed surface = panel memory). SpringBoard still dies in `-[FBSDisplayMonitor _initWithBookendObserver:transformer:]+1160` (sig 5, slide 0x30960000). **Shim: 2x console font** (`shim/loader.c` Video.v_depth scale field = 1) so phone videos are readable; image `shim/out/shim-boot-0046b.img` = 0046n + 2x font.
-- **Patch 0046: built-in IOSurface + IOMobileFramebuffer (2026-10-17, offline, NOT phone-tested).** `xnu/patches/0046-sweet-iosurface-iomfb.patch`: new `iokit/Kernel/arm/SweetSurface.{h,cpp}` (IOCoreSurfaceRoot + IOSurfaceRootUserClient: sel 13/0/4/34/35, traps 0-5, wired buffers mapped into the caller, per-client refs) and `SweetFramebuffer.cpp` (AppleCLCD : IOMobileFramebuffer on /arm-io/disp0: sizes, swap = CPU copy of enabled layers into the ABL panel memory, 60 Hz vsync via sendAsyncResult64WithOptions(CanDrop), panel memory published as the default IOSurface, kernel text console paused on the first swap only with `sweetfb_noconsole=1` (default keeps the console: pausing switches it to serial and would hide panics)); SweetPlatformExpert creates nubs for /arm-io children (not gic) attached to the platform expert (IOPlatformDevice::compareName casts its provider to IOPlatformExpert, so nubs under the arm-io nub never matched - first CI build showed that in QEMU). mkadt: /arm-io/disp0 {device_type display-subsystem, compatible sweet,display, canvas-width 1080, canvas-height 2400}. CI `39021572169` -> `xnu/out-0046`. **QEMU** (`research/q0046-hi.adt`, RAM disk init, msgbuf): `SWEET SURF: IOCoreSurfaceRoot registered`, `SWEET FB: AppleCLCD 1080x2400 stride 4320 at 0x9c000000, default surface 1`, init alive, no panic. Phone image **`shim/out/shim-boot-0046n.img`** (SHA256 9c4d2fe9..., CI `39024108588` with the review fixes: swap bounds check, zeroed 64-bit async ref, port release, 1.5 GiB wired budget, ref leak/race fixes; QEMU re-checked) = 0046 kernel + `shim/out/sweet-0046hi.adt` + the 0045n cmdline; boot it on image v8 (backboardd/SpringBoard log to console) and film. Expected new console lines: `SWEET SURF: <proc> create id ...`, `SWEET FB: backboardd sel N ...`, `SWEET FB: swap ...`. Open question for the next wall: QuartzCore's IOMFB server builds its renderer from Metal first (`CAMetalContextCreate`), GLES only when enabled; how the CPU renderer gets selected on a device without a GPU is not yet established.
-- **IOSurface values ABI (offline RE, `/run/media/dipa/android/ios-sweet-work/iosurface-values.md`) - TODO in SweetSurface (0046 only accepts and drops values, so IOSurfaceCopyValue always returns NULL):** sel 9 SetValue in = {u32 id, u32 pad, IOCFSerialize([value, key]) or ([dict] = merge)}, sel 0xb RemoveValue in = {u32 id, u32 pad, key\0} (empty key = remove all); both out 4 bytes = new generation, client accepts only (gen+2)|1. Kernel after each change: gen = (gen+2)|1 (odd, never 0) -> state+0x20, serialized size (>=1) -> state+0x28. sel 0xa in {u32 id, u32 0, u8 0}, out {u32 ?, u32 gen, serialized non-bulk dict}; too small -> 0xe00002db + needed size (client retries x16). sel 0x1b in 0x88: bulk struct 0x70 @0, u64 valid size @0x70, u64 changed mask @0x78, u32 id @0x80 -> copy masked fields into state+0x30 (bit0 32B @0, bit1 16B @0x20, bit2 8B @0x30, bits3-10 1B @0x38..0x3f, bits11-14 24B @0x40/4B @0x58/8B @0x5c/1B @0x64).
-- **IOMFB display matching confirmed (offline RE, `/run/media/dipa/android/ios-sweet-work/iomfb-match.md`):** the framework never matches on "AppleCLCD"; any registered IOMobileFramebuffer subclass works. `iomfb_match_callback` reads only `dfr`/`AppleTV`/`external` (CFBoolean, service itself, no parents); internal main display = all absent/false (type 0, name "primary"). Display count = /arm-io children whose device_type starts with "display-subsystem" (count 0 -> CreateDisplayList returns NULL; more nodes than services -> 30 s wait). IOMobileFramebufferOpen fails only on IOServiceOpen failure; canvas-width/height read as 4-byte CFData from the IOService-plane parent (optional). CopyProperty = IORegistryEntrySearchCFProperty on the service only. Patch 0046 (disp0 node, `external`=false, AppleCLCD : IOMobileFramebuffer) fits all of this.
-- **IOMobileFramebuffer swap + notification ABI (2026-10-17, offline).** Swap record = fb+0x18, **0x46c bytes**, zeroed by SwapBegin and sent whole by `kern_SwapEnd` = IOConnectCallStructMethod(sel 5, rec, 0x46c, no output). **SwapBegin** = sel 4, no input, 1 scalar out = swap id (stored at rec+0x50). `kern_SwapSetLayer(fb, layer<4, IOSurfaceRef, CGRect a, CGRect b, flags)`: rec+0x54+4*layer = **IOSurface id**; rec+0x104 bit layer = layer enabled (rec+0x108 bit cleared); rect a (int x,y,w,h, scaled) at rec+0x64+16*layer, rect b at rec+0xc4+16*layer; rec+0x114+4*layer = transform from flags&0xf; flag bits 5/31/6/7/8/9 set bytes rec+0x2ca/0x2cc/0x2e3/0x2e5/0x2e6/0x467+layer. A NULL surface only sets the enable bit with zero id. SwapWait = sel 6 scalars [swap id, timeout, 0].
-  - **Notifications**: `IOMobileFramebufferScheduleWithDispatchQueue`/`GetRunLoopSource` create an IONotificationPort and `IOConnectSetNotificationPort(conn, type, port, 0)` (kernel `registerNotificationPort`). `kern_EnableNotifications(fb, type, cb, ctx)` = **sel 72 scalars [NotifyCallbackFuncs[type], fb, type, 0]** -> the kernel keeps an async reference {port, func, refcon=fb} per type and fires it with `sendAsyncResult64`. Types: 0 HotPlug, 1 Power, 3 FrameInfo (args[0] = mask of 31-bit keys, args[1] u32, then values), 4 CRC, **5 Vsync**: 6 args, each a 32-bit half in a u64 slot: (ts lo, ts hi), (t2 lo, hi) passed through the time-ingest helper, (t3 lo, hi); the framework then calls the client's vsync callback(fb, ts, t2', t3, ctx). Vsync callbacks are dropped while the notification port has queued messages.
+- After a Hackintosh crash user returned the phone in Fastboot. Revalidated exact
+  System100/raw/sparse reconstruction, System95 rollback, boot99, private device
+  identity/product/unlocked/System geometry and matched finite display pilot.
+  ALL81 System transfers/writes and reboot are confirmed OKAY; only System was
+  written, boot99 retained. PRIVATE audit/display100-flash.json is authoritative;
+  never repeat the flasher or overwrite this record without reviewing it.
+- Installed System image5386194944B SHA622ca50416c4d296f846cd7d4e754ca2f1d87a8bfe122010fb588ef6eb40e5c8.
+  Added mobile launchd whyred-display live job uses the exact tested27b343c3
+  signed binary. Automatic startup, whole UI and long-run stability still PENDING.
+- Fresh bounded UDP receiver2635 writes audit/graphics100-usb-session.log;
+  audit/current-whyred-usb.log now selects that file. Prior97d log retained.
+  Mac exact en1 address192.168.7.1 restored from persistent configuration.
+  No UART. Boot reached launchd/fsck/mount/data-protection; no storage errors yet.
+- Sole observer5105, exec24895, PRIVATE audit/graphics100-device-20261104T144954Z:
+  waiting-for-ssh; allows30s handshake/30min boot, will create a NEW held shell,
+  require exact99 UUID and installed display readback, then read automatic log.
+  Do NOT reuse old held97326 or start another observer/manual display loop.
+  First automatic job log: /private/var/mobile/Library/Logs/whyred-display.log.
+- Before crash, same live27b binary passed3 finite40s rounds38/39/39 frames,
+  0errors, wired15966/16001/16042 pages. Final scene-window39frames/40.16s,
+  0errors/2changes; USER explicitly confirmed RED SQUARE. Marker signed CI
+  41824794100/job126556665184 passed; temporary marker binarya1279cc5 is separate
+  and is NOT installed as the permanent display job. Private99 acceptance/window
+  and memory receipts retained. Short pilot is not long-run memory/UI signoff.
+- NEXT: wait for this observer, inspect automatic frame progression/process UID,
+  memory/storage and panel state. No manual renderer invocation before checking
+  autostart. Kernel0177 touch candidate remains unflashed; real I2C input absent.
 
-- **IOSurface.framework user-client ABI reversed (2026-10-17, offline, step 2 of the GUI plan).** `ipsw dyld disass research/dsc/dyld_shared_cache_arm64 --image IOSurface` (selector scan script: scratchpad `selscan.py`).
-  - Connect (`_iosConnectInitalize`, pthread_once): `IOServiceGetMatchingService(IOServiceNameMatching("IOCoreSurfaceRoot"))`, retried with sleep(1) up to 241 times (a missing service stalls every client ~4 min, no crash); `IOServiceOpen(type 0)`; then **sel 13** (no inputs, struct out 0x18 bytes = `_ioSurfaceLimits`) and requires u16 at out+0x16 == 1 (ABI version); out+0 = offset/plane-base alignment mask, out+4 = bytes-per-row alignment mask (used as (x+m)&~m), +0..+0x14 also copied into IOSurface remote-method init, otherwise logs and closes the connection.
-  - **Create = sel 0**: scalar in [parent id or 0], struct in = `IOCFSerialize(props, kIOCFSerializeToBinary)` (OSUnserializeBinary format; keys IOSurfaceWidth/Height/BytesPerRow/BytesPerElement/PixelFormat/AllocSize/PlaneInfo/CacheMode/IsGlobal/...), struct out **0xa68 bytes** ("lock result"). **Lookup = sel 4**: scalar in [id], same struct out. LookupFromMachPort = sel 0x22 (scalar in [port name]); CreateMachPort = sel 0x23 (scalar in [id, options], scalar out [port name]).
-  - Lock result (copied to client+0x68, size 0x68 + planes*0x80, min 0xe8): 0x00 u64 base address **mapped in the caller's task**; 0x08 u64 task VA of a per-surface shared state page (+0 u64 registry id, +8/+0xa u16 bound accel ids, +0xc u32 seed, +0x14 u8 tiled, +0x20 u32 value generation, +0x24 YCbCr matrix, +0x28 u32 non-bulk values size, +0x2d u8 displayable, +0x2e u8 sysmem-only, +0x30 0x70 bytes bulk attachments); 0x10 u64 task VA of timestamp page (4 u64 indexed timestamps, +0x20 detach code); 0x18 u32 surface id; 0x1c u32 alloc size; 0x20 width; 0x24 height; 0x28 bytes per row; 0x2c buffer offset; 0x30 pixel format; 0x34 u32 (dcache flush length); 0x38 plane count; 0x40 u16 bytes/element; 0x42 u8 element width; 0x43 u8 element height; 0x44 cache mode; 0x4c u8 subsampling; 0x4d u8 prohibit-use count; 0x50 parent id; 0x54 slice count; 0x58 u64 trace id; 0x60 u64 protection options; planes[n] at 0x68+n*0x80 (+0 width, +4 height, +8 bytes/row, +0xc offset, +0x14 size, +0x18 u16 bpe, +0x1a/+0x1b u8 element w/h, +0x1c u8 component count, +0x1d address format, +0x54 u8 compression type (non-zero -> no CPU base address)).
-  - **Traps** (IOConnectTrapN -> `IOUserClient::getTargetAndTrapForIndex`): 0 IncrementUseCount(id, category), 1 DecrementUseCount(id, category), 2 **Lock**(id, options, &seed_out), 3 **Unlock**(id, options, &seed_out), 4 Release(id), 5 Release after a failed create/lookup setup (id).
-  - Other selectors: 5 SetYCbCrMatrix, 6 WrapClientImage, 7 WrapClientMemory, 9 SetValue (serialized), 0xa UpdateNonBulkValueCache (struct in 9), 0xb RemoveValue, 0xc BindAccel, 0x11 SetSurfaceNotify (async), 0x12 RemoveSurfaceNotify, 0x13 Log, 0x14 SetPurgeable, 0x15 SetOwnership, 0x16 SetTiled, 0x18 SetTimestamp, 0x19 GetTileFormat, 0x1a CopyDataValueBytes, 0x1b SetBulkAttachments (struct 0x88), 0x1e/0x2e-0x31 (via outlined helpers), 0x1f SetCompressedTileDataRegionMemoryUsed, 0x20 GetGraphicsCommPageAddress, 0x21 SetIndexedTimestamp, 0x24-0x26/0x2d IOSurfaceAccelerator, 0x27-0x29 shared events, 0x2a SignalEvent, 0x2b Set/InitDetachModeCode, 0x2c SetOwnershipIdentity, 0x32-0x34 data properties.
-  - => SWEET kernel service: class/name **IOCoreSurfaceRoot** + IOSurfaceRootUserClient; minimum = sel 13, 0, 4, 9/0xa/0xb (values), traps 0-5, 0x22/0x23 later for cross-process surfaces (CA sends surfaces to backboardd by mach port). Memory: IOBufferMemoryDescriptor per surface, mapped into each task with createMappingInTask; ids from a global table.
+## Active99: fresh-frame and changing-scene pilots PASS (2026-11-04 Minsk)
 
-- **Image v8: daemon logs on the console.** `tools/patch-launchd-plist.py IN OUT LABEL...` rewrites launchd.plist (binary, plistlib): renames every `_PanicOnCrash` to `_PanicOnCrasX` and gives the listed jobs `StandardOutPath`/`StandardErrorPath` `/dev/console` (devfs console is 0622, writable by mobile) plus `OS_ACTIVITY_DT_MODE=YES` (os_log mirrored to stderr) and `CFLOG_FORCE_STDERR=1`. v8 = v7 + that plist for com.apple.backboardd and com.apple.SpringBoard, written through the mount (796310 bytes, root:80 0644), SHA256 in `ios16-root-20H392-v8.img.sha256`, `.simg` ready; boot with `shim/out/shim-boot-0045n.img`. Goal: see backboardd's uncaught exception text and the window server's display probing. ODDITY (unresolved): the v5 raw-image rename at offset 0x1e025f000 is present in the v5-v7 image bytes, but the plist read through a Linux mount of v7 still had the original `_PanicOnCrash` keys; filefrag shows the file as one extent. Never patch file contents through raw offsets again; write through the mount.
-- **IOMobileFramebuffer.framework reversed (step 1 of the GUI plan).** `ipsw dyld disass research/dsc/dyld_shared_cache_arm64 --image IOMobileFramebuffer`.
-  - Display discovery (`IOMobileFramebufferCreateDisplayList` -> `getDisplayListNumber`): iterates children of `IODeviceTree:/arm-io`, counts nodes whose `device_type` is "display-subsystem" or "ext-display-subsystem" (or `compatible` "paravirtualizedgraphics,gpu"); then `iomfb_populate_display_infos` adds an IOServiceAddMatchingNotification(IOServiceFirstMatch, **IOServiceMatching("IOMobileFramebuffer")**) and runs the run loop up to 30 s until that many services matched. `iomfb_match_callback` reads service properties `dfr`, `AppleTV`, `external` (CFBoolean) and names displays (external ones "%s-%d").
-  - `IOMobileFramebufferOpen(service, task, type, &fb)`: `__ioMobileFramebufferAlloc` (CFPreferences com.apple.iokit.IOMobileGraphicsFamily: canvas_width/height, override_display_width/height, override_panel_width/height, benchmark, enable_ktrace), `IOServiceOpen(service, task, type)` (GetMainDisplay passes type 0), `getEDTProperty` reads `canvas-width`/`canvas-height` from the service's IODeviceTree parent, then fills a table of `kern_*` function pointers.
-  - User client selectors (`kern_*` -> IOConnectCall*): 3 _kern_GetLayerDefaultSurface[ScalarMethod_stub]; 4 _kern_SwapBegin[ScalarMethod_stub]; 5 _kern_SwapEnd[StructMethod_stub]; 6 _kern_SwapWaitWithTimeout[ScalarMethod_stub] _kern_SwapWait[ScalarMethod_stub]; 7 _kern_GetID[ScalarMethod_stub]; 8 _kern_GetDisplaySize[ScalarMethod_stub]; 10 _kern_SetTVOutMode[ScalarMethod_stub]; 11 _kern_SetWSSInfo[ScalarMethod_stub]; 12 _kern_RequestPowerChange[ScalarMethod_stub]; 13 _kern_EnableStatistics[ScalarMethod_stub]; 14 _kern_SetFlags[ScalarMethod_stub]; 15 _kern_SetDebugFlags[ScalarMethod_stub]; 16 _kern_SetTVOutSignalType[ScalarMethod_stub]; 17 _kern_SetGammaTable[StructMethod_stub]; 18 _IOMobileFramebufferIsMainDisplay[ScalarMethod_stub]; 19 _kern_SetWhiteOnBlackMode[ScalarMethod_stub]; 20 _kern_SwapSignal[ScalarMethod_stub]; 22 _kern_SetDisplayDevice[ScalarMethod_stub]; 23 _kern_SetDigitalOutMode[ScalarMethod_stub]; 24 _kern_GetHDCPDownstreamState[StructMethod_stub]; 25 _kern_GetDigitalOutState[ScalarMethod_stub]; 26 _kern_printDisplayRegs[ScalarMethod_stub]; 27 _kern_GetGammaTable[StructMethod_stub]; 28 _kern_GetDotPitch[ScalarMethod_stub]; 29 _kern_GetDisplayArea[StructMethod_stub]; 30 _kern_EnableDisableDithering[ScalarMethod_stub]; 31 _kern_SetUnderrunColor[ScalarMethod_stub]; 33 _kern_EnableDisableVideoPowerSavings[ScalarMethod_stub]; 34 _kern_SetVideoDACGain[ScalarMethod_stub]; 35 _kern_SetLine21Data[ScalarMethod_stub]; 41 _IOMobileFramebufferEnableMirroring[ScalarMethod_stub]; 42 _IOMobileFrameBufferGetMirroringCapability[StructMethod_stub]; 43 _IOMobileFramebufferSetRenderingAngle[StructMethod_stub]; 44 _IOMobileFramebufferSetMirrorContentRegion[StructMethod_stub]; 47 _kern_HDCPSendRequest[ScalarMethod_stub]; 48 _kern_HDCPGetReply[ScalarMethod_stub]; 49 _kern_SurfaceIsReplaceable[ScalarMethod_stub]; 50 _kern_SetBrightnessCorrection[ScalarMethod_stub]; 51 _kern_SetColorRemapMode[ScalarMethod_stub]; 52 _kern_SwapCancel[ScalarMethod_stub]; 53 _IOMobileFramebufferSetCanvasSize[ScalarMethod_stub]; 54 _IOMobileFramebufferGetMatrix[Method_stub]; 55 _IOMobileFramebufferSetMatrix[Method_stub]; 56 _IOMobileFramebufferKernelTests[StructMethod_stub]; 57 _kern_GetColorRemapMode[ScalarMethod_stub]; 66 _kern_SPLCSetBrightness[ScalarMethod_stub]; 67 _kern_SPLCGetBrightness[ScalarMethod_stub]; 68 _kern_SetParameter[Method_stub]; 69 _kern_SwapSetColorMatrix[StructMethod_stub]; 72 _kern_DisableNotifications[ScalarMethod_stub] _kern_EnableNotifications[ScalarMethod_stub]; 73 _kern_ChangeFrameInfo[ScalarMethod_stub]; 74 _kern_SupportedFrameInfo[Method_stub]; 75 _kern_FactoryPortal[StructMethod_stub]; 77 _kern_GetCurrentAbsoluteTime[ScalarMethod_stub]; 78 _kern_SetBlock[Method_stub]; 79 _kern_GetBlock[Method_stub]; 80 _kern_GetLinkQuality[ScalarMethod_stub]; 81 _kern_SwapCancelAll[ScalarMethod_stub]; 82 _kern_GetProtectionOptions[ScalarMethod_stub]; 83 _kern_CopyLayerDisplayedSurface[ScalarMethod_stub]; 84 _kern_SetContrast[StructMethod_stub]; 85 _kern_GetBufBlock[Method_stub]; 86 _IOMFBGainEncoderFinishEncoding[Method_stub]; UNKNOWN {}
-  - => Kernel needs: an `/arm-io` child node with device_type "display-subsystem" (+ canvas-width/height) and an IOService of class **IOMobileFramebuffer** (subclass name match) attached under it, opened with type 0, implementing at least GetDisplaySize(8), IsMainDisplay(18), GetID(7), GetLayerDefaultSurface(3), SwapBegin(4)/SwapEnd(5 struct)/SwapWait(6), Enable/DisableNotifications(72), frame info(73/74), CopyLayerDisplayedSurface(83), plus IOSurface for the swapped buffers. NEXT: CoreAnimation's AppleDisplay/IOMFBDisplay usage of these (constructor, first swap, vsync), then IOSurface.framework's IOSurfaceRoot selectors.
-- **GUI PLAN (decided 2026-10-16): CPU rendering + kernel IOMobileFramebuffer.** User: CPU rendering is fine for now (goal = prove the GUI runs), may later research an Apple-style GPU driver for the Adreno 618 -> keep display output and renderer separable. QuartzCore findings (symbols from the cache's .symbols subcache: `ipsw dyld symaddr research/dsc/dyld_shared_cache_arm64 --image QuartzCore`; strings: `ipsw dyld macho ... QuartzCore --strings`):
-  - Renderers: `sw_new_context` (CA::OGL::SWContext, full CPU renderer incl. blur, images, IOSurface-backed surfaces, make_buffer_current(WindowServer::Surface)), `gles_new_context`, `metal_new_context`, `new_null_context`. Env knobs include CA_ENABLE_OGL, CA_DISPLAY_TYPE, CA_FORCE_LOCAL_SERVER, CA_FORCE_TIMER, CA_CANVAS_WIDTH/HEIGHT, CA_MAIN_DISPLAY_SCALE/ORIENTATION, CA_DISABLE_RENDER, CA_ALWAYS_RENDER (selection logic not traced yet).
-  - `-[CAWindowServer _detectDisplays]` (0x1884e3150) iterates static tables `open_funcs`/`count_funcs` = AppleCLCDDisplay, AppleRGBOutDisplay, AppleWirelessDisplay only; each `count()` = `display_count_of_type(IOMFBDisplayType)` over **`IOMobileFramebufferCreateDisplayList()`**, `open(i)` = `create_display_of_type` -> `CA::WindowServer::AppleDisplay(CFString name, ..., IOMFBDisplayType)` (an IOMFBDisplay driven by IOMFBServer: vsync_callback, frame_info_callback, swaps). `CA::WindowServer::VirtualDisplay` exists but is never auto-detected (explicit API only). => the main display MUST come from an IOMobileFramebuffer kernel service.
-  - NEXT: reverse IOMobileFramebuffer.framework: IOMobileFramebufferCreateDisplayList / IOMobileFramebufferOpen (service matching, display type property), the user-client selectors used by IOMFBServer (display size/modes, swap begin/set-layer/end with IOSurface ids, vsync notifications), then the IOSurface kernel side (IOSurfaceRoot user client: create/lookup/lock, memory mapping) that both IOMFB swaps and CA surfaces need. Kernel: SWEET IOMobileFramebuffer service that copies the swapped IOSurface to the 1080x2400 framebuffer at 0x9c000000.
-- **logd fixed; backboardd = DISPLAY WALL (boot 0045n on v7, 21:08:57 UTC, frames VID_20261016_230850 00:55-01:28, slide 0x4c3ec000, `research/crash-0045n-v7.txt`).** No `CRASH logd` any more; new daemons run (runningboardd, WirelessRadioManagerd, networkserviceproxy, dasd, cloudpaird, magicswitchd, atc, askpermissiond, ManagedSettingsAgent, containermanagerd uses AKS 0/17). New: locationd sig 11 at CFRunLoopAddSource+132 (NULL source) from its main+0x2af138 in a dispatch_once. **backboardd** sig 6: abort <- std::terminate <- _objc_terminate <- dispatch_once <- main+0x9334 = the "start %{public}@..." wrapper (0x100009264) for **"window server"** (block 0x10000a770 -> dispatch_once body 0x10001d7f0 = StartWindowServer): MTLSetShaderCachePath, `[CAWindowServer serverWithOptions:@{kCAWindowServerDisableUpdatesOnMainDisplay: @YES}]`, `setRendererFlags:`, **`mainDisplay`** -> `displayId` -> `[CADisplay displayWithDisplayId:]`, setWindowServerDisplay:, bounds, pointScale, currentMode, preferredScale, nativeOrientation, touchScales... With no display, mainDisplay is nil and it throws. (HID system and GS start fine before it.) SpringBoard dies on the same missing display (FBSDisplayMonitor). QuartzCore display backends (from the cache's .symbols subcache, `ipsw dyld str`): `CA::WindowServer::AppleCLCDDisplay` (IOMobileFramebuffer hardware) and **`CA::WindowServer::VirtualDisplay`** (open(), new_server, clone_update). `CA_DISPLAY_TYPE` and `CA_FORCE_LOCAL_SERVER` strings exist in QuartzCore but have no direct xref (likely read via a table of CA_* env names). NEXT: find how CA::WindowServer::Server enumerates displays (IOMobileFramebuffer services vs VirtualDisplay / CA_DISPLAY_TYPE) and choose: (a) kernel IOMobileFramebuffer service + IOSurface, or (b) a VirtualDisplay rendered by CA's CPU path (CA::OGL::SW) and copied to the framebuffer.
-- **watchdogd + CommCenter + identityservicesd fixed (boot 0045n on v6, 20:41:30 UTC, frames VID_20261016_224133 00:39-01:13, slide 0x20fec000).** `SWEET WDT: watchdogd sel 0 in 0/0 out 1/0 -> ok`, no watchdogd/CommCenter/identityservicesd crashes (CommCenter/identityservicesd now call AKS 0/17/7). usermanagerd boot task runs (UMD_INIT creates primary session uid 501 "mobile", personas 99 System and 199 Default registered with the kernel); `Failed to atomically swap writing file /private/var//keybags/usersession.kb: Operation not supported (45)` (HFS lacks the atomic swap rename; non-fatal so far). Remaining: SpringBoard (FBSDisplayMonitor, no display), backboardd (uncaught exception), mediaserverd, lockdownd (crash inside obfuscated code, main+0x4c1b4?), logd. **logd**: main+0x18160 = `BUG IN LIBTRACE: Failed to migrate directory` from 0x10001801c(dir 0): 0x100016538 requires the dir to exist with uid/gid/mode from the table at 0x10002df14 (0: /private/var/db/diagnostics 272:272 0751, 1: /private/var/db/uuidtext 272:272 0755, 2: /private/var/db/diagnostics/timesync 272:272 0755) plus a `.migrated` file, else XPC "operation 6" to a helper and crash. **Image v7** = v6 + those dirs/markers (also in mkiosroot.sh), SHA256 in `ios16-root-20H392-v7.img.sha256`, `.simg` ready. Boot with `shim/out/shim-boot-0045n.img`.
-- **Exit-reason text works (boot 0044n, frames VID_20261016_221726 00:32-00:53, slide 0x22d5c000).** CommCenter/identityservicesd: `couldn't dlopen libobjc-trampolines.dylib: dlopen(/usr/lib/libobjc-trampolines.dylib, 0x0106): tried: '/usr/lib/libobjc-trampolines.dylib' (no such file, not in dyld cache)`: the file only exists in the OS cryptex and dyld does not search cryptexes at ignition_level=1. 19 cryptex files have no root counterpart (OS: DriverKit dyld cache + .symbols, VisualTestKit, libffi-trampolines, libobjc-trampolines, libstdc++ 6.0.9 + 2 symlinks; App: SafariSupport.bundle, AuthenticationServicesAgent, com.apple.Safari.History, passwordbreachd, safarifetcherd, webbookmarksd, webinspectord, webpushd) -> hard-linked (symlinks copied: Linux hfsplus cannot hard-link symlinks); `tools/mkiosroot.sh` does it generically. watchdogd still crashed: the `-wdt_no_pmu` / `/arm-io/wdt no-pmu` check (0x10000a01c) only runs when os_variant_has_internal_diagnostics; otherwise 0x100009b18 looks up IOServiceMatching("IOService") + IOPropertyMatch {IOPMUPrimary: 1} (NSConstantDictionary) and crashes if absent, then IORegistryEntrySetCFProperty(boot stage 0xff) (failure only logged). Patch **0045**: IOWatchdog sets IOPMUPrimary = 1 and accepts setProperties; CI `38961814194` -> `xnu/out-0045`. **Image v6** = v5 + the 19 cryptex links, SHA256 7c610c6a...297a, `ios16-root-20H392-v6.simg` (full flash needed). Boot image `shim/out/shim-boot-0045n.img` (0045 + sweet-0044hi.adt). Still open: SpringBoard (no display), backboardd (uncaught exception, reason none), mediaserverd (Fig NULL dict), logd (main+0x18160), lockdownd (main+0x4c1b4).
-- **System survives daemon crashes (boot 0043p, video frames VID_20261016_215006 00:25/00:42/00:54).** With the v5 plist patch no panic: launchd keeps launching (runningboardd, powerd, tccd, healthd, peopled, cryptexd, routined, aksd, mediaremoted, familynotificationd, nanoprefsyncd, navd, cloudpaird, passd, amsaccountsd, accessoryupdaterd, wcd ...). Shared cache slide that boot 0x406b4000 (`research/crash-0043p.txt`). watchdogd still crashed at main+0xb82c from the PMU step: `-wdt_no_pmu` is only honored when os_variant_has_internal_diagnostics; customer builds read `no-pmu` from IODeviceTree:/arm-io/wdt (IORegistryEntrySearchCFProperty) -> mkadt adds /arm-io/wdt {no-pmu}. **cryptexd** sig 6: abort_with_payload <- os_crash_fmt <- `__darwin_arm_secure_boot_chip.cold.7` ("panic: failed to get crypto algorithm") <- `_img4_chip_select_personalized_ap`: reads /chosen use-ddi-secure-boot, allow-ecid-mismatch, crypto-hash-method ("sha1" | "sha2-384"), /chosen/asmb lp-smb0/1 -> mkadt adds crypto-hash-method "sha2-384". **identityservicesd** sig 6 = same `_objc_fatal` in imp_implementationWithBlock as CommCenter (block trampolines; message needed). lockdownd sig 5 at main+0x4c1b4. Patch **0044**: crash report adds `CRASH name reason ns N code X: text` (exit reason description = abort_with_payload text). CI `38959096811` -> `xnu/out-0044`, QEMU OK. Image `shim/out/shim-boot-0044n.img` = 0044 + `shim/out/sweet-0044hi.adt` (wdt no-pmu, crypto-hash-method) + cmdline (wdt=-1, no -wdt_no_pmu).
-- **First symbolicated daemon crashes (boot 0043u on journaled v4, 19:38:53 UTC; video frame chat image 36; transcribed in `research/crash-0043u.txt`; shared cache slide 0x40d60000 for every process).** (Gemini's video transcription invented values, use frames only.) `tools/sweet-crash.py research/dsc/dyld_shared_cache_arm64 x research/crash-0043u.txt`:
-  - **watchdogd** pc main+0xb82c (`_os_crash` trap helper) from 0x100009bb0 = set PMU boot stage via IORegistry (no PMU) -> fix: boot-args `wdt=-1 -wdt_no_pmu` (Apple's own test mode writes "%s wdt=-1 -wdt_no_pmu"; watchdogd logs "skipping setting PMU boot stage because -wdt_no_pmu found in boot-args or no-pmu found in EDT"). Kernel effect of wdt=-1: sched hygiene debug off, zone_exhausted_timeout -1 (harmless).
-  - **SpringBoard** sig 5 in `-[FBSDisplayMonitor _initWithBookendObserver:transformer:]+1160` <- `+[FBDisplayManager sharedInstance]` <- `FBSystemShellInitialize` <- `SBSystemAppMain`: no main display. GUI WALL: display service (IOMobileFramebuffer / CoreAnimation display).
-  - **backboardd** sig 6: abort <- std::terminate <- _objc_terminate (uncaught exception; message not shown).
-  - **CommCenter** sig 6: `_objc_fatal` in `imp_implementationWithBlock` (from `+[_PFRoutines initialize]`, CoreData): objc block trampolines cannot be allocated -> likely kernel gap (trampoline page remap); will hit many processes.
-  - **mediaserverd** sig 11: CFDictionaryGetValue(NULL) in FigNotificationListenerStartNotifications (routing session manager).
-  - **logd** sig 5 at its main+0x18160 (bt main+0x9dfc); lockdownd sig 5 (not yet symbolicated).
-  - Image v5 = v4 + launchd.plist (`/System/Library/xpc/launchd.plist`, contiguous at image offset 0x1e025f000, 1456980 bytes) with the 7 `_PanicOnCrash` keys renamed `_PanicOnCrasX` in place (raw image patch, no metadata change) -> `diff-v4-v5.simg` = 7 blocks; v5 SHA256 78f96974...185a. Boot image `shim/out/shim-boot-0043p.img` = 0043 + `wdt=-1 -wdt_no_pmu`.
-- **0043 console crash reports (QEMU verified); image `shim/out/shim-boot-0043u.img`; NEXT: flash v4 + boot 0043u.** Boot 0042u (video photo IMG_20261016_211646): short exec lines work; watchdogd crashes with NO `SWEET WDT:` line (fails before its first IOWatchdog call: lookup or IOServiceOpen, or elsewhere); lockdownd, SpringBoard, mediaserverd, CommCenter, identityservicesd, backboardd, watchdogd all crash repeatedly ("Too many corpses being created" = corpse limit, no crash reports). AKS callers: lockdownd (0, 7), imagent/sleepd (0, 17, 7), backboardd (0, 17), UserEventAgent (0, 7, 102, 103 -> unsupported). Patch **0043**: `sweet_crash_log` (osfmk/kern/exception.c, called from proc_prepareexit for crash exits on the current proc) prints `CRASH name[pid] sig S code (exc<<32|code) sub X slide SR mh MH`, `CRASH name pc lr sp fp far`, `CRASH name bt` (10 fp frames); AKS sel 103 notify_state_is_set -> 0. CI `38954520419` -> `xnu/out-0043`. QEMU test: init forks, child `brk #1`: `CRASH launchd[2] sig 5 code 0x600000001 sub 0x1000004f0 slide 0x0`, pc correct, parent keeps running (pid 1 crashes panic before proc_prepareexit, so test with a child). `tools/sweet-crash.py CACHE ROOT [report]` symbolicates typed-in CRASH lines (`ipsw dyld a2s` with addr - slide; main binary offsets = addr - mh + 0x100000000).
-- **v3 reflashed 18:50-18:55 UTC (`research/flash-userdata-v3b.log`, 24/24 OKAY); 0042u booted 19:01:17 UTC on the clean disk (`research/boot0042u-2.log`), SLOW MO VID pending (watchdogd failure reason).** ABL hangs on the first `fastboot boot` after every big flash; user re-enters fastboot. User gave standing approval to reflash/boot without asking (memory standing-flash-approval). Commits now end with `Co-Authored-By: dipa-studio <183933817+dipa-studio@users.noreply.github.com>` (user request; never a Claude trailer).
-  - watchdogd flow: connect_to_kext (0x100005408): IOServiceGetMatchingService("IOWatchdog") fails -> "failed to discover" + _os_crash; IOServiceOpen(type 1) fails -> "IOServiceOpen failed with error : 0x%x" + _os_crash. Then sel 0 (out 1 scalar): 0 -> "userspace monitoring disabled", 0x100009bb0, sleep 2, exit(0); nonzero -> "userspace monitoring enabled", normal operation.
-  - **Image v4 (JOURNALED):** `tools/mkiosroot.sh` now does `mkfs.hfsplus -J`, mounts with `-o loop,force`, adds the /System/Library/Caches/com.apple.dyld hard links (44) and /private/var/keybags/systembag.kb (0700/0600 root). Built from the IPSW dmgs (OS 087-86698-044, SystemOS 087-86593-047, AppOS 087-86715-047) -> `/run/media/dipa/android/ios-sweet-ipsw/ios16-root-20H392-v4.img` SHA256 fba4aeae...ec0f9 + `.simg`. Header: attr 0x80002100 (unmounted, journaled), journal info block 129, journal 8 MiB at 532480 flagged need-init. Linux `fsck.hfsplus -n` reports "Volume header needs minor repair" on any fresh journaled volume even after -y (quirk). QEMU: 64 MB journaled test root (`rd=md0 rootrw=1`, 0042 kernel): `hfs: Initializing the journal (joffset 0x3000 sz 0x80000)` -> mounted -> init runs, no panic. NEXT: flash v4 (full), boot 0042u.
-- **SPRINGBOARD STARTS (boot 0041u 18:39:53 UTC, photo IMG_20261016_204142).** backboardd, bluetoothd, fairplayd.H2, SpringBoard (pid 111, crashed: "Too many corpses"), xpcproxy run; `SWEET AKS: backboardd sel 0 -> 0`, `sel 17 in 1/0 out 0/4096 -> 0`. Panic: watchdogd[113] exited, namespace 2 subcode 5 (SIGTRAP = its _os_crash): watchdogd crashes on purpose when IOServiceGetMatchingService("IOWatchdog") fails ("connect_to_kext() unexpectedly failed") or IOServiceOpen(type 1) fails ("IOServiceOpen failed with error"); IOWatchdog DOES register (QEMU msgbuf: `SWEET WDT: IOWatchdog registered`), cause not on screen yet -> need video. Note `wdt_test=no_user_checkin` makes watchdogd log "detected testing boot-args to not run, exiting" (path not reached here?). **HFS CORRUPTION:** `hfs_swap_BTNode: offset #0 invalid (0xBC1D) (blockSize 0x2000 numRecords 81)`, `node=19677 fileID=4` (catalog), `hfs_mark_inconsistent` repeated. Likely cause: non-journaled HFS + unclean panics while writing (0038e wrote a 2.7 GB core then panicked; every boot since ends in panic). Plan: reflash v3 (clean), longer term HFS journaling. Patch **0042**: one short `exec NAME` console line instead of the 3-line "Allowing spawn of iOS binary" notice; CI `38949451276` -> `xnu/out-0042`; image `shim/out/shim-boot-0042u.img` (same cmdline as 0041u).
-- **LAUNCHD DAEMONS RUN (boot 0039u, 18:29:13 UTC, photo IMG_20261016_203052).** With `launchd_unsecure_cache=1` all boot tasks pass and launchd starts LaunchDaemons (pids > 100: identityservicesd 114 and lockdownd 106 crash, "Too many corpses being created"). Fatal: `watchdogd: ERROR: failed to discover watchdog KEXT service` -> exit (namespace 2 = signal, subcode 5) -> `_PanicOnCrash` panic. watchdogd: IOServiceMatching("IOWatchdog"), IOServiceOpen type 1, IOConnectCallScalarMethod sel 0/1 (check in)/3/4 (disable/enable userspace monitoring)/5, IOConnectCallStructMethod sel 2 (1 KiB in) and 9 (small out); VM path ("detected virtual machine environment and no watchdog KEXT found, exiting...") only when it detects a VM. Console also flooded with `hfs: set hardlink bit on vol=iOSRoot cnid=321318` (Linux-made hard links lack kHFSHasLinkChainBit; repaired only in memory on each lookup). Patches **0040** (`iokit/Kernel/arm/SweetWatchdog.cpp`: IOWatchdog + IOWatchdogUserClient, all selectors succeed with zeroed outputs, each logged once as `SWEET WDT: ...`) and **0041** (sweet_hfs hfs_catalog.c: the three link-repair printfs limited to 8 per boot); CI `38948245372` PASSED -> `xnu/out-0041` (QEMU regression OK). Image `shim/out/shim-boot-0041u.img` (0041 + sweet-0038hi.adt + ufsrw rootrw + launchd_unsecure_cache=1) booted 18:39:53 UTC (`research/boot0041u.log`), photo pending.
-- **v3 FLASHED + keybag passes; next wall AMFI (launchd_cache_loader).** User said "flash, nothing to lose": `fastboot -S 512M flash userdata ios16-root-20H392-v3.simg` 17:51:52-17:57:01 UTC, 24/24 chunks OKAY (`research/flash-userdata-v3.log`). userdata = v3 (SHA256 fa84274c...22df) until the next rw boot. ABL fastboot then hung ("Sending" forever, `reboot bootloader` timed out) until the user re-entered fastboot by hand (common Xiaomi ABL crash). Boot 0038e 18:06:15 UTC (`research/boot0038e-3.log`), photos IMG_20261016_200812/200838: keybag OK, then boot tasks tzinit (`Bad zoneinfo link`, resets to system partition, OK), finish-restore, finish-demo-restore, sysstatuscheck, prng_seedctl (`failed to load kernel prng seed`, `failed to load virtual random (-147)`, AllowCrash), auearlyboot, then **launchd_cache_loader: `abort: Unable to find AMFI`** -> 2.7 GB core written to /cores in 91 s -> launchd panic `launchd_cache_loader[22] exited -- exit reason namespace 7 subcode 0x1`. launchd_cache_loader: SecStaticCodeCheckValidity of /System/Library/xpc/launchd.plist with detached .sig, then IOServiceMatching("AppleMobileFileIntegrity") + IOServiceOpen type 0 + IOConnectCallMethod sel 6 (1 scalar = 1, struct in = cdhash) = trust the cdhash, then sends the cache to launchd. Boot-arg `launchd_unsecure_cache=1` skips signature + AMFI ("Using unsecure cache"); the value is parsed with strtoul base 10 (helper 0x100002da8), so a path = 0 = off: boot 0039w (18:17:13 UTC, `=/System/Library/xpc/launchd.plist`, photo IMG_20261016_202008) still aborted `Unable to find AMFI` (core dump now skipped: `Failed to generate core file ... error 14`, so 0039 works). Image `shim/out/shim-boot-0039u.img` uses `launchd_unsecure_cache=1`. Patch **0039**: do_coredump = 0 on SWEET (kern.coredump sysctl still works); CI `38945267341` -> `xnu/out-0039` (_do_coredump now in __common). Image `shim/out/shim-boot-0039w.img` = 0039 + sweet-0038hi.adt + ufsrw rootrw + `launchd_unsecure_cache=/System/Library/xpc/launchd.plist`. TODO later: real AppleMobileFileIntegrity IOService (sel 6 trust cdhash etc.).
-- **Image v3 ready, awaiting user "flash".** Boot 0038w 17:38:10 UTC, photo (chat image 30): `SWEET AKS: keybagd sel 0 -> 0x0`, `sel 14 out 1/0 -> 0x0` (x2), `MKB_INIT: mount is with NO CPROTECT ... does not support Data Protection`, `System Keybag loaded`; then keybagd still opens /private/var/keybags/systembag.kb (0x100012d3c, for BackupKeyBagKeys) -> ENOENT, `no-effaceable-storage` not set -> `Can't load the keybag. tears in rain... Time to die` -> `FATAL KEYBAG ERROR: kb_load` -> reboot -> Halt/Restart Timed Out panic. Fix: ADT `/defaults/no-effaceable-storage` (mkadt.py; `shim/out/sweet-0038hi.adt`, `research/q0038-hi.adt`, QEMU OK) + file `/private/var/keybags/systembag.kb` (0600 root, dir 0700; XML plist {KeyBagKeys: data}). **v3 image** `/run/media/dipa/android/ios-sweet-ipsw/ios16-root-20H392-v3.img` = v2 + that file, fsck OK, SHA256 fa84274c...22df; `ios16-root-20H392-v3.simg` (img2simg: zero blocks become FILL chunks, so a full flash overwrites every block the rw boots changed). Flash: `fastboot -S 512M flash userdata ios16-root-20H392-v3.simg`, then boot `shim/out/shim-boot-0038e.img` (0038 + sweet-0038hi.adt + ufsrw=1 rootrw=1).
-- **0038 AppleKeyStore (CI 38938744130 PASSED -> `xnu/out-0038`; QEMU msgbuf: `SWEET AKS: AppleKeyStore registered (no passcode, unlocked)`; phone image `shim/out/shim-boot-0038w.img` booted 17:38:10 UTC, `research/boot0038w.log`, photo pending).** QEMU full kernel log trick (fb.txt is only the last screen): `llvm-nm KERNEL | grep _msgbufp` -> `--hmp "x /1gx ADDR"` gives struct msgbuf address (static, 0xfffffe0007b56678 on 0038) -> `--hmp "x /3gx STRUCT"` gives bufc (3rd quad) -> `--hmp "memsave BUFC 0x20000 \"FILE\""` (quote the file name), `tr -d "\0" < FILE`. Same inputs give the same addresses. Boot 0037w 17:08:35 UTC, photo IMG_20261016_191052: bindfs fixed mount; mount-phase-1/2 pass; `cc_fips_test` boot task: all corecrypto FIPS POST tests PASSED in userspace; then keybag boot task `keybagd --init`: `MKB_INIT: FATAL KEYBAG ERROR: failed to load system bag`, `Could not get options entry from the device tree` (x2, IODeviceTree:/options = NVRAM, non-fatal), `REBOOTING INTO RECOVERY MODE` -> reboot -> panic `Halt/Restart Timed Out @IOPlatformExpert.cpp:884` (no restart path on SWEET).
-  - keybagd (static libaks): load_devicebag (0x100012c30) calls aks_get_system (sel 14, 0-1 scalar in, 1 out) and loads /private/var/keybags/systembag.kb only if the result is 0xe00002f0 (NotFound); any other error -> fatal; SUCCESS -> skip the file (userspace-reboot path). systembag.kb is a plist {KeyBagKeys}; decrypted with effaceable storage unless IODeviceTree:/defaults has `no-effaceable-storage`. Image has no /private/var/keybags. has_data_protection: statfs of /private/var; no cprotect on our HFS -> device-bag volume mapping skipped.
-  - libaks connection: IORegistryEntryFromPath / IOServiceMatching("AppleKeyStore"), IOServiceOpen type 0, then selector 0 (no args) must succeed.
-  - **AppleKeyStore selector map (iOS 16.7 AppleKeyStore.framework, via `ipsw dyld disass`):** 0 open, 2 create_bag, 3 save_bag, 4 unload_bag, 5 set_system_with_passcode, 6 load_bag, 7 get_lock_state (1 in, 1 out; bit 2 = unlocked since boot), 9 unlock_device, 10 wrap_key, 11 unwrap_key, 12 unlock_bag/test_stashed_kek, 13 lock_bag, 14 get_system, 15 change_secret_se, 16 internal_state, 17 get_device_state (1 in, struct out <=4K: DER SET of SEQUENCE{UTF8 key, INTEGER}: ss state, sls lock_state (MKBGetDeviceLockState returns it), sb backoff, sbo, sfa failed attempts, sfao, sgs generation, sas assertions, sgpe grace, srcd countdown, sr reserved), 18 recover_with_escrow_bag, 19 obliterate_class_d, 20 drain_backup_keys, 21/22 set/clear_backup_bag, 23 get_bag_uuid, 24 rewrap_key_for_backup, 26/27 assert_hold/drop, 30/31 set/get_configuration, 33-37 stash, 38 auth_token_create, 40 generation, 41 fdr_hmac_data, 42 verify_password, 43 _aks_operation, 44 remote_session, 49/50 signing keys, 51/53/54 stash enable/persist/escrow, 55 unload_session_bags, 57/58 remote peer, 59-62 smartcard, 63 migrate_s_key, 65 set_keybag_for_volume_with_cookie_persona, 66/67 sync bags, 68 copy_volume_cookie_persona, 69-73 se_*, 74-79/84/85/99 fv_* (FileVault/VEK), 80/81 absinthe, 82 make_public_backup_bag, 83 drop_auxiliary_auth, 86 kext get/set options, 87 invalidate_bag, 88-91/94/95/106/107 se_*, 92 lower_iteration_count, 93 get_internal_info, 96-98/117 keybag_persona create/list/delete, 100/101 assert promote/consume, 102/103 notify_state set/is_set, 104 fairplay, 105 change_secret_epilogue, 108 delete_xart_leak, 110-113 backup volume, 114 sealed_hashes_set, 115 prewarm_sps, 118-128 AKSIdentity*/AKSGetLastUser.
-  - Patch **0038**: `iokit/Kernel/arm/SweetKeyStore.cpp` (class AppleKeyStore on IOResources, IOUserClientClass AppleKeyStoreUserClient; personality in KernelConfigTables.cpp): 0/4/5/9/12/13/26/27/55/102 success, 14 -> handle 0, 7 -> 0x4, 17 -> DER state (ss 4, sls 0), others kIOReturnUnsupported; logs `SWEET AKS: <proc> sel N arg0 in a/b out c/d -> ret` for every call.
-  - Tools: shared cache copied to `research/dsc/` (git-ignored; ipsw needs a writable dir for its .a2s symbol cache); `ipsw dyld disass research/dsc/dyld_shared_cache_arm64 --image AppleKeyStore|MobileKeyBag`; scratchpad `annot2.py BIN DIS FIXUPS` annotates llvm-objdump output with strings and import names (`ipsw macho info --fixups`).
-- **0037 bindfs (phone boot 0037w pending photo).** Boot 0036mw 16:57:47 UTC, photo IMG_20261016_190102: WRITABLE ROOT WORKS: `/dev/ufsroot0 on / (hfs, local, noatime)` after mount_hfs update (GetMasterBlock EBUSY harmless), coredump of mount written to /cores (rw). Then `mount: failed to mount /private/preboot/5CBE3601.../usr/standalone/firmware -> ...: Operation not supported by device (19)` -> exit 74 -> launchd panic `mount[2] exited`. Cause: the macOS-derived config had nullfs but no bindfs (ENODEV = unknown fs type). Caller passes env 0 -> bind not required, ENOENT (missing source dir) tolerated. Patch **0037** adds `bindfs` to FILESYS_BASE in MASTER.arm64.sweet; CI `38936550483` -> `xnu/out-0037` (bindfs_vfsops present; QEMU probe regression OK). Image `shim/out/shim-boot-0037w.img` (0037 + sweet-0036hi.adt + ufsrw=1 rootrw=1) booted 17:08:35 UTC (`research/boot0037w.log`). NOTE: userdata has now been modified by rw boots; it no longer equals the v2 image, so sparsediff with v2 as OLD is not safe any more (full reflash or a new baseline needed).
-- **0036 phone: launchd boot tasks run; mount -P 1 needs /chosen/boot-manifest-hash.** Boot 0036hr 16:15:32 UTC, photo IMG_20261016_185236: platform check passes; fsck boot task runs (`fsck: not booting main or diagnostic OS. Skipping fsck on OS container`); mount-phase-1: `failed to get filesystem info` x2 (no IODeviceTree:/filesystems/fstab, non-fatal), `mount: data volume missing, but not required in env: 0`, mount_hfs update of /: `GetMasterBlock: Error 16 opening /dev/ufsroot0` (EBUSY, mounted block dev, non-fatal) then mount() EROFS (read-only boot) -> `mount: / failed with 1`; then `failed to get boot-manifest-hash` -> errx exit 66 -> launchd panic `mount[3] exited`. /sbin/mount: fn 0x100005f90 reads IODeviceTree:/chosen boot-manifest-hash (hex), bindfs-mounts /private/preboot/<HEX>/usr/standalone/firmware (ENOENT tolerated unless required). `tools/mkadt.py` now adds `boot-manifest-hash` = SHA-384("sweet boot manifest") (5CBE3601...5205). ADTs `shim/out/sweet-0036hi.adt`, `research/q0036-hi.adt` (QEMU probe OK, csops 0x26000001). Image `shim/out/shim-boot-0036mw.img` (0036 + new ADT + ufsrw=1 rootrw=1), booted 16:57:47 UTC (`research/boot0036mw.log`): FIRST WRITABLE BOOT of userdata (restore source: v2 image on SSD).
-- **0036 CS_SIGNED (phone boot 0036hr pending photo).** Phone boot 0035hr 2026-10-16 15:57:02 UTC (`research/boot0035hr.log`, photo IMG_20261016_180249): highmem works on hardware; shared cache maps (trust-cache warnings only), Apple launchd runs (`Darwin Bootstrapper Version 7.0.0`, `entering ondemand mode`), starts boot task fsck, then userspace panic `boot task is not a platform binary (fsck, /sbin/fsck)`. launchd+0x3fea0: `csops(pid, CS_OPS_STATUS)` must have bit 0x04000000. Cause: nothing set CS_SIGNED (AMFI does it in vnode_check_signature), so csproc_get_blob() returns NULL for every process and csops never reports CS_PLATFORM_BINARY (also breaks per-process cdhash/entitlement queries). QEMU probe init (`csops` status printer, scratchpad csq/) on 0035: `0x02000001`; patch **0036** (`*cs_flags |= CS_SIGNED` in the SWEET AMFI hook), CI `38929635791` -> `xnu/out-0036`: `0x26000001`. Images `shim/out/shim-boot-0036hr.img` / `-0036hw.img` (same cmdlines as 0035). 0036hr booted 16:15:32 UTC (`research/boot0036hr.log`). Next launchd boot tasks (embedded __config plist): fsck -qL and mount -P 1/2 (RequireSuccess); no /etc/fstab on the image.
-- **0035 ENTITLEMENTS + PLATFORM BINARIES (QEMU verified).** `xnu/patches/0035-sweet-amfi-entitlements-platform-binaries.patch`: new `iokit/Kernel/arm/SweetEntitlements.cpp` (OSObject subclass: OSDictionary from OSUnserializeXML of the signature's XML entitlements + original XML for CS_OPS_ENTITLEMENTS_BLOB); `bsd/kern/sweet_amfi.c` answers queryEntitlementBoolean/String(+WithProc, string also matches array members), copyEntitlementAsOSObject(+WithProc, retained), asdict (retained), get_xml (kalloc_data copy); built-in MAC policy "SWEET AMFI" (registered from bsd_init before vfs/exec) with mpo_vnode_check_signature: every signed binary on the MNT_ROOTFS mount gets CS_PLATFORM_BINARY (stand-in for AMFI's static trust cache: iOS system binaries are ad-hoc, cd_flags 0x2, platform byte 0), and attaches entitlements ONLY for the writable copy (cs_blob != csb_ro_addr; revalidation passes the RO blob). LESSON: first version attached in adjustContextWithoutMonitor -> QEMU `unable to adjust OSEntitlements context without monitor: 53` because ubc_cs_convert_to_multilevel_hash (4K-page signatures on 16K kernel) sets csb_entitlements_blob = NULL; ALL iOS 16 binaries (launchd, backboardd, SpringBoard) use 4K code pages, so this would have broken launchd on the phone. Boot-arg `sweet_amfi_debug=1` logs `SWEET AMFI: <ident>: N entitlements (test: ...)`. `tools/mkinit.py OBJ OUT [ENTS.plist]` adds an XML entitlements blob (special slot -5; default output byte-identical). QEMU `research/q0035-ent` (RAM disk `research/root-hfs-ent.img`, init with 3 test entitlements, highmem): `org.sweet.init: 3 entitlements (test: bool 1 string 1 array 1)` then init PID 1. MAC policies loaded: 0034 = 1, 0035 = 2 (QMP `mac_policy_list`). CI `38909807230` -> `xnu/out-0035`. Phone images: `shim/out/shim-boot-0035hr.img` (highmem, ro), `-0035hw.img` (highmem, +ufsrw=1 rootrw=1), `-0035r.img` (low mem fallback).
-- **PHONE TEST ORDER (updated):** 0035hr -> if instant reset, 0035r -> then 0035hw.
+- Exact99 UUID verified over new held SSH97326, PRIVATE
+  audit/graphics99-device-20261104T113603Z/held. Observer FINISHED, all3 signed
+  helper uploads/readbacks PASS. This is the only current held shell; never98.
+- First live-window:11 fresh frames/43.45s,0 errors,0 changes,normal exit0,
+  parent timeout0. Direct panel-on0/new display-on observed. USER explicitly
+  confirms Apple logo on black during this test. Not a ready SpringBoard UI.
+- Scene pilot used same permanent-candidate live binary27b343c3e92384be4b7e2c0a50de32d228c1424865a4648e647f5c76eb28e4d1
+  concurrently with existing temporary named-LCD marker, each under bounded
+  mobile diagnostic runner.22 frames/42.9s,0 errors,2 hash changes; marker
+  baseline0/after1024,context invalidated,both exits0. No storage fallback.
+  USER saw a brief top-left change/blink but did NOT confirm red color.
+  Private scene-pilot.json/visible-observations.json retain actual results.
+- Observed rates0.25/0.51fps during cold boot, NOT1fps achieved. First capture
+  451.8ms, later2.8-6.8s; boot still performs heavy PIO. No speed or leak claim.
+- Stability script now SOLE owner of held97326:3 finite40s rounds with VM samples,
+  status stability.json. Do NOT send held commands until finished; on timeout
+  inspect framing. No continuous daemon installed or System100 flashed.
+- Preparing optional remote-layer-lcd-window marker mode: keep the validated
+  temporary marker10s for clearer user observation; old modes unchanged.
+  Native strict compile/new physical-target refusal PASS; signed CI pending.
+  Permanent System100 candidate and tested live binary remain27b343c3 unchanged.
 
-- **HIGHMEM: XNU in the upper DDR bank, ~3.95 GiB (was 1.2 GiB).** Live FDT memory = <0x80000000 2G> + <0x1_00000000 0xfcc00000>; all fixed reserved-memory carve-outs are in the low bank (highest: ramdump_fb 0xaf000000, rmtfs ~0xfde01000), dynamic pools have alloc-ranges <= 0xffffffff, UFS node has no `iommus` (Linux DMAs anywhere). `tools/mkadt.py --highmem` sets /chosen dram-base 0x100000000 dram-size 0xfcc00000; `tools/mkpayload.py` now takes phys_base/mem_size from the ADT (default payloads byte-identical, verified); `tools/qemu-sweet.py` sizes -m from the payload (8G for highmem). Patch **0034** (`0034-sweet-ufs-dma-above-4g.patch`): UFS refuses DMA memory above 4G without UFSHCI CAP.64AS (bit 24), logs `DMA at 0x...`. CI `38905889883` success -> `xnu/out-0034`. **QEMU verified** (`research/q0034-hi`, ADT `research/q0034-hi.adt` --qemu --highmem, HFS RAM disk): phys_base 0x100000000, init PID 1 heartbeat, no panic; `max_mem` = `mem_size` = 0xfcc00000 read via QMP (`research/q0034-hi-mem`). Phone images: `shim/out/shim-boot-0034hr.img` (read-only) / `-0034hw.img` (+ufsrw=1 rootrw=1), ADT `shim/out/sweet-0034hi.adt` (asmb SIP + sweet-ufs + highmem). PHONE RISK: unknown runtime TZ/XPU protection in the upper bank would show as an instant reset; fall back to 0033r/w. Watchdog ruled out for the overnight reset: msm-watchdog bark is 20 s (qcom,bark-time 0x4e20) yet panic screens stay up for many minutes.
+## Active boot99 first physical test (2026-11-04 Minsk)
 
-- **Offline research 2026-10-16 (user away, phone unavailable). Images rebuilt** `shim/out/shim-boot-0033r.img` / `-0033w.img` now also carry `wdt_test=no_user_checkin`. NEXT ON PHONE: boot 0033r (expect past in6_nigroup), then 0033w (first writes: rw root fixes HFS link-chain bits itself and gives /var for launchd sockets /var/run/syslog, /var/run/lockdown.sock).
-- **launchd.plist** (`/System/Library/xpc/launchd.plist`, compiled; 532 daemons, 66 RunAtLoad/KeepAlive, list in scratchpad `early-daemons.txt`). `_PanicOnCrash` daemons: containermanagerd/usermanagerd (InternalOnly), lockdownd/remoted/trustd/remotepairingdeviced (AutomationOnly), **watchdogd unconditional** (KeepAlive SuccessfulExit=false). watchdogd needs IOKit `IOWatchdog` kext service; if absent it exits only when `kern.hv_vmm_present` (ADT `/defaults/vmm-present`, hvg_sysctl.c) or with boot-arg `wdt_test=no_user_checkin` ("detected testing boot-args to not run, exiting"; reads kern.bootargs). Using the boot-arg (vmm-present would change many daemons; keep as an option).
-- **GUI path research (QuartzCore in the shared cache, `ipsw dyld str CACHE STR`, ~10 s/search):** CA::WindowServer has IOMFBServer/IOMFBDisplay (Apple DCP/IOMobileFramebuffer), AppleCLCDDisplay, AppleRGBOutDisplay, **VirtualServer/VirtualDisplay** and **MemorySurface**, EAGLServer. Renderers: CA::OGL::MetalContext, GLContext and a **CPU software rasterizer CA::OGL::SW** (samplers/blend modes; "image is too large for software renderer"). Env knobs: `CA_ENABLE_OGL`, `CA_DISPLAY_TYPE`, `CA_FORCE_LOCAL_SERVER` (249 CA_* vars). Hypothesis (unverified): backboardd's render server could run a VirtualServer/MemorySurface with the SW renderer and we copy the surface to the ABL framebuffer -> needs disassembly of CA::WindowServer server creation. Expected other GUI walls: IOSurface (closed-source kext; needs a reimplementation), IOMobileFramebuffer user client, IOHID touch events, AppleKeyStore/keybag (SEP) for lock state, MobileGestalt answers (AppleCLCD etc.).
+- User returned phone in Fastboot. Fresh private identity/productwhyred/unlocked/
+  64MiB boot geometry, exact99 image/kernel/flags and verified98 rollback PASS.
+  Boot99 send/write/reboot ALL OKAY; ONLY boot written. System95 unchanged.
+  Installed boot image now99 (expected UUID2ED4E8A4-6D1C-3C3C-980B-8533C25978D1);
+  actual UUID over SSH still pending. No0177 touch kernel or System100 flashed.
+- PRIVATE audit/kernel99-flash.json, graphics99-reboot.json boundary and
+  audit/graphics99-device-20261104T113603Z/status.json. Observer/check_graphics99.py
+  started once (held session not created yet), waiting-for-ssh. Do NOT start a
+  second observer or reuse98 shells. observer exec session96666 is running.
+- USB enumerated, exact Mac en1/MAC02:00:5e:77:ee:01 auto-restored192.168.7.1.
+  Sole logger2488 receives fresh99 output into audit/current-whyred-usb.log.
+  Boot passed launchd/keybag/usermanager tasks; early67MB IO has0 errors/fallbacks,
+  cmd17 only as intended. This is early boot, not a long-run stability result.
+- NEXT: await observer's exact UUID/upload/readback checks and retained new shell;
+  run finite pilot_graphics99.py on its status. Require measured frames/memory,
+  real scene changes and visible proof before enabling System100 display job.
 
-- **0032r RESULT (boot 05:07:50 UTC, `research/boot0032r.log`, photo IMG_20261016_071200): SHARED CACHE MAPPED, LAUNCHD RUNS.** With SIP relaxed (ADT asmb) the `not in trust cache` lines are only warnings for every subcache (.31 ... .42.dyldlinkedit); no SIP rejection; libSystem loads; launchd configures networking (`skip attaching fsw to lo0 using legacy TX model`) -> kernel data abort far 0x28 in `SHA1Init` (symbolized as sha1_init) from `in6_nigroup` (IPv6 on lo0): g_crypto_funcs NULL. Kernel addresses are unslid: `~/swift/usr/bin/llvm-symbolizer --obj=KERNEL ADDR` works directly.
-- **0032** BearSSL SHA-1 (`0032-sweet-bearssl-sha1.patch`), **0033** BearSSL SHA-384/512 (`0033-sweet-bearssl-sha384-sha512.patch`, BearSSL ctx stored in SHA512_CTX, static-asserted to fit; ubc_subr.c uses SHA-384 for code directories). `0020-stage-bearssl.sh` now also stages hash/sha1.c, hash/sha2big.c, codec/{dec,enc}{32,64}be.c. CI `38854909053` success (0032-only run `38854802073` superseded). Kernel `xnu/out-0033` (SHA1Init -> _br_sha1_init verified by disassembly; nm symbols have a leading underscore). Images (ADT sweet-0032): `shim/out/shim-boot-0033r.img` (read-only), `shim-boot-0033w.img` (+ufsrw=1 rootrw=1). Still NULL g_crypto_funcs users: des, chacha20poly1305, rsa, aesxts, rand, flow_divert.
-- `research/check-patch-order.py` now skips patches touching CI-staged sweet_hfs sources (0031) instead of stopping.
+## Kernel CI network blocker and bounded BearSSL fallback (2026-11-04 Minsk)
 
-- **0031r RESULT (boot 05:03:52 UTC 2026-10-16, `research/boot0031r.log`, photo IMG_20261016_070508): SHARED CACHE FOUND.** dyld now opens `dyld_shared_cache_arm64` (v2 image hard links), kernel refuses to map it: `shared_region: ... map(...'dyld_shared_cache_arm64'): not in trust cache` -> `vnode is not SIP-protected` (vm_unix.c: macOS arm64 path needs trust cache, else root-owned + SF_RESTRICTED unless CSR_ALLOW_UNRESTRICTED_FS) -> `dyld cache '(null)' not loaded: syscall to map cache into shared region failed` -> libSystem not loaded -> coredump to /cores fails error 30 (EROFS) -> panic initproc failed -> "MACH Reboot" (spins; screen kept). Lots of `hfs: set hardlink bit on vol=iOSRoot cnid=... linkid=...` spam (Linux-made hard links lack the link-chain bit; read-only mount cannot persist the fix). FIX: ADT `/chosen/asmb` with `lp-sip0`=0x6f (u64; incl. CSR_ALLOW_UNRESTRICTED_FS) and `lp-sip1`=1 (unauthenticated root), `tools/mkadt.py` -> `shim/out/sweet-0032.adt`. Images with kernel 0031: `shim/out/shim-boot-0032r.img` (read-only) and `shim-boot-0032w.img` (+ufsrw=1 rootrw=1).
+- User reported kernel build failure. CI41816371836 attempts1/job126528026791
+  and2/job126530569522 BOTH stopped in0020-stage-bearssl.sh before kernel compile:
+  bearer upstream https://www.bearssl.org/git/BearSSL returned HTTP502 (git128).
+  No touch C++ compiler error was reported by either CI attempt.
+- Updated ONLY dependency fetch: at most2 upstream attempts, then2 GitHub mirror
+  attempts, keeping exact7bea48e5e850ab4cafbe68d3765cdaba13a86d6f FETCH_HEAD/HEAD
+  verification. No branch/version change or skipped staging on failure.
+- Local actual staging with injected upstream failure PASSED via status-im mirror;
+  all30 staged files are byte-identical to verified baseline. All-remotes-fail
+  negative control rejects after4 attempts, creates no staged target. bash -n PASS.
+  Private touch-whyred/bearssl-{fallback,reject}-check receipts.
+- FIXED full kernel CI41817694238/job126532556668 from source6ebc9fe6ca8228e1649f08159f86f13207b2558c
+  ALL steps SUCCESS, including kernel compile/link and new digitizer checks.
+  Touch2356 host checks, retained eMMC/APFS/RAMFS/USB/framebuffer/AKS/idle checks
+  passed. Authoritative kernel artifact13316395983 ZIP79410894B SHA
+  0cc68ef3a4625a09fb68ebe0cd0c97811e51a5b1fc45b67ab1a5007bf4a75829;
+  buildtree13316162052 ZIP25440738B SHA
+  fa709f740b0eda8d1f869d2ebb6afd0a2e2fb90c54a5c10c3e6c7929be578cdf.
+  Artifacts not downloaded/packaged/flashed yet; installed98/System95 unchanged.
+  PRIVATE touch-whyred/fixed-final-jobs.json retains step receipts.
+- Full CI now supersedes the incomplete local C++ header experiment (its reused
+  BSD flags/header subset did not compile). Do not describe that local attempt
+  as a pass. No physical I2C input producer or touch hardware test yet.
 
-- **2026-10-16 morning:** userdata now = **v2** image (`diff-v1-v2.simg` flashed 21:06:50 UTC 2026-10-15, OKAY, `research/flash-userdata-diff-v2.log`); future diffs use `ios16-root-20H392-v2.img` as OLD. Booted `shim-boot-0029k.img` (ignition_level=1) right after (`research/boot0029k-v2.log`); **no photo** (user asleep). Next morning the phone was in PixelOS recovery = some hardware reset (ABL then booted Android, which cannot use userdata). OBSERVATION: our kernel cannot reset the SoC itself (`PE_halt_restart` is never set; reboot/halt print "MACH Reboot"/"CPU halted" and spin), so the reset came from outside XNU: Qualcomm watchdog or a TZ/XPU violation. Unknown which; re-boot 0029k and watch/video until the reset. Do NOT tap factory reset/format data in recovery (would wipe the iOS image).
-- **0030** (`xnu/patches/0030-sweet-ufs-writes.patch`, CI `38852655542`): UFS WRITE(10) + read-modify-write for partial 4 KiB blocks + SYNCHRONIZE CACHE (DKIOCSYNCHRONIZE), only with boot-arg `ufsrw=1`; `ufs_write_blocks` re-checks partition bounds before every write (only place data goes out).
-- **0031** (`xnu/patches/0031-sweet-read-write-root.patch`, CI `38852837176`): boot-arg `rootrw=1` clears MNT_RDONLY before the root mount (no data volume on sweet: /private/var is on the root; image has no /etc/fstab); Apple HFS accepts a dirty non-journaled ROOT read-write on SWEET (logs "mounting dirty non-journaled root read-write"). Later: journaled HFS for crash safety. Kernel `xnu/out-0031` (CI `38852837176` success, 5m31s; 0030 run cancelled by the newer push). Boot images (phone ADT `sweet-0028.adt`, ramdisk byte-matched): `shim/out/shim-boot-0031r.img` = 0029k args (read-only, ignition_level=1) and `shim/out/shim-boot-0031w.img` = same + `ufsrw=1 rootrw=1`. PLAN: boot 0031r first and film until the reset (diagnose overnight reset), then 0031w (first ever writes to userdata; v2 image on the SSD is the restore source). `research/check-patch-order.py` cannot check 0031 (staged sweet_hfs files are not in its index); CI stage scripts run first, so CI is the check.
+## Touch requested; offline0177 candidate (2026-11-04 Minsk)
 
-- **ignition_level=1 result** (boot 21:01:39 UTC, `research/boot0029k.log`, photo IMG_20261015_230308): preboot/cryptex stages skipped (need >= 2/3), `dylib_cache: finding shared cache on system volume: ignition level = 1, search root fd = 4, subpath = System/Library/Caches/com.apple.dyld/` -> not found -> `ignition boot failed: 19` -> no shared cache -> libSystem not loaded. FIX IN PROGRESS: image v2 = copy of the flashed image + `/System/Library/Caches/com.apple.dyld/` with HARD LINKS to the 44 cryptex cache files (no extra space; avoids symlink-following doubts), then `tools/sparsediff.py ios16-root-20H392.img ios16-root-20H392-v2.img diff.simg` and flash only the diff. Boot with `ignition_level=1` (shim-boot-0029k.img).
-- **ignition_level=0 result** (boot 20:58:07 UTC, `research/boot0029j.log`, photo IMG_20261015_230037): all stages skipped as "ignition level insufficient" (hello/preboot/cryptex1 sniff >= 2, select os cryptex path/graft >= 3, **dyld_cache >= 1**), `ignition boot failed: 89`, "ignition partially disabled", then same `Library not loaded: /usr/lib/libSystem.B.dylib (no such file, no dyld cache)`. => dyld gets the shared cache directory from ignition's dyld_cache stage. Next: `ignition_level=1` (`shim/out/shim-boot-0029k.img`) to skip preboot/cryptex stages but run dyld_cache; its log "finding shared cache on %s ... subpath = %s" will show where it searches. If it searches rootfs /System/Library/Caches/com.apple.dyld, add a symlink there (image rebuild; consider a diff-only sparse flash tool to avoid rewriting 12 GB).
-- **APPLE dyld/launchd RUNNING (libignition) with `unentitled_ios_sim_launch=1`** (boot 20:53:24 UTC, `research/boot0029i.log`, photo IMG_20261015_225617): kernel prints "Allowing spawn of iOS binary ... boot-arg set to true"; `shared_region: ... check_np ... vm_shared_region_start_address() failed` (no region yet, normal); dyld's built-in **libignition** (Darwin Ignition Sequence 1.0.0, libignition-51~1974; prints rd=ufsroot0, hardware target sweet, ignition level 0x5, platform 0x2, boot spec local, 7 stages): `hello from launchd.1` -> `preboot: mounting preboot` -> `failed to lookup preboot: 25` (ENOTTY: looks for a separate Preboot volume by role) -> ignition fails -> dyld `Library not loaded: /usr/lib/libSystem.B.dylib ... (no such file, no dyld cache)` -> launchd exit -> panic initproc failed. dyld boot-args found via strings: `ignition_level`, `ignition_force_dylib_root` (forced rootfs/livefs/cryptex fallback), `ignition_halt_after`, `ignition_live_app_graft`; dyld cache search paths include /System/Cryptexes/OS, /System/Volumes/Preboot/Cryptexes/OS/, /private/preboot/Cryptexes/OS/ (present in our image). Next try `ignition_level=0` (`shim/out/shim-boot-0029j.img`).
-- **APPLE launchd EXECUTED FROM UFS (2026-10-15).** Flashed iOS image: `img2simg` -> `ios16-root-20H392.simg` (12.1 GB) then `fastboot -S 512M flash userdata ...simg` (24 chunks, 307 s, `research/flash-userdata-ios16.log`; a raw-image flash was killed by earlyoom at 2.6 GB RSS - always flash the sparse image). ABL fastboot hung on getvar after the flash; power+vol-down fixed it. Boot 0029u 20:49:04 UTC (`research/boot0029u-ios16.log`), photo IMG_20261015_225134: `hfs: mounted iOSRoot` -> load_init_program /sbin/launchd -> panic `unexpected SIGKILL of launchd (CS_KILLED) with reason -- namespace 9 code 0xe` = OS_REASON_EXEC / EXEC_EXIT_REASON_WRONG_PLATFORM: our kernel is XNU_TARGET_OS_OSX, iOS-platform binaries are "alien" and refused unless spawn attr platform set or DEVELOPMENT TUNABLE `unentitled_ios_sim_launch`. Next try: same kernel, cmdline + `unentitled_ios_sim_launch=1` (`shim/out/shim-boot-0029i.img`). LONGER TERM: macOS-config kernel marks iOS maps alien (vm_map_mark_alien) and differs from iOS in many policies; an iPhoneOS-config kernel build may eventually be needed.
-- **iOS 16 ROOT IMAGE BUILT:** `/run/media/dipa/android/ios-sweet-ipsw/ios16-root-20H392.img` (16 GiB case-sensitive HFS+, label iOSRoot, 12 GB used, fsck OK after `fsck.hfsplus -y` rewrote 32 non-ASCII localized WorkflowKit Shortcut names Linux decomposes differently). Built by `tools/mkiosroot.sh OS.dmg SYSTEMOS.dmg APPOS.dmg OUT.img [SIZE]` (needs sudo; apfs-fuse as root; OS dmg is UDIF -> link must end .dmg). Contents: iPhone X 20H392 OS root + SystemOS cryptex at /private/preboot/Cryptexes/OS (so /System/Cryptexes/OS -> cache, 44 files, dyld_v1 arm64) + AppOS at .../App. /sbin/launchd and /usr/lib/dyld root:wheel 0755. NEXT: (confirm) `fastboot flash userdata ios16-root-20H392.img` (auto-sparse), boot 0029u (rd=ufsroot0) -> Apple launchd attempt.
-- **MILESTONE ON HARDWARE: BOOT FROM INTERNAL FLASH.** 0029 CI `38797924912` PASSED, `xnu/out-0029` SHA256 `a68bc847...2a37`. Image `shim/out/shim-boot-0029u.img` (payload-0029u = 0029 kernel + `shim/out/sweet-0028.adt` + `rd=ufsroot0`, NO RAM disk). Boots 20:01:34 and 20:12:37 UTC (`research/boot0029u*.log`), photo IMG_20261015_221403: `SWEET UFS: "userdata" on LUN 0: first block 0x2b8c00, 109643 MiB, read-only` -> `BSD root: ufsroot0, major 1, minor 0` -> `hfs: mounted SweetRoot on device b(1, 0)` -> `SWEET: root volume is not authenticated (error 25); continuing unsealed` -> `load_init_program ... /sbin/launchd` -> `*** SWEET userspace: init running as PID 1 ***` -> heartbeat (ran for minutes unattended). userdata currently holds the 8 MB `research/root-hfs.img`. NEXT: build a multi-GB HFS+ image with the iOS 16 (iPhone X 20H392) userland (OS rootfs + SystemOS cryptex contents incl. dyld shared cache at /System/Library/Caches/com.apple.dyld; preserve modes/owners/symlinks; decompress LZBITMAP via apfs-fuse), flash it to userdata (sparse, needs user OK), then try Apple's dyld/launchd. Driver is read-only (root mounts RDONLY), fine for first launchd attempts.
-- **userdata FLASHED with the 8 MB HFS test volume** (user said "flash it", 2026-10-15 19:53:17 UTC, `research/flash-userdata-hfs-test.log`: `fastboot flash userdata research/root-hfs.img` OKAY; pre-checks: one sweet device, partition-size:userdata 0x1AC4BFB000, partition-type f2fs, image fsck OK, SHA256 3626ea69...). Android userdata is now destroyed (expected/approved). Boot 0028u at 19:53:20 (`research/boot0028u-hfs.log`), photo IMG_20261015_215541: `BSD root: ufsroot0` -> **`hfs: mounted SweetRoot on device b(1, 0)` from internal UFS** -> panic `rootvp not authenticated after mounting @bsd_init.c:931` (arm64 macOS-config requires FSIOC_KERNEL_ROOTAUTH sealed root for non-ramdisk roots). Patch **0029** (`dd1c284`): SWEET logs `SWEET: root volume is not authenticated (error N); continuing unsealed` instead of panicking (Apple configs keep the panic; pivot_root still requires auth). CI **`38797924912`** running. Next: download out-0029, phone image with sweet-0028.adt + rd=ufsroot0 (no RAM disk), boot -> expect init from UFS.
-- **UFS ROOT DRIVER VERIFIED ON HARDWARE (read-only).** 0028 CI `38796139570` PASSED, `xnu/out-0028` SHA256 `8b981640...9da6`; QEMU HFS RAM-disk regression `research/q0028-hfs` still runs init. Phone boot 2026-10-15 19:50:24 UTC (`research/boot0028u.log`, image `shim/out/shim-boot-0028u.img`, phone ADT `shim/out/sweet-0028.adt` with /sweet-ufs, NO RAM disk, `rd=ufsroot0`), photos IMG_20261015_215151/215220: `SWEET UFS: "userdata" on LUN 0: first block 0x2b8c00, 109643 MiB, read-only` -> `BSD root: ufsroot0, major 1, minor 0` -> `hfs_ValidateHFSPlusVolumeHeader: unknown Volume Signature : f188` (Android-encrypted data, as expected) -> `cannot mount root, errno = 19`, kernel retries mountroot (no panic). Nothing written to flash. NEXT (destructive, needs user confirmation right before): `fastboot flash userdata research/root-hfs.img` (8 MB HFS with test init) then boot rd=ufsroot0 -> expect init from internal flash.
-- **PATCH 0028 (`33aceac`): XNU read-only UFS root device**, CI **`38796139570`** running (next artifacts xnu/out-0028, research/bt29, run29.log). `bsd/dev/sweet_ufs.c`: reuses ABL's UFSHCI state (like the shim probe), takes over UTRL at a kmem_alloc_contig region (DMA layout: UTRL 0x0, UCD 0x1000, 1 MiB bounce 0x4000), verifies UTRLBA readback before any doorbell, IE=0 polled, one SCSI cmd at a time on LUN0 (TUR x3, READ(10) via bounce, PRDT 256 KiB chunks), flush_dcache64 by PA around each command (host not dma-coherent per DT), finds GPT partition by name (`ufsroot=` boot-arg, default `userdata`), exposes `/dev/ufsroot0`/`rufsroot0` (512-byte logical sectors, physical 4 KiB, DKIOC* ioctls), refuses writes (EROFS). IOKitBSDInit: `rd=ufsroot0` -> sweet_ufs_rootdev() (lazy init) else panic. ADT: `tools/mkadt.py` adds `/sweet-ufs` reg <0x1d84000 0x3000> for the PHONE only (not --qemu). Local compile OK, imports resolve. Sandbox research/bt28 (pre0028 originals). FIRST PHONE TEST PLAN (non-destructive): boot 0028 with phone ADT + `rd=ufsroot0` and NO RAM disk: expect `SWEET UFS: "userdata" on LUN 0: first block 0x2b8c00, 109643 MiB` + `BSD root: ufsroot0`, then root mount failure (userdata is still Android-encrypted) -> panic. That validates the driver before flashing an HFS image into userdata (needs explicit user confirmation at that time).
-- **SUPERSEDES the 64 GiB iosroot GPT plan: user said "u can delete android" (2026-10-15).** Use the existing `userdata` partition (LUN0 sda34, 4K LBA 0x2B8C00, 0x1AC4B MiB ~107 GiB) directly as the iOS root: NO GPT changes. Keep bootloaders, recovery (OrangeFox), modem/persist/fsg/modemst untouched. Write the HFS image later with `fastboot flash userdata` (sparse, auto-split under the 768 MiB limit). Android will no longer boot normally (expected; reinstallable). Order: XNU UFS driver first, read-only against the current GPT; flash only once it can locate userdata. Nothing erased yet.
-- **DECIDED (user, 2026-10-15): 64 GiB `iosroot` on LUN0 (sda), taken from userdata (wipes Android user data; Android/super kept).** Planned GPT (4K LBAs): userdata 0x2B8C00..0xD7D6FF (~43 GiB, keep type/unique GUIDs and attributes); iosroot 0xD7D700..0x1D7D6FF (0x1000000 blocks = 64 GiB, 1 MiB aligned); backup GPT area unchanged. Procedure: user backs up phone data -> boot OrangeFox recovery (adb) -> back up GPT (sgdisk --backup + raw dd of LBA 0-5 and last 6 blocks) to research/ -> sgdisk edit -> Format Data -> verify Android boots to setup. NOT EXECUTED YET.
-- **INTERNAL UFS WORKS FROM THE SHIM (read-only), user authorized internal-UFS approach incl. flashing (2026-10-15, "i allow everything").** Shim probe `shim/ufs.c` (commit `12ed3ed` + filter): ufshc@1d84000 is UFSHCI 2.1 (ver 0x210, cap 0x1587031F, 32 slots), ABL leaves HCE=1, HCS=0x10F (device present, lists ready, UIC ready); probe takes over UTRL at its own buffer (verifies UTRLBA readback before any doorbell), TEST UNIT READY/READ CAPACITY/READ(10) all succeed. LUN0 = 0x1D7D800 x 4 KiB (~126.6 GB), valid GPT (64 entries at LBA 2). Photos IMG_20261015_212916/213325/213429. Big LUN0 partitions (start in 4K LBAs / MiB): super 0xCA00/0x2200 (8.5 GiB), logdump 0x22CA00/64, minidump 0x230A00/128, rawdump 0x238A00/128, recovery 0x240C00/128, cache 0x248C00/384 ext4, exaid 0x260C00/384, cust 0x278C00/1024 ext4, **userdata 0x2B8C00/0x1AC4B MiB (~107 GiB), fs unreadable = encrypted (metadata encryption)**. cache..cust contiguous = only 1.75 GiB (too small for iOS ~10+ GiB). Plan needing user consent: shrink userdata in GPT (wipes Android data) and add an `iosroot` partition at the end of LUN0. LUNs 1-5 not listed yet (sdb..sdf backed up in backup/lun).
-- **fastboot limit measured (2026-10-15, read-only getvar):** `max-download-size: 805306368` (768 MiB); `max-fetch-size` unsupported; `is-userspace: no` (ABL fastboot). A `fastboot boot` image (shim+kernel+RAM disk) must be < 768 MiB, so the 2.5 GiB iOS shared cache cannot ride in the boot RAM disk even if XNU gets all RAM. Real userland needs storage access (UFS driver, or USB host) or a much smaller cache. Unlocking full RAM is still needed later (GUI).
-- **iOS 16 USERLAND SOURCE (Claude, 2026-10-15).** Chose **iPhone X (iPhone10,3/10,6, D22/D221AP)** iOS **16.7.16 (20H392)** over iPhone 8: same A11 (no PAC -> plain arm64, runs on Kryo 470/ARMv8.2), last iOS for A11; X userland is home-button-less and tall-screen (1125x2436 vs sweet 1080x2400), better fit for later GUI. Note the X has its OWN SystemOS cryptex (different digest from iPhone 8's). IPSW URL in `research/ipsw-x/URL.txt` (+ BuildManifest). Images on the user's external SSD (NOT in git, do not format that disk: it holds the user's photos): `/run/media/dipa/android/ios-sweet-ipsw/iPhone10,3_16.7.16_20H392/` — `087-86593-047.dmg` = Cryptex1,SystemOS (2,743,074,816 B), `087-86698-044.dmg` = OS rootfs (4,730,814,044 B), both zip CRC-32 verified, plus Firmware/*.root_hash/.trustcache/.mtree. AppOS cryptex is 087-86715-047.dmg (10 MB, same as iPhone 8).
-  - Images are raw APFS; files use LZBITMAP (decmpfs type 14). 7z cannot decode. Tools: `ipsw` 3.1.738 (AUR ipsw-bin, user-approved) needs apfs-fuse on Linux; **apfs-fuse** built in user space (system cmake broken: cmake 4.4.4 wants libjsoncpp.so.27, jsoncpp 1.9.6 installed = partial upgrade, NOT fixed) with pip cmake + `-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_CXX_FLAGS="-include cstdint"`, installed to `~/.local/bin/apfs-fuse` (+apfs-dump-quick). Mount via a comma-free symlink (apfs-fuse splits options on ',' in `iPhone10,3`; exFAT has no symlinks -> put link elsewhere): `apfs-fuse LINK/087-86698-044.dmg MNT` -> `MNT/root/...`; unmount `fusermount3 -u MNT`.
-  - Verified from headers: `dyld_shared_cache_arm64` magic `dyld_v1   arm64`; `/sbin/launchd`, `/usr/lib/dyld` = cputype 0x100000c subtype 0 (plain arm64). libSystem exists only inside the cache.
-  - **BLOCKER for real userland via RAM disk:** shared cache = 3.10 GiB in 44 files (~2.5 GiB without the 592 MB `.symbols`), but the kernel manages only 1.20 GiB (0xb0000000..0xfd000000). Options: (A) give XNU the phone's full ~6 GB (banks 0x80000000+2G and 0x100000000+0xfcc00000, carve-out holes need pmap support) AND check fastboot max-download-size for a multi-GB boot image; (B) storage driver (Qualcomm UFS) to read a root from flash (no flashing allowed: would need a file/partition strategy); (C) run against individual dylibs extracted from the cache (uncertain).
-- **MILESTONE ON HARDWARE: HFS+ ROOT FILESYSTEM -> PID 1.** Boot 2026-10-15 18:22:12 UTC (`research/boot0027b.log`, image `shim/out/shim-boot-0027b.img`), photo `IMG_20261015_202334.jpg`: `BSD root: md0` -> `hfs: mounted SweetRoot on device b(1, 0)` -> `load_init_program: attempting to load /sbin/launchd` -> `*** SWEET userspace: init running as PID 1 ***` -> repeated `SWEET init: still alive`, no panic. Kernel 0027 (built-in Apple OSS HFS + BearSSL MD5), init with SP alignment fix. NEXT: real iOS 16 userland on the HFS image (dyld, libSystem/dyld shared cache, launchd). Known gaps: entitlements (none granted), SHA-1/SHA-384/512 providers, no storage driver (RAM disk only), root mounted read-only.
-- **PHONE HFS ROOT (0027) + SIGBUS ROOT-CAUSED.** Phone boot 2026-10-15 17:49:06 UTC (`research/boot0027.log`, photo `IMG_20261015_200031.jpg`): `hfs: mounted SweetRoot on device b(1, 0)` (HFS works on hardware), init printed its first line, then `pid 1 exited -- exit reason namespace 2 subcode 0xa` = SIGNAL/SIGBUS -> `initproc failed to start` panic. Diagnostic boot 18:08:13 UTC (`research/boot0027d.log`, image `shim/out/shim-boot-0027d.img`, diag init `research/diag-init` from scratch diag-init.S with [a][b][c] markers, `cs_debug=1`; photo `IMG_20261015_201547.jpg`): output `PID [a][b]` then SIGBUS -> fault at first `strb w21,[sp]`; no code-signing messages. Cause: kernel enters a static binary with sp at argc, not necessarily 16-aligned (depends on arg/apple string lengths, differs mockfs vs HFS); EL0 SP alignment check -> EXC_ARM_SP_ALIGN -> SIGBUS (sleh handle_sp_align). QEMU does not enforce SP alignment. NOT a kernel bug: real binaries start in dyld which aligns. Fix `1a8fc15`: sweet-init aligns sp at entry. Rebuilt `research/root-hfs.img`, QEMU `research/q0027-hfs2` OK. Phone image `shim/out/shim-boot-0027b.img` SHA256 `098ba46c...c5c` (payload-0027b, ramdisk match check-0027b) ready, awaiting FASTBOOT. Lesson: Assembly `;` is a comment in Apple arm64 asm (use .macro, not ;-joined #define).
-- **HFS ROOT WORKS (QEMU).** 0027 CI `38779441895` PASSED, `xnu/out-0027` SHA256 `a8643886...5f6a`. QEMU `research/q0027-hfs` (RAM disk = `research/root-hfs.img`, rd=md0): `BSD root: md0` -> `hfs: mounted SweetRoot on device b(1, 0)` -> `load_init_program: attempting to load /sbin/launchd` -> `*** SWEET userspace: init running as PID 1 ***` + heartbeat, no panic. Phone image `shim/out/shim-boot-0027.img` (payload-0027 = 0027 kernel + sweet-0021.adt + root-hfs.img + rd=md0, ramdisk byte-match check-0027) ready; awaiting FASTBOOT for phone test.
-- **HFS ROOT WORK (Claude), patches 0026-0027.**
-  - 0026 (`f0e990c` + link fix `64c96f4`): Apple OSS **hfs-627.100.6** (commit `31d5ec238dfab485e78a9a30b8b92d13e8914f03`, paired with xnu-8796.141.3 in macos-135 release.json) staged by `xnu/patches/0026-stage-hfs.sh` into `bsd/sweet_hfs` (core + hfs_encodings; AppleKeyStore include/key prototypes guarded by CONFIG_PROTECT; SDK TargetConditionals copied). New config option `sweet_hfs` (MASTER + MASTER.arm64.sweet); 40 `optional sweet_hfs` files; Makefile.template foreach adds `_CFLAGS_ADD = -include sweet_hfs_compat.h -I...` (MUST come after kernel -D flags; compat undefs BSD/XNU_KERNEL_PRIVATE and the CONFIG_* HFS tests so kext-config.h decides: macOS profile, no content protection). `sweet_hfs_iokit.c` replaces hfs_iokit.cpp/hfs_encodings_kext.cpp: `sweet_hfs_register()` called in bsd_init after vfsinit (encodings init, vfs_fsadd VFS_TBLCANMOUNTROOT, zones, sysctls); is_ejectable 0, iterate_media none, serial KERN_NOT_SUPPORTED, OSKextGetCurrentLoadTag -> kOSKextInvalidLoadTag (renamed via compat macro). hfs_encodings' own `hfs_allocated` renamed per object (separate kexts on Apple; first CI `38777325964` failed on that duplicate at link). mockfs now validates Mach-O magic (its TODO) so non-Mach-O roots fall through to HFS (new fs entries come AFTER mockfs in vfsconf). CI `38778133720` PASSED, `xnu/out-0026` SHA256 `0b49170c...701a`, prints `SWEET HFS: hfs-627.100.6 registered`.
-  - HFS+ image: `research/root-hfs.img` (8 MB, mkfs.hfsplus from AUR hfsprogs installed with user approval; loop-mounted with sudo; /sbin/launchd = research/sweet-init, /dev; fsck.hfsplus OK). QEMU `research/q0026-hfs`: `BSD root: md0` then data abort in MD5Init from hfs_getvoluuid (mount computes volume UUID).
-  - 0027 (`14bf2b7`): 0020 stager also copies BearSSL hash/md5.c + codec/dec32le.c/enc32le.c; `corecrypto_md5.c` SWEET branch converts MD5_CTX <-> br_md5_context around br_md5_* calls; wrappers sweet_md5.c/sweet_dec32le.c/sweet_enc32le.c. Host test 40/40 match md5sum. CI **`38779441895`** running.
-  - Local tooling: `tools/xnu-cc.py` has `XNU_CC_POST` (flags after logged ones). Sandbox `research/bt28/xnu` = 0025 CI tree + 0026/0027 edits; originals `research/pre0026`, `research/pre0027`. HFS local objects `research/hfs-objs`. Checker entries updated to bt28.
-  - SHA-1 / SHA-384/512 still have no provider.
-- **MILESTONE ON HARDWARE: USERSPACE PID 1 RUNS ON THE PHONE.** Boot 2026-10-15 17:16:00 UTC (`research/boot0025.log`: send OKAY0.410s, boot OKAY0.135s), image `shim/out/shim-boot-0025.img` SHA256 `9dbfa0b1...89db0`. Photo `IMG_20261015_191733.jpg`: `BSD root: md0` -> `load_init_program: attempting to load /sbin/launchd` -> `*** SWEET userspace: init running as PID 1 ***` -> repeated `SWEET init: still alive` (5 s heartbeat), no panic. Kernel 0025 + mockfs RAM disk + built-in no-entitlements AMFI. No flashing performed.
-- **NEXT (toward real iOS userland):** real root filesystem with real binaries. Options: (a) build Apple OSS `hfs` (macOS 13.5 tag `hfs-627.100.6`) into SWEET like libpthread, then an HFS RAM disk image; (b) iOS 16 dyld + libSystem/dyld shared cache from the IPSW (needs APFS or repacking onto HFS). Expected hurdles: entitlements (sweet_amfi grants none), SHA-1/MD5/SHA-384/512 providers (BearSSL), missing kexts/daemons. Current init is a static test program, not launchd.
-- **MILESTONE: USERSPACE RUNS (QEMU).** 0025 CI `38774788048` PASSED, `xnu/out-0025` SHA256 `5496069b...4877`. QEMU `research/q0025-rd` (150 s, no panic): `BSD root: md0` -> `load_init_program: attempting to load /sbin/launchd` -> `*** SWEET userspace: init running as PID 1 ***` -> `SWEET init: still alive` every 5 s. Exec, ad-hoc SHA-256 code signature, syscalls, devfs /dev/console, select timeouts all work. Phone image prepared: `shim/out/shim-boot-0025.img` 16,515,072 bytes SHA256 `9dbfa0b15140c0bd733a16c4f727f6a7df44a8741f98d8e266d5f2fa4f689db0` (payload-0025 = 0025 kernel + sweet-0021.adt + research/sweet-init + rd=md0; ramdisk byte-match check-0025). Waiting for user to put phone in FASTBOOT.
-- **0024 CI `38773277811` PASSED**, `xnu/out-0024` SHA256 `a0ba964b...4348`. QEMU `research/q0024-rd` and **PHONE (boot 2026-10-15 17:05:55 UTC, `research/boot0024.log`, image `shim/out/shim-boot-0024.img` SHA256 `cf3dac86...6964`, 16,510,976 bytes, payload `shim/out/payload-0024.bin` = 0024 kernel + `shim/out/sweet-0021.adt` + RAM disk `research/sweet-init` + rd=md0; ramdisk byte-match `check-0024`)** agree: `Added memory device md0`, `BSD root: md0`, `load_init_program: attempting to load /sbin/launchd`, then data abort in accelerate_entitlement_queries (PC 0x...77d2458, FAR 0x1a0) = NULL AMFI interface. Photo `IMG_20261015_190715.jpg`. RAM disk root is physically verified.
-- **0025 (`2518c79`)**: new `bsd/kern/sweet_amfi.c` registers a built-in AMFI interface at EARLY_BOOT/MIDDLE: no entitlements (adjustContextWithoutMonitor succeeds without creating a context, queries KERN_DENIED, copies NULL/KERN_NOT_FOUND, get_xml/transmuted false); WithMonitor KERN_NOT_SUPPORTED; OSEntitlements_query and query_context_to_object panic explicitly (CoreEntitlements closed; no kernel caller); TrustCache version 0 (0015 keys on trust_cache_rt==NULL, img4 absent -> still unavailable); CoreEntitlements table zero (PMAP_CS only). Compiles locally; checker updated (bt27 entries). CI **`38774788048`** running. Next artifacts `xnu/out-0025`, `research/bt29`, `research/run29.log`. Real iOS binaries will need real entitlements later (no OSS CoreEntitlements exists).
-- **0021-0024 RAM-disk-root iteration (Claude), QEMU only so far, no new phone boot since 0020.** Each kernel tested with `tools/mkpayload.py KERNEL research/q0021.adt OUT --ramdisk research/sweet-init --cmdline "debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=md0"` then `tools/qemu-sweet.py OUT DIR --secs 150 --kernel KERNEL --fail-on-panic` (PATH needs ~/swift/usr/bin for llvm-nm). Fresh ADTs: `research/q0021.adt` (QEMU), `shim/out/sweet-0021.adt` (phone).
-  - 0021 CI `38769532000` PASSED, `xnu/out-0021` SHA256 `2b7500a1...962e`, `research/bt25`/`run25.log`. QEMU `research/q0021-rd`: md0 root, then assert `iomediaClass` in IOService::publishHiddenMedia.
-  - 0022 (`20ece9c`, publishHiddenMedia without IOMedia class) CI `38770666158` PASSED, `xnu/out-0022` SHA256 `a4d0e787...30c5`, `research/bt26`/`run26.log`. QEMU `research/q0022-rd`: data abort in SHA256_Init (NULL g_crypto_funcs) from vm_kernel_addrhash_internal.
-  - 0023 (`c8089d1`, libkern SHA256_Init/Update/Final use built-in ccsha256_ltc_di + ccdigest_init/update on SWEET; also serves code-signing SHA-256; SHA-1/MD5/SHA-384/512 still have NO provider - BearSSL from 0020 could supply them later) CI `38771876423` PASSED, `xnu/out-0023` SHA256 `d763fed7...1003`, `research/bt27`/`run27.log`. QEMU `research/q0023-rd`: **mockfs mounted md0, `load_init_program: attempting to load /sbin/launchd`**, then panic `mockfs_fsnode_vnode failed to create fictitious pages ... rvalue = 5` (mockfs.c:351).
-  - 0024 (`3293c80`): mockfs used memdev mi_base (4K page number of a VIRTUAL kernel address for IOKit RAMDisk, truncated to 32 bits) << PAGE_SHIFT as a physical address. Now zero-copy pager mapping only when mi_phys (with 4K units); virtual md uses pagein/blockmap/strategy -> memdev bcopy. memdev's own mdPhys path assumes 4K ppnums (unsafe on 16K arm64), so do NOT switch the RAMDisk to physical. CI **`38773277811`** running. Next artifacts `xnu/out-0024`, `research/bt28`, `research/run28.log`.
-  - Sandboxes: bt25/bt26/bt27 contain the next patch's edited files; pristine copies in `research/pre0022`..`pre0024`.
-- **PATCH 0021 (Claude): RAM disk root via mockfs -> first userspace program.** Commits `9c37771` (initial; CI `38768500280` FAILED: mockfs_fsnode.c kfree_type(mockfs_fsnode_t) typed-alloc static assert; local xnu-cc stubs `__builtin_xnu_types_compatible` so it can't catch this) and `193772f` (fix), CI **`38769532000`** running: https://github.com/dipa-studio/ios-sweet/actions/runs/38769532000. Next artifacts: `xnu/out-0021`, `research/bt25`, `research/run25.log`.
-  - Kernel: `config/MASTER.arm64.sweet` FILESYS_BASE += `mockfs` (XNU's built-in FS: root device is itself a Mach-O, served as /sbin/launchd, plus /dev for devfs). Upstream mockfs bit-rot fixed: kalloc_type/kfree_type used the POINTER typedef mockfs_fsnode_t (nodes were 8 bytes) -> `struct mockfs_fsnode`. `IOService::setRootMedia` asserted IOBlockStorageDriver class exists (IOStorageFamily absent): SWEET-only, a missing class means root=NULL (same as IOSetImageBoot); Apple path keeps assert. All 21 patches apply (`research/check-patch-order.py`); 5 TUs compile locally with -DMOCKFS (`research/mockfs-objs`), imports resolve vs 0020 kernel. Sandbox `research/bt24/xnu` now holds 0021 versions of those 3 files; pristine 0020 copies in `research/pre0021`.
-  - Tools: `tools/mkpayload.py --ramdisk IMAGE` appends IMAGE as an extra payload segment right after the kernel, moves kernel_end past it (shim unchanged: ADT+boot_args follow it, image stays below topOfKernelData), and adds ADT `/chosen/memory-map` `RAMDisk`=<phys,size>. Boot with `rd=md0`. Without --ramdisk output is byte-identical to existing 0020 QEMU and phone payloads (verified). `tools/sweet-init.S` + `tools/mkinit.py`: PIC static init (open /dev/console, print PID, heartbeat every 5 s via select, never exits) wrapped into a static arm64 Mach-O (__PAGEZERO, __TEXT@0x100000000, LC_UNIXTHREAD, ad-hoc SHA-256 CodeDirectory v0x20400, 4K pages). Build: `~/swift/usr/bin/clang -target arm64-apple-ios16.0 -c tools/sweet-init.S -o X.o && tools/mkinit.py X.o research/sweet-init` (ld64.lld cannot link static iOS). Signature not verified by a real codesign; the kernel will tell.
-  - QEMU with 0020 kernel + RAM disk (`research/q0020-rd.bin`, rd=md0, 150 s `research/q0020-rd150`): `Added memory device md0`, **`BSD root: md0, major 1, minor 0`** (plumbing works), then the setRootMedia assert (now fixed in 0021). NOTE: QEMU needs >60 s to reach IOFindBSDRoot (60 s run showed nothing after stf0; likely RTC/inittodr wait), so use --secs 150.
-  - NEXT: download 0021, QEMU 150 s with ramdisk; expect mockfs mount then init exec -> `*** SWEET userspace: init running as PID 1 ***`. Then phone boot with same payload (phone ADT shim/out/sweet-0020.adt pattern + --ramdisk + rd=md0).
-- **0020 PHONE RESULT (user transcription of screen, 2026-10-15): KERNEL INIT COMPLETE, WAITING FOR ROOT.** After Skywalk self-tests PASSED, kminit, ifnet_attach lo0/gif0/stf0, screen prints `BSD`, then `Waiting on <dict><key>IOProviderClass</key><string>IOMedia</string><key>Content</key><string>Apple_HFS</string></dict>` and `Failed to write boot-picker-bringup-reason to NVRAM.` No panic. This is IOFindBSDRoot waiting for a root device (none exists); NVRAM warning is expected (no NVRAM driver). QEMU `cpu_idle` snapshot is presumably the same wait (not GDB-confirmed; milestone GDB run was cancelled by user since phone answered it). Draft `research/check-milestones20.gdb` (hbreaks inittodr/vfs_mountroot/IOFindBSDRoot/bsd_utaskbootstrap) left uncommitted/ignored.
-- **NEXT MILESTONE: root filesystem -> launchd.** Plan: (1) RAM disk: shim places an image in RAM, ADT /chosen/memory-map `RAMDisk` entry, boot-arg `rd=md0` (XNU md driver). (2) HFS is a separate kext on Apple; build Apple OSS `hfs` (tag paired with macOS 13.5 in distribution-macOS macos-135 release.json) into SWEET like libpthread 0019. APFS is closed. (3) Minimal HFS image with iOS 16 launchd (later: dyld/shared cache; AMFI/code-signing absent will be a later hurdle). User's end goal is full iOS GUI.
-- **0020 (AES) VERIFIED + PHONE BOOTED (Claude took over after Codex usage limit).** Actions `38765422261` (`ab9e23f`) PASSED; kernel `xnu/out-0020/kernel.development.sweet` checksum OK; buildtree `research/bt24`, log `research/run24.log`. Actual-kernel AES checks PASS (`research/check-aes20.gdb` / `.log`, 12 extra CBC cases match OpenSSL). 45s QEMU `research/q0020`: no panic, zero unknown glyphs, past old TCP/AES panic -> Skywalk self-tests PASSED -> bsd_autoconf kminit -> ifnet_attach lo0/gif0/stf0; final snapshot PC in `cpu_idle` (idle or waiting; NOT yet diagnosed, could be root-device wait). Image `shim/out/shim-boot-0020.img` 16,461,824 bytes SHA256 `775200cb02d95fc750981516b79d91dcdc96184bbe67a38f9d57c59b4a391828`, ramdisk byte-matches `payload-0020.bin` (`check-0020`). **Phone temporarily booted 2026-10-15 16:10:00 UTC**: one FASTBOOT product sweet, send OKAY0.407s, boot OKAY0.134s, total0.549s, exit0 (`research/boot0020.log`). Awaiting user photo; do not reboot the phone before it. NEXT: read photo; diagnose what QEMU waits on after stf0 (GDB backtrace of threads / longer run). Codex's STOP request below is complete.
-- User requests STOP after completing the current0020 AES iteration (Actions/QEMU/phone), then leave a precise committed handoff for another AI. User says FASTBOOT ready again after0019 photo. Do not start a new blocker fix after this iteration.
-- Goal: iOS16-generation XNU on Redmi Note10Pro sweet/SM7150. Always commit, use gh/Actions for kernel builds, keep this handoff current. Temporary fastboot boot only; preserve Android/backups. No userland/root filesystem boot yet.
-- **Patch0020 update:** initial `e71098d` / Actions `38765012466` superseded by scalar-only compile flags. Added -mgeneral-regs-only to all six provider/BearSSL TUs and corecrypto_aes.c; object disassembly now confirms no SIMD. Updated implementation `ab9e23f`, Actions `38765422261` queued/running: https://github.com/dipa-studio/ios-sweet/actions/runs/38765422261. Do not launch another run. portable BearSSL AES CBC and legacy one-block ECB wired directly into SWEET corecrypto_aes.c. Genuine bitslice implementation, no CPU AES/SIMD requirement, heap or fake global crypto table. Source fetched by `0020-stage-bearssl.sh` from official BearSSL git at immutable `7bea48e5e850ab4cafbe68d3765cdaba13a86d6f`; MIT license retained, downloaded source stays out of git. Kernel limits include adapter only. All128/192/256-bit keys, CBC encrypt/decrypt, copied contexts, in-place/out-of-place; zero block count and size overflow handled, invalid keys clear context. Seven TUs compile to arm64 objects (`research/aes-objs`), imports resolve, all20 patches apply and sources match (`research/patch0020-check.log`). Sandbox `research/bt23/xnu`, originals `research/pre0020`. NEXT: Actions then actual-kernel NIST/random CBC/ECB checks and >=45s QEMU before another phone boot. Next artifacts out-0020 / bt24 / run24.log. 0020 updated CI pending. Local sources/checks match the scalar-only patch.
-- **Latest built kernel0019**, implementation `256d3f0`, patches0001-0019. Actions `38763072907` PASSED (4m5s): https://github.com/dipa-studio/ios-sweet/actions/runs/38763072907. Kernel `xnu/out-0019/kernel.development.sweet`, SHA256 `a27df7568f03fb541cf0e8024c0a594fa178a85054fcf9eba29158cbd4c5ecc0`; checksum verified. Log/source `research/run23.log` / `research/bt23` (no nested .git). Seven pthread source/build/header files and staged adaptations byte-match local compile inputs.
-- **0019 hardware photo received** `IMG_20261015_175306.jpg`: pthread registration visible, passes mbinit and DLIL checksum/scheduling, same AES fault as QEMU: PC`0xfffffe00079174e0` (`aes_encrypt_key128`), LR`0xfffffe000767c3a4` (`tcp_init`), FAR0x78, x8=0. Disassembly proves NULL g_crypto_funcs->ccaes_cbc_encrypt. Photo processed; no more0019 observation pending. General crypto table remains absent, other hash/mode operations may still fault after0020. DO NOT bypass TCP or install fake crypto. XNU already contains SHA256/HMAC implementations; AES source there is a dispatch wrapper. Full future provider interface libkern/libkern/crypto/register_crypto.h. Apple/corecrypto default README describes evaluation-only licensing, so no external corecrypto was fetched or staged; BearSSL selected for this portable AES integration.
-- **0019 pthread FIXED in QEMU and observed beyond its init on phone**: 45s QEMU `research/q0019`, zero unknown glyphs, then AES panic. Actual-kernel API checks PASS `research/check-pthread19.gdb` / `.log`, guest `research/q0019-api`: function/callback table identity, actual provider pthread_init returns, locks/global hash/threadcall/typed zones initialized, thread_selfid via syscall shim + buffer bounds, process hash init/delete via shims restores NULL. Monitor quit prints expected remote-disconnect after PASS. All fixture guests stopped.
-- **0019 provider**: genuine Apple libpthread-514.100.2 commit `a6c70ca0e544347a0377babf748f831577ec24f9`, exact paired release with xnu8796.141.3 in distribution-macOS/macos-135/release.json (`research/macos-135-release.json`). 0019 shell stage runs before patches (workflow copies *.sh); three SWEET wrapper TUs use kext BSD header view, vm_fault_external, renamed provider-side pthread_kern/current_uthread; register real function table at EARLY_BOOT SECOND, real pthread_init later. Stager applies bounded address casts, zero user addresses, proper panic format. SWEET opaque ksyn storage enlarged48->56 for trailing kwe_uth, checked with provider static assertion. Local pre-CI TargetConditionals fixture was syntax-only; artifact bt23 carries actual SDK header and CI is authoritative.
-- **Phone0019 temporarily booted** 2026-10-15 15:51:36 UTC: exactly one FASTBOOT/product sweet verified; send OKAY0.406s, boot OKAY0.134s, total0.546s, exit0 (`research/boot0019.log`). Image `shim/out/shim-boot-0019.img`, 16,457,728 bytes, SHA256 `19429a57e486b856880df9e27327ed488e0139345311fdb0350974e72103a9a1`. Phone ADT/payload `shim/out/sweet-0019.adt` / `payload-0019.bin` timer19, unpacked ramdisk byte-match (`check-0019`). EntryPA0xb146b488, kernelendPA0xb2000000, boot_argsPA0xb2004000/top0xb2008000. Last user FASTBOOT+USB reply preceded this boot; do not assume phone is still in FASTBOOT.
-- **CPU0018 physically verified** by `IMG_20261015_173951 (2).jpg`: boot CPU0 registered, real SGI1 verified, initialization complete -> BSD/MAC/mbinit -> old pthread-table panic. SweetCPU uses legacy IOCPU, ml_processor_register/processor_start/initCPU, real SGI1 clears SIGPdisabled before max CPUs completion; no forced flags/skipped waits. CPU APIs and two-CPU rejection passed (`research/check-cpu18.gdb`, `q0018-api`, `q0018-smp`). Single core; SMP/suspend unsupported. CURRENT SWEET has NO USE_APPLEARMSMP.
-- QEMU next run: generate fresh `tools/mkadt.py research/q0020.adt --qemu` (timer27), mkpayload with `debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress`, then `tools/qemu-sweet.py PAYLOAD OUT --secs 45 --kernel KERNEL --fail-on-panic`. 12s can miss later panics because IORTC waits30s. Runner snapshot only: panic exit2, blank/incomplete exit3; absence of panic does not mean complete boot. Qualcomm XPU/ABL/panel and phone SMC PSCI require hardware checks.
-- Local checker `tools/xnu-cc.py research/run23.log research/bt23 FILTER --per-file`, XNU_CC_OBJDIR for objects. For new BearSSL TUs add XNU_CC_EXTRA with -I bt23/xnu/libkern/crypto/sweet_bearssl/{inc,src}. Patch checker `research/check-patch-order.py` uses temporary upstream index; source fixtures/artifacts ignored under research. GDB mask registers to unsigned64, use function-entry manual-call return traps, discard manipulated guests. No QEMU guest intentionally left running.
+- User asks to implement touchscreen; phone remains disconnected. Installed
+  boot98/System95 unchanged; ready boot99/System100 display work retained.
+- Registered HID is not hardware input. sweet_touch.c targets the other board's
+  GENI/GT9896/FTS and is initialized through sweet UFS, not whyred eMMC. Do not
+  enable it on whyred. Xiaomi whyred DTS supports alternative SynapticsDSX0x20
+  and Novatek0x62 on i2c_1/GPIO67 IRQ/GPIO66 Novatek reset. Actual IC unknown.
+-0177 fixes actual whyred HID geometry2400->2160, full-panel normalization to
+  match framebuffer scaling, lower-edge detection and release parent location.
+  Adds bounded65-byte/10-contact Novatek frame-to-HID adapter ONLY; no I2C
+  producer/power/reset/firmware operations. It does NOT make physical taps work.
+- Local2356 strict-warning/UBSan geometry/packet checks PASS; exact patch replay
+  against authenticated99 source PASS. CI test integrated; full kernel build
+  CI41816371836 started from beadd14e9afdc7c45ab311e3470baff6dcc346d0;
+  failed on upstream HTTP502; source6ebc9fe/fullCI41817694238 now passed above.
+  See WHYRED-TOUCH.md. Private references/baseline/candidate/checks
+  are in touch-whyred; original vendor files and source dumps stay out of git.
+- NEXT: identify actual fitted controller and QUP powered handoff when phone is
+  available; implement matching board-correct bus transport and Synaptics decoder
+  if needed. Verify real taps/drags/multitouch/releases/edges before claiming
+  touchscreen readiness. Do not replace verified99 boot with unverified0177.
 
-## Session log and earlier handoffs (superseded by the active summary above)
+## Phone disconnected; offline automatic-display integration (2026-11-04 Minsk)
 
-### Prior 0019 transition notes (superseded)
+- Final live signed artifact13297982482/run41778268151/job126403582532:
+  ZIP122127B/b1d3f181d1eafbd451a5ee405bdc858316ee81845829b102aec0f01bcb033dc6;
+  binary94544B/27b343c3e92384be4b7e2c0a50de32d228c1424865a4648e647f5c76eb28e4d1.
+  Sourcee1dd981edfe172a7bbca703d523b175bb6c5eea7. Final diagnostic source
+  df007761d1f16887ebd9cbfdba4baf006a7819a4 passed ALL CI41778450154/
+  job126404186157. ZIP73337B/aab7397a5fdf1c338701760836096cb6bda206c9d2686118a190734d6af8ec86;
+  binary73632B/23ec1e2eb0cbe918adef1daa466e6a71b6be4c8eb47b5da90826e1b86c378746.
+  All final archive/source/CRC/size/signature/exact-rights/platform2/noLSE proofs
+  passed; PRIVATE graphics-v100/provenance.json and diag-provenance.json.
+- Independent final comparator passes BOTH compressed/plain positive fixtures
+  and5 negative controls (extra/deleted file, old bytes/mode, new mode). It permits
+  only UF_COMPRESSED on new files and strict old BSD flags. Private final results
+  graphics-v100/comparator-final-tests.json. Own C unit warning-clean -Werror.
+- PRIVATE ssh-v90/check_graphics99.py and pilot_graphics99.py prepared/syntax
+  checked. Default observer does LOCAL validation only (PASS); --start requires
+  completed boot99 flash receipt, creates NEW session and verifies exact UUID
+  and upload readbacks. Pilot requires matching receipts; explicit --run only,
+  fixed finite40s capture/mobile90s parent, memory before/after and actual counters.
+  It never marks deployment ready or changing-scene/visible proof automatically.
+- System100 FULL IMAGE VERIFIED, PRIVATE graphics-v100/system-v100-candidate:
+  whyred-system-ios165-v100-live-display.apfs,5386194944B, SHA256
+  622ca50416c4d296f846cd7d4e754ca2f1d87a8bfe122010fb588ef6eb40e5c8.
+  Independent reader compared8614114504 old logical bytes,63022 old nodes,
+  45744 old files/16607 directories/671 symlinks; exactly3 additions and1 cache
+  content exception. All4 changed/new file byte+mode/UID/GID checks PASS.
+  Separate complete-cache comparison preserves every prior field and all531 jobs.
+  SSH/keys and disabled Bluetooth/FairPlay are in the unchanged byte-checked set.
+  Writer/comparator sources match committed65b1e97fbd6389fbeecf6d675649b8477c9b5555;
+  final CI41781693532/job126414466903 ALL steps PASS. Spool removed after success.
+  manifest.json/offline-readiness.json: offline_ready=true, deployment_ready=false,
+  hardware_verified=false, pilot_required_before_flash=true. Image fits the
+  existing System partition. No device access or flash occurred during this work.
+- NEXT when user reconnects: ask actual Fastboot readiness only then, flash ONLY
+  verified boot99 against existing System95 using private flash_kernel99.py;
+  fresh check_graphics99.py --start and exact-binary finite pilot_graphics99.py
+  after reviewing the fresh session receipt. Do NOT flash the enabled System100
+  until real finite capture, changing-scene/visible delivery and memory checks
+  pass. See WHYRED-DISPLAY-AUTOSTART.md. No continuous daemon installed yet.
 
-- Goal: iOS 16 generation XNU on sweet. Always commit completed work, use gh/Actions for kernel builds, keep this handoff current. Temporary fastboot boot only; preserve Android/backups.
-- **0019 build PASSED** Actions `38763072907` (4m5s), implementation `256d3f0`. Kernel `xnu/out-0019/kernel.development.sweet`, SHA256 `a27df7568f03fb541cf0e8024c0a594fa178a85054fcf9eba29158cbd4c5ecc0`; checksum verified. Log/source `research/run23.log` / `research/bt23`; all seven patched files and staged provider adaptations match local compile inputs. Prefer bt23 as the next baseline.
-- **0019 pthread FIXED in QEMU**: 45s run `research/q0019` registers provider, passes mbinit, DLIL SUM16 checks and DLIL thread scheduling. Actual-kernel GDB checks `research/check-pthread19.gdb` / `.log` PASS: function/callback table identity, real _pthread_init returns, locks/global hash/cleanup threadcall/typed zones non-NULL, thread_selfid via actual syscall shim with output bounds, process hash init/delete through actual shims restores NULL. Guest stopped after tests; no fixture left running. GDB monitor quit prints expected remote disconnect after PASS.
-- **Current next blocker:** QEMU0019 panic data abort FAR0x78 at `aes_encrypt_key128` PC`0xfffffe00079174e0`, called by `tcp_init` LR`0xfffffe000767c3a4`. Disassembly confirms `g_crypto_funcs == NULL`, loading ccaes_cbc_encrypt at+0x78. General crypto registration is still absent; DO NOT bypass TCP or supply fake crypto. Next integrate a genuine compatible crypto implementation/provider (AES first needed here, other digest/mode APIs also used). XNU contains SHA256/HMAC but no AES implementation; its corecrypto_aes.c is a dispatch wrapper. Full crypto table is in libkern/libkern/crypto/register_crypto.h.
-- **0019 phone image prepared and verified**, user reports FASTBOOT+USB again; exactly one device/product sweet verified. `shim/out/shim-boot-0019.img`, 16,457,728 bytes, SHA256 `19429a57e486b856880df9e27327ed488e0139345311fdb0350974e72103a9a1`; unpacked ramdisk matches phone payload (`shim/out/check-0019`, `payload-0019.bin`, `sweet-0019.adt`, timer19). EntryPA0xb146b488; kernelendPA0xb2000000; boot_argsPA0xb2004000/top0xb2008000. Usual debug cmdline cpus=1/-noprogress. **Temporarily booted 2026-10-15 15:51:36 UTC**: send OKAY0.406s, boot OKAY0.134s, total0.546s, exit0 (`research/boot0019.log`). User asked for photo after45s. Await the photo; DO NOT reboot again before observation. Bootloader acceptance only; no0019 physical progress observed yet.
-- **Hardware photo confirms 0018 progress** (`IMG_20261015_173951 (2).jpg`): real phone prints `SWEET CPU: boot CPU 0 registered, SGI1 verified, initialization complete`, enters BSD/MAC, reaches `mbinit: done`, then the same missing-pthread-function-table panic as QEMU at pthread_shims.c:318. CPU completion/interrupt delivery is now physically observed. The photo was received; no further phone boot performed yet.
-- **Patch0019 committed/pushed `256d3f0`; Actions `38763072907` queued/running:** https://github.com/dipa-studio/ios-sweet/actions/runs/38763072907. Do not launch a duplicate. genuine Apple OSS libpthread-514.100.2 provider (immutable commit `a6c70ca0e544347a0377babf748f831577ec24f9`), paired with xnu-8796.141.3 by Apple's `distribution-macOS/macos-135/release.json` (`research/macos-135-release.json`). `0019-stage-libpthread.sh` fetches/stages it before patches; workflow now copies shell scripts too. SWEET-only wrappers compile all three real kernel sources, rename provider-side symbols, use kext header view and vm_fault_external, register the real function table at EARLY_BOOT SECOND. Existing pthread_init then runs the actual provider initialization. No pthread wait/syscall is bypassed. Source staging includes bounded explicit address casts/zero user addresses and panic-format fixes. SWEET kernel opaque ksyn storage enlarged from48 to56 bytes to contain this provider's trailing kwe_uth, with a provider size assertion. Local compile of three provider TUs plus pthread_shims/kern_fork passed; imports resolve and provider exports do not collide with existing kernel symbols. All19 patches apply and changed sources match (`research/patch0019-check.log`). Source sandbox `research/bt22/xnu`, originals `research/pre0019`, objects `research/pthread-objs`. Local TargetConditionals fixture only has target macros for syntax; CI stages the real macOS SDK header and is authoritative. Next Actions artifacts: out-0019 / bt23 / run23.log; run QEMU >=45 seconds. 0019 CI is pending; no 0019 QEMU run yet.
-- **Latest kernel implementation `e7d9550`, patches0001-0018; CI `38760004398` PASSED (3m56s)**: https://github.com/dipa-studio/ios-sweet/actions/runs/38760004398. No build is pending. Kernel `xnu/out-0018/kernel.development.sweet`, SHA256 `b3c8d59acc88f93a2c836eb2527a05ed4fbaac7c580a2ea8c3b795137f4aadf1`; checksum verified. Source/log `research/bt22` / `research/run22.log` (baseline for patch0019; no nested .git). New driver/config sources match CI exactly.
-- **CPU wait FIXED in QEMU**: SweetCPU uses legacy IOCPU, validates single boot CPU, ml_processor_register -> processor_start -> initCPU real SGI1 -> scheduler/IOKit completion -> ml_set_max_cpus. It does NOT force a flag or skip a wait. CPU APIs passed: Running CPU0, processor_array[0] association, SGI signalling enabled, name, unsupported secondary-start error (`research/check-cpu18.gdb` / `.log`, `research/q0018-api`). Single-core only; SMP and suspend unsupported. Two-CPU topology fails explicitly (`research/q0018-smp`).
-- **Next blocker reproduced in 45s QEMU** (`research/q0018-long`, zero unknown glyphs): BSD initialization reaches MAC framework, network mcache and `mbinit: done`, then **`pthread kernel extension not loaded (function table is NULL). @pthread_shims.c:318`**. Do not bypass pthread_init: find/integrate the matching open-source libpthread kernel implementation and register its real function table. A 12s run `research/q0018` looked panic-free before the 30s IORTC wait elapsed; use >=45s or GDB checkpoints for the next iteration. No userland/root filesystem boot yet.
-- **Phone 0018 TEMPORARILY BOOTED** 2026-10-15 **15:31:15 UTC**: exactly one FASTBOOT device verified product sweet; send OKAY0.400s, boot OKAY0.134s, total0.539s, exit0. Local log `research/boot0018.log`. This confirms bootloader acceptance only. User was asked for a photo; await it, DO NOT reboot the phone again before their observation. No flashing performed.
-- Current hardware image `shim/out/shim-boot-0018.img`, **16,437,248 bytes**, SHA256 **`b7a23595d143a76c72c9fe2cfcc5d77a8f16987b5af1a2703bbffdfa6922908c`**. Phone ADT/payload `shim/out/sweet-0018.adt` / `shim/out/payload-0018.bin` (timer19), unpacked ramdisk exactly matches payload (`shim/out/check-0018`). EntryPA0xb146b488; kernelendPA0xb1ffc000; boot_argsPA0xb2000000/top0xb2004000. Command line `debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress`.
-- QEMU payload/ADT `research/q0018.bin` / `research/q0018.adt` (timer27). Run `python3 tools/qemu-sweet.py research/q0018.bin research/NEW-OUT --secs 45 --kernel xnu/out-0018/kernel.development.sweet --fail-on-panic`; fresh ADT seed for a new payload. Output fb.png/fb.txt/regs.txt/qemu.log/result.json. Visible panic exit2; blank/incomplete decode exit3; no_panic_observed is snapshot-only, not successful boot. -noprogress prevents the graphical indicator corrupting console text. Qualcomm XPU/bootloader/panel and SMC PSCI still need physical validation.
-- Patches0014-0017 fixed PRNG registration/direct SHA256, explicit unavailable trust-cache service with rejected loads/no matches, built-in SweetPlatformExpert, and timer PPI from ADT (phone19/default19, QEMU27). All their checks/artifacts are preserved in the history below. CURRENT SWEET has NO USE_APPLEARMSMP; do not assume gCPUIC/gAIC/gPMGR AppleARMSMP globals exist.
-- Local single-file checker: tools/xnu-cc.py research/run22.log research/bt22 FILTER --per-file, output via XNU_CC_OBJDIR. Patch checker `research/check-patch-order.py` applies all18 via temporary index, matches sandbox sources. Sandbox for0018 `research/bt21/xnu`, originals `research/pre0018`, objects `research/cpu-objs`. First compiler issues were missing machine/atomic.h and nonexistent getNameSymbol; fixed and both TUs compiled successfully before CI. Fixtures/artifacts under research are local-only/ignored.
-- GDB: mask int(register)&((1<<64)-1) for unsigned kernel pointers; use function-entry manual-call return traps, discard manipulated guests. No QEMU fixture is intentionally left running.
+- User explicitly disconnected the phone and asks for offline work. Do not ask
+  Fastboot now or reuse held98c SSH. Installed boot98/System95 unchanged.
+- Both matched99 helpers from sourcea330a8b118d389cda7fae1ab93e516cf78567c4e
+  passed all CI steps: render41698260722/job126134429664, wake41698260835/
+  job126134430599. Artifact digests/CRC/provenance/platform2/signature/rights/
+  ISA/99UUID passed locally. Private graphics-v99/live99 and wake99. No device
+  live pilot; do not claim automatic rendering fixed from these offline checks.
+- Preparing System100 from verified System95: add only live/wake binaries and
+  org.whyred.display job, modify only launchd cache; preserve all531 old jobs,
+  disabled Bluetooth/FairPlay and SSH/keys. Supervise as mobile,30s restart throttle,
+  fresh immutable capture each iteration, max1fps, no permanent power override.
+  Process RLIMIT_FSIZE1MiB bounds regular logs. Updated sourcee1dd981 passed
+  all renderCI41778268151/job126403582532 steps; signed archive fully verified.
+- New tools/prepare-whyred-display-image.py validates old jobs/base/provenance,
+  executable rights/ISA/platform, embedded bootstrap path and independent APFS
+  file checks. tools/whyred-display-image-compare.c independently compares all
+  old bytes/metadata, permits exactly3 additions and1 cache exception. Native
+  renderer guard/layer/surface checks PASS; independent reader rejects an
+  unchanged95 image as the100 overlay. System100 is now fully verified above;
+  installed boot98/System95 remains unchanged. Exact live-binary finite pilot remains
+  required BEFORE deploying the enabled automatic launchd image.
+- Corrected pilot runner mismatch: general run-mobile remains30s; new explicit
+  run-mobile-display accepts ONLY finite live-window, fixed90s bound. Native
+  argument/continuous-mode/root refusals PASS. No automatic or device invocation;
+  signed diagnostic rebuild and artifact verification now PASS (see above).
 
-### Earlier active handoff snapshot (superseded)
+## Boot99 packaged and matched tools compiling (2026-11-03 Minsk)
 
+- Full package authentication PASSED, including authoritative run/jobs/digests,
+  ZIP CRCs/kernel SHA, all retained source/body/test proofs, exact new0176 source,
+  4826 host checks, linked no-LSE/no-PAN, USB cache barriers, masked idle, foreground
+  setter, boot-art and payload bounds. Runtime-source delta versus98 is ONLY
+  bsd/dev/whyred_emmc_pio_probe.c; framebuffer ABI/boot args unchanged.
+- PRIVATE port/out/whyred-ios-root-v99-late-ready-41692808789: image
+  e2c8a0066f8b651d79e7d8e158d57a0806a53e16421c4d80c39e8633c05e28ff, 22347776B;
+  kernel961ee9a4f92e4fd595c3825ffa470a5efed1604ad7ba819fa6cadff879adfc1c;
+  UUID2ED4E8A4-6D1C-3C3C-980B-8533C25978D1. Manifest has bounded FIFO-ready
+  recheck flag/max1; payload21537520B. No flash/hardware99 test yet.
+- Prepared PRIVATE tools/flash_kernel99.py: exact image/kernel/source/flags,
+  verified98 rollback image, installed System95/81-slice proof, private identity,
+  whyred/unlocked/64MiB boot guards. Requires fresh physical Fastboot-ready answer.
+  NOT run yet. Matched live/wake99 UUID guards native compile/refusal PASS;
+  signed builds pending. Finish them and ask Fastboot only when concrete retry
+  is ready. User's goal remains automatic fresh-frame output, not just a logo.
 
-- **0018 milestone:** Actions `38760004398` PASSED (3m56s), checksums passed, new CPU/build files byte-match CI tree. Kernel `xnu/out-0018/kernel.development.sweet`, SHA256 `b3c8d59acc88f93a2c836eb2527a05ed4fbaac7c580a2ea8c3b795137f4aadf1`; log/tree `research/run22.log` / `research/bt22`. QEMU `research/q0018` 12s: boot CPU registered, SGI1 verified, CPU initialization complete, **BSD initialization entered** (copyright, MAC framework, buffer headers), no panic/zero unknown glyphs. Direct CPU API checks PASS (`research/check-cpu18.gdb`, `.log`, `research/q0018-api`): CPU0 Running, processor matches processor_array[0], real SGI enabled, CPU name correct, secondary-start returns KERN_NOT_SUPPORTED. Two-CPU ADT correctly panics before registration (`research/q0018-smp`). Longer 45s run `research/q0018-long` still running; next BSD wait/fault not yet identified.
-- **Prepared 0018 phone image:** `shim/out/shim-boot-0018.img`, 16,437,248 bytes, SHA256 `b7a23595d143a76c72c9fe2cfcc5d77a8f16987b5af1a2703bbffdfa6922908c`. Phone ADT/payload `shim/out/sweet-0018.adt` / `shim/out/payload-0018.bin`, usual debug args with cpus=1 and -noprogress. Unpacked ramdisk byte-compared (`shim/out/check-0018`). Entry PA remains 0xb146b488; kernel end PA 0xb1ffc000, boot_args 0xb2000000/top0xb2004000. User reports FASTBOOT+USB ready; read-only check found exactly one product sweet. NEXT: temporary fastboot boot of this verified image, record send/boot results, then await hardware photo without rebooting again.
-- Patch 0018 committed/pushed **`e7d9550`**; Actions **`38760004398`** queued/running: https://github.com/dipa-studio/ios-sweet/actions/runs/38760004398. Do not launch a duplicate run.
-- Active continuation: patch **0018** implemented in `iokit/Kernel/arm/SweetCPU.cpp` + arm64 source list + exact qcom,kryo470 personality. Keeps legacy IOCPU, accepts ONLY the single boot CPU, fills ml_processor_info from parsed topology with CPU object as cpu_id, calls ml_processor_register and processor_start. initCPU sends SGI1 via ICC_SGI1R_EL1 and waits (1-second deadline) for real cpu_signal_handler to clear SIGPdisabled. Only after successful startup calls ml_cpu_init_completed/cpusRunning and publishes completion/max CPUs. Secondary startup/suspend are explicitly unsupported. Local C++ compile passed for both TUs (`research/cpu-objs`), all imports resolve, object contains dsb ishst / ICC_SGI1R / isb; all18 patches apply in order and match sources. Sandbox `research/bt21/xnu`, originals `research/pre0018`; next CI artifacts should use `xnu/out-0018`, `research/bt22`, `research/run22.log`. User has the phone available; first run QEMU, then prepare/temporarily boot useful hardware progress.
-- Goal: iOS 16 generation XNU on Redmi Note 10 Pro / sweet. User wants persistent progress, commits, kernel builds via `gh` Actions, and this handoff kept current across agent switches. Temporary `fastboot boot` only; preserve Android and backups.
-- Latest kernel implementation: **`aa3f991`**, patches **0001-0017**. All four new Actions builds PASSED: 0014 `38748543058` (4m0s), 0015 `38749549779` (4m3s), 0016 `38750733996` (4m3s), 0017 **`38751507437` (4m7s)**. Latest: https://github.com/dipa-studio/ios-sweet/actions/runs/38751507437. No build is pending.
-- **Current blocker: CPU initialization has no SWEET CPU driver.** QEMU registers SweetPlatformExpert, then kernel_bootstrap_thread waits in **kperf_init_early -> ml_wait_max_cpus**. Confirmed via actual-kernel GDB call stack (`research/locate-cpu-wait2.log` / `.symbols`) and normal-run `max_cpus_initialized == 2` (MAX_CPUS_WAIT). Do not force the flag or remove the wait. Next implement real CPU registration and completion using XNU's CPU/processor interfaces. CURRENT SWEET uses legacy IOCPU (`USE_APPLEARMSMP` is absent); enabling AppleARMSMP is a separate architectural change requiring GIC/PMGR services. No userland/root filesystem boot yet.
-- Fixed this session: PC=0 unregistered PRNG callback (0014, built-in HMAC-SHA256 provider + direct entropy/write_random hashing); absent Image4/AMFI trust-cache service (0015, unavailable runtime, loads rejected and queries no-match); missing platform driver (0016, SweetPlatformExpert exact personality); incorrect QEMU timer IRQ (0017, validated ADT PPI property, phone default19/QEMU27).
-- **Latest kernel** `xnu/out-0017/kernel.development.sweet`, SHA256 `055a80190ab998b4df9203f1102072dcc78faad1779a537a514e522b682b582f`. Buildtree/log **`research/bt21` / `research/run21.log`**; all nine changed C/C++/header/config files byte-match local checked sources. Checksums passed. Entry PA `0xb146b488`, kernel end PA `0xb1ff4000`. Preferred baseline for patch 0018: `research/bt21/xnu` (no nested .git).
-- **QEMU verified**: `research/q0017-noprogress` ran **30 seconds**, no visible panic, **zero unknown glyphs**, IRQ exceptions returned normally (4 IRQs, tickless idle). It still waits for CPU completion, so this is NOT a completed boot. Earlier 15s run `research/q0017` captured 122 IRQs, timer value27, GICR_ISENABLER0 `0x08000002`, and CPU WAIT; graphical progress overlay corrupted 13 glyphs. Add **`-noprogress`** to keep the console readable. New runner classifies incomplete/blank decoding explicitly (exit3 with --fail-on-panic), visible panic exits2. Snapshot-only; use regs/GDB to diagnose stalls.
-- Current QEMU payload/ADT: **`research/q0017-noprogress.bin` / `research/q0017.adt`**. Run: `python3 tools/qemu-sweet.py research/q0017-noprogress.bin research/NEW-OUT --secs 30 --kernel xnu/out-0017/kernel.development.sweet --fail-on-panic`. Generate fresh seed with mkadt for a new payload. QEMU virt models generic ARM execution, not Qualcomm XPU/bootloader/panel or the phone's SMC PSCI conduit.
-- **Prepared phone image**: **`shim/out/shim-boot-0017.img`**, 16,416,768 bytes, SHA256 `51ff7fe30b4a6668c3452ffe1da922c5ac30cb8de60625c2a652587ecbd0ec92`. Phone ADT/payload `shim/out/sweet-0017.adt` / `shim/out/payload-0017.bin` (timer19). Unpacked ramdisk exactly matches payload (`shim/out/check-0017`). Command line **`debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress`**. NOT sent to phone this session: known CPU-driver wait should be addressed in QEMU first. Last actual phone boot remains 0013; user's latest photo `IMG_20261015_160033.jpg` confirmed the old PRNG PC=0 panic.
-- Direct QEMU/GDB API checks: PRNG 600-byte chunking, buffer bounds, changing output, zero-length reads/writes, user reseed, contended refresh, generator1 init/output PASS again on latest0017 (`research/check-prng17.gdb` / `.log`, guest `research/q0017-api`). Trust-cache unavailable-service/argument/output cases PASS on0015 (`research/check-trustcache.gdb` / `.log`). Platform registration + target/product normal/truncated/zero/null/bounds PASS on0016 (`research/check-platform.gdb`, `research/check-platform3.log`). Different platform ID correctly retains IOPanicPlatform fallback (`research/q0016-negative`). Timer PPI32 and size2 correctly panic (`research/q0017-badppi`, `research/q0017-badsize`); omitted property selects19 (`research/q0017-default`). These are API/bring-up checks, not crypto certification or SMP scheduling validation.
-- Local checker **`research/check-patch-order.py`** verifies all17 patches and changed source equality using a temporary upstream git index. Fixtures/logs/artifacts under research are local-only and ignored. For GDB unsigned kernel pointers, mask `int(register_value) & ((1<<64)-1)`; x30/x29 may be rendered signed. Stop at a function entry for manual-call return traps, and discard each manipulated guest after API tests. All fixture QEMU guests have been stopped.
+## Active98c second storage fallback; boot99 and matching live tools preparing (2026-11-03 Minsk)
 
+- User supplied fresh CMD17 incomplete LBA3068157/int20/present01f80af6/FIFO512.
+  Same clean second CMD13 prior00400900 ->00000900/recheck1, followed by baseline
+  clock restore. This is NOT kernel panic. Current98c graphics pilot is deferred
+  while this read fallback can stall SSH. No99 flash happened; no live daemon
+  installed. Last display-off was logged separately, not a proven read-failure cause.
+- Automatic new-frame helper source dd7ab3f5130589a0551886a421a99b1f5cadd797
+  passed ALL CI41697274483/job126131003017 build/native refusal/signature/audit
+  steps. Not uploaded or physically tested yet. Fresh new IOSurface per frame,
+  no reused screenshot/unsafe rewrite; live-window40s and explicit live1fps modes.
+- Kernel0176 source5b7e210a8c96eceecff8b4b9f95c24ea22d68a73 now passed ALL full
+  CI41692808789/job126115470445 steps (incl4826 eMMC checks and all retained
+  framebuffer/APFS/RAMFS/USB/AKS/idle checks). Authoritative kernel artifact
+  13260537519 ZIP79279001B SHA209d91b3449941b1d0a29f1d16075696691e0a7760382d6eaef3316f667947b7.
+  Buildtree13262505066 ZIP25442046B SHA3111327d764921a79a9d9d68148d5f068028f53ed09cd7ba25fc692151141bc9.
+  Both downloaded privately to kernel-v99-late-ready/artifact. Kernel ZIP digest/
+  CRC passed; embedded UUID2ED4E8A4-6D1C-3C3C-980B-8533C25978D1 and kernel SHA
+  961ee9a4f92e4fd595c3825ffa470a5efed1604ad7ba819fa6cadff879adfc1c.
+- Added ONLY this exact99 UUID to wake and BOTH present/live guards; API remains
+  same ID0/1125x2436. Rebuilt signed matching tools pending. Boot99 packaging
+  reuses all98 source/artifact/layout/rollback checks, updates4826 and requires
+  new0176 patch/coverage/source match. Not ready for flash until packaging passes.
+- NEXT: finish verified boot99 package and matching signed helpers BEFORE asking
+  user to enter Fastboot. Only boot flash needed to test new polling logic; keep
+  System95. Then fresh99 observer and actual finite live pilot; require measured
+  fresh frame changes/performance/memory before persistent automatic integration.
 
-- User wants persistent progress toward iOS 16, commits for completed changes, builds through `gh` / GitHub Actions.
-- Keep this file current at every milestone so another agent can resume immediately, including when usage limits interrupt a session.
-- Patch 0017 committed/pushed `aa3f991`, Actions `38751507437` running: https://github.com/dipa-studio/ios-sweet/actions/runs/38751507437. Next artifacts: xnu/out-0017, research/bt21, research/run21.log. Do not duplicate.
-- Patch 0016 kernel downloaded/checksum verified: SHA256 `d06336c54baa06e0df6561a8bd7df98a9b9f7502c9381c62d1a44c045cd1ce46`, `xnu/out-0016/kernel.development.sweet`; buildtree/log `research/bt20` / `research/run20.log`. QEMU `research/q0016` (10s) prints platform expert registered, zero unknown glyphs, no panic observed BUT stalls (timer mapping still wrong until 0017). Direct actual-kernel GDB tests passed for registered instance and target/product names, including maxLength=1/0 and NULL, sentinels intact (`research/check-platform.gdb`, `research/check-platform3.log`, `research/q0016-api3`). First two fixture attempts used premature/wrong return breakpoints; discarded, corrected fixture uses start-return observation then a function-entry return trap. No phone boot yet.
-- Patch 0016 CI `38750733996` PASSED (4m3s); artifacts not yet downloaded/booted. Patch 0017 prepared to fix QEMU timer fidelity BEFORE interpreting future no-panic/stall runs: actual `qemu-system-aarch64 -M virt,gic-version=3,dumpdtb=research/qemu-virt.dtb ...` timer property has virtual PPI 11 => INTID 27, while phone uses INTID 19. Kernel formerly hardcoded 19. New optional /arm-io/gic virtual-timer-intid property selects the PPI (validate exact u32 and 16..31); missing property retains phone default 19. One RO-late global drives GIC enable and sleh_irq dispatch. tools/mkadt.py emits phone19/QEMU27. Both C TUs compile (`research/timer-objs`), ADT serialize/parse checks confirm values/addresses, all 17 patches apply and match. Sandbox `research/bt19/xnu`, originals `research/pre0017`; initial local sleh compile failed due read-only exported header not updated, fixed export and BOTH recompiled successfully. CI exports normally.
-- Architecture correction for next agent: CURRENT SWEET board_config does NOT define USE_APPLEARMSMP; it compiles the legacy IOCPU path, not cpu_boot_thread/IOPMGR AppleARMSMP. Existing roadmap mentions AppleARMSMP as a future approach. Do not look for gCPUIC/gAIC/gPMGR globals in the current kernel: they are absent. Determine the actual CPU-init wait after platform registration before choosing the next driver architecture.
-- Patch 0016 committed/pushed as `0dcdf5c`; Actions `38750733996` running: https://github.com/dipa-studio/ios-sweet/actions/runs/38750733996. Next artifacts: `xnu/out-0016`, `research/bt20`, `research/run20.log`.
-- Patch 0016 implemented: new `iokit/Kernel/arm/SweetPlatformExpert.cpp`, arm64 source list, built-in personality in KernelConfigTables.cpp guarded by ARM64_BOARD_CONFIG_SWEET. Matches only xiaomi,sweet at score 10000, keeps IOPanicPlatform fallback for other hardware. Uses IODTPlatformExpert base initialization/power domain and createNubs CPU logical-ID annotation; overrides top-level publishing because base requires nonexistent Apple NVRAM /options. Publishes real CPU/top-level nodes, provides bounded target/product names, and registers the platform service. GIC/PMGR and arm-io child-bus drivers remain separate work. Both C++ TUs compile (`research/platform-objs`), all imports resolve against 0015/own objects, all 16 patches apply and sources match. Sandbox `research/bt19/xnu`; originals `research/pre0016`. NEXT: full Actions/QEMU; inspect CPU boot waits after the platform registers, do not equate absence of panic with successful boot.
-- Patch 0015 CI `38749549779` PASSED (4m3s), checksum verified. Kernel `xnu/out-0015/kernel.development.sweet`, SHA256 `ca1b424a596c7058550ad1659080a333e7643270f019656401d80bf2b876645f`; buildtree/log `research/bt19` / `research/run19.log`. QEMU `research/q0015` (10s, zero unknown glyphs) passes trust-cache handling and machine lockdown, then panics `Unable to find driver for this platform: "xiaomi,sweet" @IOPlatformExpert.cpp:2319` (IOPanicPlatform fallback). Next concrete work: add a built-in SWEET IODTPlatformExpert personality/class; keep the fallback for mismatched platforms. No phone boot yet.
-- Direct trust-cache API checks PASSED in the actual 0015 kernel under QEMU/GDB (`research/check-trustcache.gdb`, `research/check-trustcache.log`, `research/q0015-api`): runtime pointers NULL, hash/UUID queries return NOT_FOUND, typed/untyped/legacy loads return NOT_SUPPORTED, capabilities outputs zero and bounds preserved, invalid-argument cases still reject. Second PRNG check also verifies contended refresh returns immediately (`research/check-prng2.log`, `research/q0014-api2`).
-- Patch 0015 committed/pushed `8f851d4`, Actions run `38749549779` running: https://github.com/dipa-studio/ios-sweet/actions/runs/38749549779. Do not duplicate.
-- Direct PRNG API checks passed in the REAL 0014 kernel under QEMU/GDB, stopped before trust-cache init (`research/check-prng.gdb`, log `research/check-prng.log`, guest `research/q0014-api`). Invoked read_random for 600 bytes (chunking and buffer sentinel intact), repeated output differed, zero-length read/write succeeded, write_random(64-byte input) succeeded, secondary generator 1 initialized and generated distinct output. QEMU log has no exceptions during these checks; guest was discarded after the tests. This tests API behavior, not a cryptographic certification or SMP scheduling.
-- Patch 0015 implemented in `bsd/kern/kern_trustcache.c`: SWEET with missing Image4/AMFI marks both runtime pointers NULL and logs service unavailability. Existing static loader handles NULL. Public load APIs return KERN_NOT_SUPPORTED; hash/UUID queries return KERN_NOT_FOUND; capabilities outputs are zero with KERN_NOT_SUPPORTED. Invalid-input checks remain, and Apple paths/available-provider initialization retain existing behavior. No trust is granted. Local arm64 compile passed (`research/trustcache-objs`), all 15 patches apply and sources match. Sandbox `research/bt18/xnu`, baseline `research/pre0015`. Next: Actions/QEMU and direct unavailable-service API checks using GDB.
-- Patch 0014 CI `38748543058` PASSED (4m0s), artifact checksum passed. Kernel `xnu/out-0014/kernel.development.sweet`, SHA256 `741de20c851755d333759d7e668346f3edb4f325efac4cc7c142d80d1f5ff75c`; buildtree/log `research/bt18` / `research/run18.log`. QEMU run `research/q0014` (10s, zero unknown glyphs) prints `SWEET PRNG: HMAC-SHA256 registered`, passes commpage initialization, loads vnguard policy, THEN panics `image4 interface not available @kern_trustcache.c:253`. PC=0 fault FIXED IN QEMU. No new phone boot performed.
-- Next work: SWEET currently has neither AppleImage4 nor AMFI. `trust_cache_runtime_init` unconditionally requires both; unlike BCM2837, SWEET enters this startup path. Investigate an explicitly unavailable trust-cache runtime with rejected loads/no query matches while providers are absent; preserve all Apple-platform checks. Merely skipping the startup call would leave later AMFI/IMG4 dereferences unsafe. Existing load_static_trust_cache already handles trust_cache_rt == NULL.
-- QEMU runner now supports `--kernel MATCHING_KERNEL --fail-on-panic`: runtime font extraction from the payload produces exact `fb.txt`, plus `result.json`; a visible panic returns 2. Baseline 0013 re-run `research/q0013-text` detects the same NULL callback panic with zero unknown glyphs. Synthetic glyph roundtrip (including literal `?`) and invalid-VA rejection passed. Screen rows remain circular, not a full log; `no_panic_observed` does not prove successful boot. README has the invocation.
-- Patch 0014 committed/pushed as `be61f99`; Actions run `38748543058` is running: https://github.com/dipa-studio/ios-sweet/actions/runs/38748543058. Do not start a duplicate build.
-- 2026-10-15 active: hardware photo `IMG_20261015_160033.jpg` confirms the same PC=0 instruction-fetch abort as QEMU (LR `0xfffffe0007443fe4` = read_random). Independently reproduced with kernel 0013 in `research/q0013` (8-second run); prior allocator fix works. Latest tooling commit reviewed: `8d66d2d`.
-- Patch 0014 implemented: registers a built-in HMAC-SHA256 DRBG provider at EARLY_BOOT/FIRST, before commpage creation. A shared mutex serializes output/reseed across CPUs (correctness first; no per-CPU scaling yet), initgen validates CPU identities, refresh uses try-lock and the existing entropy filter/health tests. SWEET entropy accumulation and write_random now use the built-in SHA256 directly; no incomplete g_crypto_funcs table is registered. The existing bootloader-seed requirement remains enforced.
-- Local validation: both PRNG translation units compile to arm64 objects in `research/prng-objs`; no SHA256 wrapper imports remain. All 14 patches apply in CI order and resulting PRNG sources match local inputs. Sandbox `research/bt17/xnu`, originals `research/pre0014`, checker `research/check-patch-order.py`. NEXT: Actions kernel build, download to `xnu/out-0014`, run the QEMU payload before requesting another phone boot. Baseline QEMU ADT/payload are `research/q0013.adt` / `research/q0013.bin`.
-- 2026-10-15 08:15 QEMU EMULATION WORKS (`tools/qemu-sweet.py`, see "QEMU emulation" below). Patch 0013 VERIFIED in QEMU: boot passes kmem_crypto_init and ulock_initialize. NEXT BLOCKER (reproduced in QEMU, expected on hardware too): `pmap_create_commpages -> random() -> RandomULong -> read_random -> prng_funcs.refresh == NULL` (instruction fetch abort at pc 0, lr read_random+0x34). Nobody calls `register_and_init_prng` (closed corecrypto kext does it on Apple). Fix = patch 0014: SWEET-registered cckprng_funcs provider (osfmk/prng/prng_random.c); note random_cpu_init also panics while !prng_ready. The 07:26 hardware boot of 0013 will most likely show this same panic.
-- Previous hardware boot: patch 0013 (`a3a46e2`) CI `38686345689` PASSED (3m44s), image `shim/out/shim-boot-0013.img` was temporarily booted on 2026-10-15 at 05:26 UTC: send OKAY (0.407s), boot OKAY (0.134s), total 0.546s. Superseded by the hardware/QEMU PC=0 observation and patch 0014 work above.
-- Latest kernel implementation commit: `8f851d4`. Latest successful kernel CI: `38749549779` (patch 0015), https://github.com/dipa-studio/ios-sweet/actions/runs/38749549779.
-- CURRENT image: `shim/out/shim-boot-0013.img`, 16,412,672 bytes, SHA256 `110d1c46aee4b60253db24b6535e9781c4cf0fd25ca2a70e9016cf81378cea25`. Kernel `xnu/out-0013/kernel.development.sweet`, SHA256 `f0b1d375995316c550ce7014ff234d8271e9b9ac2857795ceff41b76ba2cd740`, plain arm64. CI log confirms 0013 applied; checksums passed. Entry PA `0xb146b488`, kernel end PA `0xb1ff4000`.
-- Current log/buildtree: `research/run17.log`, `research/bt17` (extracted, no nested .git; preferred baseline for patch 0014). Payload/ADT: `shim/out/payload-0013.bin`, `shim/out/sweet-0013.adt` (includes /defaults). Unpacked ramdisk byte-compared with payload in `shim/out/check-0013`.
-- Patch-0012 original image: `shim/out/shim-boot-0012.img`, 16,412,672 bytes, SHA256 `cf4b8ec4a65a51888d71c17d09cd0831d6b761b90e2531fdb8e575c32f4fd24a`. Kernel `xnu/out-0012/kernel.development.sweet`, SHA256 `69b78f49f6459cc63a0af44e7cf73c1779ef72130ef72b12ae86c88183ffc742`; checksums passed and sweet_early_relocate symbol present. Entry PA remains `0xb146b488`, kernel end PA `0xb1ff4000`.
-- Patch-0012 log/tree: `research/run16.log`, `research/bt16` (extracted, no nested .git; preferred baseline for next patch). CI log confirms 0012 applied. Payload `shim/out/payload-0012.bin`, ADT `shim/out/sweet-0012.adt`; packed ramdisk byte-compared with payload in `shim/out/check-0012`.
-- Active payload command line: `debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam`.
-- Latest observed photo: `/home/dipa/Downloads/IMG_20261015_071346.jpg` (local only). Stages 9 (kernel framebuffer VA), 10 (TTBR0 off/TLB flush), 11 (physmap table pointers) and 12 (calling pmap_bootstrap) all visible. Persistent diagnostics are VERIFIED ON HARDWARE.
-- pmap.c:1987 is the assert after SecureDTLookupEntry(NULL, "/defaults", &entry). The pmap-max-asids property itself is optional; an empty /defaults uses XNU's MAX_ASIDS. Do not bypass the assertion or guess an ASID limit.
-- Previous payload-only fix image: `shim/out/shim-boot-0012-defaults.img`, SHA256 `3ff61a268853c6ea7cbf284833f1346a1d791980ca366b6e1a215a86e040512b` (16,412,672 bytes). Same kernel/CI as 0012; ADT 2516 bytes (`shim/out/sweet-0012-defaults.adt`), root /defaults present with no ASID override. Payload `shim/out/payload-0012-defaults.bin`; unpacked ramdisk exactly matches payload (`shim/out/check-0012-defaults`). This boot reached the allocator crypto NULL-pointer fault below.
-- Latest hardware photo: `/home/dipa/Downloads/IMG_20261015_071608.jpg` (local only). Normal serial framebuffer console works. VM bootstrap/zone initialization, logging, scheduler, IPC, KDP and ulock_initialize print before the kmem_crypto_init data abort. gPanicBase warnings are expected because PLATFORM_PANIC_LOG_DISABLED is configured, and are not the faulting call.
-- Faulting instruction: `ldr x0, [x8, #0x150]` in crypto_random_kmem_ctx_size; x8 = NULL g_crypto_funcs. Source: libkern/crypto/corecrypto_rand.c and osfmk/vm/vm_kern.c:2448. rand.h explicitly permits NON-cryptographic kmem RNGs, but requires no locking in generation and context size <=256. Do not substitute read_random here: the global PRNG provider is also unregistered and kmem generation must remain lock-free. early_random may seed contexts during single-CPU bootstrap; it uses the built-in HMAC-SHA256 DRBG with the host-generated ADT seed.
-- Patch 0013 keeps the replacement entirely private to vm_kern.c: SplitMix64 state is 8 bytes per CPU/sizeclass, initialized using early_random. Uniform selection uses rejection sampling to avoid modulo bias. Other platforms retain the original corecrypto calls; SWEET's generic crypto APIs/registration remain untouched. Reference: https://prng.di.unimi.it/splitmix64.c (Sebastiano Vigna, public domain).
-- Validation: vm_kern.c compiles to arm64 (`research/kmem-rng-objs`, using `research/run16.log` + `research/bt16`). Undefined symbols include early_random and NO crypto_random_* references. All 13 patches apply in CI order and match the checked source. Original saved as `research/vm_kern.pre0013.c`.
-- RNG host checks: extracted actual new helper in `research/kmem-rng-check.c`; 16,384 outputs match the author's downloaded reference (`research/splitmix64-reference.c`), 147,456 bounded outputs satisfy their limits (including 1 and UINT64_MAX), and a forced rejection advances correctly. Full kernel crypto services and the registered kernel PRNG provider remain future work; this patch only supplies the allocator RNG contract.
-- Patch-0011 artifacts: kernel `xnu/out-0011/kernel.development.sweet`, log `research/run15.log`, extracted buildtree `research/bt15` (no nested .git). CI log confirms patch 0011 applied; artifact checksums passed. Kernel is plain arm64, entry VA `0xfffffe000746b488` -> PA `0xb146b488`, kernel end PA still `0xb1ff4000`.
-- Patch-0011 image: 16,412,672 bytes, SHA256 `29ad5cbfc752473de4af2c471a24a8b34f92da4bff5afec65c614b90cd3ad53a`. Kernel SHA256 `8ac3a956894b09f7bd0d890de8c5de38c65513287feb1e1bcd12db8ca772ee5c`. Payload/ADT in `shim/out/payload-0011.bin`, `shim/out/sweet-0011.adt`. Header unpacked/checked in `shim/out/check-0011`.
-- First patch-0011 attempt timed out waiting for FASTBOOT; superseded by the successful send/boot recorded above. Do not repeat the boot before the user reports the current screen.
-- Patch-0011 photo: `/home/dipa/Downloads/IMG_20261015_070218.jpg` (local only). Visible stages 1-8 and old red shim text; entry PA B146B488, boot args PA B1FF8000 / top B1FFC000. No evidence yet locating execution after stage 8.
-- Patch-0012 sandbox: `research/bt15/xnu` (NO nested .git). Proposed permanent debug VA: VM_MIN_KERNEL_ADDRESS + ARM_TT_L2_SIZE, in the reserved gap below gVirtBase and above low globals; map the same PA framebuffer as Normal-NC in the final TTBR1 before arm_vm_physmap_init changes phystokv(). Keep the early panic sink until normal kprintf startup.
-- Patch 0012 validation: all 4 changed C translation units compiled to arm64 objects in `research/post-ttbr0-objs`; internal header export added to osfmk/arm64/Makefile and recreated locally in EXPORT_HDRS for pe_serial.c. All 12 patches apply in CI order and match all 6 edited files. Baselines are saved under `research/pre0012/`.
-- Actual mapping-helper host model (`research/early-map-check.c`, barrier stubbed only for host compilation) confirms: VA `0xfffffe0002000000`, L1 index 2016, L2 index 1; descriptor `0x006000009c000605` = framebuffer PA, Normal-NC, outer-shareable, EL1 RW, PXN+UXN. All other L2 entries preserved. The gap is excluded by ARM_LARGE_MEMORY's pmap_virtual_region(0).
-- Next boot command line MUST add `-enable_kprintf_spam`: DEVELOPMENT disables kprintf_output by default even when DB_KPRT is set (`pexpert/arm/pe_kprintf.c`). Planned command line: `debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam`.
+## Active98c automatic CPU display bridge candidate (2026-11-03 Minsk)
 
-### Patch 0012 screen legend (after original stages 1-8)
-- 9: kernel framebuffer VA live; 10: TTBR0 off / TLB flushed; 11: physmap pointers rebound.
-- 12: calling pmap_bootstrap; 13: pmap_bootstrap returned; 14: early I/O page tables ready; 15: arm_vm_init returned.
-- 16: calling serial_init; 17: fbcon config read / mapping; 18: fbcon mapping returned; 19: serial_init returned; 20: kprintf startup complete.
-- Normal serial initialization clears the screen, so earlier stages may disappear before 19. If serial exists, early console disables after 20; otherwise early panic output stays enabled.
-- Local source sandbox: `research/bt13/xnu` (git baseline `623b060`, patches 0001-0008 already in baseline; uncommitted export edits correspond to patch 0009). Preserve those edits when producing patch 0010.
-- Previous compile log/tree: `research/run13.log`, `research/bt13`; previous kernel: `xnu/out/kernel.development.sweet`. New successful log/tree: `research/run14.log`, `research/bt14`; new kernel: `xnu/out-0010/kernel.development.sweet`.
-- Current device access: patch-0012 image was temporarily started from FASTBOOT; no adb connection is expected. Never flash partitions for bring-up; use `fastboot boot` with the shim image.
-- Patch `0010` lives in `xnu/patches/0010-sweet-early-framebuffer-debug.patch`. Its exact compiled sources are under `research/bt13/xnu`; generated objects are in `research/early-objs`.
-- Local checks passed: all 5 changed/new translation units compiled to arm64 Mach-O objects; new console only imports `_doprnt` and `iso_font` (both exist in the previous kernel). All 10 patches applied to a temporary upstream git index in CI order, and all 7 resulting changed source files matched the local compile inputs.
-- Reproduce changed-file compilation: `XNU_CC_OBJDIR="$PWD/research/early-objs" python3 tools/xnu-cc.py research/run13.log research/bt13 arm_init.c arm_vm_init.c kern/debug.c arm64/start.s osfmk/arm64/sweet_early.c --per-file` (create the output directory first). The helper now accepts explicit new source paths absent from the old artifact's Makefiles and rejects empty selections.
-- Device command result: `adb reboot bootloader`, then `timeout 30s fastboot boot shim/out/shim-boot-0010.img`: send OKAY (16028 KB), boot OKAY, total 0.541s. This confirms bootloader acceptance only, not XNU progress.
-- The successful boot above was on 2026-10-14. On 2026-10-15, `timeout 45s fastboot boot ...` timed out waiting for a device; no image was sent. Boot image SHA256 rechecked and unchanged. No new build is needed to repeat the trial.
-- Earlier retry: `timeout 90s fastboot boot shim/out/shim-boot-0010.img` timed out (exit 124). This is superseded by the successful 2026-10-15 repeat boot recorded above; do not repeat it until the user reports the screen.
-- User observation confirms MMU-on C entry, platform expert, CPU topology/bootstrap, startup bootstrap and cpu_init all complete. Failure is within arm_vm_physmap_init (non-XNU_MONITOR branch), before stage 8 / TTBR0 teardown. Old red shim text remains behind the early console; this is expected because only written rows are cleared.
-- New edit/compile sandbox is `research/bt14/xnu` (extracted artifact, NO nested .git; `git diff` there would act on the parent project). Use a saved baseline file / generated unified diff, or explicitly initialize a local baseline before editing. `research/bt13/xnu` does have its own baseline git repo.
-- Exact user-reported panic: `arm_vm_init.c:1606 Assertion failed: (temp_ptov_table[ptov_index - 1].va + temp_ptov_table[ptov_index - 1].len) <= physmap_end`.
-- Root cause: MacOSX build sets `ARM_LARGE_MEMORY=1`; `XNU_MONITOR` is off. Block alignment in arm_vm_physmap_slide can add gaps, but the non-PPL large-memory physmap_end omitted the padding already present in the small-memory branch. Patch 0011 reserves PTOV_TABLE_SIZE*ARM_TT_TWIG_SIZE (8*32MB) in both the aperture bound and its L1 allocation; monitor/PPL builds retain zero padding. The assertion is preserved.
-- Validation: `arm_vm_init.c` compiled to an arm64 object using `research/run14.log` + `research/bt14` (object in `research/physmap-objs`). All 11 patches apply in CI order and produce exactly that source. Host harness `research/physmap-check.c` extracts the real XNU slide function with page-table-write stubs: all 65,536 page-aligned slides within 1GB checked against the current kernel memory layout; old bound fails 65,504 cases, padded bound fails zero; worst overrun 0x1ffc000 bytes. Baseline source saved as `research/arm_vm_init.pre0011.c`.
-- CI: https://github.com/dipa-studio/ios-sweet/actions/runs/38638702083 (success; artifacts and full log downloaded).
-- New image: `shim/out/shim-boot-0010.img` (16,412,672 bytes, SHA256 `ed2c270e0081bad5ff517be415f9bfe8805463aea7866732203fa97ac737e64e`). Previous image preserved as `shim/out/shim-boot-pre0010.img`.
-- New kernel SHA256: `3ee05270cc291c49589a101678f904b1b69cb2f2575e05398bce8a4e052f409a`. Artifact checksums passed; arm64 (not arm64e), early-console symbols present. Payload entry VA `0xfffffe000746a488` -> PA `0xb146a488`; kernel end PA `0xb1ff4000`. Command line remains `debug=0xc serial=3 cpus=1 keepsyms=1`.
+- User explicitly asks to FIX display output. Stopped read-only monitor46870 via
+  graphics98c-memory-stop; phase stopped verified. Held46379 is now free after
+  fresh read-only threads26/95/57 and actual cache-slide38248000. SpringBoard26
+  still has5 threads in earlier CoreServices store wait; do NOT reuse late98b
+  IconServices progression as if it were current98c. lsd95 has8 sampled threads.
+  Private98c-device/output-fix-*-threads-*.stdout and cache snapshot.
+- Preparing explicit live-window / live modes in existing entitled render helper.
+  Each iteration obtains a NEW real LCD capture in fresh own IOSurface memory,
+  queues it once and drops userspace reference. Driver0150 retains pending and
+  workloop surface objects; never rewrite a queued surface. Per-frame autorelease
+  pool bounds temporary objects. At most1new frame/sec; sparse summaries/hash
+  counts; no stored PNG, test content, guessed renderer flags or fake GPU.
+- Opaque black captures are valid in LIVE modes; untouched transparent surfaces
+  are rejected. Existing finite probes remain strict. Exact97/98 UUID and ABI
+  guard remains before live capture/presentation. Signal stop;45s per-capture
+  watchdog; stop after3consecutive failures. Finite pilot40s requires3clean frames;
+  continuous mode only explicit invocation, no power-state override/autostart yet.
+- Native warning-clean compile, physical-target refusals for new/retained modes
+  and retained CPU CALayer/IOSurface tests PASS. iOS CI/upload/live performance,
+  memory/visible changing-scene proof and persistent integration PENDING. This is
+  functional CPU fallback plumbing, not a claim that stock GPU path is repaired.
+- Primary next: signed CI artifact verification/readback, finite live pilot via
+  current held shell, measure capture latency/surface lifetime and frame changes.
+  Only after real pilot success start supervised automatic updates. No extra
+  phone reboot or flash requested at this stage. Kernel0176 CI separate/offline.
 
-### Patch 0010 screen legend
-- Bottom-left white 64x32 tile: assembly entered `start_first_cpu`, before page tables/MMU.
-- Text `SWEET EARLY 1`: entered `arm_init` with MMU on; 2: platform expert done; 3: CPU topology done; 4: CPU bootstrap done; 5: startup bootstrap done; 6: CPU init done; 7: entering `arm_vm_init`; 8: leaving bootstrap TTBR0.
-- `SWEET EARLY PANIC:` prints a copy of panic arguments before normal panic handling needs per-CPU/thread state.
-- In patches 0010/0011 the console disabled before TTBR0 invalidation; patch 0012 replaces that with a persistent kernel VA alias and diagnostics through normal serial/kprintf startup (see its legend above).
-- Screen contents require a physical observation from the user: adb cannot capture a framebuffer after Android has been replaced by a bare-metal kernel.
+## Active98c: direct panel-on and visible real logo CONFIRMED (2026-11-03 Minsk)
 
-## QEMU emulation (2026-10-15)
-- `tools/mkadt.py OUT.adt --qemu` = same ADT with QEMU virt GICD 0x08000000 / GICR 0x080a0000 / CNTFRQ 62.5 MHz.
-- `tools/qemu-sweet.py PAYLOAD OUTDIR [--secs N] [--hmp "x /8gx ADDR"] [--gdb]`: host-side copy of shim/loader.c
-  (segments + ADT + boot_args at their PAs, 6-instruction stub sets x0 and jumps), `-M virt,gic-version=3 -cpu cortex-a76`
-  (same ID_AA64MMFR0 as Kryo 470), 4G RAM so 0x9c000000 fb and 0xb0000000 kernel are plain RAM.
-  Outputs `fb.png` (the screen), `regs.txt`, `qemu.log` (exceptions with ESR/FAR/ELR). `--gdb` halts with a stub on :1234
-  (system `gdb` + `set architecture aarch64`, `hbreak *VA` works with the MMU on).
-- Not emulated: Qualcomm XPUs, ABL, real panel, PSCI conduit (QEMU virt uses hvc). Hardware still decides those.
-- Example: `python3 tools/mkadt.py /tmp/q.adt --qemu && python3 tools/mkpayload.py xnu/out-0013/kernel.development.sweet /tmp/q.adt /tmp/pq.bin --cmdline 'debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam' && python3 tools/qemu-sweet.py /tmp/pq.bin /tmp/q`
+- Fresh observer44399 finished after64 login attempts (~13min cold startup).
+  New retained SSH46379 at PRIVATE audit/graphics98c-device/held. Exact98 UUID,
+  diag2a276d3f/window9a1d6053/new wake17f8f28e uploads/readbacks all PASS.
+  Installed boot98/System95 unchanged. No flash/UART/new approval required.
+- User repeated request to send frame; notified immediately before explicit
+  show_graphics98c.py. Actual new guarded panel-on root tool exits0 in1.65s;
+  display-ID/dimensions/kernel guards pass; selector12 request0 and NEW
+  SWEET FB: display on observed. This IS physical use of tool17f8f28e from
+  sourcecf254ab/CI41691099406/job126109597215, not merely a candidate anymore.
+- Actual mobile fresh capture accepted1 RGB25430/alpha2332800;84 successful
+  queues of surface5. Run-mobile30s child bound then sendsSIGTERM/exit124 at
+  30.4s BEFORE all101 queues. Do NOT report101/101 or normal exit. User explicitly
+  confirmed “Логотип Apple на чёрном фоне” during this exact98c attempt. Captured
+  actual scene -> driver -> visible panel path works. Stock continuous rendering
+  and normal SpringBoard UI are STILL NOT established; no stale PNG injection.
+  Private audit/graphics98c-show.json and98c-device/requested-*.stdout retain
+  exact results. No synthetic HID pair needed for this successful direct request.
+- After show, retained shell still answers immediately. VM16KiB free20879,
+  active33261/inactive13417/wired12239/compressor0/no swap. Verified actual live
+  PIDs SpringBoard26/lsd95/backboard57 (PRIVATE graphics98c-live-pids.json).
+- Read-only monitor46870 now SOLE owner of held46379: VM + threads26/95 once/min,
+  max30 rounds. Status audit/graphics98c-memory-monitor.json; samples
+  graphics98c-memory-samples.log. To use shell create graphics98c-memory-stop
+  and wait phase stopped; if timeout/failed, inspect exact framing before reuse.
+  No automatic wake/capture/presentation. Passive UDP2488 unchanged.
+- Candidate0176/source5b7e210a8c96eceecff8b4b9f95c24ea22d68a73 remains OFFLINE,
+  full kernel CI41692808789/job126115470445 currently building. Local4826 checks,
+  exact negative control and actual ARM64 compile passed. No99 image/flash or
+  hardware-fix claim. Next inspect CI/checks; preserve current98c graphics run.
+- PRIMARY requested action is achieved: direct screen-on + new actual captured
+  frame shown and confirmed by user. Next UI work: inspect LaunchServices/Icon-
+  Services progression on current98c; do not reuse98b37904 or old waiting state.
 
-## Layout
-- `backup/`  partition dumps + full sdb..sdf LUNs, `SHA256SUMS` (all verified on-device == local)
-- `dtb/`     live FDT (from OrangeFox), PixelOS boot.img dtb, dtbo, dts versions
-- `shim/`    bare-metal boot shim (`./build.sh` -> `out/shim-boot.img`)
-- `research/` mainline sm7150 dts, XNU pe_fiq.c etc, PocketDarwin patches
-- `tools/unpack_bootv2.py`
+## Active98c ordinary reboot for requested screen retry; late-ready candidate (2026-11-03 Minsk)
 
-## Device access
-- No root in PixelOS 17 (user build, adb root disabled). Root = `fastboot boot recovery/recovery.img` (OrangeFox R12.0_2, temp boot, not flashed).
-- `fastboot boot` works for stock boot.img, OrangeFox, and our shim.
-- Shim resets itself via PSCI SYSTEM_RESET; IMEM restart_reason 0x77665500 is seen
-  (bootreason=bootloader) but ABL still boots Android, so it does not stop in fastboot.
+- User CONFIRMED ordinary reboot after98b stall; no flash/UART. Recorded fresh
+  audit/graphics98c-reboot.json boundary3617040. Started PRIVATE
+  ssh-v90/check_graphics98c.py PID44399, status graphics98c-check.json, outputs
+  graphics98c-device. It waits for cold root SSH, NEW held shell, exact98 UUID,
+  full uploads/readbacks of diag2a276d3f/window9a1d6053/new wake17f8f28e, then
+  stops prepared-shell-retained. No automatic display request yet. USB2488 live.
+  Early fresh98c telemetry errors0/XO1/multi0. Installed boot98/System95 unchanged.
+- NEXT PRIMARY ACTION: when observer prepared, use NEW held shell only. Notify
+  user immediately; run new wake tool panel-on and verify display-on, then mobile
+  renderer present-window for actual current scene. If RGB0, no real image can
+  be claimed. Request actual user observation. Do NOT reflash merely for this.
+- While waiting, investigated98b FIFO512/int20/present01f80af6 read-ready failure.
+  This is consistent with descheduling after an empty readiness sample and
+  before deadline check; not uniquely proved on hardware. Existing0170 rechecks
+  command/DATA_END completion, but CMD17 FIFO-readiness loop lacked that guard.
+- Candidate0176 re-samples INT_STATUS/PRESENT_STATE ONCE when FIFO readiness
+  wait expires. Only clean freshly ready FIFO proceeds through existing full
+  512-byte drain/DATA_END/no-inhibit/empty-FIFO checks. Still-unready or hardware
+  error rejects. No wait extension, clock change, fabricated data or media write.
+- New deterministic model reenacts ready arriving after empty sample while CPU
+  exceeds its deadline; requires full byte-exact sector, guards intact, no CMD12/
+  CMD13/recovery. Additional late hardware-error and still-unready cases reject
+  without modifying output. Patched actual driver functions PASS4826 checks;
+  unmodified98 fails specifically clean late-ready case (negative control direct
+  exported-function line verified). Patch applies cleanly to98. Actual full
+  driver ARM64 compile with98 generated headers passes; private
+  kernel-v99-late-ready/{checks,negative-old,compile.json}. This is a candidate,
+  NOT a proven physical cause/fix or an installed kernel. Full CI pending.
 
-## Hardware facts (live DT + shim measurements)
-- Framebuffer (ABL cont splash): 0x9c000000, 1080x2400, stride 4320, a8r8g8b8, panel is DSC *video* mode (no kick needed).
-- RAM: 0x80000000+2G, 0x100000000+0xfcc00000. Live reserved-memory = PixelOS base dtb + sweet dtbo fixups.
-- GICv3: GICD 0x17a00000, GICR 0x17a60000 (stride 0x20000, 8 PEs). GICD_TYPER 0x007B041D: SecurityExtn=1 (DS=0).
-  ABL leaves GICD_CTLR = 0x10 (ARE_NS on, groups off). Writing 0x13 reads back 0x12: EnableGrp1A (bit1) is the one that matters.
-- GIC Group 1 VERIFIED (shim 2c): vtimer INTID 19 = 30 IRQs/300ms, ptimer INTID 18 = 30, SGI 1 to self = 10/10.
-  ICC_SRE=1 already, ICC_CTLR 0x8440, priority/enable writes stick. GICR_IGROUPR0 and GICD_IGROUPRn read 0 from NS
-  even though Group 1 delivery works (RAZ in NS view) - do not use them as a health check.
-  INTID 28 shows pending constantly (unknown PPI 12).
-- Timer 19.2 MHz. Qualcomm PPI numbering: secure-phys/phys/virt/hyp = PPI 1/2/3/0 -> vtimer INTID 19, ptimer 18 (NOT 27/30).
-- PSCI 1.1 via SMC, SMCCC 1.1. CPU_ON ok; SYSTEM_SUSPEND and SYSTEM_RESET2 unsupported.
-- SMP: CPU_ON works for all 7 secondaries (MPIDR 0x81000n00).
-- Entry EL1, MMU off, x0 = DTB (magic ok). ID_AA64MMFR0 = ...101122: 16K granule YES, 4K YES.
-- No serial console: debug UART SE is in SPI mode on sweet. Screen is the only debug channel.
+## Current98b screen retry blocked by storage; ordinary reboot requested (2026-11-03 Minsk)
 
-## XNU implications
-- XNU GICv3 path (pexpert/arm/pe_fiq.c, VMAPPLE) puts the timer (PPI 27) in Group 0 = FIQ. With SecurityExtn=1,
-  Group 0 is secure -> impossible from NS EL1. Need: Group 1 IRQ, ICC_IGRPEN1, INTID 19, and the timer handled in the IRQ path.
-- XNU VMAPPLE PSCI uses `hvc`; sweet needs `smc`.
-- PocketDarwin NonAppleGenericCpu.patch only swaps -mcpu=apple-h7 for -march=armv8-a.
+- Direct panel-on source cf254ab165f0f3750364facd4494db9bc6ecba1f passed ALL CI
+  41691099406/job126109597215 steps. Artifact13257233536 ZIP24542B SHA
+  e9f660b954bfcaeae6103332c94fb107b4ed4336aee3d665ca9b0a17eddb5e6d.
+  Binary69984B SHA17f8f28e6f9205ec0f480270cc9263d9f823b8a13bb7df5ead5176889637ba20.
+  Source/report/archive/platform/ISA/strict signature/exact2HID rights checks PASS.
+  Private graphics-v98/panel-on98. Fresh SCP upload and exact full readback PASS
+  to /private/var/tmp/whyred-panel-on-17f8f28e. This is NOT device execution proof.
+- Attempted direct wake/presentation after user asked. Before direct tool ran,
+  retained shell37904 stalled on read-only exact-kernel diagnostic for85s.
+  Last token WHYRED_SESSION_5cc88b57f38de68ed6a15b8a8a2c25c4_BEGIN with NO END.
+  Parent exited; NO later panel/present command was enqueued on this FIFO.
+  Fresh independent SSH with guarded panel-on && present-window failed255 with
+  connection timeout before output,0 queues. No confirmed direct wake/new frame.
+  Private audit/graphics98b-wake-present.json and requested-*.stdout/.stderr.
+- Fresh UDP reveals FIRST physical98b CMD17/PIO incomplete atLBA12620940,
+  int20/present01f80af6/fifo200. CMD12 failed int18000; DATA reset completed.
+  Recovery attempt1 stop=-1 status0 r1=00000900 prior00400900 recheck1, FIFO0:
+  0175 clean-second-status branch IS NOW EXERCISED and accepted the ready card.
+  Then WHYRED CLOCK restored baseline was logged. Fresh reread/overall recovery
+  completion NOT established; no recovery-failed line or kernel panic observed.
+  Root reads/SSH stalled afterwards. Prior “unexercised/no-read-errors” notes are
+  historical, no longer current. Exact private graphics98b-first-recovery.log.
+- One separate mediaserverd28 SIGSEGV atPC0/lr1deb2c58c occurred before read
+  recovery; matches earlier CoreImage NULL-callback class by canonical address
+  but needs exact current symbolication for attribution. It restarted. Do not
+  call this a kernel panic or attribute it to the later storage failure.
+- Old memory/followup monitors are STOPPED/failed; no active FIFO writer now.
+  USB receiver2488 continues; log alias unchanged. No successful wake/present
+  from this retry, no flash/UART/cache/daemon change, no stale logo injection.
+- Asked user for ordinary reboot with USB, NO Fastboot/UART. Pending reply.
+  Prepared PRIVATE ssh-v90/check_graphics98c.py (syntax checked, NOT started):
+  fresh root SSH/NEW held shell, exact98 UUID, upload/readback diag2a276d3f,
+  window renderer9a1d6053 and NEW panel-on wake17f8f28e. It stops at prepared-
+  shell-retained without automatic display work. After reboot confirmation:
+  create fresh audit/graphics98c-device, new log boundary; start observer and
+  wait. NEVER reuse98b held37904 after reboot. Notify user immediately before
+  actual panel-on + fresh present; no new permission/flash required.
 
-## Milestone 3 (2026-10-14): 16K MMU verified
-- ABL loads the Image at 0x80080000 (base 0x80000000 + 0x80000) regardless of text_offset=0.
-- 16K granule, T0SZ=28 (L2 start, 32MB blocks), MAIR 0x44ff00, TCR 0x1409CB51C, PARange=2 (40-bit PA).
-- Only own image pages WB (Qualcomm XPUs: never map carve-outs cacheable); fb Normal-NC; rest Device.
-- AT S1E1R checks all as expected; unmapped -> translation fault L2.
-- Fill fb: 110 ms (MMU off) -> 3.5 ms (NC). Memory loop 70 ms -> 0.7 ms. vtimer + SGI IRQs still fine with MMU on.
+## Active98b requested screen wake: guarded panel-on candidate (2026-11-03 Minsk)
 
-## XNU loader design notes (xnu-8796)
-- Entry: `_start` -> `start_first_cpu`, x0 = boot_args (PA), MMU off, EL1. boot_args: Revision/Version 2,
-  virtBase/physBase/memSize/topOfKernelData, Boot_Video (fb 0x9c000000, rowBytes 4320, 1080x2400, depth 32),
-  deviceTreeP/Length (ADT), CommandLine[608], bootFlags, memSizeActual.
-- start.s maps [kernel mach header .. physBase+memSize) with cacheable BLOCKS. On Qualcomm every XPU carve-out
-  must therefore lie below the kernel: use physBase = 0xb0000000 (above ramdump_fb 0xaf000000+16M,
-  cdsp_sec, qseecom), end before rmtfs 0xfde01000 -> memSize ~0x4d000000 for bring-up.
-- Base ADT: iPhone 8 d20ap DeviceTree from iOS 16.7.16 IPSW (tools/remotezip.py + tools/adt.py; LZFSE payload).
-  Template values are empty: the loader must fill chosen/*, memory-map, cpu*/reg etc. like iBoot.
-- XNU build: GitHub Actions (dipa-studio/ios-sweet, xnu.yml) via blacktop/darwin-xnu-build, MACOS_VERSION=13.5.
-  New-clang fixes in xnu/patches; Xcode 16 iig is incompatible (IORPC.kernelContent) -> macos-14 runner, oldest Xcode.
+- Pending prior capture LATER completed END1: accepted1 RGB0/full alpha, no PNG;
+  display had gone OFF. Held37904 framing is COMPLETE, no monitor owner now.
+  User explicitly asked to turn screen on and submit a frame. Exact98 UUID passes.
+- Sent ONE diagnostic power-key pair while last state OFF: helper/child exit0,
+  but no ON within8s. Then idempotent BackBoard unblank request exited0, no ON
+  within15s. No repeated toggle, frame or visible-image success claimed.
+  Private audit/graphics98b-wake-present.json and98b-device/requested-*.stdout.
+- Added explicit whyred-display-wake panel-on mode: exact97/98 UUID guard,
+  AppleCLCD service, displayID0 and1125x2436 checks BEFORE own driver scalar12(1).
+  It changes driver power state only; does not unlock iOS, invent pixels, change
+  renderer flags or imply compositor wake. ABI checked against installed patches
+  0079 and0150. Native warning-clean compile and4 physical-target refusals plus
+  invalid-argument cases PASS. Added new mode to existing CI refusal/provenance
+  checks. iOS build/upload/actual panel-on still PENDING. No flash required.
+- NEXT: authenticate signed CI artifact, exact upload/readback; exact98 kernel,
+  panel-on once, require new display-on record, then fresh capture/presentation.
+  A blank captured scene is not proof of working stock UI. No stale-logo injection.
 
-## Kernel architecture plan (SWEET machine config)
-- First stock build (VMAPPLE) is arm64e (PAC). Kryo 470 = ARMv8.2, no PAC -> SWEET must build plain arm64
-  (HAS_APPLE_PAC is only defined for __arm64e__, so arm64 drops PAC automatically).
-- Template: VMAPPLE (16K pages, GICv3 code in pe_fiq.c) minus APPLEVIRTUALPLATFORM hypercalls/paravirt PAC,
-  plus BCM2837 (generic ARM: no APPLE_ARM64_ARCH_FAMILY Apple sysregs). Do not link the KDK lib<cfg>.os.*.a.
-- Timer: XNU expects it on FIQ (sleh_fiq -> rtclock_intr). SWEET: GIC Group 1, so sleh_irq must ack ICC_IAR1,
-  route INTID 19 to the same timer path, SGIs to cpu_signal_handler, EOI via ICC_EOIR1.
-- SMP/interrupts: open-source AppleARMSMP (USE_APPLEARMSMP) needs an IOInterruptController (AIC role) and an
-  IOPMGR (CPU power -> PSCI CPU_ON via SMC). Plan: built-in IOKit classes (SweetGIC, SweetPMGR, platform
-  expert) compiled into the kernel and matched via iokit/KernelConfigTables.cpp -> no closed kexts needed.
-- Debug: xnu patch 0003 sweet-fbcon = kprintf drawn on the framebuffer (ADT node "sweet-fbcon").
-- ADT /arm-io ranges must not map to parent 0 (pe_arm_get_soc_base_phys()==0 disables serial): use parent 0x1000000.
+## Active98b: LaunchServices wait PASSED; IconServices now sampled (2026-11-03 Minsk)
 
-## Status 2026-10-14 late: first XNU boot attempt
-- SWEET kernel builds (CI run 38635343732, patches 0001-0009). Verified offline: arm64, no PAC, no >v8.2 code,
-  70300 classic relocs all in range (slide 0 = no loader work), entry = __start.
-- Boot: shim loader worked (initrd 0x846F0000-0x855FE3E0, BOOTARG 0xB1FF8000, JUMP 0xB146A488) but screen stayed
-  red -> xnu died/hung before serial_init (fbcon). kprintf is a no-op before STARTUP_SUB_KPRINTF.
-- Historical next-step plan (patch 0010, now implemented and built; see active handoff above): early fb debug channel
-  1. start.s start_first_cpu (after mov x20,x0 / mov x21,#0): PA marker band (MMU off, direct store to 0x9c000000).
-  2. start.s after both create_bootstrap_mapping calls: add ONE block entry to the existing V=P L2 table
-     (x25 + 2*PGBYTES; do NOT call create_bootstrap_mapping again: fb and RAM share L1 entry 0, it would replace
-     the L2 table). Entry = TYPE_BLOCK|VALID|SH(OUTER)|ATTRINDX(CACHE_ATTRINDX_WRITECOMB=1)|AF|PNX|NX|0x9c000000,
-     index = (va & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT.
-  3. new osfmk/arm64/sweet_early.c (+files.arm64 entry): sweet_early_mark(n) colored bands at screen bottom and
-     sweet_early_putc using iso_font via VA=PA while the bootstrap TTBR0 is live; disable before
-     arm_vm_init's set_mmu_ttb(invalid_ttep) (arm_vm_init.c:2148).
-  4. markers in arm_init after PE_init_platform, ml_parse_cpu_topology, cpu_bootstrap, kernel_startup_bootstrap,
-     cpu_init, before arm_vm_init.
-  5. panic hook at top of panic_trap_to_debugger: va_copy + _doprnt(fmt, &copy, sweet_early_putc, 16).
-  Verify with tools/xnu-cc.py (compile+symbols) and patch-order simulation before the single CI run.
+- User supplied new installd/PosterBoard, SpringBoard privilege1007 denied and
+  display-off records. Fresh read-only exact98 UUID passes. SpringBoard26 now
+  has13 threads; its main no longer waits for CoreServices store acquisition:
+  synchronous Foundation/XPC through IconServices -> SBHGetApplicationIconImage
+  -> SpringBoardHome. lsd95 has2 threads and main CFRunLoopRun. This establishes
+  progress past the old store wait; NOT a proved permanent IconServices deadlock
+  or a ready UI. Same cache slide4a018000. Exact fresh symbolication privately in
+  graphics-v98/26-98b-progress-symbols.json and95 counterpart; source snapshots
+  audit/graphics98b-device/progress-*-threads-26/95.stdout. Initial symbolication
+  accidentally selected older post-threads inputs; corrected filenames and
+  regenerated. Only corrected13-thread/2-thread result above is current.
+- Fresh process list includes pkd253 STILL RUNNING, suggestd256, PosterBoard324,
+  installd318. The earlier pkd /dev UUID EINVAL did not immediately abort this
+  instance. No fake replacement or service restart was performed.
+- PRIV1007 is PRIV_DARKBOOT (bsd/sys/priv.h): sysctl_darkboot writing checks this
+  privilege. A denied change to kern.darkboot does not itself prove a process
+  crash or explain normal display timeout. Do NOT grant all privileges or equate
+  darkboot with this separate display-off record. No kernel modification yet.
+- Monitor41907 stopped at sample2 memory timeout20s. That command LATER completed
+  END0; exact framing verified before reuse. Late VM:16KiB pages, free4540,
+  active31176/inactive29001/wired15019/compressor0. Free alone not OOM proof.
+  Retained shell37904 then served exact kernel, threads and ps in1.86/8.54/2.66/
+  16.17s. Fresh SSH root identity also eventually returned successfully; no reboot
+  or lost transport conclusion. NO monitor now owns the held shell.
+- Last display transition is ON (OFF followed by ON). No synthetic power toggle
+  was sent. Fresh capture request exceeded local45s deadline BEFORE initial
+  renderer text arrived. Command framing token is
+  WHYRED_SESSION_517979235c7fedfc5d4a9cdece3282fb; outstanding until matching END.
+  Do NOT send another FIFO command until its completion is verified. Bounded
+  late watcher is collecting this same response, not issuing a second capture;
+  outputs audit/graphics98b-device/late-progress-capture.stdout/.png if complete.
+- Passive UDP receiver2488 stays live. Observed current98b stream has no CRASH,
+  panic, fatal recovery or RAMFS pressure so far. Do not claim a fresh screenshot
+  or visible UI until the pending capture/user observation provides it. No UART,
+  flash, MG cache edit, daemon restart or permanent presentation loop this turn.
+
+## Current98b live boot-status check: still Apple logo (2026-11-03 Minsk)
+
+- User asked whether UI has loaded. Stopped monitor38947 through its stop file;
+  confirmed phase stopped and completed framing before sole-shell use.
+- Live exact98 UUID still passes. Fresh capture-png exits0 in1.84s, accepted1,
+  RGB25430; viewed PNG is still white Apple logo on black, byte-identical to
+  earlier real scene (SHA d56ea3fea7985a580332da2a7e0cda48a43d84fc866880d324e6ab851a675789).
+  PRIVATE audit/graphics98b-device/now-capture.png and now-capture-png.stdout. No normal UI yet.
+- Latest thread monitor sample7 still has SpringBoard store-lock/syncXPC wait;
+  lsd95 worker continues hardware-query/traversal path with advancing counters.
+  Current USB segment has no CRASH/panic/fatal recovery/RAMFS pressure; eMMC
+  bytes1304526848/errors0. No new stable-recovery claim.
+- VM sample7 free7119/active30890/inactive25897/wired15896 pages (16KiB each),
+  compressor0. This decrease in FREE alone is not an OOM diagnosis; inactive
+  pages exist. No purge or daemon/cache mutation.
+- Resumed read-only collection with NEW followup monitor40151, sole owner of
+  SAME held98b shell37904. Status audit/graphics98b-followup-monitor.json,
+  samples graphics98b-followup-samples.log, maximum20 rounds. Stop/release with
+  audit/graphics98b-followup-stop and wait for stopped before shell commands.
+  Old memory monitor38947 is stopped. Passive USB receiver2488 still live.
+
+## Current98b pkd EINVAL /dev probe classified (2026-11-03 Minsk)
+
+- User pasted pkd253 getattrlist common0x6/volume0x80060000/buffer64/options0,
+  FSERR78 errno22. Exact masks decode to DEVID+FSID and VOL_INFO+CAPABILITIES+UUID.
+  Stock devfs_vfs_getattr supplies capabilities but not f_uuid; getvolattrlist
+  returns EINVAL for unsupported requested attrs without RETURNED_ATTRS.
+- Native Mac comparison using the same masks and64-byte buffer reproduces22.
+  Removing ONLY VOL_UUID (volume0x80020000) succeeds errno0. Private probe/output
+  audit/devfs-attr-probe.{c,stdout}. This is expected unsupported devfs UUID,
+  not demonstrated eMMC/RAMFS corruption or a new kernel regression.
+- At inspection current98b has only pkd253 spawn and this query failure, no
+  matching CRASH/exit record. Do not infer pkd abort from FSERR alone or suppress
+  EINVAL globally. No kernel/daemon/cache change. Read-only monitor38947 still
+  owns held FIFO; release via stop file per next section before commands.
+
+## Active98b: visible Apple logo CONFIRMED by user (2026-11-03 Minsk)
+
+- User confirmed ordinary reboot; NO flash or UART this turn. Fresh worker35028
+  completed pinned root SSH, exact98 kernel UUID and full upload/readbacks of
+  diag2a276d3f, renderer9a1d6053 and wake449eed2f. Worker is FINISHED. Installed
+  baseline remains boot98/System95. Fresh held SSH37904 at PRIVATE
+  audit/graphics98b-device/held; passive UDP receiver2488 remains live.
+- After notifying user immediately before presentation, repeated the real LCD
+  scene. Actual capture accepted1, RGB25430, alpha2332800. Driver source and
+  panel samples match earlier actual Apple-logo capture: panel RGB21674,
+  bbox429,820..609,1006; copied2332800 pixels. User responded “да есть же”, then
+  explicitly selected “Логотип Apple на чёрном фоне”. This IS physical visible
+  output evidence for this exact98b test. It does NOT establish stock UI or
+  continuous compositor presentation. Old98a window was missed, not a failure.
+- Exact repeat:99 successful queues, then run-mobile's30s child deadline sent
+  SIGTERM; exit124 after31.408s, no101 completion. Do not report101/101 or exit0
+  for98b. This timeout does not undo user's visible result. Private
+  audit/graphics98b-window-test.json and98b-device/present-window.stdout retain
+  exact counts and observation. Last display state was ON, so no power toggle
+  was sent. No permanent screenshot loop, daemon setting or renderer flag change.
+- Fresh read-only snapshots: shared-cache slide4a018000; SpringBoard26 remains
+  on CoreServices store lock plus sync NSXPC. lsd95 changed from InstalledContent
+  directory traversal/open to later MobileGestalt query; CPU counters advance.
+  MobileGestaltHelper96 writes its cache; backboard57 has13 sampled threads in
+  runloops/render IPC. This is startup dependency/progress, NOT a proved permanent
+  deadlock. No identity cache edit or daemon restart in98b. Prior failed cache
+  experiment stays rejected; do not seed it again.
+- Post-test VM:16KiB pages, free37656 (~588MiB), active30541/inactive673/wired10897,
+  compressor0, no swap. Observed stream at~983MiB eMMC reads has errors0, no fatal
+  recovery/CRASH/panic/RAMFS pressure. FSERR records still include unsupported
+  /dev volume-attribute probe EINVAL and startup missing-path probes; do not call
+  all logged errors fatal or all filesystem issues fixed.0175 recovery remains
+  physically UNEXERCISED in98b. No late-stability claim.
+- PRIVATE read-only monitor38947 now owns the held FIFO: samples VM, threads26
+  and95 once/minute, maximum30 rounds. Status audit/graphics98b-memory-monitor.json;
+  raw samples graphics98b-memory-samples.log; worker log has same monitor prefix.
+  To take the shell: create audit/graphics98b-memory-stop, wait for phase stopped;
+  if failed-shell-review-required inspect final framing before reuse. Never send
+  commands concurrently. Monitor does NOT wake/capture/present/restart anything.
+- NEXT: inspect startup samples for LaunchServices completion, then capture the
+  current real scene and trace why stock swaps differ from the working explicit
+  capture-to-panel path. Visible logo now rules out a universally broken panel
+  mapping for this test; it does not fix stock rendering. No new kernel needed
+  merely to repeat this successful display path.
+
+## Earlier98b ordinary reboot for a repeat the user can watch (2026-11-03 Minsk)
+
+- User missed the prior101-frame test while away; this is NOT a negative visible
+  result. Asked to repeat after returning. At ~17:26Z old98 held shell27053
+  accepted BEGIN but kernel-uuid command never completed within20s. Fresh SSH
+  banner timed out8s. USB heartbeat still arriving; observed stream has no fatal
+  eMMC/SIGBUS/CRASH records. Cause of lost userspace access remains unproved.
+  Do NOT reuse98-device/held: outstanding command framing is incomplete.
+- User confirmed ordinary reboot, no new flash/UART. Prepared/started PRIVATE
+  ssh-v90/check_graphics98b.py PID35028. Status audit/graphics98b-check.json,
+  log graphics98b-check.log, outputs graphics98b-device. Fresh boundary in
+  audit/graphics98b-reboot.json. Installed boot98/System95 unchanged.
+- Fresh worker waits for cold SSH, opens NEW retained shell, verifies exact98
+  UUID, uploads/readbacks GPR diag, window renderer9a1d6053 and final wake449eed2f.
+  It STOPS at prepared-shell-retained, NO automatic wake/capture/presentation.
+  Notify user with “смотри сейчас” immediately before running the ~10s window.
+  Check last current display ON/OFF and only send a power event if OFF.
+- Prior98 repeated-frame success is memory/submission evidence only; physical
+  output still unknown. No repeat succeeded in this turn yet. Cache experiment
+  remains reverted; do not seed it again or restart lsd based on its failed probe.
+
+## Active98: real repeated frame completed; identity cache experiment rejected (2026-11-03 Minsk)
+
+- Installed boot98/System95 confirmed by actual SSH kernel UUID
+ 936C980F-9428-33A1-B076-CDB09ABDC855. Cold root SSH became available around
+ 13min, observer24959 attempts65. Current retained shell27053 at PRIVATE
+  audit/graphics98-device/held. Passive receiver2488 remains live. Worker has
+  finished, not running in background; protocol framing currently complete.
+- Final wake/render helper uploads and exact readbacks PASS. Initial diagnostic
+  HID pair returned normally; latest display state already ON, no new ON/OFF
+  transition observed from this pair. Do not blindly toggle a screen already ON.
+  Physical whyred keys still unsupported. Earlier97e OFF->ON remains actual
+  successful remote wake proof. Subsequent98 test checked last display state
+  and only sends a key if OFF; no additional toggle was needed.
+- Initial capture-png emitted accepted1 RGB25430 alpha2332800 of2740500, then
+  hit the30s run-mobile child limit (SIGTERM/124) BEFORE PNG output. Thus the
+  actual capture produced pixels; timeout does not establish capture failure.
+  Later warm retry returned0 in<1s and exported62639B PNG1125x2436. Viewed:
+  white Apple boot logo on black, EXACT byte match to prior97c capture; SHA
+  d56ea3fea7985a580332da2a7e0cda48a43d84fc866880d324e6ab851a675789.
+  PRIVATE audit/graphics98-device/capture-lcd-warm.png. No normal UI yet.
+- New finite present-window source87bf4ee564853b6c72dd46c91f0e87537f8379b9,
+  CI41674768570/job126052329724 ALL steps PASS. Artifact13248659353 ZIP112045B
+  SHAe8d091a772bb3aea9b984db91cbbb20ae0aa8e60313d6a6106f7d219bd324faf;
+  signed binary93664B SHA9a1d6053ede2813f8d53d269a87dabde8d3ac00373a7c01c011a788b95bbe131.
+  All provenance/archive/platform/ISA/signature/exact2rights checks and upload/
+  readback/exact98 UUID PASS. Actual mobile present-window EXIT0,101/101 queues,
+  same captured surface8 repeated100ms intervals (~10s). Driver source RGB25430;
+  panel RGB21674, bbox429,820..609,1006, copied2332800 pixels. These are memory/
+  submission results, NOT visible display proof. User screen-observation question
+  for this exact window is still pending; never reuse97d black-screen answer.
+  Private graphics98-window-test.json and present-window.stdout. No test art,
+  renderer flags, daemon configuration or kernel changes in this helper.
+- Health readback after first capture: page16KiB, free22687 (~354.5MiB), active
+ 32774/inactive11921/wired12349, no swap. Per-directory RAMFS allocation read
+  totals recorded privately; examples db3489792B, mobile8306688B, root4538368B,
+  Keychains2490368B. This early snapshot is far below128MiB and is NOT long-run
+  quota proof. No purge/quota change. Fresh full usage script completed safely.
+- Current98 exact cache slide1c6c4000. SpringBoard26 has5 threads: main waits
+  on CoreServices store lock, another sync NSXPC; lsd95 has8 threads, worker in
+  MobileGestalt hardware query. backboard57 has13 sampled threads. This repeats
+  earlier startup dependency;97e eventually reached main run loop without an
+  identity workaround, so do not call this uniquely proved permanent deadlock.
+  PRIVATE graphics-v98/*-98-symbols.json, exact live samples in98-device.
+- Named MobileGestalt cache now exists6838B (was absent early97e). Added98 UUID
+  ONLY to guarded experiment; sourcebc325f71090ccdfe788876b3cde751d09cb88458,
+  CI41677592018/job126062268344 ALL PASS. Artifact13251861348 ZIP36640B
+  SHA589fafec719f3103c94ab70e03e1822094787f74c672bb68c1a1e796d52a348e;
+  binary90512B SHA8caef2f4f9b1411ca8c8af6b91cafddaeb604b4f2bc199d048b5bd9a4d3abe7c.
+  All artifact/source/platform/ISA/strict signature/exact2protected-keys checks,
+  upload/readback/kernel guard PASS. Actual platform UUID provider works.
+- Actual guarded seed succeeded; exact2-key delta/types and original backup
+  verified. Actual mobile MGCopyAnswer probe FAILED (matches0,10121.445ms).
+  CacheExtra insertion did not supply these runtime answers. AUTOMATIC rollback
+  succeeded and exact original bytes re-read. Original SHA
+ 5b1dd09b0b74f4046c9ef7a14bb5378d3d7b912519d46bd43cd0d26e3f1f9d37,
+  temporary SHA5bac2dbf516afd7f9c38f70f8b5427aa3d85f05fc3c153198d49cab1b54be635.
+  Private graphics98-gestalt-check.json phase rolled-back-shell-retained,
+  cache_written=false/restored_exactly=true/daemon_restarted=false. Backup remains
+  for audit; helper deliberately refuses overwriting an existing backup. Do NOT
+  repeat this unsuccessful seed or restart lsd on its basis. No persistent write.
+- At latest checkpoint ~24min: eMMC bytes1316016128/requests32185/errors0,
+  no fatal recovery/common SIGBUS/CRASH/pressure records in observed98 segment.
+  No recovery has occurred, so0175 extra-status branch remains physically
+  UNEXERCISED. Do not claim a long stability proof or a demonstrated repair.
+- Sole shell27053 is free after warm PNG retry. Next: obtain user's actual panel
+  result for101-frame test; distinguish mapping/visibility from startup state.
+  Cache experiment is rolled back. No lsd restart, extra flash or UART this turn.
+
+## Boot98 flashed; cold SSH/graphics observer running (2026-11-03 Minsk)
+
+- User confirmed Fastboot. PRIVATE tools/flash_kernel98.py --flash --ready-answer
+  rechecked image/kernel hashes, rollback, System95 completion, exact private
+  identity/product/unlocked64MiB boot. Boot SEND and WRITE each OKAY; reboot OKAY.
+  Installed baseline is NOW boot98/System95. No System or other partition write;
+  no UART. Private audit/kernel98-flash.json, boundary graphics98-boot-boundary.json.
+- Image SHA b3d6440ff1e050c52fa325dd88543965a23217fc33da27fa2287a8a505527473;
+  expected running UUID936C980F-9428-33A1-B076-CDB09ABDC855. Fresh USB datagrams
+  observed after reboot; early snapshot starts mid-record (best-effort UDP).
+  Exact running UUID and recovery behavior await SSH; no graphics claim.
+- Started PRIVATE ssh-v90/check_graphics98.py PID24959, phase waiting-for-ssh.
+  Status audit/graphics98-check.json, private log audit/graphics98-check.log,
+  outputs audit/graphics98-device. Sole old receiver2488 continues unchanged,
+  logfile audit/graphics97d-usb-session.log/current-whyred-usb.log alias.
+  Worker flashed=false means observer itself does no flash; actual flash above
+  completed. Typical current CMD17 cold startup takes10..15min. Keep active
+  observer; never start a second worker or reuse97e shell14309.
+- Next inspect observer until actual kernel guard/uploads/wake/capture result.
+  On real-frame submission promptly request visible screen confirmation.
+  If capture nonzero, do not substitute test art or call CPU submission working UI.
+  Need fresh RAMFS directory accounting while transport healthy. Previous98-tool
+  artifacts below are authenticated; no new permission needed for this test.
+
+## Ready for user Fastboot:98 tools and next observer prepared (2026-11-03 Minsk)
+
+- Source ae72123da7f607e6e4ade37696192ca8f6be04b2 adds verified97/98 UUID
+  allowlists to wake/render tools. Wake CI41672463674/job126044141756 all PASS;
+  render CI41672463382/job126044138478 all build/test/upload steps PASS.
+  Authenticated artifacts, CRC, exact source/report/binary digests, iOS platform,
+  ISA, strict signatures and exact rights checked. Private audit/graphics98-final-tools.json.
+- Wake artifact13248562336 ZIP21654B SHA630de17baedebcc0846d41dd2d0f82ef011cbfcc3f9f4f35d90f2db3b1dd119d;
+  binary69920B SHA449eed2ffc3e7399a4f3f4b14fd7d4ac103565ab25e14f1593f9f6bf26863977,
+  PRIVATE graphics-v98/wake98-final/whyred-display-wake.
+  Render artifact13247629259 ZIP111894B SHA3c494265fa581f867bf8bf561c90f89ce3dc048ce49a04ae2ca1c01c38c15547;
+  binary93760B SHA3d49e9f4e279c15676ac234bc8cc865f8bfa20679f78d39e987ed4797d6adae4,
+  PRIVATE graphics-v98/render98-final/whyred-render-probe. Neither final98 tool
+  uploaded yet; old97 HID result below is the actual observed wake.
+- Verified98 linked recovery disassembly contains the concrete function and
+ 3 command callsites (STOP, first CMD13, optional clean recheck); private
+  kernel-v98-recovery/linked-recovery-disassembly.txt. Complete kernel run is
+  SUCCESS; boot98 image ready as recorded below. No flash has occurred.
+- PRIVATE ssh-v90/check_graphics98.py syntax checked, NOT started. After verified
+  boot98 flash/reboot: mkdir audit/graphics98-device and start this worker with
+  private log redirection. It waits for cold SSH, retains fresh shell, verifies
+  exact98 UUID, uploads/authenticates diag and both FINAL98 tools, sends ONE
+  diagnostic HID wake, captures actual PNG then presents once only if capture
+  succeeds. No cache writes/daemon restarts. On timeout review outstanding FIFO
+  framing before reuse. Screen confirmation remains required after any present.
+- User Fastboot-ready question pending; latest scan sees no Fastboot. All boot
+  preparation is complete. Only boot is authorized for next flash; System95
+  remains installed. UART unnecessary. Do not use97e shell for a new boot.
+
+## Boot98 authenticated and ready;97e storage failure after HID wake (2026-11-03 Minsk)
+
+- Installed still boot97/System95. User reports console clears, no interface
+  after test. Do NOT claim working visible logo/UI. Physical key still unsupported.
+- Actual guarded HID helper ba80a653c024407b3dfab8cd25101ccf9b5e7d18,
+  CI41671434692/job126040535199 ALL steps PASS. Artifact13248107726 ZIP21230B
+  SHAa58a8cb5c97aa2ddec611453224540096a88efd84c44aab42b171a367aff15ed;
+  binary69920B SHA3fe413a4713d96637c8dfd8294900f3134d4310197954dc9f273cfda30c89015.
+  Provenance/archive/platform/ISA/strict signature/exact2 HID rights verified;
+  upload/readback/exact97 kernel PASS. ONE diagnostic power down/up100ms through
+  existing SweetHIDButtons sender produced actual SWEET FB: display on. Public
+  Apple IOHIDFamily monitor/entitlement examples and exact20F66 ABI reviewed.
+  This is remote diagnostic input, not an implemented physical key driver.
+- Earlier unblank helper3975952 source CI41670889270/job126038611872 all PASS,
+  artifact13247038757 ZIP15022B SHA17b91583e2a896d402c64edae40651712a8adacbbd96d6da884e56a5415d36a9,
+  binary68976B SHA8972b230f771e8660b8ebcd96b6b3e32740e6f565fe61c86714c85d35988e8f0.
+  Verified/uploaded/read back; unblank returned but NO display-on, flags16ec and
+  opaque black unchanged. Only HID pair actually changed display state.
+- During capture AFTER actual wake,97e repeated the fatal CMD17 recovery:
+  incomplete lba6974501, FIFO512, both CMD12 error00018000 and CMD13=00400900,
+  then transport rejection/APFS EIO/mass SIGBUS. Capture command exit138, no PNG,
+  no present submitted. Private storage-failure-context.txt in97e-device.
+  Current held shell14309 has completed framing, but failing disk means do not
+  rely on further process samples/uploads. HID worker complete-shell-retained
+  means protocol complete only; last display-flags command ALSO exit138.
+- RAMFS pressure also recurred:8192/8192 pages,128MiB, low free-page samples.
+  Read-only usage before disk failure: diagnostics6176768B, uuidtext25182208B,
+  mobile Library/Caches5799936B, root Library/Caches8683520B. This is incomplete
+  directory accounting, not sole quota ownership. No purge/quota change done.
+- Full0175 kernel source4878ce141d4ccd692024584000b2e463c7c73089,
+  CI41669886409/job126035105627 ALL steps success, including4819 eMMC checks
+  and retained ASan+UBSan/USB/RAMFS/graphics/etc. Both artifact length/digest/CRC,
+  run/source identity, all reviewed runtime sources and reports, applied0175,
+  linked new diagnostics, zero LSE/PAN, cache clean/idle/commpage disassembly,
+  loader/stock DTB/ADT/layout/size guards PASS. Physical recovery still UNTESTED.
+  Kernel artifact13247418940 ZIP79480813B SHA6cf40da1cdd1ab20a3bda891ce7a29730db55616c4eff2f266905cd0b5624f97;
+  tree13247259365 ZIP25439713B SHA211b3400716592f0d56920c8fda998280171034eccdf62609404f5dab58f30cd.
+- Packaged PRIVATE port/out/whyred-ios-root-v98-status-recheck-41669886409:
+  boot22347776B payload21537520B, image SHA
+  b3d6440ff1e050c52fa325dd88543965a23217fc33da27fa2287a8a505527473;
+  kernel SHAf1f2eb6f474027931d0cb88ebaf07716e1b0131973509f8576f9ea9616edf770,
+  UUID936C980F-9428-33A1-B076-CDB09ABDC855. Keeps XO CMD17 and installed System95;
+  only bounded clean second status/fresh reread candidate changes kernel behavior.
+- PRIVATE tools/flash_kernel98.py prepared, syntax checked; image/System95 proof,
+  v94 rollback hash and manifest checks pass. Read-only Fastboot scan did NOT
+  find target; no flash. User asked to enter Fastboot (pending response).
+  Run ONLY after ready: python3 tools/flash_kernel98.py --flash --ready-answer.
+  It verifies exact private serial/product/unlocked64MiB boot before boot-only
+  flash/reboot. No UART. Never print private identity/keys.
+- Pending tool-source update adds ONLY verified98 UUID to wake/render allowlists
+  (97 retained), because framebuffer ABI/System95 are identical. Gestalt mutator
+  remains97-only and is NOT needed; no cache write. Need signed new builds and
+  exact upload/readback after98 cold startup before any new present attempt.
+- Passive USB receiver2488 remains live. Current logfile/private key path and
+  old97e artifacts retained. Next reboot needs NEW boundary/shell; NEVER reuse
+ 97d5106. No98 hardware boot or successful graphics claimed yet.
+
+## Fresh97e reaches SpringBoard run loop; physical key path missing (2026-11-03 Minsk)
+
+- Actual97e read-only samples, exact shared-cache slide2fefc000: SpringBoard26
+  main is now CFRunLoop/GSEventRunModal/UIKit, rather than the earlier
+  LaunchServices store wait. lsd95 main is idle in CFRunLoopRun. Thus the old
+  MobileGestalt workaround is NOT required to reach this state. Fixed named
+  cache path is still absent, no cache mutation or lsd restart performed.
+- Authenticated present helper9b0a77d5 uploaded/read back. Actual root and mobile
+  captures accepted1, RGB0, alpha2740500/2740500. No PNG exported, no new present
+  submitted. Last logged display transition is OFF. Read-only backboard57 LCD
+  has6 clients, CPU renderer/wrapper nonzero, flags16ec, disablesUpdates false.
+  Private audit/graphics97e-device/backend2.json. A black sleeping scene is not
+  evidence by itself of broken scanout or compositor.
+- User short-pressed power with no reaction. Source confirms sweet_keys_init
+  is called only from sweet_ufs.c; whyred uses the eMMC path instead. Current
+  stream has no SWEET KEYS or HID key events. No physical whyred button polling
+  implemented. Do not request repeated button presses as if wake were supported.
+- Added exact97 physical-target guarded whyred-display-wake. Native refusal/
+  argument checks PASS. Source7f66eb5f0024afddec72d0d216da4d1ee0b1559b,
+  CI41670478848/job126037193120 all PASS. Artifact13247607554 ZIP14200B
+  SHAa7b2ccc9637510ca9565f454ba2e310d65f7e79cf0a9ba92e2ad9f592529cfc8,
+  binary68976B SHAeb0e0755e1398266ba6f9c9a1e364c0f515ab2986878a90d044009f6aad32a6d.
+  Exact provenance/digest/length/CRC/platform/ISA/strict signature/no-rights
+  checks PASS. Upload/readback/exact97 UUID PASS. Actual mobile SBSUndimScreen
+  returns request_status0, but NO display-on event; capture remains opaque black.
+  This is a request result, not successful wake. Retained97e shell14309 is free.
+- Source3975952da98472d2e7eff55be7b062c8b83e4a42 adds separate explicit unblank
+  via exact20F66 BKSDisplayServicesSetScreenBlanked(false). Does not interpret
+  its unspecified C return as success; require observed display/capture change.
+  Native guards PASS; signed iOS CI41670889270 pending, not tested yet.
+- Recovery0175 source4878ce141d4ccd692024584000b2e463c7c73089 full kernel
+  CI41669886409/job126035105627 building. Local exact current C/header ARM64
+  compile passes with generated79 headers; zero disallowed LSE/PAN instructions,
+  no >4KiB frame warning. Expected legacy declaration warnings retained. First
+  invocation used wrong cwd and failed meta_features.h; corrected BSD generated
+  cwd compile passed. Private kernel-v98-recovery/emmc98-compile.json.
+- Current97e observed stream has no common SIGBUS or fatal eMMC recovery so far.
+  Actual mediaserverd null-PC crashes symbolize to CoreImage via CMCapture,
+  separate from storage. Known CoreImage null callback remains unresolved;
+  searchd SIGABRT also retained. No hardware/software renderer success inferred.
+- Installed boot97/System95 unchanged. Logs continue privately, no UART/flash.
+
+## Active97e and late97d storage failure; recovery candidate0175 (2026-11-03 Minsk)
+
+- User confirms backlit BLACK after the actual one-frame97d experiment. Nonempty
+  source/panel measurements are not visible display success. Later stock swaps
+  and display-off/on occurred, so the delayed report alone does not uniquely
+  identify scanout/cache failure. Graphics remains unresolved; no synthetic UI.
+- Full retained97d USB stream later records fatal eMMC recovery, despite CMD17
+  baseline: last good telemetry bytes1302032384, requests32736, cmd17=2543032,
+  cmd18=0, errors0, elapsed_us1826742065. Then two CMD12 errors int00018000,
+  each followed by CMD13 r1=00400900 (ILLEGAL_COMMAND, TRAN, READY), final read
+  rejection, APFS EIO and mass SIGBUS. Prior ~18min clean checkpoint was limited.
+  Private audit/graphics97d-storage-errors.txt and first-sigbus-context preserved.
+- Patch0175 permits one additional CMD13 only after failed STOP, sole
+  ILLEGAL_COMMAND error, TRAN/READY and no inhibit. It NEVER masks the error:
+  final status must have zero R1 errors, safe state, zero pending interrupts/FIFO
+  before a fresh byte-exact reread. Persistent/error/unsafe responses still fail
+  closed. Hypothesis: STOP introduced a consumable status flag; physical effect
+  remains UNTESTED. No clock or storage-write policy change.
+- Exact patch replay against current late-patched source matches reviewed header.
+  4819 actual extracted-function MMIO model checks PASS, also UBSan. Added clean
+  second-status/fresh reread, failed recheck, persistent/distinct card errors,
+  unsafe READY/state/inhibit, stale FIFO and failed reread coverage. Old0172
+  driver fails the new fixture. Local results do not establish hardware recovery;
+  full ARM64 CI pending. Private kernel-v98-recovery/final-local-checks.json.
+  Repository validator Python47/shell7 syntax checks pass; its patch-number
+  check fails on pre-existing sweet/whyred duplicate numbers and0082..0099 gap.
+  This candidate adds0175 after0174 and does not renumber historical patches.
+- User ordinary-rebooted; configd restored static en1 IPv4 without admin prompt.
+  Passive receiver2488 continues graphics97d-usb-session.log; fresh97e notification
+  boundary1572317. Fresh SSH root recovered, retained shell14309 at private
+  audit/graphics97e-device/held, installed exact97 UUID verified. Authenticated
+  GPR helper and FINAL gestalt-path98 helper uploaded and byte-exact read back.
+  Worker stopped BEFORE cache mutation: fixed volatile cache path ENOENT, also
+  absent on later read/list. cache_written=false; no seed/rollback/lsd restart.
+  Fresh SpringBoard26/lsd95 read-only thread samples obtained. Inspect current
+  cache/process dependency before attempting another guarded experiment.
+- Installed boot97/System95 unchanged. No flash or UART this turn. Sole current
+  held shell is97e; never reuse97d shell5106 (unfinished SCP state before reboot).
+
+## Current stop: phone access stalled, no identity-cache change (2026-11-03 Minsk)
+
+- Final tool source b242eb47248d501fde328370c226dc1858f8a38e CI41660019245 /
+  job126000441380 ALL steps pass. Artifact13242030669 ZIP36123B
+  SHA9b16cd30f08a1bd754cc8aa8c9e73752f25d3577fbd66ec0cbf0ea1d7aec9546;
+  binary90512B SHA3356f566f223beca159668fbe2f216c4eeefb2f80a1d1f52ae22daacefc95119.
+  All archive/provenance/report/platform/ISA/signature/exact rights checks passed.
+  Native final path build and host refusal pass. Candidate PRIVATE graphics-v98/
+  gestalt-path98. NOT uploaded/run; cache remains byte-for-byte unmodified.
+- Fresh login with ConnectTimeout60 failed255 before root identity. Original
+  SCP attempt failed at banner before payload. Retained-shell tiny SCP test
+  waited150s without its FIRST acknowledgment: no C record or file payload sent.
+  audit/graphics97d-held-transfer.json is failed-protocol-review-required.
+  Last session-log suffix is WHYRED_SCP_e9ce42d320f3d80db2d3ed525ddce07f_BEGIN only.
+  Do NOT issue framed shell commands into this session while sink state is
+  uncertain. No successful phone use of persistent_scp.py claimed.
+- User asked for ordinary reboot, USB attached, UART unnecessary. Await answer;
+  no second reboot/flash performed. Earlier optional visible-logo question also
+  unanswered. USB receiver2488 continues audit/graphics97d-usb-session.log.
+- Prepared PRIVATE ssh-v90/check_graphics97e.py, syntax checked, NOT launched:
+  create fresh audit/graphics97e-device before launch; fresh pinned root shell,
+  exact97 UUID, authenticated GPR diag and FINAL gestalt-path98 tool uploads,
+  fresh original cache read/hash, guarded seed, exact2-key delta/backup check,
+  actual mobile MG probe; automatic exact rollback on a completed failed probe.
+  It deliberately does NOT restart lsd: inspect passing result first, then use
+  freshly verified PID. On timeout, review outstanding command before any reuse.
+- Next after user's ordinary reboot (or verified Fastboot reboot, NO flash):
+  record new log boundary, launch fresh97e worker, inspect MG probe. Only after
+  it passes, restart actual lsd and observe SpringBoard/real server capture and
+  physical presentation. Prior cache/graphical scene not a final UI repair.
+- Updated WHYRED-GRAPHICS-STATUS.md to reflect actual one-frame presentation,
+  false update gates, rejected queued-reply guess and exact identity dependency.
+
+## Retained-shell transfer prepared; exact IOKit cache path corrected (2026-11-03 Minsk)
+
+- Source721de172968684e14bf53159dfbf752334dd2012 CI41658918789 all steps PASS;
+  artifact13240003682 ZIP36116B SHA50a4042d1dd82a3b28f264c090b81aa69e6511db26c7de73c8ae57c75629e8c5,
+  binary90512B SHA4d0debc184754959b6aeba8d802e8703ad36ea7536e22a24f98350854c81f3ab.
+  Digest/length/CRC/source/platform/ISA/signature/exact entitlements verified.
+  NOT uploaded: fresh SSH stalled at banner exchange, SCP refused before data.
+  Cache remains unchanged, no lsd restart. Actual retained kernel read still works.
+- Exact preserved cache inventory uses IOKit.framework/Versions/A/IOKit; corrected
+  explicit dlopen path before testing, rather than assuming the unversioned alias.
+  Signed rebuilt tool pending. Root stat command exceeded60s but eventually
+  completed both ENOENT results and its end marker; shell is not abandoned.
+- Private persistent_scp.py transfers through existing shell using SCP C/E records,
+  checked exact Dropbear sink behavior. Actual native dash+scp/FIFO test PASS on
+ 131106 bytes including binary and shell-looking text, mode0755 and exact bytes;
+  subsequent framed shell command succeeds. No phone transfer with this utility
+  yet. This avoids requiring new root authentication, not a general SSH fix.
+
+## Development identity tool iOS SDK correction (2026-11-03 Minsk)
+
+- Candidate f8bb612af48e7953b65d2ada7c9cae340e8bd505 CI41658525007 /
+  job125995235395 FAILED: gethostuuid unavailable on iOS. No candidate uploaded
+  or cache written. Replaced that SDK-disallowed API with read-only IOKit
+  IOPlatformExpertDevice.IOPlatformUUID, then NSUUID validation. This is the
+  existing generated platform UUID (local XNU IOPlatformExpert.cpp), not a new
+  device identity source or simulated network service. Missing value fails closed.
+- Native warning-clean compile and all3 physical target guards retested. Actual
+  cache write, MG probe, lsd restart and UI improvement remain UNTESTED.
+
+## IPC correlation rejects queued-reply guess; actual missing identity keys (2026-11-03 Minsk)
+
+- GPR helper02b54fd6983d8744c88cabcd1b20bc85e411a2d8 CI41656697790 /
+  job125988798863 all steps pass. Artifact13240720530 ZIP72878B
+  SHA1d5ac22ba4bd60396ac14a3dd15ebea9874ac7b7e6133fe23e31158405790d22;
+  binary73504B SHA2a276d3f3a3b60e9773f0e51482ad8137e61521b1d1afb00efbbdd217791e8d8.
+  Provenance/platform/ISA/signature/rights/upload/readback verified. Actual ARM64
+  GPR samples correlate x5>>32 with local mach_msg2 ABI: SpringBoard thread1
+  waits on0x4303, EMPTY; its queued0x2803 is NOT that port. No lost reply wakeup
+  proved. lsd advanced from UserManagement request to MG hardware lookup; CPU
+  counters and later worker exit demonstrate progress. Do not call it deadlocked.
+- Bounded read-only lsd stack constants decode exactly (MD5 MGCopyAnswer prefix,
+  checked against each actual hash): WifiAddressData/WifiAddress and
+  UniqueDeviceIDData/UniqueDeviceID. This is the actual hardware-query dependency.
+- Existing volatile systemgroup MobileGestalt cache is6838B, CacheVersion20F66,
+  CacheData5337B/CacheExtra33 entries. Both UniqueDeviceID keys and Wi-Fi address
+  keys absent. Original bytes preserved privately; no cache mutation yet.
+- Added explicit whyred-gestalt-cache seed/probe/rollback experiment. Exact97 UUID,
+  root identity, fixed path on whyredramfs, regular single-link file, version and
+  caller-supplied current SHA256 are required before seed. Adds ONLY2 development
+  identity answers derived from existing platform host UUID, preserves other
+  fields, creates original backup, atomic replace and restores owner/group/mode.
+  Rollback verifies current digest and restores original bytes. Probe prints only
+  match/timing, never identity values. No fake Wi-Fi service or partition write.
+  Native warning-clean build/all3 physical-target refusals pass; signed iOS build
+  and actual cache behavior pending. User informed of temporary experiment.
+
+## Actual97d queued Mach messages; register sample candidate (2026-11-03 Minsk)
+
+- Ports helper838548e1694f3e53f148eaca4c621e6912c36dbb CI41656099646 /
+  job125986682704 all steps PASS. Artifact13240205870 ZIP72280B
+  SHA1dca11e6566a1ef3d031f6c0a407009bb08e1c7f1ad9fb489aa09f04b5589092;
+  binary73504B SHA95489d3da45535d70dbba405ab3b214cd63b6c31b89016196a73e6cca155e005.
+  Provenance/platform/ISA/signature/rights/upload/readback checked. Actual phone
+  selftest PASS: own queued message preserved, no receive performed.
+- Physical queue snapshots: launchd has514 receive rights,512 queried with0
+  errors,55 nonempty queues/120 messages (LIMITED, not the whole task). lsd94 has
+ 133 receive rights, all queried:36 nonempty/36 messages. usermanagerd85 and
+  notifyd89 receive queues all empty. SpringBoard26 has46 receive rights,2
+  nonempty, including0x2803 limit1/msg1/seq0. Read-only unsuspended snapshots,
+  not proof of which port the blocked caller waits on or a unique kernel defect.
+- Added optional registers PID to existing bounded thread sampler, exposing ARM64
+  x0..x28 only on explicit request; native builds report unsupported GPR format.
+  Purpose: correlate actual mach_msg2 receive port with queued-port name, using
+  local XNU trap ABI. No task suspend/write. Native warning-clean/selftest passes;
+  signed iOS build and physical correlation pending.
+- Private audit/graphics97d-ports-check.json complete; retained SSH shell5106 free.
+  Post-reboot observed stream still no common SIGBUS or eMMC errors at ~18min.
+  User confirmation of visible one-frame boot-logo presentation remains pending.
+
+## Actual97d capture-to-panel passes; port-queue diagnostic prepared (2026-11-03 Minsk)
+
+- After requested ordinary reboot, root SSH recovered at14:36Z; retained shell
+  PID5106, private audit/graphics97d-device/held. Exact97 UUID and both helper
+  upload/readbacks passed. Present-once exit0, capture RGB25430 alpha2332800,
+  surface5/swap5 requested successfully. Driver source exact25430 RGB and
+ 2332800 copied pixels; panel RGB40113 (console raced), nonzero output verified.
+  User screen confirmation pending. This is one real boot-scene frame, NOT
+  repaired SpringBoard or continuous presentation. No flash/UART this turn.
+- Fresh backboard57 read-only inspection:4 displays, LCD2 render clients, same
+  concrete vtable, flags3 and CPU renderer. LCD flags12ec: disablesUpdates FALSE,
+  software-capture flag TRUE. All4 update gates false. Startup gate hypothesis
+  does not explain current blank stock swaps. Actual current cache slide2b788000.
+- Fresh SpringBoard26 reproduces database-store wait. lsd94 thread1 goes through
+  InstalledContentLibrary to listAllPersonaAttributesWithError: on UMUserManager;
+  it waits inside xpc_connection_resume. usermanagerd85/launchd1/notifyd89 thread
+  samples obtained read-only. No unique IPC failure cause established yet.
+  Bounded SpringBoard stack search found no NSXPCConnection among11 selected
+  low-heap candidates; absence is not evidence of no connection.
+- Added explicit whyreddiag ports PID: up to512 receive-right status queries,
+  <=16384-name guard, reports nonempty queues without receiving/extracting any
+  message or stopping tasks. Native warning-clean build/selftest proves one
+  own queued message remains after inspection. Cleanup only own test rights.
+  iOS build/phone port-queue measurements pending. Need distinguish server-side
+  queued messages from clients waiting for replies before proposing IPC fixes.
+- Old pre-reboot SIGBUS preserved separately. Fresh observed segment has no
+  common SIGBUS or eMMC read errors at this checkpoint; not a long stability proof.
+
+## Presentation probe authenticated; LaunchServices wait identified (2026-11-03 Minsk)
+
+- Source b03952a947f529f7f0b009535e221d2efdf76b47 CI41653213351 /
+  job125976558662 ALL steps pass. Artifact13239250056 ZIP111473B
+  SHA888e8523f14bbadb4eb043c913eaeb70803ae840f12472d853e240d3bcb1a6a8.
+  Signed binary93760B SHA9b0a77d5394de0987aa0313ee3a0d63578b9d1318ebd37e4f00aec4640fb7091.
+  Source/report/digest/length/CRC/platform/ISA/signature/exact2rights checked.
+  No physical present result yet: ordinary reboot confirmed; cold CMD17 startup
+  still underway. Private serially coordinated restore/present/sample/backend
+  workers wait for one retained shell; no concurrent commands on its FIFO.
+- Exact97c CoreServices stubs resolve synchronousRemoteObjectProxyWithErrorHandler:
+  and getServerStoreBlockingWithCompletionHandler:. ControlCenter caller uses
+  initWithBundleIdentifier:allowPlaceholder:error:. Main waits on shared store
+  lock while another thread requests database store over NSXPC. Why the server
+  has not supplied it remains unresolved. No new lsd diagnosis claimed.
+- Decoded actual CAWindowServerDisplay disablesUpdates getter1884deb74: follows
+  native server+60 to display, tests bit8 of unaligned16bit field+251. Setter
+ 1884deae8 changes bit0x100; external software/capture path uses separate0x80.
+  Prepared bounded read-only measurement, not a live flag change. Previous
+  direct-load scan found no references because access uses add+ldrh; corrected
+  scan and exact ObjC method list resolve the getter. Private cache bytes kept.
+- Rewrote WHYRED-GRAPHICS-STATUS.md so superseded unentitled empty-capture results
+  are clearly distinguished from actual entitled marker/Apple-logo successes.
+  Post-reboot observed log segment has no CRASH records or eMMC errors so far;
+  early pre-USB boot was not captured. Pre-reboot SIGBUS lines kept separately.
+
+## Resumed after Mac crash; present helper compile fix (2026-11-03 Minsk)
+
+- User reports Mac crash and asks to continue graphics. Source HEAD4f15ca8a and
+  private prior PNG/audits survived. Old retained SSH process and UDP receiver
+  are gone. USB en1 still configured; a single pinned login rejects publickey.
+  Requested ordinary reboot, no UART. Restored passive UDP to a NEW private
+  audit/graphics97d-usb-session.log; old logs preserved. Current stream has
+  repeated xpcproxy SIGBUS, not attributed to a new cause yet.
+- Prior present-once CI41650225641/job125966097273 FAILED during iOS compile:
+  mach_task_self undeclared. Added explicit mach/mach.h rather than depending on
+  transitive desktop SDK includes. Native warning-clean fallback-declaration
+  compile and present-once host refusal pass. Signed iOS/phone test pending.
+- Installed boot97/System95 unchanged; no flash or serial access this turn.
+
+## Actual server PNG shows Apple boot logo; one-shot CPU presentation prepared (2026-11-03 Minsk)
+
+- User reports console text with occasional clears to backlit black. Existing
+  current97c FB logs independently show source3 RGB0/alpha0 copied to panel on
+  swaps4/7/10/13. No exact timestamp match to each user observation claimed.
+- PNG helper source98d9a5b946ac3d8de4a3776f9b252317274fed89, CI41649429775 /
+  job125963367270 all steps pass. Artifact13236617252 ZIP106157B
+  SHAa404d52c692bd7c12a2781fb1adcefa6fbc8d5b779498b1576381ff8fea08e84;
+  binary93488B SHAa21e48060343da4613c758e4af3c075c7245a128f8308049908c916d53547531.
+  Source/digest/length/CRC/platform/ISA/signature/entitlements and exact upload
+  readback verified. Physical capture-png exit0:62639B PNG1125x2436, viewed locally:
+  real WHITE APPLE BOOT LOGO on black, not console or a synthesized test image.
+  Private audit/graphics97c-device/capture-lcd.png, do not commit image/bytes.
+- Actual SpringBoard thread sample still main CoreServices/ControlCenter wait,
+  another syncXPC through CoreServices/Foundation. Backboard render/MIG/runloops
+  present. No proved identity of waited-on service. Private corrected97c cache
+  slide symbolication saved; large nearest-export offsets NOT treated as names.
+- Added explicit present-once, only for exact running97 UUID, using PUBLIC IOKit
+  C ABI and our custom framebuffer selectors4/5/7/8 (layout source-reviewed).
+  Captures real LCD into own IOSurface, verifies displayID0 and1125x2436, queues
+  it as layer0 with full source/destination rects. Driver retains surface. No
+  invented UI, renderer flags, daemon changes or partition writes. This is only
+  a one-frame test, not continuous UI rendering. Native warning-clean build and
+  host refusal pass; signed iOS CI/physical presentation pending.
+
+## Entitled remote marker PASSES on phone97c; image export prepared (2026-11-03 Minsk)
+
+- Corrected ONLY diagnostic signature with2 exact QuartzCore entitlements.
+  Source396c0b1fc2bcb2d3c860df8fa5c828e872e74292, CI41648826350/job125961234726
+  ALL steps pass. Artifact13236571718 ZIP102903B SHA843341b770effa2228efdefe31115d7176f59ca5ec8c858379330ae561f29639.
+  Renderer92672B SHA27e49395e0d36b1d18eef32a91779858828d100393d284f5abb8c16b3c2e387a.
+  Digest/length/CRC, exact signed entitlement set, source/platform/ISA/signature
+  verified; exact upload/readback pass. Private graphics-v98/rights98.
+- ACTUAL mobile entitled test exit0: baseline RGB25430 alpha2332800, after RGB26454
+  alpha2332800, red marker EXACT1024px, context1156270260. Finally invalidated.
+  Same source previous unentitled capture was allzero; previous empty captures
+  are NOT reliable evidence of failed compositor. No GPU fabricated or daemon/
+  System/kernel changed. CPU server composition and own marker capture now proved;
+  stock UI/panel presentation still NOT established. User informed and screen
+  appearance question pending. Private audit/graphics97c-rights-check/device.
+- Corrected private rights status inherited old worker PID/time fields: retained
+  as initial-probe metadata, not fresh worker identity. Evidence/output unchanged.
+- Added capture-png: captures own surface and exports PNG as base64 stdout,
+  no phone file or display mutation. Uses ImageIO and locked BGRA mapping lifetime.
+  Native warning-clean build, all4 host capture/remote refusals pass. iOS build
+  pending. Next inspect actual image before proposing framebuffer changes.
+
+## Fresh97c physical checks; diagnostic renderer rights missing (2026-11-03 Minsk)
+
+- User returned phone in Fastboot. Verified exact private baseline identity and
+  whyred product; fastboot reboot OKAY, NO partition write. Private immutable
+  audit/graphics97c-reboot.json boundary9705721. Cold CMD17 startup took ~13min
+  before pinned SSH accepted commands; observed eMMC errors0/fallbacks0 throughout.
+- Worker72449/held shell74871 completed new audit/graphics97c-device checks.
+  Actual kernel UUID97 and sessionflags1f5/multiuser0 verified. All3 reviewed
+  helper uploads byte-for-byte verified. Actual mobile two-process IOSurface
+  test PASSES all512 shared bytes, lookup1, child exit0. This is a phone result.
+- Named LCD remote-layer still transparent before/after, contextID833566179,
+  exit1 without crash, context invalidated. No visible marker claimed.
+- Bounded read-only backboard57 snapshot: actual slide4ea3c000, server exists,
+ 4 displays. Verified NSArrayM metadata/layout in exact preserved cache. First
+  expected-vtable guard stopped: real class vtable1d5b45c68, NOT guessed oldbase.
+  Decoded its slot180 ->18835cc54 with CPU fallback1884ebcc0, then separate
+  backend2 snapshot supports this verified subclass. Original stopped outputs kept.
+- LCD (exact nameCFString1d5b59178) has2 render clients, flags3, nonzero cached
+  software renderer/wrapper; both contexts have nonzero rootIDs/cached roots.
+  Other3 displays each have1 client. This rules out empty LCD list in this snapshot.
+- Crucial probe limitation: stock backboardd signature has QuartzCore
+  displayable-context/global-capture entitlements; previous helper had neither.
+  BOTH exact key strings exist in preserved QuartzCore. Prior marker/capture
+  results cannot yet exclude authorization filtering. Updated diagnostic workflow
+  grants ONLY these2 keys to render helper, verifies signed entitlements exactly.
+  No daemon/System/kernel change. Rebuild/retest pending; shell remains usable.
+
+## Surface IPC candidate authenticated; empty-list capture can succeed (2026-11-03 Minsk)
+
+- Source d3b8f817c6f496df8d2bcd875c1bfb4b1a64e104, CI41622795476 /
+  job125872489652 ALL steps passed, including actual two-process IOSurface data
+  assertion on native CI runner and signed arm64 iOS build/platform/ISA checks.
+  Artifact13224571482 ZIP101869B SHAd3b4f8d6a9052901d8afe8ff073735e124ed369bff2d2b7eb6642879f758db46.
+- Download length/digest/CRC, report source/both binary digests/lengths, platform,
+  ISA checked; new IPC strict signature verified locally. Private graphics-v98/ipc98.
+  IPC binary88176B SHA18d9f84e8e443985c277663aa2d65bf7da8d942e79b49f862fa3894fd6d9484e.
+  Bundled named-render binary92080B SHA8afa15198474c715fae0318e3bbf4a741e616585eb9636d38f4c7ab602b17052.
+  Native CI record: child registered_ports3, lookup1 initial_pixelsPASS, parent
+  shared_pixelsPASS512B. NOT a phone result. No upload/flash/SSH/serial calls.
+- Offline capture-event1884ee784 FIRST sets request+60 bit8 (handled/success),
+  THEN tests concrete server+80 render-client count. Zero branches to unlock/return
+  at1884ee830 WITHOUT renderer construction/drawing. Work188469360 returns0
+  on the set bit; MIG reply succeeds and public wrapper normalizes nonzero
+  result to accepted1. Thus an empty display client list can produce our exact
+  accepted-but-transparent result. This is a demonstrated code path, not an
+  observation that the phone's list was actually empty.
+- Prioritize bounded read-only concrete display-server+70 list/+80 count alongside
+  context routing and cached software renderer+c0/c8. Do not infer GPU failure
+  or clear update gates before checking this. Presentation gate effect on capture
+  still unproven. Kernel GetID0 supports, but doesn't prove, original context route.
+- Existing framebuffer callbacks were reviewed: notification arrays are per user
+  client and VSYNC type5 matches stock wrapper. No claimed new driver fix from
+  those checks. Graphics remains unresolved; prepared tests require returned phone.
+
+## CPU capture path traced; cross-process surface test added offline (2026-11-03 Minsk)
+
+- Exact capture IPC40221 (reply40321) resolves from QuartzCore MIG subsystem
+  40200..40281 at1d5b34750, routine21 stub1885423ec ->1884691ac ->188469360
+  ->event20. CADisplayServer registers event20 callback1884ee784. Its concrete
+  virtual render-to-target slot180 ->1884ebcc0 ->1884ebd68 allocates software
+  renderer4fe0 with EXACT SAME vtable1d5b3d618 as software callback constructor.
+  Thus lack of EAGL alone DOES NOT explain the measured empty capture. Private
+  capture-event/renderer/MIG disassembly remains outside Git. Update gate still
+  unresolved; no proof that a startup presentation gate blocks this capture path.
+- Existing framebuffer GetID returns0; the earlier ID0 route is plausible, not
+  a proven defect. Named LCD comparison remains useful for actual identity proof.
+- Added tools/whyred-surface-ipc.m: parent creates own8x8 stride64 surface, passes
+  its Mach send right to separately spawned executable, child looks it up and
+  validates/replaces512 bytes, parent validates all changes. No display/service/
+  filesystem modifications. Child-only registered port via exact local XNU spawn
+  declaration; real bootstrap untouched. All IPC and child waits bounded.
+- Native warning-clean fallback-declaration build and actual two-process test
+  PASS. Initial bootstrap-channel prototype and incorrect count==1 assumption
+  failed locally; final uses registered ports (mach_ports_lookup returns3) and
+  accepts slot0 while releasing remaining lookup rights. These failures are host
+  helper development results, not handset/kernel failures. CI/iOS build pending.
+- Native CI adds actual cross-process pixel assertion, signed iOS helper,
+  platform/ISA/signature/digest report. No phone commands; user has the handset.
+
+## Signed named-route candidate ready; startup update gate found (2026-11-03 Minsk)
+
+- Public source54bf682ba00e66c770d885e4d2ce5eb8853fc353, CI41581070859 /
+  job125735783858 all steps passed, including host display refusals and CPU tests.
+  Artifact13206296406 ZIP63005B SHA31ab4e7bf2e15576c864cafaa26b831a93ea2c2b1790037aebb645c2d2cf8ac0.
+  Binary92080B SHAfd68b46a56e827ef05655046c6bc255388e9d9668f9d6407c436275c1afe601a.
+  ZIP digest/length/CRC, report source/binary digest/length, iOS platform, ISA and
+  strict signature verified. Private graphics-v98/named98. NO upload/device test.
+- Offline stock backboardd path10001d8ec passes true for exported
+  kCAWindowServerDisableUpdatesOnMainDisplay to serverWithOptions:, then sets
+  rendererFlags3. Exact ObjC stub selectors verified from preserved binary:
+  10009c360=serverWithOptions:,10009e440=setRendererFlags:,
+  10009cfc0=setDisablesUpdates:,1000978c0=disablesUpdates.
+- Overlay handling around1000825d8/1000826d0 logs disabling/enabling framebuffer
+  changes and calls setDisablesUpdates:. Thus startup deliberately gates updates;
+  actual current gate state is UNKNOWN. It may explain no presentation, but has
+  not been shown to explain empty server captures. Do not blindly clear it or
+  claim renderer/GPU diagnosis from this path. Next read-only server snapshot
+  should include the real display's update gate and display/context identity.
+- User's offline-only constraint remains active; installed boot97/System95
+  unchanged. Source/native/CI checks do not establish a physical graphics repair.
+
+## Named LCD context comparison prepared offline (2026-11-03 Minsk)
+
+- Still no phone commands; user retains the handset. Original remote marker used
+  display ID0, while capture targets LCD by name. Their equivalence was never
+  measured; an empty marker capture cannot by itself prove renderer failure.
+- Added remote-layer-lcd with exact exported kCAContextDisplayName and LCD,
+  retaining remote-layer ID0 for controlled comparison. Both now verify the
+  runtime contextId ABI and print actual context ID. Finally invalidation remains.
+  No renderer flag, daemon, System or boot changes. This is a diagnostic candidate,
+  NOT an observed graphics repair or proof that ID0 was wrong.
+- Native and simulator capture/remote commands now refuse before accessing a
+  display. Warning-clean native build with iOS IOSurface declaration fallback,
+  all3 host refusals and exact CPU layer/surface preservation checks pass.
+  CI workflow now executes those checks. Signed iOS build/device execution pending.
+- Further offline investigation: no direct intra-QuartzCore callers to exported
+  CARenderOGLNew/_New_ or software callback constructor were found (except wrapper
+  forwarding); this limited scan does not prove absence of indirect/cross-image
+  use. Private context-init and renderer-caller slices retained outside git.
+
+## Offline graphics investigation; phone taken by user (2026-11-03 Minsk)
+
+- User explicitly requested work without the phone. No subsequent phone commands,
+  SSH uploads or flashes. Local observer25904/shell27792 were already gone when
+  checked. Latest97b status: failed, samples27, last state0, SSH exit255. This
+  coincides with user taking the device; do not classify it as a new spontaneous
+  kernel/storage fault or a completed65min test. Passive UDP receiver may stay.
+  Private graphics-v98/user-offline-request.json preserves the boundary.
+- Authenticated read-only diag source4ead866d66553908e9f02f314441489832c9db48:
+  CI41531195903/job125571544548 all steps passed. Artifact13181273512 ZIP62132B
+  SHA2780c262495e7f7d6e092a28fbe864e29de9889fd8a20395118f0fc1c7f764e1;
+  binary72960B SHAa9ebd0d26b2f36a34ee28b8b53c4cafe457661a8d9e28e77f9a813fd10993c5c.
+  ZIP length/digest/CRC, report source/binary digest/length and strict signature
+  verified locally. Prepared graphics-v98/diag-region98; NOT uploaded/run on phone.
+- Offline display-discovery decode found exactly3 type-specific inventory paths,
+  not3 established renderer engines. Factory1883a3320 chooses LCD/TVOut using
+  display+9f2 bit8, set by display type; not a software bit. Concrete external-
+  update vtable slot58 ->1884f7d38 toggles display+251 bit80. Base slot is no-op.
+  No supported persistent software-server configuration has yet been established.
+- Exact saved lsd return chain19c54d6e4/d910/d320 ->19c547214 identifies an
+  IONetworkController wait, names sdio/wlan/marconi-wifi, caller timeout5seconds.
+  CFRunLoop imports resolved exactly, not nearest redacted export. The outer
+  semaphore wait is worker synchronization, not proof of an infinite MG query.
+  Missing ADT product/options are NOT the matching target of this saved sample.
+- Added WHYRED-GRAPHICS-STATUS.md with measured boundaries, guarded backend paths
+  and next bounded read-only experiment. No graphics fix claimed and no new
+  image built. Next actual hardware step only after user returns the phone:
+  cache identity/slide -> actual server global/object/vtable -> backend/context
+  routing, before proposing state mutation. Private disassembly remains outside git.
+
+## Remote marker failed to reach server capture; read-only backend inspection prepared (2026-11-03 Minsk)
+
+- User explicitly requested continued graphics work. Exact remote-layer probe
+  source056181479a063781a173918ad829bd7ec6a59be1 from CI41530546994/artifact13182076347
+  ZIP66842B SHA56ae641531f7026fd9a9027c8e92990db4a414d031b482851826fae4bc577b1c;
+  binary92048B SHA2a22ff0b9e96451dad0c21cf3d0cb801f9a62999fd4ce770f409a87baefa9904.
+  Signature/iOS/ISA/CRC/length and exact upload/readback verified. Worker29221
+  complete21:42:29Z: CAContext created,32x32 red layer submitted, before/after
+  capture accepted1 but RGB/alpha/marker all0. Context invalidated in finally.
+  No rendered marker or stock UI repair claimed. audit/remote98-check/device.
+- Runtime method ABI checks passed for factory/setLayer/invalidate; setLevel
+  called ONLY for verified float ABI. No guessed renderer flags or server memory
+  writes. Actual new context failing to appear suggests server remote composition
+  path needs investigation; empty capture alone doesn't prove a unique cause.
+- Read-only unsuspended SpringBoard26/Backboard57/lsd96 thread samples private.
+  SpringBoard main waits through CoreServices; another thread waits synchronously
+  on XPC from CoreServices/Foundation. No identity of the waited-on service yet.
+  Correct shared cache slide30728000 confirmed by TWO exact kernel anchors:
+  workq_kernreturn+8 and ulock_wait+8. Earlier hand-calculated30628000 was wrong
+  and discarded before any claimed diagnosis; corrected private symbolication.
+- CAWindowServer serverIfRunning is an exact load from shared global1dcf3c160;
+  planned inspection reads the actual backboardd task/global/object/vtable only.
+  Added bounded read-only whyreddiag cache PID and region PID ADDRESS LENGTH<=4096,
+  no task suspend/write. task_cache reads actual dyld all-image-info shared slide
+  before using addresses. Native warning-clean build, actual self task-cache/read
+  and7 malformed/overflow/negative/size cases pass. Signed iOS CI/device pending.
+- Current installed97/System95 and observer25904/shell27792 untouched. Graphics
+  remains active. Next authenticate helper, inspect server backend pointers/flags
+  from read-only snapshots, then decode actual backend choice. Don't fabricate
+  accelerator support, blindly switch bits, or present a test marker as iOS UI.
+
+## Actual97b server capture completed: accepted but transparent/empty (2026-11-03 Minsk)
+
+- User asked to act now. TCP was initially refused while cold CMD17 startup read
+  ~803MB. Once available, pinned SSH authenticated on first attempt. Running97
+  UUID/sessionUID501 and75 xattrs verified again; observer25904/shell27792 active.
+- Stopped ONLY waiting capture worker25936 before it performed any upload, then
+  started worker27563/check_capture98c.py after verified97 UUID, without waiting
+  for duplicate file controls. Distinct audit/capture98c outputs preserved.
+- Actual signed upload/readback pass. Methods command returns0 with runtime
+  signatures/implementation offsets; capture returns1 only because pixels empty:
+  CARenderServerRenderDisplay accepted=1, RGB0/alpha0 of2740500. No crash/timeout,
+  no screen mutation. Completed21:34:50Z. Existing CPU layer/surface proofs pass.
+- Runtime method offsets(relative QuartzCore base18827b000) now resolve exact
+  setters: CAWindowServer setRendererFlags25f430 ORs caller flags with3 and copies
+  to each CADisplayServer+0xb8. This is not yet a decoded software-switch bitmask;
+  do not write guessed bits. beginExternalUpdate:usingSoftwareRenderer:264b88
+  dispatches bool through server vtable+0x58, then update throughvtable+0x10.
+  Private disassembly graphics-v98/server-flags,display-flags,external-update.
+- Empty accepted server capture localizes the observed empty frame before panel
+  copying, but doesn't alone distinguish empty context tree from unavailable
+  renderer. No stock UI repair claimed. Next decode actual server backend/context
+  selection with new method addresses and inspect UI context availability.
+- No flash/System/driver/framework bytes changed; graphics task continues.
+  Prior97 SSH hang separate. Read97b observer/capture98c results before more work.
+
+## User confirmed ordinary reboot; distinct97b observers running (2026-11-03 Minsk)
+
+- User rebooted phone normally. No flash. New observer25904 uses existing97
+  manifest and distinct audit/kernel97b-observer.json/log/device, confirmation
+  audit/kernel97b-user-reboot.json. Log boundary9537568 preserved before reboot;
+  fresh reset I/O counters/early foreground success observed. Old97 failed
+  outputs remain immutable. No duplicate old observer or concurrent FIFO use.
+- Renderer capture worker25936 ssh-v90/check_capture98b.py waits for new97b
+  baseline then uploads verified source96ece6f4 capture helper and runs methods/
+  capture commands as mobile. Existing graphics-v98/capture98 artifact unchanged.
+  Status audit/capture98b-check.json/log/device. Do not duplicate this worker.
+- Through early new boot~21:25Z,302MB errors0/fallbacks0, foreground setter works.
+  SSH still starting; no UUID/session/read baseline or capture result from this
+  new run yet. Continue reading both statuses before action; no new reboot
+  needed while startup progresses. Previous ordinary97 watch failed before65min.
+- Graphics remains an active repair task: CPU layer and IOSurface proved, real
+  display/server capture pending. Do not call offscreen test rectangles a working
+  stock interface. No System/driver/framework modifications deployed for graphics.
+
+## Current97 SSH hang blocks next graphics probes; ordinary reboot requested (2026-11-03 Minsk)
+
+- ACTUAL IOSurface CPU probe passed at21:09:23Z: create16x16/stride64, lock/map,
+  CALayer192red+64green exact pixels, unlock/relock preserve all1024 bytes. Worker
+ 23548 complete; audit/surface98-check.json/device. No screen/server mutation.
+- Next capture helper source96ece6f4d80dfd0ff230c47a00fc1c353cf7dae4, CI41525632566,
+  artifact13178494206 ZIP57570B SHA40a2b30b897969082e3ede619219268261fa2d51e2d5be0e245057c067a29298;
+  binary91168B SHA52d964f0ed119d16d3053b63466380023caf8293e3583cb1c76ae530e336ecd7.
+  Signature/iOS/ISA/CRC/length verified under graphics-v98/capture98. Its upload
+  NEVER received first SCP acknowledgement; worker24031 failed before payload,
+  so neither methods nor capture command ran. No device graphics result here.
+- New SSH probe establishes TCP but times out BEFORE server version/banner,
+  before key offer/auth. Thus this is not a measured bad-key rejection. Original
+  observer17023 ALSO ended phase failed: retained-shell command got BEGIN but
+  no END within180s, samples28. Last complete state21:10:04Z: VMfree1802 pages,
+  wired16099/compressor384; RAMFSfree3500/8192, not data quota. No concurrent FIFO
+  commands were issued. Held SSH shell19005 may retain a stuck remote child.
+- UDP still supplies SpringBoard/USB lines. No current EMMC recovery/APFS/EIO/
+  RAMFS pressure/panic captured. Last I/O1.388GB errors0/fallbacks0. Separately,
+  genuine mediaserverd28 again hit the known NULL CoreImage callback; distinguish
+  it from diagnostic process185. Do not claim storage fully fixed or attribute
+  this new hang to the old CMD12 latch without evidence.65min watch incomplete.
+- Private immutable cut audit/kernel97-full-review/ssh-hang-summary.json/log,
+  graphics-v98/restart-request-boundary.json and ssh-login-check stderr stages.
+- Asked user for an ordinary power reboot to continue graphics checks (or report
+  Fastboot if already there). Await actual reply; no new flash is required to
+  run the existing97 kernel. Do not restart old observers/overwrite old outputs.
+  Prepare distinct97b output/baseline only after user confirms the new boot.
+- Graphics still open: real CPU layer and owned IOSurface work; need server
+  snapshot/root-layer composition and framebuffer delivery. No fake GPU, service
+  disable, System rewrite, framework byte patch or guessed renderer flags made.
+
+## Graphics server capture investigation (2026-11-03 Minsk)
+
+- Read actual /usr/libexec/backboardd over pinned SSH to private graphics-v98;
+  no device writes. Its screenshot call at0x10001e974 invokes the exact imported
+  CARenderServerRenderDisplay with port0/display name/ownIOSurface/int0/int0,
+  between lock/unlock. QuartzCore wrapper at0x188470e40 returns normalized bool.
+- Added explicit capture diagnostic with that five-argument ABI, own1125x2436
+  BGRA surface, no display swap. Reports accepted/RGB/alpha counts only. Native
+  warning-clean compile; NOT run against the Mac display. iOS CI/device pending.
+  Root/mobile privilege differences and server renderer capabilities remain open.
+- Added read-only renderer methods diagnostic (source32fcf2a): runtime signatures
+  and implementation offsets for CAWindowServer/CAWindowServerDisplay/CARenderer,
+  bounded128 matches/class. No guessed private setters invoked. CI41525363634
+  produced artifact13178913579, not yet downloaded/physically tested.
+- Surface helper corrected-header CI41525233629 artifact13179636649 ZIP46978B
+  SHAabad646e2d0c8e9c7f8afc53c0abf63906b9e1d47f5e7178f49762b0eb036752;
+  binary90240B SHA6c03f65739617cbb734cafc98bf0cc25b3b46af1f51ceaff7071635f57052cb0.
+  Signature/iOS/ISA/CRC/length verified, worker23548 currently uploads exact helper,
+  audit/surface98-check.json/device. Await actual result, don't duplicate it.
+- No repair of the stock graphical scene claimed. Keep97 observer17023 and shell
+  19005 untouched while separate bounded diagnostic SSH commands run. Current
+  source capture addition is separate from already installed kernel97/System95.
+
+## IOSurface diagnostic SDK declaration fix; not a device result (2026-11-03 Minsk)
+
+- Surface CI41524953675/job125550177453 failed before linking: iPhoneOS SDK has
+  IOSurface dylib but no IOSurface/IOSurface.h. Native headers exist. Added a
+  minimal ABI declaration fallback for the exact used C calls/keys. Forced
+  fallback native build passes warnings-as-errors and actual surface/pixel/
+  relock checks; no device/header failure has been hidden as a passing test.
+- Rebuild signed surface helper next. No new kernel/System/phone reboot. Actual
+  layer98 result remains passed; surface result still pending. Keep97 observer.
+
+## Actual QuartzCore CPU layer probe passed on97; shared-surface probe next (2026-11-03 Minsk)
+
+- Signed layer diagnostic source8bb6b3ed2ef832f0a17d93d25621600f80de0c4e,
+  CI41524505780/job125548647347, artifact13177959738 ZIP40576B
+  SHA f0fccf3599fa03a1acd4ab2b313591b4bc26467afafa52fd9afbe5210459d0a0.
+  Binary89040B SHA517df605372eb54fca576639d7705fcc4f60f46dec1bb313a68c847a8cecc4d0.
+  Archive/signature/iOS/ISA/size verified, exact upload/readback pass. Worker22527
+  complete at21:02:15Z: ACTUAL97 CALayer CPU drawing returns0,192red+64green pixels
+  exactly match. audit/layer98-check.json/device. No display/System mutation.
+- This proves the real QuartzCore CPU layer rasterizer works on this phone,
+  independently of unavailable EAGL/CoreImage. Stock SpringBoard scene/display
+  still unconfirmed/unfixed. Must bridge real compositor updates to framebuffer,
+  not substitute test rectangles and call that a working iOS interface.
+- Added explicit surface probe to create its own16x16 IOSurface, lock/map it,
+  render identical CALayer tree into it, unlock/relock and require preserved
+  bytes. No display swap, shared server mutation or file writes. Native exact
+  pixels and preserved1024 bytes pass, warning-clean. Signed CI/device pending.
+- Exact software destination ABI investigated privately: renderer vtable+0x3d0
+  reaches CPU implementation0x18843cbfc, storing destination/stride/bpp/second
+  buffer/offset/size fields. No guessed private ABI invoked on phone. Quartz
+  renderer-info error path is server IPC, not automatically IOMFB selector57.
+  Keep observations separate; do not alter selector contracts speculatively.
+- Installed97/System95, observer17023/held shell19005/UDP47443 unchanged. At
+  21:01:41Z sample18 and3 direct health checks pass;1.382GB errors0/fallbacks0,
+  no RAMFS pressure/APFS/panic/latch, only the earlier explicit CI diagnostic
+  crash. System target PIDs stable; trial65min not yet complete.
+
+## Graphics work: exact renderer selection and QuartzCore CPU path (2026-11-03 Minsk)
+
+- User explicitly requested graphics repair while97 longrun continues. No reboot,
+  new image or framebuffer overwrite. Observer17023 still monitoring; read status.
+- Exact CoreImage initWithOptions removes UseSoftwareRenderer on this iOS path,
+  tries Metal then falls back into EAGL context creation. No working CPU CoreImage
+  selection established. CA_NO_ACCEL only controls backing allocation; do not
+  mistake it for a proven server software-compositor switch. CA_ENABLE_OGL is
+  renderer capability state, not yet a validated fallback repair. No system env
+  changes or binary/framework patches made based on these names.
+- QuartzCore exports real kCARenderSoftwareCallbacks/CARenderSoftwareSetDestination;
+  software constructor allocates0x4fe0 bytes and installs its own vtable. This
+  is a separate implementation worth testing, not a fake accelerator. Exact
+  cache analysis/disassembly remains private under graphics-v98.
+- Extended explicit render helper with layer command: public CALayer renderInContext
+  into16x16 CPU CGContext, red parent/green child. Native compile warning-clean;
+  192red+64green exact pixels pass using shared sRGB. Device test pending. No
+  window/server mutation or writes in this command. CI links QuartzCore explicitly.
+- Next validate same signed layer probe on97. If actual CPU layer drawing works,
+  investigate bridging the real software compositor to display/context updates.
+  A successful local layer bitmap alone is not repaired SpringBoard or CoreImage.
+
+## Actual97 session/xattrs/read controls pass; isolated graphics failure reproduced (2026-11-02)
+
+- Running97 UUID1444AADE-E57B-3F55-88A9-866FFA6086A0 matches packaged kernel.
+  Real iOS session getters BOTH return0; raw flags0x1f5=UID501, multiuser0.
+  This plus early usermanagerd success physically validates the0174 setter fix.
+  All75 actual xattr checks and12 cached/F_NOCACHE/mmap length/hash controls pass;
+  all3 installed95 job/cache files read back exactly. No forbidden job spawns.
+- Observer17023 is now phase monitoring, held shell19005. Keep65min natural
+  observation; don't issue concurrent FIFO commands. Current early success is
+  not proof the previous38/44min eMMC failures are fully fixed. CMD17-only trial
+  remains a mitigation, batching still disabled. Read current observer first.
+- Renderer worker17947 COMPLETE at20:48:17Z, exact signed upload/readback pass.
+  EAGL2 AND EAGL3 both return nil/current0. Explicit CoreImage software request
+  SIGSEGVs before context creation returns: output only software context begin,
+  status139. Its own process whyred-render-f4 PID185 has pc0/lr0x1961ec58c,
+  slide0x16d8000 -> exact same CoreImage0x194b1458c NULL callback as mediaserverd.
+  Thus the software option did not avoid the unavailable GL dispatch in this
+  iOS build; do not recommend a simple software-renderer toggle as a fix.
+- This crash was the explicit diagnostic, not evidence of a new arbitrary
+  system-daemon crash. No SpringBoard/mediaserverd disable, fake GPU, framework
+  binary patch, System write or UART. Actual graphical scene remains unfixed.
+  Need a supported renderer/context path; native Mac software256-pixel success
+  does not establish the iOS path. Private audit/render97-device and status.
+- Public source8c929fb is diagnostic-only after97 kernel source47524; installed
+  kernel remains97/System95. NOTES-only source0c5745 recorded the earlier wait.
+  Raw logs/Apple bytes/helpers/private keys stay outsideGit. Current log remains
+  audit/current-whyred-usb.log, summary audit/kernel97-full-review/current-summary.
+- Next: preserve longrun97; inspect new genuine system crashes/storage/pressure.
+  Foreground fix,75 xattrs and initial read/config proofs are complete. Graphics,
+  Data Protection, early notifyOPT_DISABLE8, legacy Jetsam command6, fresh boot
+  entropy/reseed and persistent platform support remain separate open work.
+
+## Boot97 early foreground success; renderer helper verified and waiting (2026-11-02)
+
+- Actual97 USB early boot reports Set Foreground ID + multiuser in commpage
+  successfully; prior FAILED line is absent. This confirms the setter path,
+  but real userspace session flag readback/UUID are still pending SSH. Through
+  20:41:43Z eMMC503.7MB/errors0/fallbacks0, no APFS/PRESSURE/crash/panic/latch.
+  TCP reaches the phone but2222 currently refuses; dropbear exec was logged.
+  Do not reset it during this baseline or interpret normal startup as a repair.
+- Renderer diagnostic source8c929fb58ca5d64d13166fc1c73091ddddf21c76,
+  CI41520788443/job125535941232 all7 steps pass. Artifact13176484526 ZIP31522B
+  SHAf37e83fa127523bb15564ef554436f3d653e221063ae1d80f9da61ab9f1d9c09;
+  binary88096B SHAf49cf77fdca5adb0d0bf6eb24b2b0257831194f20127a1bbfa2558b5a22276b8.
+  Signature/iOS/ISA/length/CRC verified, kernel-v97-draft/render97. No claim of
+  iOS software rendering success yet. Native256-pixel proof is separate.
+- ONLY renderer worker17947 ssh-v90/check_render97.py waits for existing97
+  observer17023 phase monitoring/verified UUID/config. It then uploads the
+  reviewed helper to volatile tmp, verifies bytes and runs explicit software
+  andEAGL probes as mobile through the reviewed30s-bounded helper. Uses its own
+  SSH commands, never the observer FIFO. audit/render97-check.json/log/device.
+  No partition changes or UART. Read both status files before continuing.
+- Current read-only summary tool tools/summarize_kernel97.py records the exact
+  original boot interval and header-only FSERR errno, without contacting phone.
+  Output audit/kernel97-full-review/current-summary.json; UDP47443 unchanged.
+- Next: verify actual97 UUID/session flags (UID501),75 xattrs,12 read controls,
+  retained disabled jobs; inspect renderer results and preserve natural longrun.
+  Remaining Data Protection/notify/Jetsam/PRNG/platform/UI issues remain open.
+
+## Boot97 flashed after user ended96 trial; USB/SSH validation pending (2026-11-02)
+
+- User reported a manual reboot to Fastboot and requested repairs. Exact phone
+  readiness/product/unlocked/64MiB boot, source/kernel/System95 and rollback94
+  guards passed. Actual sending/writing boot97 and reboot all returned OKAY at
+  ~20:35:08Z. No System write. Installed now boot97/System95; do not ask again
+  for the already consumed readiness answer or reflash this same image.
+- Full97 CI41515301290/job125517210664/source47524d521237e9d50d84ba9d1b5e72806c5e13cd
+  ALL27 steps succeeded. ZIP SHA/length/CRC, exact reviewed sources including
+  host.c/commpage.c,960 actual host/updater checks and linked call/NULL rejection,
+  retained ASan/UBSan suites, ISA/bootstrap/cache/idle/ADT/layout guards passed.
+- Image port/out/whyred-ios-root-v97-foreground-41515301290/
+  shim-boot-whyred-uartdm-debug.img,22347776B, SHA
+  ebbcb2a0f159d89b1996c7471d8e0bf86976ac8645310b9428c769986db0da00;
+  kernel SHAe6fd653a89391f50e58bc4a1edaece06c9022429877c87b0b8af9cc8bcebc4f3,
+  expected UUID1444AADE-E57B-3F55-88A9-866FFA6086A0. XO/CMD17 only retained.
+- ONLY new observer17023 ssh-v90/observe_kernel97.py, original offset9345783,
+  audit/kernel97-observer.json/log/device. Requires97 UUID, reads session flags
+  via real iOS getters,75 xattrs,12 read/mmap controls, actual95 job files then
+  65min watch. Do not issue concurrent FIFO commands. UDP47443 unchanged; no UART.
+- Signed session diagnostic CI41516654602/job125521825902 all7 steps pass.
+  Artifact13174284723 ZIP54600B SHA3fdfbae3b1f8d4d9eca0609836f8259cc902c248ffd9bb4bfb3bdc7cc5d086a1;
+  binary72592B SHAe74cdb1526999c8acbbb5ea698b6d31b4d60336c700129ea2d20b04e8c0d7130.
+  Signature/iOS/ISA/imports verified; private kernel-v97-draft/diag97. Device
+  session readback is pending, so don't claim foreground repaired on hardware yet.
+- Final96: user interrupted before65min completion. Observer4706/shell7488 ended
+  withSSH255 after reboot, not a captured storage latch. Final snapshot private
+  audit/kernel96-full-review/final-summary.json/log/termination.json:32 samples,
+  6 true direct health reads passed,1.318GB errors0/fallbacks0, no APFS/PRESSURE/
+  panic/latch/recovery record. lsd94/pkd257/suggestd265 persisted. No target two
+  job spawns. One mediaserverd28 NULL-PC graphics crash; replacement372 observed.
+  Latest successful sample20:31:15Z, last IO report~30min after I/O startup. This
+  incomplete exposure does NOT close the earlier38/44min physical eMMC failures.
+- Exact CoreImage tracing now names _wrapEAGLContextCreate and _wrapGetMacroContext:
+  API3 thenAPI2 context creation; a missing GL context leaves the zeroed callback
+  table, later called unchecked. No GPU/service/binary workaround applied.
+- Added explicit render probe: process-local16x16 red bitmap through requested
+  CoreImage software renderer, separate EAGL2/3 creation/status command. No window,
+  daemon change or files written by helper. Native warning-clean compile and all
+  256 expected RGBA pixels pass. Signed iOS helper CI/device test pending; native
+  success is not proof that iOS has a software renderer or SpringBoard fallback.
+
+## Read-only session diagnostics prepared while boot96 observation continues (2026-11-02)
+
+- Added whyreddiag session: uses real iOS libsyscall host_get_multiuser_config_flags
+  and host_check_multiuser_mode getters, which read the commpage; no privileged
+  setter, guessed-address access, process suspension or device write. Prints
+  raw return codes/flags/mode so a97 device test can verify actual session state.
+- Native helper compiles with warnings-as-errors, selftest/kernel and all75
+  temporary-file xattr cases pass. Native macOS correctly reports NOT_SUPPORTED
+  for both session getters; this is not an iOS/device success claim. Signed iOS
+  helper CI and eventual on-device check remain pending.
+- Kernel97 CI41515301290/source47524 remains building; installed boot96 watch4706
+  continues undisturbed. No fresh partition write, reboot or UART. Private97
+  packager prepared with exact0174 source/report and linked setter-call guards,
+  retaining all96 packaging checks. No97 image has yet been packaged or flashed.
+
+## Kernel97 foreground API candidate; installed96 still under observation (2026-11-02)
+
+- ACTUAL boot96 validation through20:02:41Z: running UUID matches packaged
+  BC9C2211-0018-3824-BC73-06DAAB42E274; all75 device xattr cases pass, all12
+  cached/direct/mmap controls match expected bytes/hashes, all3 installed95
+  job/cache files match. Zero forbidden job spawns. ~1.03GB CMD17 reads,
+  errors0/fallbacks0; no current APFS/PRESSURE/recovery-latch record. This is
+  early evidence only. Observer4706 now monitoring, held shell7488, samples2;
+  raw/diag uploads verified. Read current status before any further action.
+- SDK-isolation fix source47524d521237e9d50d84ba9d1b5e72806c5e13cd retriggers97
+  CI41515301290. Candidate97 is NOT installed. Do not reflash96/97 merely because
+  a new artifact appears; preserve this natural96 long-run exposure first.
+- Copied96 observer initially reused the95 bootstrap-probe filenames; current
+  probe metadata was archived under audit/kernel96-ssh-probe-*.json and the disk
+  script corrected. Earlier95 state/control/config/device-failure proofs are
+  intact, but do not use root-level system95-ssh-probe files for historical95
+  attribution now. Main96 outputs were always separate in kernel96-device.
+- Initial97 CI41514102825/job125513096438 failed BEFORE kernel compilation:
+  the native pre-build test inherited the kernel-only SDKROOT and could not
+  find stdio.h. No97 kernel was produced/deployed. The test now explicitly
+  selects the native macOS SDK and clears inherited SDK/deployment variables,
+  matching the existing eMMC host runner. Rebuild after this environment fix.
+- Boot96 diagnostic now captured MCM's exact /dev query: common6, volume80060000,
+  count5,64-byte buffer/options0 = DEVID/FSID/capabilities/UUID. Upstream devfs
+  provides no volume UUID, so generic getattrlist returns EINVAL for it. Native
+  macOS reproduces22 with this exact query; removing UUID succeeds. This specific
+  /dev probe is expected unsupported behavior, not a container write/crash cause.
+  Other EINVAL calls, e.g. /tmp, must still be evaluated on their own masks.
+- User's repair work continues while the actual boot96/System95 observation
+  runs. Patch0174 narrowly enables the real host_set_multiuser_config_flags
+  implementation on SWEET despite the macOS target configuration. Preserves
+  NULL privileged-host rejection and writes the real commpage flags through
+  the existing updater; other macOS boards/SWEET=0 keep NOT_SUPPORTED.
+- Local ARM64 host.c compile with the actual authenticated96 compile command
+  passes. New actual-function/updater host suite passes960 checks across5
+  target configurations with UBSan; old source fails the SWEET/macOS case.
+  Private kernel-v97-draft. This is not deployed or physically validated yet.
+- Full kernel CI will include this check before compilation and preserve its
+  report. No new device write/reboot, no new observer: boot96 watch4706 and
+  UDP47443 continue. The new candidate retains all96 fixes; do not replace the
+  running96 trial prematurely or claim the session failure fixed on hardware.
+- Actual96 UUID/xattr/direct-read results are still pending at this milestone.
+  Next inspect audit/kernel96-observer.json before any further physical action.
+
+## Boot96 flashed, System95 retained; automated validation pending (2026-11-02)
+
+- User freshly confirmed Fastboot. Exact-device/product/unlocked/boot64MiB,
+  image/kernel/source/System95 proof and rollback94 guards passed. Actual
+  fastboot flash boot AND reboot returned OKAY at~19:48:30Z. No System write.
+  Private audit/kernel96-flash.json and audit/kernel96-preflight.json.
+- Final kernel source b9e8aa455053478c4c785610e632a746b16c419c, full CI41509382660
+  /job125499618939 ALL27 steps successful including ASan/UBSan. Initial8a95 CI
+ 41508019427 was superseded. Downloaded ZIP SHA256s match official artifact
+  digests and exact build source, retained suites, ISA/no-LSE/no-PAN, bootstrap,
+  cache/idle paths, splash, ADT/payload/stock DTB/layout guards all pass.
+- Boot image port/out/whyred-ios-root-v96-xattr-recovery-41509382660/
+  shim-boot-whyred-uartdm-debug.img,22347776 bytes SHA
+  8680c3993b2cb8935377c18410479ffba4c7668c70430da1ecd553c83f510f24.
+  Kernel SHA fc0536cc2c98e952fb334e15a1d4ad38e63695d9e2228cb26c3013ab35709649;
+  expected running UUID BC9C2211-0018-3824-BC73-06DAAB42E274.
+- IMPORTANT trial policy: whyred-emmc-fast=1 BUT whyred-emmc-multi=0. Both
+  natural boot94 failures began with batch read failure, so next stability test
+  retains validated XO frequency with CMD17 only. New STOP recovery is tested
+  in the model, not yet physically proven; avoiding batches is a mitigation,
+  not evidence that the entire hardware fault was repaired. System95 stays.
+- New ONLY observer4706 (ssh-v90/observe_kernel96.py), audit/kernel96-observer
+  .json/.log, offset9153114, output audit/kernel96-device. It requires actual
+  UUID match, then75+ opt-in temporary-file xattr checks,12 cached/direct/mmap
+  controls, installed95 configurations and prolonged65min observation. Do not
+  issue simultaneous FIFO commands or duplicate it. UDP47443 still collects
+  audit/dsc89-usb-session.log; UART never opened. Prior95 observer finished
+  captured-first-error-session-retained at39samples and is not still monitoring.
+- Signed diagnostic25c9d22 source from CI41508866433/job125495161075 ALL7 steps
+  pass; ZIP SHA a76092c5fce79252cc1a2bb9362e23156c73508cb631008fe1a44bff1fbe307f,
+  binary kernel-v96/diag96/whyreddiag SHA
+  25bd35333ea3fe8c5553e6ea0eb4f8b44d43f67041f64a8095e4c65884b895ce.
+  Native75 xattr cases pass, iOS signature/platform/ISA verified. Not yet a
+  device test result. Private readiness/packager/proofs under kernel-v96.
+- Independent next findings: host_set_multiuser_config_flags in host.c returns
+  NOT_SUPPORTED in this macOS build; real commpage updater exists. Private
+  kernel-v97-draft contains a narrow SWEET-gate draft and4-config UBSan checks,
+  not shipped/committed. Exact launchd disassembly calls legacy memory command6
+  (fatal task limit), excluded with CONFIG_JETSAM0, not merely command5 soft HWM.
+  Review actual ledger/PID1 consequences before exposing it. Do not enable
+  global jetsam or fabricate success just to silence this message.
+- Next: read kernel96 observer first. Confirm UUID/xattrs/reads/95 jobs, preserve
+  first recovery snapshot if storage fails, collect attrlist masks. Only then
+  proceed with session/graphics/container work. Do not reflash System95 or ask
+  the same Fastboot readiness again for this already completed boot96 flash.
+
+## Kernel96 candidate: xattr snapshots, STOP timeout recovery, attr masks (2026-11-02)
+
+- System95 naturally reproduced the storage failure at19:17:51Z (~44min boot),
+  after39 samples: CMD18 failed, first recovery passed, baseline clock restored,
+  CMD17 PIO stayed incomplete with DATA_AVAILABLE, second STOP timed out, then
+  permanent EIO and mass SIGBUS. All4 F_NOCACHE controls fail; several cached
+  controls still pass. Observer finished captured-first-error-session-retained,
+  shell90517 retained, no new dynamic SSH probes needed. Evidence is private
+  audit/system95-device and kernel-v96/system95-transport-first-error.txt.
+  Neither disabled daemon launched; their removal did not repair lower I/O.
+- Following that new evidence, final0172 also preserves pre-reset Qualcomm
+  FIFO route/data counters/clock/DLL snapshots (at most8 recovery entries).
+  An alternative FIFO-route reset is only a hypothesis; no unproven register
+  policy is changed. Rebuild is necessary to retain the state before erasure;
+  the initial CI below is superseded by this final kernel source update.
+- Kernel source8a95ca56679e8be290c6119fb31820b9b64efbc0 is building in full CI
+ 41508019427/job125492212913, required pre-build source checks passed. Private
+  v96 packager retains all prior guards and requires System95; artifact/device
+  validation pending. Later NOTES/diagnostic-only commits do not replace the
+  exact kernel build commit or cancel its workflow.
+- Diagnostic helper adds read-only kern.uuid for matching the actually running
+  image and explicit xattrs DIRECTORY probe (one mkstemp file, max16KiB values,
+  removes it afterwards). Native75 set/size/read/list/shrink/remove/ERANGE checks
+  pass, normal sampler remains read-only. Separate signed iOS helper CI pending;
+  no helper/device probe has been deployed during the current observation.
+- Exact-cache symbolication of the later mediaserverd failures places the
+  NULL indirect call in CoreImage, reached from CMCapture. Disassembly loads a
+  zero callback from a stack dispatch table while preparing GL state. This is
+  evidence for a graphics-context/dispatch problem, not a proven Bluetooth or
+  FairPlay dependency. Local IDA HTTP endpoint is currently unavailable; local
+  cache bytes/disassembly and decoded frames remain private under kernel-v96.
+- User authorized proceeding with repairs after the current-run audit. Candidate
+  kernel96 changes ONLY kernel source/tests; installed boot94/System95 remains
+  running under the original observer/UDP collector, no new flash or UART.
+- Patch0171 removes nonblocking snapshot allocation under the RAMFS mutex from
+  getxattr/listxattr. Allocate with waiting allowed outside the lock, re-find and
+  re-size under it, copy a stable private snapshot, free by allocation capacity.
+  Handles growth/shrink/replacement/removal and copyout faults without holding
+  the mutex over allocation/user access. Quota and honest protection policy stay.
+- Patch0172 resets CMD+DATA again after STOP timeout before attempting status;
+  prior recovery ignored STOP failure then waited on latched CMD_INHIBIT. At
+  most2 stop/status attempts, require clean R1/READY/TRAN plus idle host/FIFO,
+  then reread. No failed bytes accepted or media/config writes introduced.
+  This repairs a reproducible recovery defect, not yet the entire physical-I/O
+  root cause. Actual long-run hardware verification is still required.
+- Patch0173 adds bounded best-effort24-byte attrlist masks/options/length to
+  existing EINVAL trace for get/fget/getat/bulk. Copy failures print zero masks
+  plus their own copy error; no syscall result or user output buffer changes.
+  Needed to establish the unexplained /dev and later /tmp EINVAL branch.
+- Local checks pass1120236 RAMFS cases with UBSan and4792 modeled eMMC cases;
+ 144 trace checks/90 syscall descriptors/2 return hooks. New fixtures fail on
+  old RAMFS/eMMC source. ARM64 RAMFS/eMMC single-file compiles pass with actual
+  generated headers; all3 patches replay exactly with fuzz0. Private kernel-v96.
+  Local ASan runtime traps before main even for an empty program; plain/UBSan
+  work. Full CI's ASan checks must still pass before packaging kernel96.
+- Current observer reached32samples with no storage latch/APFS failure; later
+  current log now contains a mediaserverd NULL-PC SIGSEGV, plus SpringBoard
+  layer/layout warnings and unsupported AKS selector8. Preserve these as new
+  follow-on evidence; prior audit was a timestamped earlier slice. Do not claim
+  current whole-run crash-free or diagnose the NULL-PC callback without symbols.
+- Next: full kernel CI and authenticated packaging, then new-boot validation
+  when physically ready. Keep65min existing observation until it completes or
+  captures first storage failure; do not prematurely reset to shorten testing.
+
+## Current boot94/System95 log audit and repair queue (2026-11-02)
+
+- User requested a complete current-run error review/list, not another fix or
+  flash. Reviewed all1826 available USB lines through18:55:41Z (21:55 Minsk),
+  157892 bytes from original offset7987522. Pre-USB kernel startup is unavailable
+  without UART; UDP/interleaved text is not lossless proof. Also read the entire
+  current MCM text log and both OTA reports, plus18 process/memory samples.
+  Private report audit/system95-full-review/REPAIR-LIST.md, immutable log/hash,
+  all78 FSERR events, state summary and additional logs. No raw logs committed.
+- Current confirmed RAMFS event is one68-byte getxattr NOWAIT allocation failure,
+  not data quota: event resident578/8192 pages, prior peak1064, quota/page/slot
+  failures0. Code allocates the xattr snapshot under rm_lock with Z_NOWAIT and
+  returns ENOMEM on failure. Need safe allocation/revalidation outside the lock;
+  do not use waiting allocation under it or raise quota based on this event.
+  Add bounded caller/xattr identity; global OOM and affected client are unproven.
+- MCM log contains99 repeated unsupported container Data Protection errors.
+  Eight FSERR45 calls (MCM6/calaccessd2) really request F_SETPROTECTIONCLASS64;
+  current RAMFS has no CPROTECT/SEP. Need a truthful unprotected-mode contract
+  and client container tests; never claim encryption or fake successful class
+  support. Two profiled AKS selector31 unsupported results remain to interpret.
+- Graphics: repeated absent accelerator/scaler/backlight matches; ALL3 submitted
+  source surfaces have zero RGB/alpha, final panel zero too. Copying frames is
+  insufficient: investigate compositor rendering/fallback and advertised caps.
+  Additional open checks: exact devfs attrlist masks for3 EINVAL calls; early
+  foreground/commpage + persona notifications; launchd Jetsam request EINVAL;
+  PRNG seed/reseed interfaces; specific privilege denials, not blanket grants.
+- Storage/platform update path is incomplete: volatile Data, absent expected
+  options/storage IORegistry nodes and Preboot mount cause two OTA restore
+  diagnostic reports, not two application crashes. Prioritize core storage/UI
+  before OTA; trust-cache development warnings and duplicate gamepad classes
+  are separate limitations/noise, not current crash proof. Most FSERRs are
+  startup probes:54 ENOENT/10 EEXIST/8 ENOTSUP/3 EINVAL/3 EPERM. Temp/Data paths
+  now exist; cleanup completed, so those transient path failures are not proven
+  persistent defects. Parse errno only in the header, never copy_errno fields.
+- Current slice has no crash/panic/APFS error/permanent-I/O latch/ENOSPC;
+  eMMC1.297GB errors0/fallbacks0, all12 early controls plus3 later direct health
+  reads pass. Latest RAMFS3501/8192 pages, VM free7191 pages; growth alone does
+  not establish a leak. MCM/lsd/pkd/suggestd PIDs persist; disabled two jobs
+  remain absent. This22-minute observation DOES NOT close the previous boot94
+  CMD12 recovery failure at~38min. That is still the P0 prior-run blocker.
+- No new device writes/reboot/UART. Original observer88567, shell90517, UDP47443
+  continue, phase monitoring at18samples; do not start duplicate collectors.
+  Next: inspect their final/current evidence, then repair eMMC recovery based on
+  its first failure, RAMFS xattr, container contract and rendering in that order.
+  Commit ae87319 is the audit's source baseline; this milestone changes NOTES
+  only, so no new build or tests are warranted. Installed boot94/System95 stay.
+
+## System95 policy verified on phone; MCM EINVAL checked (2026-11-02)
+
+- Installed boot94/System95, all81 System transfers/reboot OKAY. Pinned root SSH
+  works (held shell90517). Reviewed volatile raw/diag uploads and full readbacks
+  pass. All12 early cached/direct/mapped controls pass. ALL3 actual installed
+  plist/cache files read back byte-for-byte equal to the verified95 overlays.
+- Through18:44:28Z, zero exec/spawn records for bluetoothd or fairplayd.H2, and
+  neither process appears in3 consecutive PS samples. Both requested jobs are
+  disabled, no fake processes/endpoints. Private audit/system95-policy-result.json.
+  Other529 cached job definitions and all unchanged System91 bytes preserved.
+- User asks about containermanagerd errno22: current first trace is getattrlist
+  on /dev with64-byte result buffer/options0, not a container metadata write.
+  Same process65 continues subsequent calls and is alive in all3 samples; no
+  MCM crash captured. Exact attribute masks are NOT in the current trace, so
+  the particular EINVAL branch/cause remains unknown. Do not suppress EINVAL or
+  fabricate successful attributes. Future diagnosis can capture the24-byte
+  attrlist plus options at the existing bounded syscall-return hook, if needed.
+- First current memory sample set ends free17374/wired12774/compressor0,
+  RAMFS free6648/8192. No current APFS error captured. This is EARLY health only;
+  the previous boot94/System91 failed its long run at a second CMD12 recovery
+  after baseline-clock fallback. That lower-I/O defect remains unresolved and
+  disabling these jobs is not proof it is fixed or all dependencies work.
+- ONLY observer88567 is active in monitoring phase; retained shell90517, UDP47443.
+  audit/system95-observer.json/log, audit/system95-device, original boot offset
+  7987522. It continues65min after baseline and captures first storage/policy
+  failure. Do not duplicate collectors, reopen UART or send concurrent commands
+  into its FIFO. No further flash is needed for the completed disable request.
+- Next on resume: read this observer's final phase/proofs and fresh UDP first.
+  If storage fails, preserve first CMD18/CMD12/recovery/clock sequence and static
+  controls, then repair based on that evidence. If only MCM EINVAL is at issue,
+  acquire masks/branch before changing VFS behavior. System91 rollback and all
+  protected partitions remain intact; System92 and deferred exit tracing unused.
+
+## System95 completely written; new-boot validation pending (2026-11-02)
+
+- Fresh System95 file/device guards passed. Sending/writing ALL81 sparse slices
+  and final reboot returned OKAY; audit/services95-flash.json completed_slices81,
+  written_partitions[system], boot_writtenfalse, no error. Known installed NOW
+  boot94/System95. Original System91 rollback and protected partitions untouched.
+- User's Fastboot-ready message was consumed for this authorized System95 update;
+  do not request it again for this same completed action. No new write is needed
+  merely to inspect the boot. Root startup/SSH/control tests are still pending.
+- Observer88567 remains active from before reboot, offset7987522, private
+  audit/system95-observer.json/log/device. It checks actual installed plist/cache
+  bytes,12 file/mmap controls and absence of either target process/spawn, then
+  prolonged storage behavior. UDP47443 remains; UART never opened. Do not launch
+  another observer or send concurrent commands into its retained shell.
+- System95 SHA6d8da8962b0cb6e40d329e2050ce9f57bb02bae417e26b17ba3ff8259324b99f,
+  5386170368 bytes; full63k-object/8.6GB unchanged-file comparison and81-slice
+  reconstruction passed. Only the requested two jobs have Disabled=true in the
+  physical plist and cached launchd definition. This is not yet hardware proof
+  of stopped launches or fixed dependencies. V94 CMD12/eMMC issue remains open.
+
+## System95 offline-ready; user ready and System installation in progress (2026-11-02)
+
+- System95 image5386170368 bytes SHA
+  6d8da8962b0cb6e40d329e2050ce9f57bb02bae417e26b17ba3ff8259324b99f.
+  Exact66 critical file checks pass. Independent dual-image APFS comparison
+  passes63022 nodes:45744 files/16607 dirs/671 symlinks;8614112801 unchanged
+  logical file bytes are identical to91. All paths/modes/owners/flags/times/link
+  targets compare; exactly3 file-content exceptions have separate byte/semantic
+  checks. Only Disabled=true for the two specified plist/cache definitions;
+  other529 jobs, SSH and existing keys preserved. All81 sparse slices reconstruct
+  the exact verified image. Readiness/metadata/comparison under candidate folder.
+- User spontaneously confirmed Fastboot after being informed System95 is being
+  prepared. This is current physical readiness for the requested configuration
+  change; do not ask again. Full file guards/rollback91/boot94 and fresh private
+  baseline identity/product/unlocked/System geometry/download guards pass.
+  tools/flash_services95.py --flash --ready-answer is currently writing ONLY
+  system, audit/services95-flash.json; wait for all81 write confirmations/reboot.
+  At this note first11 are confirmed; not yet an installed/booted claim.
+- Current System95 observer88567 started BEFORE writing/reboot18:30:15Z with
+  offset7987522; audit/system95-observer.json/log and audit/system95-device.
+  It waits through System transfer and startup, authenticates pinned root SSH,
+  verifies volatile tools and12 read controls, then reads back all3 actual
+  installed config files byte-for-byte. Checks logs and PS for forbidden job
+  spawns/processes; records first I/O error separately. UDP47443 retained, no UART.
+- After boot: confirm all81/reboot, new System config and no bluetoothd/fairplayd
+  job launches, then inspect pkd/suggestd/lsd and storage health. Boot94 remains;
+  its second CMD12 recovery failure is unresolved. Do not claim disabling two
+  jobs fixes the global read failure or all dependencies. System91 rollback,
+  original protected partitions and unused System92 reserve remain intact.
+
+## System95 disabling the two jobs is building; v94 long test failed (2026-11-02)
+
+- User's explicit disable request supersedes the optional exit-stack diagnostic.
+  A restricted live-control helper reached launchd but read requests returned154;
+  host xpc_strerror maps154 to Requestor is not a platform binary, consistent
+  with this kernel AMFI marking only ROOTFS executables as platform binaries.
+  Do not weaken platform policy or inject into another process to work around it.
+  No disable/bootout succeeded, and no fake process was started.
+- Modern helper sourceb98fc2b6/CI41496403618/job125452412560 all7 passes. Artifact
+  13166771893 ZIP16226 SHA9e05c12bdbba119e247744412810d571797757b82c60643160dae9bdf92becde,
+  signed binary76ee28ad580d4e96731a63577caa4b2fcc0edc6215a44dd4663dd5053deaf2b0.
+  Offline provenance/signature/34-import checks pass. Live transfer/read probe
+  did not complete; fresh SSH timed out. The existing held shell still served
+  the observer. No successful second-helper RPC or policy change is claimed.
+- Preparing System95 from the exact System91 base/keys/userland. Set Disabled=true
+  in ONLY the two physical LaunchDaemons plists and their cached definitions in
+  System/Library/xpc/launchd.plist. All other529 jobs/catalog metadata/SSH must
+  compare unchanged. tools/prepare-whyred-disabled-services.py rebuilds with the
+  already verified v70 APFS builder, replays verified91 changes and rechecks every
+  retained critical file and both new plist bytes/metadata. No phone writes.
+- Detached offline builder86458, audit/system95-build.json/log, output
+  ssh-v90/system-v95-candidate; at this note it passed tree/config diff guards and
+  is compressing/layouting. No final manifest or readiness yet. Independent
+  service-control-v95/compare-images uses the preserved APFS reader to compare
+  the entire catalog, metadata, symlinks and all unchanged file bytes against91,
+  with exactly3 content exceptions that require separate semantic/byte checks.
+  After these pass, generate/reconstruct every sparse slice before any flash.
+- V94 observation FAILED at18:13:17Z (sample33, about38min after boot). First
+  lower block read EIO then shared-cache page-in errors and permanent I/O reject.
+  Sequence: CMD18 failure, initial recovery/DATA reset, inherited baseline clock
+  restored, then second abort CMD12 reports command-timeout error, driver latches
+  failed. This is additional unresolved recovery behavior; patch0170 is not a
+  complete physical fix. Do not suppress errno or attribute this to daemon exits.
+- All true uncached controls now EIO; cached .17/.27 still match exact bytes;
+  shell-list/passwd normal reads EIO and mapped reads SIGBUS. Private
+  audit/emmc-v94-device/transport-all.txt, first-error-context.txt and12 failure
+  controls preserved. Observer81246 finished captured-first-error-session-retained;
+  held shell81341 and UDP47443 remain. No UART. Stop further fresh SSH probes
+  against this degraded run. Installed is still boot94/System91; System95 is
+  not built/verified/flashed yet. No job-policy change occurred before failure.
+
+## Service-control helper live read probe; modern query update (2026-11-02)
+
+- Helper sourcef0ffa4b4, CI41496018797/job125451054330 all7 steps success.
+  Artifact13165154529 ZIP15918 SHA
+  93333c714f5207fbbf7d49f4765435c0447c060fa683c1412161e082b62e364b;
+  signed binary19516e716f83d4e1db4ede921ddbdf3f9182ee5d2ec4557bb2f8bd15b8c39ec6.
+  Provenance/CRC/digest/IOS/ISA/signature and34 exact16.5 imports pass; both
+  dynamically resolved bootstrap symbols are exported by the exact cache.
+- Volatile SCP0755 and complete byte readback pass. Read-only named LIST815
+  calls reach launchd but return154 in system domain; no mutation attempted.
+  Switching read probe to the same modern712 named-service query used by pinned
+  Procursus domain discovery, plus xpc_strerror text for failures. New CI pending.
+  Current helpers/attempt evidence under service-control-v95/ and audit/services-v94/.
+- No job disable/bootout or partition write yet. Boot94/System91 observer remains
+  active with zero captured lower-read/APFS/panic failure; do not claim services
+  disabled until RPC responses AND subsequent spawn/PID checks confirm it.
+
+## User requests disabling Bluetooth/FairPlay jobs; restricted control preparing (2026-11-02)
+
+- User explicitly requests removing bluetoothd/fairplayd.H2 launches (or fake
+  processes), to prevent their restart loops and test dependent services. Choose
+  genuine launchd disable/bootout, without fake Mach-service endpoints. Current
+  exits are clean0, not demonstrated causes of other services' crashes.
+- Fresh v94 manual mobile Bluetooth child confirms missing marconi-bt/bluetooth
+  IORegistry services, invalid/missing address and No bluetooth on this device,
+  then exit0. IORegistry bluetooth query is empty. Private audit/services-v94/.
+  FairPlay's exact normal-exit cause remains unresolved. Long eMMC observer is
+  still running; no APFS/permanent-read/panic failure yet. Service policy changes
+  will be timestamped separately from the preceding storage baseline.
+- System image has no launchctl. New whyredsvc source uses pinned Procursus
+  launchctl protocol22906f7d, allowing ONLY the two exact labels in explicit
+  system/user501 domains. Root whyred boot gate prevents RPC on host macOS;
+  dry-run validates27 label/action/domain/host guards without sending RPC.
+  Query first, then disable and bootout only an identified target/domain.
+  Replies/error dictionaries must succeed; inverse enable/bootstrap is retained.
+- iOS helper CI pending. No helper upload, live disable, System/boot write or
+  fake process has occurred. First aim is a reversible live RAMFS-backed launchd
+  change; persistence across /var reset needs a separate verified seed change.
+- Earlier optional pre-exit stack tracing work is deferred, NOT compiled or
+  committed. Private service-exit-v95/ holds it and deferred-tools; no0171 patch
+  exists. Its initial BSD compile lacks private task/region layouts; do not use
+  it as a candidate. Current installed stays boot94/System91; UART unopened.
+
+## V94 early pinned SSH and all read controls pass; long test active (2026-11-02)
+
+- Boot94/System91 remains installed. Pinned root SSH authentication and held
+  shell81341 work. Both reviewed tools uploaded only to RAMFS0755; entire raw
+  35056-byte and diag70752-byte readbacks equal their reviewed signed binaries.
+  All8 cached/F_NOCACHE reads plus4 mapped reads pass status/length and exact
+  original-file FNV checks. Diag selftest and first2 VM/fs/ps samples pass.
+- Initial sample: page16KiB/free30508/active33667/inactive4342/wired11250,
+  compressor/pageouts0; RAMFS free7103/8192 pages. At1.04GB kernel root reads,
+  errors0/fallbacks0/XO1/multi1. No APFS error/common memory-error SIGBUS/permanent
+  rejection/panic captured yet. These are early controls, not sustained recovery
+  or proof that all individual service/hardware problems are fixed.
+- First local SSH attempt raced early server readiness and timed out; its local
+  SSH child had exited. Observer79898 was stopped before any tool upload, all
+  attempt files archived in audit/emmc-v94-bootstrap-attempt-1. Added bounded
+  pinned-command readiness and local-child exit detection. Root probe succeeds
+  without auth-policy changes. Current ONLY observer81246 retains original
+  boot offset7104825; status audit/emmc-v94-observer.json, device directory
+  audit/emmc-v94-device, log audit/emmc94-observer.log. UDP47443 stayed active.
+- Collector now monitors65min after the early baseline, recording VM/fs/ps and
+  periodic true uncached reads. Do not reboot/start duplicate shell commands or
+  use the unused pressure helper during this window. Read its final phase and
+  first-failure controls before claiming stability; if clean, verify fresh root
+  auth and service lifetimes after the window. UART remains unopened. Latest
+  user questions concern WHYRED FSERR: errno0 is specifically a short successful
+  write, accompanied by same-id requested/returned diagnostics; it is not a new
+  read-error or memory-corruption result.
+
+## Boot v94 physically installed; early validation running (2026-11-02)
+
+- User confirmed fresh Fastboot availability for v94. Private baseline identity,
+  product/unlock/64MiB boot geometry, exact candidate and verified boot93 rollback
+  passed. Boot send/write and reboot all OKAY (audit/emmc94-flash.json). Installed
+  NOW boot94/System91. No System/other partition write; System92 reserve unused.
+- Existing UDP receiver47443 stayed active; new boot offset7104825. Observer79898
+  started BEFORE flash/reboot17:35:31Z (audit/emmc-v94-observer.json and
+  audit/emmc94-observer.log), captures into audit/emmc-v94-device. No UART.
+  USB console works; port2222 appeared and pinned-shell initialization is now
+  running. At604MB of root reads the kernel reported errors0/fallbacks0; no
+  new APFS error/permanent-I/O rejection/panic captured. This is only startup.
+- Early cached/direct/mapped read checks and tool full readbacks are pending.
+  Do not launch a second observer or commands into its shell while it uploads.
+  Monitor65min after baseline, including uncached shell-list checks; retain
+  first-failure evidence and the one shell. No sustained/device recovery result
+  claimed yet. Bounded private-memory helper is still unused on phone.
+
+## Boot v94 offline-ready; physical test pending (2026-11-02)
+
+- Kernel source3b180816fc9ca0c615404d1bf0ce484bce1b08b5, full CI
+  [41482862184](https://github.com/timosid/ios-sweetwhyred/actions/runs/41482862184),
+  job125405454088: all27 steps succeeded, including4769 actual-function eMMC
+  model checks and both new old-code regression cases. These model checks do
+  not emulate physical SDCC timing. Exact no-fuzz replay and ARM64 compile pass.
+- Kernel ZIP79355972 bytes SHA
+  fb2f557a82364f2748cebdcf8fbcf06df257dba4aca5ba91d369cf55af2369d0;
+  buildtree ZIP25434691 bytes SHA
+  e046f477def1d3902baee1057b437237fbf6373cb318603219a70588d4593d5f.
+  GitHub digest/size/CRC/provenance, patch0170 replay, exact reviewed runtime
+  sources, retained suites, linked ISA/cache path, artwork, loader/ADT/stock DTB,
+  layout and image guards pass. No failed-build artifact is used.
+- Candidate port/out/whyred-ios-root-v94-emmc-recovery-41482862184/:
+  boot22347776 bytes SHA
+  cfd40e726b1d9b2fac7d8015bd503ffbd329110dbc38980cc6c5a6fc53c9b27c;
+  kernel1de821211845980d0e176f042704a8e1e0b489c44e2953941783b9692002f4dc.
+  Same581-byte command line/System91 contract as93. v94 only changes two driver
+  recovery/polling sites; no error suppression, quota increase or IRQ masking.
+- Current installed remains boot93/System91. v94 has NOT been flashed or
+  physically validated. Fastboot currently absent. Boot-only flash helper pins
+  image/kernel/source/System91 and verified boot93 rollback. Fresh physical
+  Fastboot readiness is required; previous answer was consumed for boot93.
+- Existing UDP receiver remains active; UART never opened. Prepared observer
+  ssh-v90/observe_emmc94.py is NOT started: start once before the next flash,
+  capture early cached/direct/mapped baselines through pinned root SSH, retain
+  one shell and monitor65min. Every fifth sample now verifies a true uncached
+  shell-list read. Stop/capture first lower-I/O/APFS/common-SIGBUS failure.
+  System92 reserve and private-memory pressure helper remain unused.
+
+## eMMC failure localized; baseline recovery and deadline fixes preparing (2026-11-02)
+
+- V93 reproduced the global failure naturally after prolonged observation.
+  Observer ended captured-exec-failure-session-retained, sample38/status138;
+  held static SSH shell60796 and UDP receiver47443 remain. No synthetic memory
+  test was run on phone. Earlier strong-pressure8-read/fresh-auth checks passed;
+  this was a baseline, not a root-cause repair or sustained stability result.
+- First APFS failure is lower block-device read completion EIO with partial
+  residual, then page-in failure for a shared-cache member. Preceding sequence:
+  a CMD18 batch fails, card recovery completes, inherited baseline clock is
+  restored, then a CMD17 timeout is reported with an old zero status while the
+  next actual snapshot shows command response and data-ready bits. Driver then
+  permanently rejects every subsequent media read. Full logs/IDs are private.
+  True F_NOCACHE returns EIO for all tested files; some cached reads still match
+  source bytes. This localizes the origin below APFS/UPL and explains SIGBUS and
+  invalid-shell SSH rejection. RAMFS quota is not the originating read error.
+- Patch0170 addresses two specific code defects: resample interrupt completion
+  once at the deadline (CPU may have been descheduled after the first sample),
+  and recover/reread a failed CMD17 in baseline as well as XO mode. Restore
+  inherited clock only when XO is still active. CMD12/CMD13 READY/TRAN checks,
+  one-retry bound, readonly/LBA/partial-data guards and permanent rejection after
+  genuinely failed recovery/retry remain. No IRQ masking/timing-rate policy added.
+- Exact authenticated v93 driver/header extracted. Deterministic actual-function
+  host regressions BOTH fail on old code: late completion after counter jump and
+  baseline CMD17 recovery. Patched tests pass4769 cases, including batch failure
+  followed by baseline transient failure, late hardware-error rejection, and
+  persistent errors with exact residual/at-most-two attempts. Local ARM64 compile
+  and exact no-fuzz patch replay pass. Full kernel CI/device test still pending.
+- Current installed remains boot93/System91; System92 reserve unused. No new
+  partition write or UART. Next candidate is boot94 after full CI/provenance/
+  runtime-source/loader/image checks, then fresh physical Fastboot readiness.
+- Independent static private-memory helper source55970a81 / CI41478637167,
+  job125390794509 all6 succeeds; artifact13159040562 ZIP12117 SHA
+  06e9f6eaae260a680b71a5703a30c669b83b95d002a42952cd076efe095f0f1b.
+  It was NOT downloaded/uploaded/executed: natural VM pressure was sufficient.
+
+## Bounded private-memory reproduction helper preparing (2026-11-02)
+
+- Boot93/System91 still running with one observer59812 and held shell60796.
+  Atstate021, free7292/wired14708/compressor0; RAMFS4382/8192 free. pkd296,
+  suggestd300 and lsd96 retain PIDs, no APFS error/panic captured yet. Initial
+  stacks resolve with slide0x1e1f8000, validated by mach_msg2/kevent/ulock/stat
+  trap offsets. Eight VM/UPL/pager source files match authenticated v93 exactly.
+- Static probe gains an explicit pressure MIB SECONDS mode, hard bounds96MiB/
+  15s, only its own anonymous private pages. Deterministic incompressible fill,
+  before/after full digest, select timeout and munmap; any process exit releases
+  the region. Native4MiB/1s allocation/fill/hold/verification/free and invalid
+  bounds pass. Existing file-only mode/collector binary is unchanged on phone.
+- New signed artifact CI pending; no memory-pressure test ran on phone. Prepare
+  this for a short64MiB test only if normal observation does not reproduce the
+  previous roughly33-minute failure. Check live memory/first-error status first;
+  do not compound an already-occurring failure. No filesystem/partition writes
+  or service-policy changes, no UART. Exact root cause remains unproven.
+
+## Boot v93 physically installed; early SSH/read baseline passes (2026-11-02)
+
+- User confirmed fresh Fastboot. Exact private baseline/product/unlocked/64MiB
+  boot geometry and candidate/boot89 rollback guards passed. Boot send/write
+  and reboot all OKAY (audit/apfs93-flash.json); only boot changed. Installed
+  NOW boot93/System91. No UART opened. New bootargs/USB logs confirm profile.
+- Existing UDP receiver47443 stayed alive, new boot stream observation starts
+  at byte4926436. Detached observer59812 started15:40:07Z BEFORE flash/reboot;
+  audit/apfs-v93-observer.json/log and audit/apfs-v93-device hold private results.
+  Do not start duplicate collectors or reboot during this observation.
+- Early pinned root SSH works, held shell60796. Static raw3996342f and task/VM
+  helperc1a356f4 uploaded only to RAMFS0755; complete file readback equals each
+  reviewed binary. Raw cache17/27 cached+F_NOCACHE reads match expected original
+  FNV d58f5b0f9afadca0/b9b23f3a46fd0825; all8 initial file-read cases and mapped
+  reads pass. Prior-failing shells/passwd and0xa59cd80 range currently read.
+  This establishes baseline after reboot, NOT a sustained root-cause fix.
+- First VM sample: page16KiB, free40521/active29619/inactive709/wired8875,
+  compressor/pageouts0. RAMFS free7574/8192 pages. Initial SpringBoard25,
+  backboardd105, lsd96, containermanager65 have bounded read-only thread stacks;
+  pkd/suggestd not yet in initial sample. Continue observing to first failure.
+- Observer monitors65min after baseline for first WHYRED APFS ERROR or common
+  memory-error SIGBUS; normal/direct/mmap comparisons reuse retained shell.
+  Host reader separately walked63022 image objects and saved private inode/path
+  index for matching the first error to exact file. No phone media writes from
+  these diagnostics. System92 reserve remains unused. Kernel5f63e7c9 build
+ 41471287807 and boot5a29f651 are retained; earlier failed CI stays rejected.
+
+## Boot v93 offline-ready; physical Fastboot readiness requested (2026-11-02)
+
+- Kernel source5f63e7c9e9e2fb776e74324a62c82ce3592a15ab,
+  CI41471287807/job125365226436: all27 steps success. New actual-function
+  fault-injection/UBSan test also passes in Build before kernel compile and
+  its report is retained. Earlier SDK-inheritance failure remains rejected.
+- Authenticated kernel ZIPa05fd85b5e95ce2b90bc3a60d059d1c9eac44b81df69924730642d06361748b5,
+  buildtree ZIP37126b09ed1d00742af2a50e4014220a67528ff91992b546b25893429b21ab88.
+  ZIP size/CRC/provenance, all retained checks, exact reviewed APFS3 files and
+  other runtime source, linked diagnostic markers, no-LSE disassembly, boot
+  artwork, loader ABI/layout and stock-image contract pass.
+- Candidate port/out/whyred-ios-root-v93-apfs-errors-41471287807/:
+  boot22347776 bytes SHA5a29f651144b546e030db6376cac4daee5f78eb94c5a52f18f5bc6987f0ba37f,
+  kernel58c8ad2ecb6005a641720cceacfd84529dee52917628857ae8eecbe76f886213.
+  Command581bytes adds only whyred-apfs-errors=1 to v89 profile; global RAMFS
+  quota/AKS/USB/storage policy retained. New API behavior is explicit IO_NOCACHE
+  direct read, for cache-vs-parser comparison. It is not a verified root fix.
+- Current boot89/System91 remains installed. No new flash/UART this run.
+  Boot-only helper is pinned to image/kernel/source/System91 contract and known
+  boot89 rollback. Fastboot devices currently returns none. Physical Fastboot
+  readiness question is pending; ordinary reboot reply was not flash readiness.
+  Do not write System92 reserve, GPT, recovery, bootloaders or other partitions.
+- Once user confirms Fastboot, freshly verify private baseline/product/unlock/
+  boot geometry; start prepared ssh-v90/observe_apfs93.py BEFORE flash/reboot
+  (not against old running boot), then guarded tools/flash_apfs93.py. Existing
+  UDP receiver47443 stays; never open UART/duplicate receiver. Observer uploads
+  signed raw3996342f/helperc1a356f4 only into volatile RAMFS using pinned SSH,
+  exact full readback, retains one shell, and captures early/first failure with
+  normal-vs-F_NOCACHE/mmap comparisons. It is prepared, not started/tested yet.
+- Later old-boot sample: .27 header reads correctly while0xa59cd80 returns EIO;
+  shell/server headers and .17 retained bytes also read. Corrected raw mapped
+  faults are confirmed sig10/code0x10000000a at valid file mappings. Thus failure
+  is per-page, not whole-file disappearance. Exact originating layer is unproven.
+  Private audit evidence and keys remain outside Git.
+
+## Full CI test SDK correction (2026-11-02)
+
+- Initial kernel run41470349414/job125361960778 stopped BEFORE kernel compile:
+  the new host test inherited build.sh SDKROOT and could not find assert.h.
+  No failed-run boot artifact is eligible. Patch0169 applied and APFS source
+  read-only guards passed; this is not a device/kernel result.
+- Host test now removes inherited SDKROOT and explicitly chooses macOS SDK,
+  matching the existing eMMC contract-test pattern. A deliberately invalid
+  SDKROOT local run passes. CI also retains its report in the kernel artifact.
+- New raw F_NOCACHE probe source78fde09d / CI41470349071 all6 passed, binary
+  3996342f804590682d77e2bb4da2dbfabaa9666ebd9449a907a03a8ab7edea43,
+  ZIP8d237575107f8c98a0cbd83b7274eb0d5cf931fd7c65368e3ef6eeed68d4ddd7.
+  Complete volatile self digest passed. Current boot89 ignores IO_NOCACHE in
+  VNOP_READ: pread still EIO with fcntl success, as expected from exact source.
+  Signed probe remains usable despite broken dyld. No new boot/System flash.
+
+## Read/mmap failure confirmed; bounded APFS diagnostics preparing (2026-11-02)
+
+- Corrected raw helper cc0ab5c / CI41468481553/job125355507394 passes all6
+  steps. ZIP49e05ae3ee299910feb47b63c22aa56d9cbe339437e6bc3f82d6d8cb2a9bfac3,
+  binary97db040f25f6faaef038229892af6b6dc3a3aa5bddd1934f05ba74cf3c87b490.
+  Signature/platform/no imports validated, volatile complete self digest passes.
+  It now starts on every tested argument layout. Shells/passwd/.27 fault-page
+  pread EIO, then mmap succeeds but actual mapped read SIGBUS138. Cache .17
+  pread/mmap still give the exact expected512-byte digest. These are genuine
+  memory-error faults after entering main, distinct from the fixed SP bug.
+- Patch0169 adds default-off whyred-apfs-errors=1 tracing at transport, cached
+  read/fill and page-in failures. Preserves original errno/UPL abort behavior,
+  records original mapping KR, file inode/offset/size and free/wired counters.
+  At most32 records, no allocation or pathname lookup. It also honors existing
+  IO_NOCACHE read requests through the already implemented direct path; this
+  enables a controlled cache-vs-parser comparison, not a claim of root repair.
+- Both changed C units compile locally for ARM64 with authenticated v79
+  generated headers. Exact no-fuzz patch replay on authenticated v89 passes.
+  Host fault injection extracts the actual kernel functions and checks17
+  read/page-in/transport fault cases, cleanup, EOF zeroing, direct dispatch and
+  default-off/32-record logging budget. Undefined-behavior sanitizer passes.
+  Local ASan runtime itself traps in libpthread initialization before main;
+  that attempted run is not counted as a kernel/test result.
+- Raw helper adds optional bounded F_NOCACHE toggle; native syscall test passes.
+  Full kernel CI/new signed raw artifact pending. Boot89/System91 is still
+  installed, verified System92 reserve unused, held SSH shell/UDP log alive.
+  No UART or partition access added. User's ordinary reboot is not a new flash
+  readiness answer. Prepare a verified boot-only candidate before next test.
+
+## First common SIGBUS captured; read-only APFS files return EIO (2026-11-02)
+
+- The ordinary reboot reproduced the common failure at14:46:27Z (~33 minutes
+  into boot). VM pressure/compression began first: free about2094 pages,
+  compressor753/pageouts31 at the last complete sample; a later partial sample
+  shows free2345/wired18089/compressor2374/pageouts39. RAMFS still had2838 free
+  pages (~44MiB), so this failure is not its128MiB data quota. Earlier
+  mediaserverd NULL-call SIGSEGV is distinct from subsequent common SIGBUS.
+- Automatic first-failure collector completed. Freshly executing dynamic probes,
+  whyredctl and whyreddiag all die before main in dyld at the same writable
+  shared-cache address0x2120e4d80 (unslid0x1e1eb0d80/.27.dylddata offset0xa59cd80).
+  Held raw SSH shell PID40269 survives. New server2223 rejects valid auth because
+  User root has invalid shell, rejected; auth/key checks stay unchanged.
+- Critically, built-in shell reads of /etc/shells and passwd produce no bytes.
+  A signed freestanding ARM64 probe (no dyld/imports) was transferred using only
+  shell printf into the no-longer-running volatile probe's0755 inode. It starts
+  in the broken state, and complete self-file digest matches the reviewed Mac
+  binary. This modifies only /var/tmp, not System or any partition.
+- Raw syscalls prove: /etc/shells open/fstat succeed, UID0/mode100644/size8,
+  but pread=-5(EIO). Passwd has correct2795-byte size and also pread EIO. The
+  critical .27.dylddata file has correct189300736-byte size but that offset
+  returns EIO. The old .17 literal's512 bytes still read correctly with expected
+  FNV d58f5b0f9afadca0. Mounted root block-device open is EBUSY, not a transport
+  test. eMMC counters last report0 errors; failures before hardware accounting
+  and UBC/page-in failures remain possible. APFS pread uses its custom UBC path;
+  these results do NOT prove whether parser, UBC, mapping or transport is root.
+- Raw first version CI41466390673/job125348296582 passed all6 steps; zero imports,
+  LC_UNIXTHREAD/no dylinker, iOS platform, code signature and ISA checked. Binary
+  bf775bbf07bc8023c9b5a83342a954275e4685d65bce6b42ce4983bd8520722e,
+  ZIP2f3472292b39b3e9b79387d086524014b1c16b9464f6005995d685bfb23850e9.
+  Earlier CI41465971269 failed because static ld omits platform metadata; the
+  build now inserts the correct iOS16.4 declaration in reserved padding BEFORE
+  signing. No wrong-platform artifact was deployed.
+- Some first raw runs hit our own initial-SP alignment bug (exception0x103,
+  not the common memory-error0xa). Confirmed via stack address/PC; argument
+  padding allowed immediate EIO measurements. Source9e897dea85c8345a8650ae09a47cc02257b3b133
+  aligns SP while retaining argv pointer. Its new CI and improved mmap-after-
+  pread-error diagnostic are pending. Do not confuse probe alignment with root.
+- Next: finish signed raw probe update/read-vs-mmap comparison, then prepare
+  narrowly bounded kernel error diagnostics/repair based on actual failure.
+  No boot/System flash since v91; v92 is still an unused verified reserve.
+  Native collector37864 failed at the common SIGBUS; cold watcher45132 completed.
+  Old watcher42713 was superseded for a5-minute pause in new auth requests.
+  Kernel UDP receiver47443 and held shell40269 remain; no UART opened.
+
+## Volatile diagnostics verified after user reboot (2026-11-02)
+
+- User confirmed ordinary reboot. Existing USB/host address and UDP receiver
+  survived. Installed stays boot89/System91; no partition write or UART access.
+  Early pinned root SSH succeeded, and one persistent raw shell remains alive.
+- Reviewed v92 helperc1a356f4/server5f1f16a4 were uploaded only into /var/tmp via
+  SCP0755 and complete readback equality. On-phone helper self-test, cross-task
+  registers/frame reads and VM statistics succeed. A diagnostic server on2223
+  uses the existing pinned System host/authorized keys; actual root login passed
+  and server messages arrive in the existing USB UDP log. Original2222 job stays.
+- Manual mobile-user Bluetooth child prints missing marconi-bt/bluetooth service,
+  invalid/missing device address and No bluetooth on this device, then exit0.
+  This confirms its missing-device exit branch in that run, consistent with
+  stock clean exits; manual execution does not reproduce all launchd context.
+  FairPlay mobile child also exits0 but supplies no stderr cause. No DRM or
+  anti-debug behavior was bypassed; Bluetooth hardware functionality is unported.
+- Current samples show pkd305/suggestd314/lsd96 alive, with task frames captured;
+  no new target crash yet in this boot. Initial VM free37944 pages fell to about
+  7700, inactive about25500, wired15400; compressor/pageouts/swap stay0. RAMFS
+  free about4700/8192 pages. This is not a long-run stability or repair claim.
+- Added bounded read-only file/pread/mmap/task-memory probe source
+  c99b6ccf444e2c82f600135fc981fa81cb3ab34f. Full CI41462202753/job125333835496
+  all7 steps pass. Artifact13149202188 ZIP16978 bytes, SHA256
+  48bfefb53548365ace93ca7e85a8405b142f280e0a43ea7add23b5e8f6ba1bc4;
+  binaryd47c8b9e1206ae4b4c99f69ec3536fd4e968200047a8a1899ecd732ae34e9b4a.
+  Signature/platform/ISA and31 exact16.5 imports pass. Volatile SCP/readback and
+  physical baseline pass: root lookup succeeds, the old fault's cache .17
+  literal returns identical512 bytes by pread/mmap/remote suggestd VM read, and
+  the old writable cache-page address is readable in launchd. No target writes.
+- Read-only baseline VM slide0x30234000 is inferred from mach_msg2_trap return
+  and validated by identical literal bytes. Local symbol helper's old100-load-
+  command cap was raised to1000 (same64KiB bound) for legitimate SpringBoard
+  224 commands; Apple/cache bytes and analysis remain private.
+- Native collectors: PID37864 samples VM/fs/PIDs/new target stacks until14:47Z;
+  persistent shell PID40269/FIFO is retained afterward. PID42713 watches first
+  SIGBUS or fresh2223 auth failure until about15:01Z, then reads account/file/
+  mapped-page/VM/server evidence through that held shell. Do not duplicate them.
+  Private audit/services-volatile-v91/ and monitor JSON hold current status.
+  The earlier v91 common SIGBUS and MCM lack of Data Protection remain unresolved.
+
+## Ready v92 reserve; preferred next test is volatile upload after reboot (2026-11-02)
+
+- Detached v92 build completed all offline checks at14:09:00Z. Image size
+  5,386,178,560 bytes, SHA256
+  0357bf46dc72f5c957ce7725d18952f7d31063e564681734c5d75bd44131bc28.
+  All65 exact file comparisons,18 metadata checks and81 sparse full-payload
+  reconstruction checks pass. Prior531 launchd jobs/keys are unchanged; only
+  the server changes and a diagnostic helper is added relative to v91.
+  Packager SHA4850cf670c08d38c5f28654ee3b074d38fcc1135184c62766fec02efb3ed32df.
+  No new flash occurred; installed remains boot89/System91. The first,
+  interrupted candidate remains quarantined and is not eligible.
+- Faster next action: user was asked to reboot normally, or enter Fastboot for
+  host reboot only. Once early SSH returns, use the reviewed v92 binaries in
+  volatile /private/var/tmp through the existing v91 server. This does not
+  require another System write. Do not treat this reboot-readiness answer as
+  authorization to flash the reserve v92 image.
+- Private detached monitor PID37864/script ssh-v90/observe_volatile_diag.py
+  started14:07:15Z, waits for TCP disconnect/reappearance, then opens a single
+  pinned persistent raw shell. It uploads/checks complete helper/server bytes,
+  starts the diagnostic server on2223 with existing System keys, and samples
+  VM/fs/process/thread state. It expires40 minutes after startup. Check status
+  audit/services-volatile-v91-monitor.json before starting anything else. It
+  was still waiting for physical reboot; no device tool upload or runtime
+  helper test has happened. No UART was opened; existing UDP capture continues.
+- Additional host-only investigation executes the exact authenticated boot89
+  APFS reader core against System91:4096 namespace probes,512 partial shared-
+  cache reads,133 cfile resets,33 metadata flushes pass with exact source bytes.
+  This does not test device eMMC, kernel UPL or VM pressure behavior and does
+  not establish a fix for the common SIGBUS/KERN_MEMORY_ERROR failure.
+
+## V92 userland verified; image write restarted after interruption (2026-11-02)
+
+- Full v92 userland source838c644feea10ac38578c14b8aedadb0e22bab4b,
+  CI41454271748/job125307206157: all10 steps success. ZIP SHA256
+  f4f12a56ebe68c0ab18970972807c68b7a979aef11777e2b4e31fbe8bbb23adb,
+  artifact13144949733/573129 bytes, exact file set/CRC/provenance and every
+  binary digest pass. All six binaries match installed16.5 cache imports.
+  Dropbear5f1f16a4d23d3019a8cd3a799514f13cc5db7b838bd0be59c3ea7184e31c9ab1;
+  diagnostic helperc1a356f4fae9537a0336e2aedef465ed9cf248d2a99c369a3bfa210c18f10fa9.
+- Native authentication/transport5 checks and USB mirror512-budget/1023-byte/
+  sanitization/errno-preservation checks pass. Separate final sampler workflow
+  41454271609 also passes, including VM counter self-test. First full v92 build
+  failed because -g created a dSYM directory in the binary inventory; fixed by
+  omitting that debug bundle. No failed-build artifact was used.
+- First local v92 container write was interrupted before completed file checks.
+  /bin/sh comparison reports resource-fork EIO. It is quarantined privately in
+  system-v92-interrupted-ineligible with DO-NOT-FLASH marker; no successful
+  manifest exists and it must never be flashed. A separate detached build/
+  complete verification pipeline restarted; image results remain pending.
+- Later v91 USB capture reveals a system-wide SIGBUS/KERN_MEMORY_ERROR storm.
+  The first captured SIGBUS is SpringBoard25, followed by xpcproxy737; suggestd
+  later faults in strlen/strdup/xpc string creation reading a valid original
+  cache string. Shared-cache and private-data ranges both appear. Transport
+  counters last showed zero eMMC errors, which does not prove VM/page data
+  correctness. This supersedes the earlier short-run absence-of-crash sample.
+  Do not claim filesystem encryption or any daemon repair. Root cause remains
+  unproven; distinguish VM/resource, pager and file-read failure paths.
+- V92 retains boot89/kernel policy and every existing531 launchd job/key. It
+  changes the SSH server only to mirror bounded diagnostics and add failure
+  errno, plus installs the read-only task/VM helper. A persistent remote shell
+  collector is prepared so later diagnostics reuse one authenticated session;
+  loopback-only FIFO framing/exit7/next-command tests pass. No new phone write
+  or UART access happened. New candidate needs complete offline verification
+  before requesting fresh physical Fastboot readiness.
+
+## SSH long-run authentication failure; v92 diagnostics preparing (2026-11-02)
+
+- After several successful read-only sessions, SSH began rejecting the same
+  pinned production public key before the signed-key step. Private/public/
+  authorized local key correspondence still passes. TCP/host identity and live
+  kernel UDP continue. No cause is proven: account lookup, shell checks, file
+  lookup/permissions and resource pressure must remain distinct possibilities.
+- The standalone sampler passed full CI41452473934/job125300803642 on source
+  231eafc514f11e9f71d3bfc6b3309e30c0eb53fc. ZIP SHA256
+  0658c018c635099c69e7e20ce4b93f55e83748da5f9e0ed3cb9860284cf65c1f,
+  binary d2193f8a6d79b5ac416744bb4d5d832edcba298039ca1495f862509f6c2335fb;
+  signature/platform/ISA and37 exact installed-cache imports passed. Upload
+  stopped at SSH authentication, before any file payload; no sampler executed
+  on the phone. Initial sampler CI failed on unsupported SDK mach_vm.h; the
+  reviewed correction uses the supported64-bit vm_read_overwrite interface.
+- Latest linked allocations are distributed: /var/mobile43.3MiB,
+  /var/db24.9MiB (uuidtext21.8MiB), /var/containers16.8MiB. No new quota-pressure
+  or pkd/lsd/suggestd crash was in the captured v91 segment at this checkpoint.
+- V92 candidate adds bounded nonblocking SSH-server log mirroring to the same
+  fixed USB destination192.168.7.1:5140 and includes the live sampler in System.
+  It also records errno on failed account/authorized-key metadata/open lookup.
+  Account/shell/ownership/key/signature decisions and job activation are intact.
+  Native UDP delivery/budget512/max1023/sanitization/errno tests and all exact
+  upstream patch contexts pass. New full userland CI/package are still pending.
+  No new flash was performed. UART stays unopened; existing receiver stays alive.
+
+## Live SSH service diagnostics in progress (2026-11-02)
+
+- Boot v89 / System v91 stays installed; no additional partition writes. Root
+  SSH and the existing single UDP receiver are working; UART is not opened.
+- Across the first roughly half-hour, pkd280/suggestd283/lsd95 retain their PIDs
+  and no pkd/lsd crash appears in the v91 capture. This is an observation, not a
+  long-run stability claim. Bluetooth/fairplay continue clean status0 exits.
+- RAMFS free pages fell from7198 shortly after SSH to2214/8192. The root DSC
+  temporary file disappeared; the remaining DSC file is about1.2MB. Thus the
+  original bulk DSC footprint is absent at the sample, but other growth still
+  needs attribution; global quota128MiB remains unchanged.
+- The private MCM log repeatedly reports unsupported class2 Data Protection;
+  exact local cache code checks statfs MNT_CPROTECT. RAMFS does not implement
+  per-file keys. Do not blindly advertise encryption to hide this error.
+- A bounded live thread sampler and mobile-user child runner are being built
+  as a standalone signed iOS helper. It reads registers/frames without target
+  suspension or memory writes; child diagnostics have a30s timeout. Upload
+  through SSH into volatile /var/tmp, not a new System flash. CI/device results
+  are pending. Device logs/cache bytes and keys remain outside Git.
+
+## System v91 SSH verified on the phone (2026-11-02)
+
+- Installed is boot v89 / System v91. The user returned the intentionally powered
+  off phone to Fastboot and requested continuing the repair. Fresh identity,
+  whyred/unlocked/System geometry/download guards passed. All81 sparse sends/
+  writes and final reboot returned OKAY; only System was written.
+- V91 image5,386,170,368 bytes, SHA256
+  fa356fa4a02ae74fff9dbc674336f52f9754560767ee3c88ca3579629905ebe0.
+  All64 complete XNU-reader file comparisons,17 metadata checks, obsolete job
+  ENOENT and81 sparse coverage/payload checks passed. The v90/v91 caches differ
+  only by the SSH job key. Programs/keys and original530 jobs are unchanged.
+  Packaging source73572a42a155bc3a8b26911a7d7fd430f95c3065. Existing authenticated
+  userland CI41350694615/b5b9b074 source is retained; no new kernel/SDK build.
+- V90's /Library/LaunchDaemons job was outside this exact launchd's embedded
+  Bootstrap/Paths. V91 uses /System/Library/LaunchDaemons for the standalone job
+  and cache key, and the builder validates the actual embedded search paths.
+  The old v90 mistake is rejected by a functional negative check.
+- The Mac OS administrator confirmation persisted only the exact USB service's
+  Manual192.168.7.1/24 without a router. This returned automatically after reboot.
+  Actual new kernel UDP logs resumed in the same detached receiver. UART was
+  not opened and no second5140 listener was started.
+- TCP2222/Dropbear2026.94 was first observed331s after the boot observer started.
+  The first20s SSH attempt timed out during startup. Retrying with90s confirmed
+  the pinned Ed25519 host and authenticated root, then returned actual Darwin
+  22.6.0/iPhone10,3 and uid/gid/euid/egid0. Subsequent full device checks passed
+  ps/fs, shell exit7, exact65536-byte binary round trip, unrelated-key rejection
+  and reading the server log. Production keys remain local; client timeout90s.
+- Read-only SSH health snapshot: RAMFS free6581/8192 pages (~102.8MiB of128MiB).
+  DSC files occupy6471680 allocated bytes at this snapshot; a5.25MB temporary
+  main-cache file is still being materialized. This does not yet establish the
+  physical8MiB cap or long-run quota behavior. PluginKitPlugin data directory
+  is absent at this point. Bluetoothd restarted between snapshots; backboardd
+  nil URL exception and container ENOENT/EPERM appear in the new UDP log.
+  Original pkd/lsd/other daemon and container/RAMFS goals remain open.
+
+## System v90 flashed; initial host address pending (2026-11-02)
+
+- User explicitly authorized adding SSH, then said to flash the concrete System
+  v90 candidate. Fresh private-baseline identity, whyred/unlocked, exact System
+  geometry6,700,000,256 bytes and512MiB download limit passed. All81 sparse
+  sends/writes and final reboot returned OKAY. Installed is boot v89 / System
+  v90. Only System was written; no separate format/GPT command was used.
+- System image5,386,170,368 bytes, SHA256
+  60b6411a89b72d3452e6bcde01e2f6589c48bfa106aa3ad82cb2778dc46a5464.
+  XNU APFS reader passed64 complete byte comparisons, including all43 active
+  cache members;17 inode/owner/mode checks and all81 sparse payload coverage/
+  digest checks passed. Original System v70 and preserved boot v89 hashes pass.
+- The baseline catalog45734 files/16600 directories/671 links is reproduced
+  without host metadata. Added Dropbear, dash, scp, whyredctl, private local
+  host/authorized keys and one job to the530 preserved decoded launchd jobs.
+  Keys were generated on the Mac and the host identity pinned; no private keys
+  or Apple bytes were uploaded. See WHYRED-SSH.md for exact source/options.
+- Corrected userland source b5b9b074c51e3b676928ced77a3b1b7c565ff600,
+  CI41350694615/job124979995276 passed all9 steps. Artifact13101197811 ZIP
+  SHA256dec89a1c4bddd17ba2f5204f383a50d5fce230938fe2dcc6fae6a97805fe1b18
+  passed provenance/digest/length/CRC and all binary digests. All five binaries
+  match exact installed16.5 cache exports, with proofs bound to binary SHA256.
+  Native key acceptance/rejection, command status,1MiB transport, shell builtins
+  and diagnostic commands passed. The earlier41349937032 shell imported absent
+  strchrnul; it was rejected and is not installed.
+- After the new reboot, the exact-MAC USB Ethernet interface returned. macOS
+  DHCP had removed the temporary192.168.7.1 alias; the host now has link-local
+  only. A guarded SystemConfiguration helper is ready to persist only this USB
+  service's192.168.7.1/24 without a router. OS administrator authentication timed
+  out without confirmation. A user question about the OS window is pending.
+  Restore this host address before testing SSH or inferring a phone crash.
+- The detached USB UDP receiver remains alive and retains its prior private log;
+  no second listener or UART was opened. Actual device SSH authentication and
+  commands remain UNVERIFIED. pkd/lsd, container/RAMFS behavior and other daemon
+  exit causes remain open; installing SSH does not establish their repair.
+
+## V89 USB Ethernet and live kernel logs verified on device (2026-11-01)
+
+- User confirmed Fastboot with UART open. Fresh single private-baseline device,
+  whyred/unlocked/boot64MiB and image/kernel/source/version/v87 rollback checks
+  passed. Boot send/write and reboot returned OKAY at2026-11-01T20:38:05Z.
+  Installed is now boot v89 / System v70; only boot was written.
+- UART confirms UTMI TESTMUX release: before35353535/40404040, after00000000,
+  release1/changed1. DWC3 receives connect/setup traffic and configures ECM.
+  Mac found the exact host MAC02:00:5e:77:ee:01 on en1 after10.078 seconds;
+  its USB inventory identifies the1209:0001 whyred Ethernet gadget.
+- After OS administrator authentication, the guarded helper added192.168.7.1/24
+  as an alias only on that exact interface, retaining its link-local address.
+  Ping to192.168.7.2 passed5/5, zero loss,2.118..10.564ms (average5.154ms).
+  The Mac receives actual phone kernel WHYRED IO/exec bytes on UDP5140. Thus
+  enumeration, bidirectional IP and live kernel-log transport are established.
+  SSH is outside this image. Reconnect/long-run throughput remain untested.
+- Continued live capture is checking root DSC limits, container creation and
+  service exits. Those outcomes are still pending; USB success does not establish
+  pkd/lsd/daemon stability. UART remains manual; device dumps/serials/logs private.
+
+## Verified v89 build and package (2026-11-01)
+
+- Final build source `f375a2f8cc2b9b29b08f19357dfdd5606969fcca`, full workflow
+  [41346137446](https://github.com/timosid/ios-sweetwhyred/actions/runs/41346137446),
+  job124966434206: all27 steps passed. RAMFS1,120,194/28 functions, USB1299/28
+  driver functions plus4 board helpers, idle/service799 passed ASan+UBSan.
+  Current namespace suite passed75 checks. Legacy0145 regression41346137417/
+  job124966245310 passed66 checks/all8 steps after test-generator compatibility
+  was retained. Earlier side41346036895 failed before compile on a missing new
+  helper in its pinned old source; this was corrected without kernel changes.
+- Both final ZIP provenance/SHA256/length/CRC, exact reviewed sources/fixtures/
+  board helper bodies, linked ISA/cache/idle instructions and trusted loader/
+  ADT/stock-DTB/layout/size guards passed. Combined0167+0168 replay also matches
+  the authenticated v87 buildtree. Superseded v88 run41344572473 was cancelled;
+  earlier v89 source036f6ad/run41346036804 supplies no candidate artifacts.
+- V89 boot:22,331,392 bytes, payload21,520,992; image SHA256
+  `668b16beddb2be2765b01ae6137b6bfc6b907072bca66d83a07ab65cf1becea1`.
+  It retains the8MiB opt-in, USB snapshots and idle/service diagnostics and was
+  flashed as recorded above.
+- Next: dsc=1 file-limit/pressure/container/service evidence from continued live
+  capture and manual UART. Logd/cache/container behavior remains unverified.
+
+## V89 root DSC cache correction plus USB (2026-11-01)
+
+- New v87 UART proves patch0166's UID-only bound is insufficient at early boot:
+  DSC main6199pages plus temporary1970pages are owned by root, total8169 of8192.
+  Pressure is data-quota, uid0 and file_limit_hits0. Later UID272 ownership had
+  hidden this initialization phase. No pkd/lsd crash is present in this excerpt;
+  its early cutoff does not establish service stability. The repeated attachment
+  has identical bytes and adds no further outcome evidence.
+- Patch0168 classifies /db/uuidtext/dsc entries inside the /var RAMFS, independent
+  of owner, at insertion and replacement/swap rename. Classification remains with
+  inodes and cache directory identities across moves/aliases/UID changes. Existing
+  data is not evicted; the opt-in8MiB per-file bound and UID272 bound both apply.
+  Unrelated root files and the global128MiB quota retain their limits.
+- Local1,120,194 UBSan checks/28 actual functions plus75 namespace/rename checks
+  pass, including root-created cache/temp, unrelated files, owner/namespace races,
+  prepopulated directory insertion and actual replacement/swap renames. ARM64,
+  noLSE/PAN and exact replay pass. Removing root or swap classification compiles
+  then fails functional checks. See WHYRED-RAMFS-PRESSURE.md.
+- V89 combines0168 with v88 USB0167, retained idle repair and lifecycle trace.
+  Full CI/package/device results pending. Do not flash the USB-only v88 as a
+  combined resource fix. Installed remains boot v87 / System v70, UART manual.
+
+## V88 USB override release implementation (2026-11-01)
+
+- V87 boot/System v70 is installed. New manual snapshots show UTMI1 low byte35,
+  UTMI2 low byte40: MiCode's FS/non-drive signature plus TEST_MUX. PLL low-byte
+  lock remains set; one event processed, raw value not supplied. No exact-MAC
+  Ethernet interface appeared in90 seconds. New RAMFS/daemon outcomes pending.
+- Patch0167 releases only TEST_MUX after controller halt and before DMA. It
+  preserves CTRL1/interface-select/other CTRL2 bits, verifies the byte and restores
+  the owned bit on failure. Unknown active override signatures stop safely.
+  No new PLL/tune/power/reset/PMIC/TCSR/SMMU writes. See WHYRED-USB.md.
+- Local1299 UBSan checks (28 driver/ring functions plus4 board helpers), two ARM64
+  units, noLSE/PAN and exact replay pass. Both no-release/interface-clobber negative
+  controls compile then fail functional assertions. Full CI/package/device test
+  next. Keep the v87 cache bound, idle repair and service trace in the candidate.
+- UART remains manual. Boot-only workflow authorized; obtain fresh physical
+  Fastboot readiness once the next image is verified. No other partition writes.
+
+## V87 boot flashed; hardware results pending (2026-11-01)
+
+- The user recovered the complete v85 pressure record: data-quota, 8192/8192
+  pages, hash8192 and added10657-freed2465=8192; only4 pages are unlinked.
+  Rank0 confirms the UID272 DSC file uses6199 pages. This supports the v87
+  resource policy; it does not establish a daemon or USB fix.
+- After the user said they were rebooting into Fastboot, the exact private
+  baseline device appeared. Fresh whyred/unlocked/boot64MiB/image/kernel/source/
+  version and v85 rollback checks passed. Boot send/write and reboot returned
+  OKAY at2026-11-01T19:54:28Z. Installed is now boot v87 / System v70.
+- Read-only Mac Ethernet observation and new manual UART are pending. No other
+  partition or host network configuration was changed. New USB snapshots,
+  logd-file-limit/pressure and pkd/lsd records are needed. UART stays manual.
+- Exact bluetoothd static analysis finds an exit0 path when its UART device
+  and both Bluetooth IOKit matches are absent; the runtime branch remains
+  unconfirmed. Do not equate clean exits with crashes or claim Bluetooth works.
+
+## V87 cache-bound implementation (2026-11-01)
+
+- New v85 UART recovers the damaged largest TOP row: logd's DSC cache is6199
+  pages/96.86MiB,75.7% of128MiB. Its filename matches the main dyld cache UUID.
+  TOP ranks are zero-based; the earlier rank1-largest interpretation was wrong.
+  Containermanagerd then fails556-byte container metadata writes with ENOSPC.
+- Patch0166 adds default-off whyred-logd-file-mb=N (1..64MiB per UID272 regular
+  file). Next v87 tries8MiB. Oversized writes/truncate return EFBIG before page
+  allocation; locked stores and final owner/size checks cover races/pageout and
+  owner transfer. No global quota increase, file deletion or job policy change.
+  Physical logd behavior and unified-log symbol availability need testing.
+- Local UBSan1120166/25 actual functions,66 namespace checks, ARM64/noLSE/PAN,
+  exact replay and functional limit/owner negative controls pass.
+  See WHYRED-RAMFS-PRESSURE.md. This is a candidate resource fix; daemon exit
+  causes/lsd faults and successful container creation remain open.
+- V86 USB snapshot source1ebb9427e50bf5ff0cbd5e641849b7baa38beea7, CI41338911774
+  job124944527693: all27 steps passed (USB637/RAMFS1120134/idle799 ASan+UBSan).
+  Provenance/digests/CRC, exact sources/fixtures, linked ISA/cache/idle and loader/
+  layout guards passed. Image SHAa3f3bd6839ac59ad8c86f8e0707253ba1aa08a46f0d8e4e186042cf7422cd260,
+  22,331,392 bytes; unflashed. V87 combines those snapshots with the cache bound.
+- Actual service traces: fairplayd.H2/bluetoothd spawn succeeds then exit0;
+  suggestd exit2/reason0; pkd SIGABRT same stack; lsd SIGSEGV still reproduces.
+  Services remain enabled. No more lost old UART can be supplied. Installed
+  installed state is superseded by the v87 flash milestone above.
+
+## Verified v87 image (2026-11-01)
+
+- Build source `0e0895bd4709eb645dde32806d3876a969c86172`, workflow
+  [41342210494](https://github.com/timosid/ios-sweetwhyred/actions/runs/41342210494),
+  job `124954436881`: all 27 steps passed. RAMFS 1,120,166 checks across 25
+  actual functions, USB 637 and idle/service 799 passed ASan+UBSan.
+- Both final ZIPs passed source/run provenance, SHA256, byte length and CRC.
+  Exact reviewed runtime sources/fixtures, linked ISA/cache/idle instructions,
+  trusted loader/ADT/stock DTB, reserved layout and size checks passed.
+- Packaged v87 boot is 22,331,392 bytes, payload 21,520,912; SHA256
+  `60a583a1c4a2f2d0f89cf436333406f9e970c30c38b5d6d2ab6c660060c66f9e`.
+  It enables the 8 MiB per-file UID272 bound and retains USB snapshots, owner
+  tracing and idle/service changes. It was flashed as recorded above.
+- Physical USB enumeration, logd behavior, container creation and daemon/lsd
+  stability remain unverified. No further older UART is required.
+
+## Active v86 USB connection diagnosis (2026-11-01)
+
+- Installed remains boot v85 / System v70. User reports no new USB lines on
+  cable connect/disconnect, but sees ue0 rx0/tx0 heartbeat. Thus the event thread
+  runs; no frame exchange, Mac gadget enumeration or Ethernet link is established.
+- Patch0165 adds read-only register snapshots before takeover, after endpoint/
+  VBUS setup and from the event thread at one-second intervals. Runtime output
+  requires a state change, ignoring DSTS frame-number-only differences. Maximum
+  32 four-line records, then no more sampler MMIO reads. No controller/PHY policy,
+  event ACK, DMA ownership, clock/reset/PMIC/PLL or charger-state changes.
+- Samples cover UTMI test/control/line state, DWC3 status/event-ring/endpoint
+  commands, QSCRATCH mux/VBUS, bus errors/timing and hardware parameters. MiCode's
+  PHY high-impedance override is a possible distinguishable state, not an observed
+  cause. See WHYRED-USB.md. Service causes remain pending separate UART output.
+- Local actual28-function USB suite passes637 UBSan checks, including timing,
+  raw output, change filtering, cap and read-only behavior. Both ARM64 units,
+  zeroLSE/PAN audits and exact patch replay pass. Both dedup/cap negative controls
+  fail their functional assertions after successful compilation. Full CI next; v86 retains v85's
+  idle repair, service tracing and RAMFS owners. No new image/flash yet.
+
+## V85 USB hardware observation (2026-11-01)
+
+- User UART confirms powered-PHY wake and EP0 STARTTRANSFER command/result0x6
+  with resource0. The driver passes its former guard, applies VBUS override
+  and reaches controller RUN. No reset/connect/event lines were supplied yet.
+- The Mac found no matching Ethernet interface during a 90-second observation;
+  its USB device inventory also had no phone gadget at the sampled time. No
+  host network changes were made. Controller RUN does not establish USB
+  enumeration, working Ethernet or console delivery. Cable-reconnect feedback
+  and further manual UART are pending; no subsequent register change is justified
+  by this excerpt alone. Service exit causes and idle stability remain open.
+
+## V85 boot flash milestone (2026-11-01)
+
+- User confirmed Fastboot readiness for the verified v85 test. Fresh private
+  identity, whyred product, unlocked state, 64MiB boot geometry, image/kernel and
+  v82 rollback hashes passed. Boot send/write and reboot returned OKAY.
+- Installed state is now boot v85 / System v70. No other partition was written.
+  Device boot progress, idle stability, USB enumeration and service exit causes
+  await user-supplied UART and host observation. UART capture remains manual.
+
+## Active v85 follow-up (2026-11-01, idle panic and daemon exit causes)
+
+- Installed phone remains boot v82 / System v70. User supplied an actual kernel
+  panic: kernel_task tid102, preemption count1 in ARM64 user return; exact v82
+  UUID/symbols verified. This differs from the separate lsd userspace SIGSEGV.
+- Found an unsafe interrupt-stack path introduced by patch0120: proximate timer
+  wait unmasks IRQs after Idle_context switches to CPU_ISTACKPTR, while the IRQ
+  handler resets SP to that same top. Patch0163 uses masked pending-IRQ/WFI wait
+  instead. This repairs a concrete overlap defect consistent with the panic;
+  physical wakeup/panic absence still need testing. The assertion stays enabled.
+- Patch0164 adds default-off whyred-service-trace=1: bounded PID, exec/spawn errno,
+  activation state, exit wait status and OS reason for bluetoothd, fairplayd.H2,
+  suggestd, lsd and pkd. No daemon cause/fix is yet proven. No jobs disabled.
+  See WHYRED-IDLE-SERVICES.md for semantics, limits and evidence.
+- Local UBSan799 checks pass, including 8000 concurrent report attempts. Changed
+  cpu.c/kern_exec.c/kern_exit.c compile for ARM64; zero LSE/PAN audit, exact replay
+  and both negative controls pass. Full CI will retain all v84 tests and add this
+  suite. Verified v85 below combines these with USB and RAMFS owner tracing.
+- V85 source `276c34608544fa2e3e1874f57500e8befccef022`, workflow
+  [41329547329](https://github.com/timosid/ios-sweetwhyred/actions/runs/41329547329),
+  job124916560517: all27 steps passed. New799, USB614 and RAMFS1120134 checks pass
+  ASan+UBSan. Both ZIP provenance/digests/length/CRC and exact reviewed runtime/
+  test sources pass. Linked cpu_idle contains pending-IRQ/DSB/WFI with no DAIFClr;
+  linked ISA/cache, trusted loader/ADT/DTB/layout and size guards pass.
+- Packaged v85 image SHA256
+  `ed46661c5641b49bc59a79fe71df2c2bd8ce87070830de489699d80d89c707d8`,
+  22,315,008 bytes, payload21,504,496. Boot args enable service trace, RAMFS owners
+  and USB. It is unflashed; next step is physical Fastboot readiness followed by
+  fresh device/product/unlock/64MiB/image/rollback checks and boot-only testing.
+  No physical USB link, daemon exit cause or panic-resolution claim yet.
+- V84 source d4ba66b3b00832f7610a6bd24887f2396d0694d8, CI41327819130/job124911379642:
+  all26 steps pass, USB614 and RAMFS1120134 ASan+UBSan. Authenticated/package
+  image SHA12e1b309a8f7af21fc4f079541943efb42faf603aef577fdf32595150305e8f8.
+  It is unflashed and lacks the new idle fix/daemon trace; prefer v85 next.
+- Full UART's first data-quota failure precedes first pkd attempt; Bluetooth/
+  FairPlay restart attempts already precede quota exhaustion. Largest RAMFS owners
+  remain unknown until TOP output. Preserve quotas and installed System v70.
+
+## Active whyred follow-up (2026-11-01, EP0 activity plus RAMFS owners)
+
+- V82 boot flash/reboot succeeded after the user's Fastboot-ready answer.
+  Installed phone is now boot v82 / System v70. User UART confirms PHY wake,
+  PLL lock, DWC3 ID 0x5533300a and ue0 address setup. Startup then stopped at the
+  driver's strict missing-transfer-index guard before USB RUN; no host link yet.
+- Patch 0162 follows Linux EP0's separate BUSY/activity tracking: successful
+  EP0 STARTTRANSFER is not rejected solely for a zero resource index. Activity
+  and HWO guard DMA reuse; data endpoints still require a nonzero resource.
+  The resource result is read separately, with a bounded settle window and
+  status/active checks. First control starts and failures log raw command results.
+- A mid-control reset with active EP0 and no retirement index stops the controller
+  and retains DMA rather than reusing it. This conservative limitation still
+  needs device testing; it is not a full USB compliance claim.
+- Local UBSan passes 614 actual USB checks. The model completes CDC setup with
+  zero control indices, rejects active DMA reuse and missing data resources,
+  and covers late result errors/reactivation. Restoring the old zero-index guard
+  or removing the new activity guard fails the respective negative control.
+  Both ARM64 compiles, exact patch replay and zero LSE/PAN object audits pass.
+- Next full candidate v84 retains the v83 ownership diagnostics below. No v84
+  image has been flashed. USB Ethernet and console delivery remain unconfirmed.
+
+## Verified v83 RAMFS ownership diagnostic candidate
+
+- Patch 0161 adds default-off `whyred-ramfs-top=1`, requiring the existing trace
+  flag, to diagnose the observed 128 MiB quota exhaustion. On sampled quota
+  failures it selects the four largest resident file-page owners and snapshots
+  inode/pages/logical size/link count/UID/mapped-write state plus one bounded name
+  and parent-directory name. It does not identify a last-writer process.
+- Selection reuses the coherent locked hash walk; namespace searches share a
+  65,536-entry budget. Fixed metadata/name arrays are copied under the mount lock
+  and printed after unlocking, with no node pointers escaping. Names are bounded,
+  printable and explicitly marked when truncated; a missing alias stays unknown.
+  Existing 32-record sampling limits and quota/error/allocation policy are retained.
+- Local UBSan passes 1,120,134 checks, including ordering/ties, linked/unlinked
+  owners, name truncation/control-byte filtering, snapshot lifetime, the name-walk
+  budget and default-off behavior. Disabling collection fails the new cases.
+  The retained 66 namespace/readdir/sync checks pass. ARM64 compilation passes
+  without a >4 KiB frame warning; object LSE/PAN audit is zero.
+- Source `f3c036f56057ea4e162d2aeb975e717c2fa7ba69`, workflow
+  [41325125813](https://github.com/timosid/ios-sweetwhyred/actions/runs/41325125813),
+  job `124903349713`: all 26 steps succeeded, including 1,120,134 pressure/owner
+  ASan+UBSan checks and 601 retained USB checks. ZIP provenance/digests/CRC,
+  reviewed sources, linked ISA/cache path, loader and layout guards passed.
+- Packaged v83 image SHA256
+  `90bb7b1a1871c1d1e91a7da83be0b7f2351509a9631f3063758f3ce88982685d`.
+  It has not been flashed and retains the old EP0 check; v84 supersedes it for
+  the next combined USB/ownership test. Physical owner output is still pending.
+
+## Verified v82 USB PHY shutdown-resume candidate
+
+- User-supplied v81 UART identifies handoff status 6 before any DWC3 register
+  access. Domain/clocks passed, while the legacy PHY POWER_DOWN bit remained set
+  and PLL lock was absent. The ID/GCTL zeros were unsampled, not proof of a bad
+  controller. Current installed phone remains boot v81 / System v70.
+- Patch 0160 adds a narrow exit from the exact major-rev=1 shutdown low-byte
+  state 0x23, using MiCode's 0x22 enable value. Mode 2 additionally requires the
+  reference gate on and QUSB/AHB2PHY resets deasserted. It waits 150 us and polls
+  for at most another 1000 us. Failure restores 0x23 before undoing new clock
+  votes; status 8 distinguishes an attempted wake timeout. Mode 1 stays read-only.
+- This retains bootloader tuning and requires powered rails. It adds no PMIC,
+  PLL tuning, reset-controller or SMMU writes and is not full cold PHY init.
+  Expanded diagnostics report before/after, attempt/polls/restore and explicitly
+  distinguish an unsampled controller from register values actually read.
+- Local UBSan passes 601 checks, including delayed/failed PLL, rejected writes,
+  missing reference gate, held resets, wrong PHY states and ordered rollback.
+  Disabling the new wake branch is rejected by the strengthened tests. Exact
+  patch replay and both ARM64 compiles pass; LSE/PAN object audits find zero.
+- Source `c6826995ba8de977d97f4e53e1d908d18f664ca1`, full workflow
+  [41323121100](https://github.com/timosid/ios-sweetwhyred/actions/runs/41323121100),
+  job `124897356634`: all 26 steps succeeded, including 601 USB ASan+UBSan checks.
+  Final ZIP provenance/digests/length/CRC, exact sources, linked ISA/cache path,
+  trusted loader/ADT/DTB, layout and size guards passed.
+- Boot v82 is 22,315,008 bytes, payload 21,504,080 bytes; SHA256
+  `55c6a5471135fd1594d9fcc96a9ca94b6246d8e50f268ba5932aeb06f913fb9c`.
+  V82 was subsequently flashed as recorded above; installed state is v82/System v70.
+- The user's v81 photograph now identifies the RAMFS failure as `data-quota`:
+  8192/8192 pages, matching the hash sum and additions minus frees, i.e. 128 MiB.
+  Zero-link pages are only 67. See `WHYRED-RAMFS-PRESSURE.md`; largest file owners
+  remain unknown. Preparing bounded ownership diagnostics; quotas are unchanged.
+- The user also observes repeated `exec bluetoothd` / `exec fairplayd.H2`.
+  Each name already has 11+16 occurrences in the preserved v79 fragments.
+  Authenticated System v70 config has fairplayd KeepAlive=true and bluetoothd
+  KeepAlive SuccessfulExit=false; neither redirects stdout/stderr to console.
+  The kernel's exec line precedes completion and has no PID/result. No target
+  termination cause is recorded, so failed exec, self-exit and crash/kill remain
+  unresolved. No services or restart policies were changed.
+
+## Verified v81 USB baseline and hardware observation
+
+- The user resumed USB work and selected Ethernet plus live logs first. SSH is
+  outside this candidate. Patch 0159 ports the existing CDC-ECM driver to the
+  whyred SDM660 registers and powered bootloader handoff; see `WHYRED-USB.md`.
+  `whyred-usb=2` explicitly enables the gadget; the default remains off.
+- Startup runs after network initialization, independently of UFS. The existing
+  in-memory console ring feeds bounded nonblocking UDP to 192.168.7.1:5140.
+  No System image changes or persistent storage writes are added.
+- Local UBSan passes 566 checks executing 27 actual kernel functions with
+  modeled MMIO/kernel services. The two changed ARM64 units compile, with zero
+  LSE/PAN instructions. Exact late-patch replay matches all three reviewed files;
+  the UFS source remains unchanged. The macOS interface helper self-test passes.
+- Initial DMA cache publication is checked before event-ring installation or
+  STARTTRANSFER. The strengthened harness rejects the previous missing-clean
+  version; the corrected driver passes. Physical cache coherence remains untested.
+- Source `7ccdf8dda98cdc2ead91f171c51607ddcae29890`, full workflow
+  [41319898167](https://github.com/timosid/ios-sweetwhyred/actions/runs/41319898167),
+  job `124888314335`: all 26 steps succeeded, including 566 USB checks with
+  ASan+UBSan, the full linked ARM64 kernel and all retained checks. Earlier USB
+  run 41319155786 was superseded and cancelled; it supplies no candidate artifacts.
+- Both final ZIPs match GitHub SHA256/length and pass CRC. All four USB/ring/init
+  sources match the reviewed buildtree and test report. Linked-code audit found
+  zero LSE/PAN instructions; the linked cache-maintenance path includes physical
+  translation, `dc civac` and `dsb sy`. Loader/ADT/stock DTB, layout and size guards
+  passed. Boot v81 retains the v80 diagnostics below and installed System v70.
+- Boot v81: 22,315,008 bytes, payload 21,504,080 bytes, 496-byte command line with
+  `whyred-usb=2`; image SHA256
+  `8b1300ed5f5c9524bc5b61722479a5f363b8df4391b8b71b06a10130f1706b41`.
+- Temporary `fastboot boot` returned OKAY, but the phone remained in Fastboot;
+  the user confirmed this command does not work on this handset. The user then
+  explicitly authorized flashing boot. Identity/product/unlocked/64-MiB partition,
+  v81 SHA256 and the preserved v79 rollback image passed fresh checks.
+- Sending/writing boot v81 and reboot each returned OKAY. The installed baseline
+  is now boot v81 / System v70; System was not written. Fastboot disappeared after
+  reboot. No CDC Ethernet interface or UDP console bytes have yet been observed;
+  enumeration, ping and actual delivery remain unconfirmed.
+- The user's UART confirms stop at PHY preflight (status 6), powered-down legacy
+  PHY and no sampled controller. v82 above addresses this observed shutdown
+  state. Physical wake, DMA visibility and host compatibility remain unconfirmed.
+- macOS 26 exposes USB via IOService IOUSBHostDevice / SPUSBHostDataType. The
+  legacy IOUSB-plane/SPUSBDataType query returned empty even with Fastboot present;
+  use the current inventory. Raw UART/serials remain private and user-supplied.
+
+## Retained v80 RAMFS diagnostics
+
+- Boot v79 and System v70 are the inherited hardware baseline. Filesystem
+  tracing reproduced container metadata write ENOSPC; the quota versus
+  allocation/reclamation cause is unresolved. A working graphical scene is
+  unconfirmed. USB Ethernet/live console work is active as described above.
+- Patch 0158 adds default-off development diagnostics for data quota, missing
+  data pages, nonwaiting page-array allocations and attribute snapshot failures.
+  It retains the existing quotas, allocation flags, operation results and storage
+  write policy. See `WHYRED-RAMFS-PRESSURE.md` for record semantics and limits.
+- Local host checks pass with UBSan: five injected failure branches, short-write
+  residuals, open-unlinked and named-vnode reclamation, 1.1 million failures for
+  the output budget and 10,000 allocation/reclaim lifetimes. Existing 66 namespace,
+  readdir64 and sync checks pass on the candidate. The changed C unit compiles to
+  ARM64 using the authenticated v79 generated headers.
+- Local AddressSanitizer cannot run in the current host environment: even a
+  standalone hello-world sanitizer binary exits with SIGILL before main. This
+  is not a passing local ASan result. Both ASan and UBSan passed on the CI runner.
+- Source `2e17298133f5639668ce5366f99b7334bdc01e11`, full workflow
+  [41314180439](https://github.com/timosid/ios-sweetwhyred/actions/runs/41314180439),
+  job `124870632893`: all 25 steps succeeded. This includes the full linked ARM64
+  kernel, the new pressure suite and all retained storage/graphics/AKS checks.
+- Both downloaded CI ZIPs matched their GitHub SHA256 digests. Exact RAMFS source
+  and all retained reviewed runtime files match the buildtree. Linked-code audit
+  found zero LSE/PAN instructions. Boot v80 was packaged with the proven loader,
+  ADT and stock DTB tail; layout and payload guards passed.
+- Boot v80: 22,310,912 bytes, payload 21,503,680 bytes; image SHA256
+  `a52274cdec6a8afbb0f2f7564ac6a1548925edc4137165fd202e3de63664367a`.
+  It enables `whyred-ramfs-trace=1`. No phone command, flash or v80 hardware test
+  has occurred; the inherited installed System v70 remains required.
+- Next: obtain RAMFS pressure records during an explicitly authorized boot-only
+  test. The observed ENOSPC cause and the relation to container crashes/empty
+  frames remain unresolved. Private manifests, UART, decompilation and transfer
+  verification remain outside this repository.

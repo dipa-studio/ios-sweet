@@ -1,0 +1,128 @@
+--- /dev/null
++++ b/bsd/kern/whyred_service_trace.h
+@@ -0,0 +1,44 @@
++#ifndef WHYRED_SERVICE_TRACE_H
++#define WHYRED_SERVICE_TRACE_H
++
++#include <os/atomic_private.h>
++
++enum {
++	WHYRED_SERVICE_EXEC,
++	WHYRED_SERVICE_SPAWN,
++	WHYRED_SERVICE_EXIT,
++	WHYRED_SERVICE_EVENTS
++};
++
++/* Called with a live process reference, outside proc locks. No allocations,
++ * user-memory accesses, path lookup, reason-buffer parsing or policy changes.
++ * Each translation unit has its own fixed counters. kern_exec emits exec/spawn,
++ * kern_exit emits exit: at most 5 targets * 3 events * 64 records per boot.
++ */
++static void
++whyred_service_event(proc_t p, unsigned int event, int error, int detail,
++    int status, uint32_t reason_namespace, uint64_t reason_code)
++{
++	static const char *const names[] = { "bluetoothd", "fairplayd.H2", "suggestd", "lsd", "pkd" };
++	static const char *const events[] = { "exec", "spawn", "exit" };
++	static uint32_t reports[5][WHYRED_SERVICE_EVENTS];
++	uint32_t enabled = 0;
++	if (p == PROC_NULL || event >= WHYRED_SERVICE_EVENTS ||
++	    !PE_parse_boot_argn("whyred-service-trace", &enabled, sizeof(enabled)) || enabled != 1) return;
++	unsigned int target;
++	for (target = 0; target < 5; target++) {
++		if (strcmp(p->p_name, names[target]) == 0) break;
++	}
++	if (target == 5) return;
++	uint32_t n = os_atomic_load(&reports[target][event], relaxed);
++	for (;;) {
++		if (n >= 64) return;
++		if (os_atomic_cmpxchg(&reports[target][event], n, n + 1, relaxed)) break;
++		n = os_atomic_load(&reports[target][event], relaxed);
++	}
++	printf("WHYRED SERVICE: ticks=%llu name=%s pid=%d event=%s seq=%u error=%d detail=%d status=0x%x reason=%u/0x%llx\n",
++	    mach_absolute_time(), names[target], proc_getpid(p), events[event], n + 1,
++	    error, detail, (unsigned int)status, reason_namespace, reason_code);
++}
++
++#endif
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -172,10 +172,13 @@
+ #include <machine/machine_routines.h>
+ #include <machine/pal_routines.h>
+ 
+ #include <pexpert/pexpert.h>
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
++#include "whyred_service_trace.h"
++#endif
++#if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/whyred_boot_log.h>
+ #endif
+ 
+ #if CONFIG_MEMORYSTATUS
+ #include <sys/kern_memorystatus.h>
+@@ -4588,10 +4591,14 @@
+ 			AUDIT_ARG(data, cdhash, sizeof(uint8_t), CS_CDHASH_LEN);
+ 		}
+ 	}
+ #endif
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	whyred_service_event(p, WHYRED_SERVICE_SPAWN, error, exec_done, 0, 0, 0);
++#endif
++
+ 	/* terminate the new task if exec failed  */
+ 	if (new_task != NULL && task_is_exec_copy(new_task)) {
+ 		task_terminate_internal(new_task);
+ 	}
+ 
+@@ -5173,10 +5180,14 @@
+ 	} else {
+ 		DTRACE_PROC1(exec__failure, int, error);
+ 	}
+ 
+ exit_with_error:
++
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	whyred_service_event(p, WHYRED_SERVICE_EXEC, error, exec_done, 0, 0, 0);
++#endif
+ 
+ 	/* terminate the new task it if exec failed  */
+ 	if (new_task != NULL && task_is_exec_copy(new_task)) {
+ 		task_terminate_internal(new_task);
+ 	}
+--- a/bsd/kern/kern_exit.c
++++ b/bsd/kern/kern_exit.c
+@@ -135,10 +135,13 @@
+ #include <vm/vm_protos.h>
+ #include <os/log.h>
+ #include <os/system_event_log.h>
+ 
+ #include <pexpert/pexpert.h>
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include "whyred_service_trace.h"
++#endif
+ 
+ #include <kdp/kdp_dyld.h>
+ 
+ #if SYSV_SHM
+ #include <sys/shm_internal.h>   /* shmexit */
+@@ -2150,10 +2153,18 @@
+ 	}
+ 
+ 	proc_unlock(p);
+ 	pid = proc_getpid(p);
+ 	exitval = p->p_xstat;
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	/* P_LPEXIT is committed; the process owns this immutable reason.
++	 * Include direct task termination paths that skip exit_with_reason. */
++	os_reason_t whyred_reason = p->p_exit_reason;
++	whyred_service_event(p, WHYRED_SERVICE_EXIT, 0, p->p_posix_spawn_failed, exitval,
++	    whyred_reason ? whyred_reason->osr_namespace : 0,
++	    whyred_reason ? whyred_reason->osr_code : 0);
++#endif
+ 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON,
+ 	    BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_START,
+ 	    pid, exitval, 0, 0, 0);
+ 
+ #if DEVELOPMENT || DEBUG

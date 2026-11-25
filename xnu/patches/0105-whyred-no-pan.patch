@@ -1,0 +1,12 @@
+--- a/pexpert/pexpert/arm64/SWEET.h
++++ b/pexpert/pexpert/arm64/SWEET.h
+@@ -33,7 +33,7 @@
+ #define __ARM_DEBUG__             7
+ #define __ARM_ENABLE_SWAP__       1
+ #define __ARM_V8_CRYPTO_EXTENSIONS__ 1
+-#define __ARM_PAN_AVAILABLE__     1
++#define __ARM_PAN_AVAILABLE__     0 /* whyred Gold: do not use PAN instructions */
+ #define __ARM_16K_PG__            1
+ 
+ #define HAS_GIC_V3                1
+

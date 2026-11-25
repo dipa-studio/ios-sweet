@@ -1,0 +1,78 @@
+From: Codex <codex@openai.com>
+Subject: [PATCH] whyred: mount RAM var with complete HFS arguments before PID 1
+
+Kernel-supplied mount pointers require the kernel thread map for copyin.
+Move the optional RAM HFS mount from bsdinit_task to bsd_init before the
+initial user process is cloned. Supply the device pointer followed by the
+complete, initialized HFS mount arguments expected by VFS_LOCALARGS.
+
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -83,6 +83,9 @@
+ #include <sys/filedesc.h>
+ #include <sys/kernel.h>
+ #include <sys/mount_internal.h>
++#if defined(SWEET)
++#include <sweet_hfs/core/hfs_mount.h>
++#endif
+ #include <sys/proc_internal.h>
+ #include <sys/kauth.h>
+ #include <sys/systm.h>
+@@ -1126,6 +1129,31 @@
+ 	kprintf("WHYRED_STAGE: BSD siginit returned\n");
+ #endif
+ 
++#if defined(SWEET)
++	/* Mount /var before cloning PID 1, while copyin uses the kernel map. */
++	uint32_t whyred_var_md0 = 0;
++	if (PE_parse_boot_argn("whyred-var-md0", &whyred_var_md0,
++	    sizeof(whyred_var_md0)) && whyred_var_md0 == 1) {
++		/* VFS consumes the device pointer before HFS reads its full arguments. */
++		struct {
++			char *device_name;
++			struct hfs_mount_args hfs_args;
++		} mount_args = {
++			.device_name = "/dev/md0",
++			.hfs_args = { .hfs_mask = 0777 },
++		};
++		printf("WHYRED VAR: mounting RAM HFS before PID 1\n");
++		int mount_error = kernel_mount("hfs", NULLVP, NULLVP,
++		    "/private/var", &mount_args, sizeof(mount_args), MNT_DONTBROWSE,
++		    KERNEL_MOUNT_NOAUTH, vfs_context_kernel());
++		if (mount_error != 0) {
++			panic("WHYRED VAR: failed to mount HFS /dev/md0 at /private/var: %d",
++			    mount_error);
++		}
++		printf("WHYRED VAR: writable RAM HFS mounted at /private/var from md0\n");
++	}
++#endif
++
+ 	bsd_init_kprintf("calling bsd_utaskbootstrap\n");
+ #if defined(SWEET)
+ 	kprintf("WHYRED_STAGE: BSD before bsd_utaskbootstrap\n");
+@@ -1184,24 +1212,7 @@
+ 
+ 	bsd_init_kprintf("bsd_do_post - done");
+ 
+-#if defined(SWEET)
+-	/* The iOS system APFS is read-only; supply a RAM-backed writable /var. */
+-	uint32_t whyred_var_md0 = 0;
+-	if (PE_parse_boot_argn("whyred-var-md0", &whyred_var_md0,
+-	    sizeof(whyred_var_md0)) && whyred_var_md0 == 1) {
+-		char device_name[] = "/dev/md0";
+-		char *device_name_ptr = device_name;
+-		char **device_name_pp = &device_name_ptr;
+-		int mount_error = kernel_mount("hfs", NULLVP, NULLVP,
+-		    "/private/var", device_name_pp, 0, MNT_DONTBROWSE,
+-		    KERNEL_MOUNT_NOAUTH, vfs_context_kernel());
+-		if (mount_error != 0) {
+-			panic("WHYRED VAR: failed to mount HFS /dev/md0 at /private/var: %d",
+-			    mount_error);
+-		}
+-		printf("WHYRED VAR: writable RAM HFS mounted at /private/var from md0\n");
+-	}
+-#endif
++
+ 
+ 	load_init_program(p);
+ 	lock_trace = 1;

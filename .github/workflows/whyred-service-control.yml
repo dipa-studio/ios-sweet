@@ -1,0 +1,64 @@
+name: whyred-restricted-service-control
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/whyred-early-fb]
+    paths: [.github/workflows/whyred-service-control.yml, tools/whyredsvc.c]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check request bounds without sending RPC
+        run: |
+          mkdir -p out/svc
+          clang -O1 -Wall -Wextra -Werror tools/whyredsvc.c -o out/svc/whyredsvc-native
+          sed -n '1,/^ \*\//p' tools/whyredsvc.c > out/svc/LICENSE.txt
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          binary='out/svc/whyredsvc-native'
+          count=0
+          for action in ['status','disable','enable','bootout','bootstrap']:
+              for domain in ['system','user501']:
+                  for label in ['com.apple.bluetoothd','com.apple.fairplayd.H2']:
+                      p=subprocess.run([binary,action,domain,label,'--dry-run'],capture_output=True,text=True)
+                      assert p.returncode==0 and 'dry_run=1' in p.stdout
+                      count+=1
+          for argv in [[],['bootout','system'],['disable','system','com.apple.dropbear'],['disable','user0','com.apple.bluetoothd'],['reboot','system','com.apple.bluetoothd'],['disable','system','com.apple.bluetoothd','--force']]:
+              assert subprocess.run([binary,*argv],capture_output=True).returncode==2
+              count+=1
+          assert subprocess.run([binary,'disable','system','com.apple.bluetoothd'],capture_output=True).returncode==3
+          Path('out/svc/host-check.txt').write_text(f'PASS {count+1} request/domain/label/non-whyred checks; no RPC sent\n')
+          PY
+      - name: Build signed iOS job-control helper
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -target arm64-apple-ios16.4 -isysroot "$SDK" -mcpu=generic+crypto -mno-outline-atomics -O1 -Wall -Wextra -Werror tools/whyredsvc.c -o out/svc/whyredsvc
+          cat > out/svc/entitlements.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>platform-application</key><true/><key>com.apple.private.xpc.launchd.enable-disable-system-services</key><true/><key>com.apple.private.xpc.service-configure</key><true/></dict></plist>
+          PLIST
+          codesign --force --sign - --timestamp=none --entitlements out/svc/entitlements.plist out/svc/whyredsvc
+          codesign --verify --strict out/svc/whyredsvc
+          otool -l out/svc/whyredsvc > out/svc/load-commands.txt
+          otool -L out/svc/whyredsvc > out/svc/dependencies.txt
+          xcrun llvm-nm -u out/svc/whyredsvc > out/svc/imports.txt
+          xcrun llvm-objdump -d out/svc/whyredsvc > out/svc/isa.txt
+          python3 - <<'PY'
+          import hashlib,json,os,re
+          from pathlib import Path
+          p=Path('out/svc')
+          assert re.search(r'platform\s+(?:2|IOS)\b',(p/'load-commands.txt').read_text())
+          assert not re.search(r'\b(?:cas[a-z]*|ldadd[a-z]*|swp[a-z]*|stadd[a-z]*)\s+[wx]',(p/'isa.txt').read_text())
+          (p/'report.json').write_text(json.dumps({'source':os.environ['GITHUB_SHA'],'sha256':hashlib.sha256((p/'whyredsvc').read_bytes()).hexdigest(),'bytes':(p/'whyredsvc').stat().st_size,'allowed_labels':['com.apple.bluetoothd','com.apple.fairplayd.H2'],'partition_writes':False,'mutates_launchd_only_on_root_whyred':True},indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whyred-restricted-service-control
+          path: out/svc/
+          retention-days: 7

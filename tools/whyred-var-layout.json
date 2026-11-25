@@ -1,0 +1,606 @@
+{
+  "source": "iOS 16.5 build 20F66 restore var directory template",
+  "content": "Directory paths, numeric owners and permission modes only; no Apple file contents or device-specific data",
+  "directories": [
+    {
+      "path": "Keychains",
+      "uid": 64,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "Managed Preferences",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "Managed Preferences/mobile",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0755"
+    },
+    {
+      "path": "MobileAsset",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "MobileDevice",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "MobileDevice/ProvisioningProfiles",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0755"
+    },
+    {
+      "path": "MobileSoftwareUpdate",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "audit",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0700"
+    },
+    {
+      "path": "buddy",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0700"
+    },
+    {
+      "path": "datamigrator",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0755"
+    },
+    {
+      "path": "db",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "db/DumpPanic",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "db/ExtensibleSSO",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "db/ExtensibleSSO/Configuration",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "db/Sandbox",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0700"
+    },
+    {
+      "path": "db/UpdateMetrics",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0777"
+    },
+    {
+      "path": "db/accessoryupdater",
+      "uid": 278,
+      "gid": 278,
+      "mode": "0751"
+    },
+    {
+      "path": "db/analyticsd",
+      "uid": 263,
+      "gid": 263,
+      "mode": "0750"
+    },
+    {
+      "path": "db/astris",
+      "uid": 245,
+      "gid": 245,
+      "mode": "0755"
+    },
+    {
+      "path": "db/biome",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0700"
+    },
+    {
+      "path": "db/com.apple.dt.automationmode",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "db/com.apple.xpc.launchd",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "db/com.apple.xpc.launchd/config",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "db/com.apple.xpc.roleaccountd.staging",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0700"
+    },
+    {
+      "path": "db/coreml",
+      "uid": 280,
+      "gid": 280,
+      "mode": "0750"
+    },
+    {
+      "path": "db/darwindaemon",
+      "uid": 284,
+      "gid": 284,
+      "mode": "0750"
+    },
+    {
+      "path": "db/darwindaemon/Library",
+      "uid": 284,
+      "gid": 284,
+      "mode": "0750"
+    },
+    {
+      "path": "db/datadetectors",
+      "uid": 257,
+      "gid": 257,
+      "mode": "0711"
+    },
+    {
+      "path": "db/diagnostics",
+      "uid": 272,
+      "gid": 272,
+      "mode": "0751"
+    },
+    {
+      "path": "db/diskimagesiod",
+      "uid": 271,
+      "gid": 271,
+      "mode": "0750"
+    },
+    {
+      "path": "db/findmydevice",
+      "uid": 254,
+      "gid": 254,
+      "mode": "0755"
+    },
+    {
+      "path": "db/fpsd",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0750"
+    },
+    {
+      "path": "db/gpsd",
+      "uid": 267,
+      "gid": 267,
+      "mode": "0700"
+    },
+    {
+      "path": "db/knowledgegraphd",
+      "uid": 279,
+      "gid": 279,
+      "mode": "0750"
+    },
+    {
+      "path": "db/lockdown",
+      "uid": 213,
+      "gid": 213,
+      "mode": "0700"
+    },
+    {
+      "path": "db/lsd",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0755"
+    },
+    {
+      "path": "db/mmaintenanced",
+      "uid": 283,
+      "gid": 283,
+      "mode": "0750"
+    },
+    {
+      "path": "db/nearbyd",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0750"
+    },
+    {
+      "path": "db/ondemand",
+      "uid": 249,
+      "gid": 249,
+      "mode": "0755"
+    },
+    {
+      "path": "db/reportmemoryexception",
+      "uid": 269,
+      "gid": 269,
+      "mode": "0750"
+    },
+    {
+      "path": "db/rmd",
+      "uid": 277,
+      "gid": 277,
+      "mode": "0750"
+    },
+    {
+      "path": "db/sysdiagnose",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "db/sysdiagnose/com.apple.ScreenshotServicesService",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0755"
+    },
+    {
+      "path": "db/sysdiagnose/com.apple.sysdiagnose",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0700"
+    },
+    {
+      "path": "db/systemstats",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "db/timed",
+      "uid": 266,
+      "gid": 266,
+      "mode": "0750"
+    },
+    {
+      "path": "db/timezone",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "dextcores",
+      "uid": 270,
+      "gid": 270,
+      "mode": "0755"
+    },
+    {
+      "path": "empty",
+      "uid": 0,
+      "gid": 3,
+      "mode": "0755"
+    },
+    {
+      "path": "folders",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "hardware",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "installd",
+      "uid": 33,
+      "gid": 33,
+      "mode": "0755"
+    },
+    {
+      "path": "log",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "log/asl",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "log/com.apple.xpc.launchd",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "log/mDNSResponder",
+      "uid": 65,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "log/ppp",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "logs",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "logs/Baseband",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "logs/hidfw-crashlogs",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0755"
+    },
+    {
+      "path": "logs/mediaserverd",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0755"
+    },
+    {
+      "path": "mobile",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0711"
+    },
+    {
+      "path": "mobile/Applications",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0755"
+    },
+    {
+      "path": "mobile/Library",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0711"
+    },
+    {
+      "path": "mobile/Library/AddressBook",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0700"
+    },
+    {
+      "path": "mobile/Library/Application Support",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0755"
+    },
+    {
+      "path": "mobile/Library/Caches",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0700"
+    },
+    {
+      "path": "mobile/Library/Cookies",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0700"
+    },
+    {
+      "path": "mobile/Library/ExternalAccessory",
+      "uid": 501,
+      "gid": 286,
+      "mode": "0775"
+    },
+    {
+      "path": "mobile/Library/Inboxes",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0755"
+    },
+    {
+      "path": "mobile/Library/Keyboard",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0700"
+    },
+    {
+      "path": "mobile/Library/Logs",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0775"
+    },
+    {
+      "path": "mobile/Library/Logs/CrashReporter",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0775"
+    },
+    {
+      "path": "mobile/Library/Logs/CrashReporter/DiagnosticLogs",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0755"
+    },
+    {
+      "path": "mobile/Library/Preferences",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0755"
+    },
+    {
+      "path": "mobile/Library/Safari",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0700"
+    },
+    {
+      "path": "mobile/Library/WebClips",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0700"
+    },
+    {
+      "path": "mobile/Media",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0750"
+    },
+    {
+      "path": "mobile/Media/DCIM",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0750"
+    },
+    {
+      "path": "mobile/Media/PhotoData",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0750"
+    },
+    {
+      "path": "mobile/Media/Photos",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0750"
+    },
+    {
+      "path": "msgs",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "networkd",
+      "uid": 24,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "preferences",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "preferences/Logging",
+      "uid": 272,
+      "gid": 272,
+      "mode": "0755"
+    },
+    {
+      "path": "preferences/Logging/Processes",
+      "uid": 272,
+      "gid": 272,
+      "mode": "0755"
+    },
+    {
+      "path": "preferences/Logging/Subsystems",
+      "uid": 272,
+      "gid": 272,
+      "mode": "0755"
+    },
+    {
+      "path": "protected",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "protected/trustd",
+      "uid": 282,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "root",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0750"
+    },
+    {
+      "path": "root/Library",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0700"
+    },
+    {
+      "path": "root/Library/Preferences",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0700"
+    },
+    {
+      "path": "run",
+      "uid": 0,
+      "gid": 1,
+      "mode": "0775"
+    },
+    {
+      "path": "select",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "staged_system_apps",
+      "uid": 501,
+      "gid": 501,
+      "mode": "0755"
+    },
+    {
+      "path": "tmp",
+      "uid": 0,
+      "gid": 0,
+      "mode": "1777"
+    },
+    {
+      "path": "vm",
+      "uid": 0,
+      "gid": 0,
+      "mode": "0755"
+    },
+    {
+      "path": "wireless",
+      "uid": 25,
+      "gid": 25,
+      "mode": "0755"
+    },
+    {
+      "path": "wireless/Library",
+      "uid": 25,
+      "gid": 25,
+      "mode": "0755"
+    },
+    {
+      "path": "wireless/baseband_data",
+      "uid": 25,
+      "gid": 25,
+      "mode": "0755"
+    }
+  ]
+}

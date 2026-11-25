@@ -1,0 +1,66 @@
+name: whyred-live-diagnostics
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/whyred-early-fb]
+    paths: [.github/workflows/whyred-diag.yml, tools/whyreddiag.c]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test native sampler
+        run: |
+          mkdir -p out/diag
+          clang -O1 -g -Wall -Wextra -Werror -fno-omit-frame-pointer tools/whyreddiag.c -o out/diag/whyreddiag-native
+          out/diag/whyreddiag-native selftest > out/diag/native-selftest.txt
+          grep -q '^PORTS selftest PASS own_message_preserved=1$' out/diag/native-selftest.txt
+          grep -q 'state_kr=0' out/diag/native-selftest.txt
+          grep -q '^1337421988765432$' out/diag/native-selftest.txt
+          out/diag/whyreddiag-native kernel > out/diag/native-kernel.txt
+          out/diag/whyreddiag-native xattrs "$RUNNER_TEMP" > out/diag/native-xattrs.txt
+          grep -q 'xattrs PASS' out/diag/native-xattrs.txt
+          python3 - <<'PY'
+          import os, subprocess
+          b = 'out/diag/whyreddiag-native'
+          for args in (['run-mobile-display'], ['run-mobile-display', '/usr/bin/true'],
+                       ['run-mobile-display', '/usr/bin/true', 'live'],
+                       ['run-mobile-display', '/usr/bin/true', 'live-window', 'extra']):
+              p = subprocess.run([b, *args], capture_output=True, text=True, timeout=5)
+              assert p.returncode == 2 and 'usage:' in p.stderr, (args, p)
+          if os.getuid() != 0:
+              p = subprocess.run([b, 'run-mobile-display', '/usr/bin/true', 'live-window'],
+                                 capture_output=True, text=True, timeout=5)
+              assert p.returncode == 2 and 'requires root' in p.stderr, p
+          PY
+      - name: Build signed iOS helper
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -target arm64-apple-ios16.4 -isysroot "$SDK" -mcpu=generic+crypto -mno-outline-atomics -O1 -g -fno-omit-frame-pointer -Wall -Wextra -Werror tools/whyreddiag.c -o out/diag/whyreddiag
+          cat > out/diag/entitlements.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>task_for_pid-allow</key><true/><key>com.apple.system-task-ports</key><true/></dict></plist>
+          PLIST
+          codesign --force --sign - --timestamp=none --entitlements out/diag/entitlements.plist out/diag/whyreddiag
+          codesign --verify --strict out/diag/whyreddiag
+          otool -l out/diag/whyreddiag > out/diag/load-commands.txt
+          otool -L out/diag/whyreddiag > out/diag/dependencies.txt
+          xcrun llvm-nm -u out/diag/whyreddiag > out/diag/imports.txt
+          xcrun llvm-objdump -d out/diag/whyreddiag > out/diag/isa.txt
+          python3 - <<'PY'
+          import hashlib,json,os,re
+          from pathlib import Path
+          p=Path('out/diag')
+          assert re.search(r'platform\s+(?:2|IOS)\b',(p/'load-commands.txt').read_text())
+          assert not re.search(r'\b(?:cas[a-z]*|ldadd[a-z]*|swp[a-z]*|stadd[a-z]*)\s+[wx]',(p/'isa.txt').read_text())
+          (p/'report.json').write_text(json.dumps({'source':os.environ['GITHUB_SHA'],'sha256':hashlib.sha256((p/'whyreddiag').read_bytes()).hexdigest(),'bytes':(p/'whyreddiag').stat().st_size,'default_target_writes':False,'opt_in_xattrs_creates_one_temporary_file':True,'suspends_tasks':False},indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whyred-live-diagnostics
+          path: out/diag/
+          retention-days: 7

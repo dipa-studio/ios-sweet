@@ -7,8 +7,23 @@ bearssl_sha=7bea48e5e850ab4cafbe68d3765cdaba13a86d6f
 bearssl_tmp=$(mktemp -d)
 trap 'rm -rf "$bearssl_tmp"' EXIT
 git init -q "$bearssl_tmp"
-git -C "$bearssl_tmp" fetch -q --depth 1 \
-    https://www.bearssl.org/git/BearSSL "$bearssl_sha"
+# The upstream host can return502. Retry finitely, then use the mirror at
+# exactly the same pinned commit; never substitute a branch or newer version.
+bearssl_fetched=0
+for bearssl_remote in https://www.bearssl.org/git/BearSSL \
+    https://github.com/status-im/BearSSL.git; do
+    for bearssl_attempt in 1 2; do
+        if git -C "$bearssl_tmp" fetch -q --depth 1 "$bearssl_remote" "$bearssl_sha"; then
+            if [[ "$(git -C "$bearssl_tmp" rev-parse FETCH_HEAD)" == "$bearssl_sha" ]]; then
+                bearssl_fetched=1
+                break 2
+            fi
+        fi
+        echo "BearSSL fetch failed ($bearssl_remote, attempt$bearssl_attempt)" >&2
+        if [[ "$bearssl_attempt" == 1 ]]; then sleep 2; fi
+    done
+done
+[[ "$bearssl_fetched" == 1 ]] || { echo "Pinned BearSSL unavailable" >&2; exit 1; }
 git -C "$bearssl_tmp" checkout -q FETCH_HEAD
 [[ "$(git -C "$bearssl_tmp" rev-parse HEAD)" == "$bearssl_sha" ]]
 python3 - "$bearssl_tmp" <<'PY'

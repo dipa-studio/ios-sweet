@@ -1,0 +1,89 @@
+diff --git a/pexpert/gen/device_tree.c b/pexpert/gen/device_tree.c
+--- a/pexpert/gen/device_tree.c
++++ b/pexpert/gen/device_tree.c
+@@ -46,6 +46,7 @@
+ #endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
+ 
+ #include <sys/types.h>
++#include <arm64/sweet_early.h>
+ 
+ SECURITY_READ_ONLY_LATE(static int) DTInitialized;
+ SECURITY_READ_ONLY_LATE(RealDTEntry) DTRootNode;
+@@ -275,17 +276,25 @@
+ }
+ 
+ static char const *startingP;         // needed for find_entry
++/* Bounded trace state for the early single-CPU PE device-tree lookup. */
++static unsigned int whyred_find_entry_depth;
+ int find_entry(const char *propName, const char *propValue, DTEntry *entryH);
+ 
+ int
+ SecureDTFindEntry(const char *propName, const char *propValue, DTEntry *entryH)
+ {
++	int result;
++
+ 	if (!DTInitialized) {
+ 		return kError;
+ 	}
+ 
++	sweet_early_mark(39, "SecureDTFindEntry entered");
+ 	startingP = (char const *)DTRootNode;
+-	return find_entry(propName, propValue, entryH);
++	whyred_find_entry_depth = 0;
++	result = find_entry(propName, propValue, entryH);
++	sweet_early_mark(96, "SecureDTFindEntry returned");
++	return result;
+ }
+ 
+ int
+@@ -293,16 +302,24 @@
+ {
+ 	DeviceTreeNode const *nodeP = (DeviceTreeNode const *) (void const *) startingP;
+ 	unsigned int k;
+-
++	unsigned int trace_depth = whyred_find_entry_depth++;
++
++	if (trace_depth < 16) {
++		sweet_early_mark(40 + trace_depth, "SecureDTFindEntry recursion depth");
++	}
+ 	ASSERT_HEADER_IN_DT(nodeP, sizeof(DeviceTreeNode));
+ 
+ 	if (nodeP->nProperties == 0) {
++		whyred_find_entry_depth--;
+ 		return kError;                        // End of the list of nodes
+ 	}
+ 	startingP = (char const *) (nodeP + 1);
+ 
+ 	// Search current entry
+ 	for (k = 0; k < nodeP->nProperties; ++k) {
++		if (trace_depth == 0 && k < 16) {
++			sweet_early_mark(60 + k, "SecureDTFindEntry root property");
++		}
+ 		DeviceTreeNodeProperty const *propP = (DeviceTreeNodeProperty const *) (void const *) startingP;
+ 		ASSERT_PROP_IN_DT(propP);
+ 
+@@ -312,6 +329,7 @@
+ 			if (propValue == NULL || strcmp((char const *)(propP + 1), propValue) == 0) {
+ 				*entryH = (DTEntry)nodeP;
+ 				ASSERT_HEADER_IN_DT(*entryH, sizeof(DeviceTreeNode));
++				whyred_find_entry_depth--;
+ 				return kSuccess;
+ 			}
+ 		}
+@@ -319,10 +337,15 @@
+ 
+ 	// Search child nodes
+ 	for (k = 0; k < nodeP->nChildren; ++k) {
++		if (trace_depth == 0 && k < 16) {
++			sweet_early_mark(80 + k, "SecureDTFindEntry root child");
++		}
+ 		if (find_entry(propName, propValue, entryH) == kSuccess) {
++			whyred_find_entry_depth--;
+ 			return kSuccess;
+ 		}
+ 	}
++	whyred_find_entry_depth--;
+ 	return kError;
+ }
+ 
+

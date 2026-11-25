@@ -1,0 +1,61 @@
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -36,6 +36,8 @@
+ #define SDHCI_CORE_DLL_STATUS            0x208
+ #define SDHCI_CORE_VENDOR_SPEC           0x20c
+ #define SDHCI_CORE_CLK_PWRSAVE           0x00000002
++#define SDHCI_CORE_DLL_PDN               0x20000000
++#define SDHCI_CORE_DLL_RST               0x40000000
+ /* qcom,sdhci-msm-v5 (MCI removed) diagnostic registers. */
+ #define SDHCI_CORE_MCI_FIFO_COUNT        0x308
+ #define SDHCI_CORE_MCI_STATUS            0x324
+@@ -225,6 +227,29 @@
+ 		}
+ 	}
+ 
++	/*
++	 * Qualcomm SDHCI-MSM disables its DLL whenever the SDCC clock is
++	 * <= 100 MHz. This identification clock is only 200 kHz. Keep the
++	 * card clock stopped while putting the v5 DLL into reset/powerdown.
++	 */
++	uint32_t dll_before = whyred_emmc_read32(base, SDHCI_CORE_DLL_CONFIG);
++	uint32_t dll_config = dll_before | SDHCI_CORE_DLL_RST;
++	whyred_emmc_write32(base, SDHCI_CORE_DLL_CONFIG, dll_config);
++	(void)whyred_emmc_read32(base, SDHCI_CORE_DLL_CONFIG);
++	dll_config = whyred_emmc_read32(base, SDHCI_CORE_DLL_CONFIG) |
++	    SDHCI_CORE_DLL_PDN;
++	whyred_emmc_write32(base, SDHCI_CORE_DLL_CONFIG, dll_config);
++	dll_config = whyred_emmc_read32(base, SDHCI_CORE_DLL_CONFIG);
++	printf("WHYRED EMMC INIT: Qualcomm DLL disabled for legacy clock cfg_before=0x%08x cfg_after=0x%08x status=0x%08x\n",
++	    dll_before, dll_config,
++	    whyred_emmc_read32(base, SDHCI_CORE_DLL_STATUS));
++	if ((dll_config & (SDHCI_CORE_DLL_RST | SDHCI_CORE_DLL_PDN)) !=
++	    (SDHCI_CORE_DLL_RST | SDHCI_CORE_DLL_PDN)) {
++		whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, old_clock);
++		printf("WHYRED EMMC INIT: failed to disable low-clock DLL\n");
++		return -1;
++	}
++
+ 	clock = whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL);
+ 	clock |= SDHCI_CLOCK_CARD_ENABLE;
+ 	whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, clock);
+@@ -413,6 +438,18 @@
+ 		ext_csd[words * 4 + 1] = (uint8_t)(value >> 8);
+ 		ext_csd[words * 4 + 2] = (uint8_t)(value >> 16);
+ 		ext_csd[words * 4 + 3] = (uint8_t)(value >> 24);
++		if (words == 0 || words == 15 || words == 127) {
++			unsigned int completed = words + 1;
++			printf("WHYRED EMMC: PIO progress words=%u last=0x%08x present=0x%08x int=0x%08x remaining=%u data_cnt=0x%08x fifo_cnt=0x%08x mci_status=0x%08x sdcc_debug=0x%08x\n",
++			    completed, value,
++			    whyred_emmc_read32(base, SDHCI_PRESENT_STATE),
++			    whyred_emmc_read32(base, SDHCI_INT_STATUS),
++			    (unsigned int)whyred_emmc_read16(base, SDHCI_BLOCK_COUNT),
++			    whyred_emmc_read32(base, SDHCI_CORE_MCI_DATA_COUNT),
++			    whyred_emmc_read32(base, SDHCI_CORE_MCI_FIFO_COUNT),
++			    whyred_emmc_read32(base, SDHCI_CORE_MCI_STATUS),
++			    whyred_emmc_read32(base, SDHCI_CORE_SDCC_DEBUG));
++		}
+ 	}
+ 	after_pio_status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
+ 	present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
+

@@ -1,0 +1,77 @@
+--- a/bsd/kern/kern_synch.c
++++ b/bsd/kern/kern_synch.c
+@@ -45,6 +45,11 @@
+ #include <kern/thread.h>
+ #include <kern/sched_prim.h>
+ #include <kern/ast.h>
++#include <kern/debug.h>
++
++#if defined(SWEET)
++extern volatile int whyred_select_probe_active;
++#endif
+ 
+ #include <kern/cpu_number.h>
+ #include <vm/vm_kern.h>
+@@ -173,6 +178,14 @@
+ 	ut = get_bsdthread_info(self);
+ 
+ 	p = current_proc();
++#if defined(SWEET)
++	if (whyred_select_probe_active && p->p_pid == 1) {
++		printf("WHYRED SLEEP: _sleep entered pri=%x chan=%p abstime=%llx cntvct=%llx ctl=%llx tval=%llx\n",
++		    pri, chan, abstime, __builtin_arm_rsr64("CNTVCT_EL0"),
++		    __builtin_arm_rsr64("CNTV_CTL_EL0"),
++		    __builtin_arm_rsr64("CNTV_TVAL_EL0"));
++	}
++#endif
+ 	p->p_priority = pri & PRIMASK;
+ 	/* It can still block in proc_exit() after the teardown. */
+ 	if (p->p_stats != NULL) {
+@@ -255,6 +268,15 @@
+ 
+ 
+ block:
++#if defined(SWEET)
++		if (whyred_select_probe_active && p->p_pid == 1) {
++			printf("WHYRED SLEEP: before thread_block pri=%x msg=%s cntvct=%llx ctl=%llx tval=%llx\n",
++			    pri, wmsg ? wmsg : "(null)",
++			    __builtin_arm_rsr64("CNTVCT_EL0"),
++			    __builtin_arm_rsr64("CNTV_CTL_EL0"),
++			    __builtin_arm_rsr64("CNTV_TVAL_EL0"));
++		}
++#endif
+ 		if (continuation != NULL) {
+ 			ut->uu_continuation = continuation;
+ 			ut->uu_pri  = (uint16_t)pri;
+--- a/osfmk/arm/arm_timer.c
++++ b/osfmk/arm/arm_timer.c
+@@ -40,6 +40,11 @@
+ #include <mach/mach_types.h>
+ 
+ #include <kern/clock.h>
++#include <kern/debug.h>
++
++#if defined(SWEET)
++extern volatile int whyred_select_probe_active;
++#endif
+ #include <kern/thread.h>
+ #include <kern/processor.h>
+ #include <kern/macro_help.h>
+@@ -211,6 +216,16 @@
+ {
+ 	cpu_data_t                              *cpu_data_ptr = getCpuDatap();
+ 	mpqueue_head_t          *queue;
++#if defined(SWEET)
++	static uint32_t whyred_queue_logs;
++	if (whyred_select_probe_active && whyred_queue_logs < 4) {
++		whyred_queue_logs++;
++		kprintf("WHYRED TIMER: assign running=%u new=%llx current=%llx rtcPop=%llx now=%llx cpu=%u\n",
++		    (unsigned)cpu_data_ptr->cpu_running, deadline,
++		    cpu_data_ptr->rtclock_timer.deadline, cpu_data_ptr->rtcPop,
++		    mach_absolute_time(), cpu_data_ptr->cpu_number);
++	}
++#endif
+ 
+ 	if (cpu_data_ptr->cpu_running) {
+ 		queue = &cpu_data_ptr->rtclock_timer.queue;
+

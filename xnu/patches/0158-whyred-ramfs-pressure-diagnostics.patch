@@ -1,0 +1,320 @@
+--- a/bsd/miscfs/whyred_ramfs/ramfs.c
++++ b/bsd/miscfs/whyred_ramfs/ramfs.c
+@@ -48,6 +48,10 @@
+ #include <uuid/uuid.h>
+ #include <vfs/vfs_support.h>
+ #include <vm/vm_kern.h>
++#include <pexpert/pexpert.h>
++
++/* Same VM sample globals used by kern_memorystatus_internal.h. */
++extern unsigned int vm_page_free_count, vm_page_wire_count;
+ 
+ #define RAMFS_MAX_NAME          255
+ #define RAMFS_MAX_XATTR         (1u * 1024 * 1024)
+@@ -112,6 +116,21 @@
+ #define RAMFS_N_CREATING        0x1         /* a thread is in vnode_create() for this node */
+ #define RAMFS_N_WANTED          0x2         /* somebody sleeps on the node */
+ 
++/* Sampled, default-off diagnostics; no paths, payloads or policy changes. */
++enum ramfs_pressure_reason {
++	RAMFS_PRESSURE_QUOTA, RAMFS_PRESSURE_PAGE, RAMFS_PRESSURE_SLOTS,
++	RAMFS_PRESSURE_GETXATTR, RAMFS_PRESSURE_LISTXATTR, RAMFS_PRESSURE_COUNT
++};
++struct ramfs_pressure_event {
++	bool valid;
++	enum ramfs_pressure_reason reason;
++	uint64_t seq, ino, off, length, pages, limit, peak, nodes, xattr_bytes;
++	uint64_t added, freed, reclaimed, hash_pages, unlinked_pages, unlinked_nodes;
++	uint64_t failures[RAMFS_PRESSURE_COUNT];
++	unsigned int vm_free, vm_wired;
++	kern_return_t allocation_error; /* meaningful only for a data-page failure */
++};
++
+ struct ramfs_mount {
+ 	mount_t             rm_mp;
+ 	lck_mtx_t           rm_lock;
+@@ -121,6 +140,11 @@
+ 	uint64_t            rm_pages;           /* file pages in use */
+ 	uint64_t            rm_max_pages;
+ 	uint64_t            rm_xattr_bytes;
++	bool                rm_trace;
++	unsigned int        rm_reports;
++	uint64_t            rm_failure_seq, rm_added, rm_freed, rm_reclaimed, rm_peak;
++	uint64_t            rm_failures[RAMFS_PRESSURE_COUNT];
++	struct ramfs_pressure_event rm_event;
+ 	struct ramfs_node **rm_hash;            /* every node by its number, for vfs_vget */
+ };
+ 
+@@ -135,6 +159,70 @@
+ static LCK_GRP_DECLARE(ramfs_lck_grp, "ramfs");
+ 
+ extern int(**ramfs_vnodeop_p)(void *);
++
++/* Called under rm_lock. Sampling and storage are bounded and allocation-free. */
++static void
++ramfs_pressure_record_locked(struct ramfs_node *node, enum ramfs_pressure_reason reason,
++    uint64_t off, uint64_t length)
++{
++	struct ramfs_mount *rm = node->rn_mount;
++	struct ramfs_pressure_event *e = &rm->rm_event;
++	if (!rm->rm_trace) return;
++	rm->rm_failures[reason]++;
++	uint64_t seq = ++rm->rm_failure_seq;
++	e->valid = false;
++	if (rm->rm_reports >= 32 || (seq > 16 && (seq & (seq - 1)) != 0)) return;
++	*e = (struct ramfs_pressure_event){ .valid = true, .reason = reason, .seq = seq,
++	    .ino = node->rn_ino, .off = off, .length = length, .pages = rm->rm_pages,
++	    .limit = rm->rm_max_pages, .peak = rm->rm_peak, .nodes = rm->rm_nodes,
++	    .xattr_bytes = rm->rm_xattr_bytes, .added = rm->rm_added, .freed = rm->rm_freed,
++	    .reclaimed = rm->rm_reclaimed };
++	memcpy(e->failures, rm->rm_failures, sizeof(e->failures));
++	/* The mount snapshot is coherent; global VM counts are approximate samples. */
++	e->vm_free = os_atomic_load(&vm_page_free_count, relaxed);
++	e->vm_wired = os_atomic_load(&vm_page_wire_count, relaxed);
++	for (unsigned int i = 0; i < RAMFS_HASH_SIZE; i++) {
++		for (struct ramfs_node *n = rm->rm_hash[i]; n != NULL; n = n->rn_hnext) {
++			e->hash_pages += n->rn_nalloc;
++			if (n->rn_nlink == 0) {
++				e->unlinked_pages += n->rn_nalloc;
++				e->unlinked_nodes++;
++			}
++		}
++	}
++	rm->rm_reports++;
++}
++
++/* Copy before releasing the same lock as the failed operation. */
++static void
++ramfs_pressure_take_locked(struct ramfs_mount *rm, struct ramfs_pressure_event *event)
++{
++	if (rm->rm_trace && rm->rm_event.valid) {
++		*event = rm->rm_event;
++		rm->rm_event.valid = false;
++	}
++}
++
++/* No mount lock, allocation, user copy, path lookup or vnode reference here. */
++static void
++ramfs_pressure_emit(const struct ramfs_pressure_event *e)
++{
++	static const char *const names[] = { "data-quota", "data-page", "slots-nowait",
++	    "getxattr-nowait", "listxattr-nowait" };
++	if (!e->valid) return;
++#define RP64(v) ((unsigned long long)(v))
++	printf("WHYRED RAMFS PRESSURE id=%llu cause=%s ino=%llu off=%llu length=%llu kr=%d\n",
++	    RP64(e->seq), names[e->reason], RP64(e->ino), RP64(e->off), RP64(e->length), e->allocation_error);
++	printf("WHYRED RAMFS PRESSURE id=%llu pages=%llu limit=%llu peak=%llu nodes=%llu xattr_bytes=%llu hash_pages=%llu unlinked_pages=%llu unlinked_nodes=%llu\n",
++	    RP64(e->seq), RP64(e->pages), RP64(e->limit), RP64(e->peak), RP64(e->nodes),
++	    RP64(e->xattr_bytes), RP64(e->hash_pages), RP64(e->unlinked_pages), RP64(e->unlinked_nodes));
++	printf("WHYRED RAMFS PRESSURE id=%llu added=%llu freed=%llu reclaimed=%llu vm_free_sample=%u vm_wired_sample=%u quota=%llu page=%llu slots=%llu getxattr=%llu listxattr=%llu\n",
++	    RP64(e->seq), RP64(e->added), RP64(e->freed), RP64(e->reclaimed), e->vm_free, e->vm_wired,
++	    RP64(e->failures[0]), RP64(e->failures[1]), RP64(e->failures[2]),
++	    RP64(e->failures[3]), RP64(e->failures[4]));
++#undef RP64
++}
++
+ 
+ /* ------------------------------------------------------------------------ */
+ /* Nodes                                                                    */
+@@ -201,13 +289,13 @@
+  * page-out path, which may be the pageout daemon looking for some).
+  */
+ static void *
+-ramfs_page_alloc(bool wait)
++ramfs_page_alloc(bool wait, kern_return_t *result)
+ {
+ 	vm_offset_t addr = 0;
+ 	kma_flags_t flags = KMA_KOBJECT | KMA_DATA | KMA_ZERO | (wait ? KMA_NONE : KMA_NOPAGEWAIT);
+ 
+-	return kmem_alloc(kernel_map, &addr, PAGE_SIZE, flags, VM_KERN_MEMORY_FILE) == KERN_SUCCESS ?
+-	       (void *)addr : NULL;
++	*result = kmem_alloc(kernel_map, &addr, PAGE_SIZE, flags, VM_KERN_MEMORY_FILE);
++	return *result == KERN_SUCCESS ? (void *)addr : NULL;
+ }
+ 
+ static void
+@@ -269,6 +357,7 @@
+ 			node->rn_pages[i] = NULL;
+ 			node->rn_nalloc--;
+ 			node->rn_mount->rm_pages--;
++			if (node->rn_mount->rm_trace) node->rn_mount->rm_freed++;
+ 			os_atomic_dec(&ramfs_pages_in_use, relaxed);
+ 		}
+ 	}
+@@ -491,6 +580,7 @@
+ 	}
+ 	slots = kalloc_type(void *, want, Z_NOWAIT | Z_ZERO);
+ 	if (slots == NULL) {
++		ramfs_pressure_record_locked(node, RAMFS_PRESSURE_SLOTS, index * PAGE_SIZE, want * sizeof(void *));
+ 		return ENOSPC;
+ 	}
+ 	if (node->rn_pages != NULL) {
+@@ -521,12 +611,18 @@
+ 	}
+ 	if (node->rn_pages[index] == NULL) {
+ 		if (*spare == NULL || rm->rm_pages >= rm->rm_max_pages) {
++			ramfs_pressure_record_locked(node, rm->rm_pages >= rm->rm_max_pages ?
++			    RAMFS_PRESSURE_QUOTA : RAMFS_PRESSURE_PAGE, off, len);
+ 			return ENOSPC;
+ 		}
+ 		node->rn_pages[index] = *spare;
+ 		*spare = NULL;
+ 		node->rn_nalloc++;
+ 		rm->rm_pages++;
++		if (rm->rm_trace) {
++			rm->rm_added++;
++			if (rm->rm_pages > rm->rm_peak) rm->rm_peak = rm->rm_pages;
++		}
+ 		os_atomic_inc(&ramfs_pages_in_use, relaxed);
+ 	}
+ 	memcpy((char *)node->rn_pages[index] + (off & PAGE_MASK), src, len);
+@@ -1173,6 +1269,8 @@
+ 	void *spare = NULL;
+ 	char *bounce;
+ 	uint64_t start, old_size;
++	kern_return_t page_error = KERN_SUCCESS;
++	struct ramfs_pressure_event pressure = {0};
+ 	int error = 0;
+ 
+ 	if (node->rn_type == VDIR) {
+@@ -1206,11 +1304,12 @@
+ 			break;
+ 		}
+ 		if (spare == NULL) {
+-			spare = ramfs_page_alloc(true);
++			spare = ramfs_page_alloc(true, &page_error);
+ 		}
+ 		ramfs_reserve_slots(rm, node, off / PAGE_SIZE);
+ 		lck_mtx_lock(&rm->rm_lock);
+ 		error = ramfs_store(node, off, bounce, len, &spare);
++		if (error == ENOSPC) ramfs_pressure_take_locked(rm, &pressure);
+ 		lck_mtx_unlock(&rm->rm_lock);
+ 		if (error) {
+ 			/* nothing of this piece was stored: hand it back to the caller's count */
+@@ -1219,6 +1318,8 @@
+ 			break;
+ 		}
+ 	}
++	if (pressure.valid && pressure.reason == RAMFS_PRESSURE_PAGE) pressure.allocation_error = page_error;
++	ramfs_pressure_emit(&pressure);
+ 	kfree_data(bounce, PAGE_SIZE);
+ 	if (spare != NULL) {
+ 		ramfs_page_free(spare);
+@@ -1385,6 +1486,7 @@
+ 	node->rn_vp = NULLVP;
+ 	node->rn_vid = 0;
+ 	if (node->rn_nlink == 0 && node != rm->rm_root) {
++		if (rm->rm_trace) rm->rm_reclaimed++;
+ 		ramfs_node_free(node);
+ 	}
+ 	lck_mtx_unlock(&rm->rm_lock);
+@@ -1499,6 +1601,8 @@
+ 	bool commit = (ap->a_flags & UPL_NOCOMMIT) == 0;
+ 	vm_offset_t addr;
+ 	int error = 0;
++	kern_return_t page_error = KERN_SUCCESS;
++	struct ramfs_pressure_event pressure = {0};
+ 
+ 	if (upl == NULL) {
+ 		return EINVAL;
+@@ -1517,7 +1621,7 @@
+ 		size_t len = (size_t)MIN((uint64_t)PAGE_SIZE, node->rn_size - (off + done));
+ 		uint64_t index = (off + done) / PAGE_SIZE;
+ 		/* this may be the pageout daemon looking for memory: never wait for more of it here */
+-		void *spare = index < node->rn_nslots && node->rn_pages[index] != NULL ? NULL : ramfs_page_alloc(false);
++		void *spare = index < node->rn_nslots && node->rn_pages[index] != NULL ? NULL : ramfs_page_alloc(false, &page_error);
+ 
+ 		error = ramfs_store(node, off + done, (const void *)(addr + done), len, &spare);
+ 		if (spare != NULL) {
+@@ -1526,8 +1630,12 @@
+ 	}
+ 	if (!error) {
+ 		ramfs_touch(node, true);
++	} else if (error == ENOSPC) {
++		ramfs_pressure_take_locked(rm, &pressure);
+ 	}
+ 	lck_mtx_unlock(&rm->rm_lock);
++	if (pressure.valid && pressure.reason == RAMFS_PRESSURE_PAGE) pressure.allocation_error = page_error;
++	ramfs_pressure_emit(&pressure);
+ 	ubc_upl_unmap(upl);
+ 
+ 	if (commit) {
+@@ -1566,6 +1674,7 @@
+ 	void *copy = NULL;
+ 	size_t size = 0;
+ 	int error = 0;
++	struct ramfs_pressure_event pressure = {0};
+ 
+ 	lck_mtx_lock(&rm->rm_lock);
+ 	xa = ramfs_xattr_find(node, ap->a_name);
+@@ -1580,6 +1689,8 @@
+ 				/* copied out after the lock is dropped: the attribute may be replaced meanwhile */
+ 				copy = kalloc_data(size, Z_NOWAIT);
+ 				if (copy == NULL) {
++					ramfs_pressure_record_locked(node, RAMFS_PRESSURE_GETXATTR, 0, size);
++					ramfs_pressure_take_locked(rm, &pressure);
+ 					error = ENOMEM;
+ 				} else {
+ 					memcpy(copy, xa->rx_data, size);
+@@ -1588,6 +1699,7 @@
+ 		}
+ 	}
+ 	lck_mtx_unlock(&rm->rm_lock);
++	ramfs_pressure_emit(&pressure);
+ 
+ 	if (!error) {
+ 		if (ap->a_uio == NULL) {
+@@ -1697,6 +1809,7 @@
+ 	char *copy = NULL;
+ 	size_t total = 0, at = 0;
+ 	int error = 0;
++	struct ramfs_pressure_event pressure = {0};
+ 
+ 	lck_mtx_lock(&rm->rm_lock);
+ 	TAILQ_FOREACH(xa, &node->rn_xattrs, rx_link) {
+@@ -1706,6 +1819,8 @@
+ 		if ((size_t)uio_resid(ap->a_uio) < total) {
+ 			error = ERANGE;
+ 		} else if ((copy = kalloc_data(total, Z_NOWAIT)) == NULL) {
++			ramfs_pressure_record_locked(node, RAMFS_PRESSURE_LISTXATTR, 0, total);
++			ramfs_pressure_take_locked(rm, &pressure);
+ 			error = ENOMEM;
+ 		} else {
+ 			TAILQ_FOREACH(xa, &node->rn_xattrs, rx_link) {
+@@ -1715,6 +1830,7 @@
+ 		}
+ 	}
+ 	lck_mtx_unlock(&rm->rm_lock);
++	ramfs_pressure_emit(&pressure);
+ 
+ 	if (!error) {
+ 		if (ap->a_uio == NULL) {
+@@ -1840,11 +1956,16 @@
+     ramfs_dir_add(parent, de, node);
+     lck_mtx_unlock(&rm->rm_lock);
+     if (s->type == VREG && s->size) {
+-        void *spare = ramfs_page_alloc(true);
++        kern_return_t page_error = KERN_SUCCESS;
++        struct ramfs_pressure_event pressure = {0};
++        void *spare = ramfs_page_alloc(true, &page_error);
+         ramfs_reserve_slots(rm, node, 0);
+         lck_mtx_lock(&rm->rm_lock);
+         error = ramfs_store(node, 0, s->data, s->size, &spare);
++        if (error == ENOSPC) ramfs_pressure_take_locked(rm, &pressure);
+         lck_mtx_unlock(&rm->rm_lock);
++        if (pressure.valid && pressure.reason == RAMFS_PRESSURE_PAGE) pressure.allocation_error = page_error;
++        ramfs_pressure_emit(&pressure);
+         if (spare) ramfs_page_free(spare);
+     }
+     return error;
+@@ -1877,6 +1998,10 @@
+ 	lck_mtx_init(&rm->rm_lock, &ramfs_lck_grp, LCK_ATTR_NULL);
+ 	rm->rm_mp = mp;
+ 	rm->rm_next_ino = RAMFS_ROOT_INO + 1;
++#if DEVELOPMENT || DEBUG
++	uint32_t trace = 0;
++	rm->rm_trace = PE_parse_boot_argn("whyred-ramfs-trace", &trace, sizeof(trace)) && trace == 1;
++#endif
+ 	/* a runaway writer must not be able to take the whole machine: a quarter of memory at most */
+ 	rm->rm_max_pages = MIN(max_mem / 4, WHYRED_RAMFS_DATA_LIMIT) / PAGE_SIZE;
+ 

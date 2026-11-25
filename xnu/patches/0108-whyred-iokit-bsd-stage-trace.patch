@@ -1,0 +1,98 @@
+--- a/pexpert/arm/pe_init.c
++++ b/pexpert/arm/pe_init.c
+@@ -379,8 +379,17 @@
+ 	 * against a kernel which has not yet enabled the full set of available
+ 	 * hardware protections.
+ 	 */
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: IOKIT lockdown begin\n");
++#endif
+ 	zalloc_iokit_lockdown();
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: IOKIT before matching\n");
++#endif
+ 	StartIOKitMatching();
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: IOKIT matching returned\n");
++#endif
+ }
+ 
+ void
+--- a/osfmk/kern/startup.c
++++ b/osfmk/kern/startup.c
+@@ -771,6 +771,9 @@
+ #ifdef  IOKIT
+ 	kernel_bootstrap_log("PE_lockdown_iokit");
+ 	PE_lockdown_iokit();
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: PE_lockdown_iokit returned\n");
++#endif
+ #endif
+ 	/*
+ 	 * max_cpus must be nailed down by the time PE_lockdown_iokit() finishes,
+@@ -787,7 +790,13 @@
+ 	 *	Start the user bootstrap.
+ 	 */
+ #ifdef  MACH_BSD
++	#if defined(SWEET)
++	kprintf("WHYRED_STAGE: before bsd_init\n");
++#endif
+ 	bsd_init();
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: bsd_init returned\n");
++#endif
+ #endif
+ 
+ 
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -685,8 +685,17 @@
+ 	 * Initialize the calendar.
+ 	 */
+ 	bsd_init_kprintf("calling IOKitInitializeTime\n");
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD before IOKitInitializeTime\n");
++#endif
+ 	IOKitInitializeTime();
+-
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD IOKitInitializeTime returned\n");
++#endif
++
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD before vfsinit\n");
++#endif
+ 	/* Initialize the file systems. */
+ 	bsd_init_kprintf("calling vfsinit\n");
+ 	vfsinit();
+@@ -798,7 +807,13 @@
+ 	sysctl_mib_init();
+ 
+ 	bsd_init_kprintf("calling bsd_autoconf\n");
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD before autoconf\n");
++#endif
+ 	bsd_autoconf();
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD autoconf returned\n");
++#endif
+ 
+ #if CONFIG_DTRACE
+ 	dtrace_postinit();
+--- a/iokit/Kernel/IOStartIOKit.cpp
++++ b/iokit/Kernel/IOStartIOKit.cpp
+@@ -182,7 +182,13 @@
+ {
+ 	SOCD_TRACE_XNU(START_IOKIT);
+ 	assert(gRootNub != NULL);
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: matching before startIOServiceMatching\n");
++#endif
+ 	bool ok = gRootNub->startIOServiceMatching();
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: matching startIOServiceMatching returned\n");
++#endif
+ 	if (__improbable(!ok)) {
+ 		panic("Failed to start IOService matching");
+ 	}
+

@@ -1,0 +1,166 @@
+--- a/bsd/miscfs/whyred_ramfs/ramfs.c
++++ b/bsd/miscfs/whyred_ramfs/ramfs.c
+@@ -116,7 +116,7 @@
+ #define RAMFS_N_CREATING        0x1         /* a thread is in vnode_create() for this node */
+ #define RAMFS_N_WANTED          0x2         /* somebody sleeps on the node */
+ 
+-/* Sampled, default-off diagnostics; no paths, payloads or policy changes. */
++/* Sampled, default-off diagnostics; optional bounded names, no file payloads/policy changes. */
+ enum ramfs_pressure_reason {
+ 	RAMFS_PRESSURE_QUOTA, RAMFS_PRESSURE_PAGE, RAMFS_PRESSURE_SLOTS,
+ 	RAMFS_PRESSURE_GETXATTR, RAMFS_PRESSURE_LISTXATTR, RAMFS_PRESSURE_COUNT
+@@ -129,6 +129,14 @@
+ 	uint64_t failures[RAMFS_PRESSURE_COUNT];
+ 	unsigned int vm_free, vm_wired;
+ 	kern_return_t allocation_error; /* meaningful only for a data-page failure */
++	bool top_enabled, names_limited;
++	uint32_t top_count, name_entries;
++	struct {
++		uint64_t ino, pages, size, parent;
++		uint32_t nlink, uid;
++		bool mapped_write, name_truncated, dir_truncated;
++		char name[48], directory[32];
++	} top[4];
+ };
+ 
+ struct ramfs_mount {
+@@ -140,7 +148,7 @@
+ 	uint64_t            rm_pages;           /* file pages in use */
+ 	uint64_t            rm_max_pages;
+ 	uint64_t            rm_xattr_bytes;
+-	bool                rm_trace;
++	bool                rm_trace, rm_trace_top;
+ 	unsigned int        rm_reports;
+ 	uint64_t            rm_failure_seq, rm_added, rm_freed, rm_reclaimed, rm_peak;
+ 	uint64_t            rm_failures[RAMFS_PRESSURE_COUNT];
+@@ -159,6 +167,19 @@
+ static LCK_GRP_DECLARE(ramfs_lck_grp, "ramfs");
+ 
+ extern int(**ramfs_vnodeop_p)(void *);
++
++/* Diagnostic names only: bounded printable ASCII, never file content. */
++static void
++ramfs_pressure_name(char *dst, size_t capacity, const char *src, size_t length)
++{
++	if (!capacity) return;
++	size_t i;
++	for (i = 0; i < length && i + 1 < capacity; i++) {
++		unsigned char c = (unsigned char)src[i];
++		dst[i] = c >= 0x20 && c <= 0x7e && c != '"' && c != '\\' ? (char)c : '?';
++	}
++	dst[i] = 0;
++}
+ 
+ /* Called under rm_lock. Sampling and storage are bounded and allocation-free. */
+ static void
+@@ -176,7 +197,8 @@
+ 	    .ino = node->rn_ino, .off = off, .length = length, .pages = rm->rm_pages,
+ 	    .limit = rm->rm_max_pages, .peak = rm->rm_peak, .nodes = rm->rm_nodes,
+ 	    .xattr_bytes = rm->rm_xattr_bytes, .added = rm->rm_added, .freed = rm->rm_freed,
+-	    .reclaimed = rm->rm_reclaimed };
++	    .reclaimed = rm->rm_reclaimed,
++	    .top_enabled = rm->rm_trace_top && reason == RAMFS_PRESSURE_QUOTA };
+ 	memcpy(e->failures, rm->rm_failures, sizeof(e->failures));
+ 	/* The mount snapshot is coherent; global VM counts are approximate samples. */
+ 	e->vm_free = os_atomic_load(&vm_page_free_count, relaxed);
+@@ -184,9 +206,73 @@
+ 	for (unsigned int i = 0; i < RAMFS_HASH_SIZE; i++) {
+ 		for (struct ramfs_node *n = rm->rm_hash[i]; n != NULL; n = n->rn_hnext) {
+ 			e->hash_pages += n->rn_nalloc;
++			if (e->top_enabled && n->rn_nalloc) {
++				unsigned int rank, capacity = sizeof(e->top) / sizeof(e->top[0]);
++				for (rank = 0; rank < capacity; rank++) {
++					if (n->rn_nalloc > e->top[rank].pages ||
++					    (n->rn_nalloc == e->top[rank].pages && n->rn_ino < e->top[rank].ino)) break;
++				}
++				if (rank < capacity) {
++					for (unsigned int j = capacity - 1; j > rank; j--) e->top[j] = e->top[j - 1];
++					bzero(&e->top[rank], sizeof(e->top[rank]));
++					e->top[rank].ino = n->rn_ino;
++					e->top[rank].pages = n->rn_nalloc;
++					e->top[rank].size = n->rn_size;
++					e->top[rank].nlink = n->rn_nlink;
++					e->top[rank].uid = n->rn_uid;
++					e->top[rank].mapped_write = n->rn_mapped_write;
++					if (e->top_count < capacity) e->top_count++;
++				}
++			}
+ 			if (n->rn_nlink == 0) {
+ 				e->unlinked_pages += n->rn_nalloc;
+ 				e->unlinked_nodes++;
++			}
++		}
++	}
++	if (e->top_enabled) {
++		/* One alias per linked owner. No VFS lookup, allocation or pointer escape.
++		 * Directory entries (including parent-name resolution) have one shared
++		 * 65536-entry budget; even hard-link-heavy namespaces cannot extend it.
++		 */
++		struct ramfs_node *parents[4] = {0};
++		unsigned int wanted = 0;
++		for (unsigned int k = 0; k < e->top_count; k++) if (e->top[k].nlink) wanted++;
++		for (unsigned int i = 0; i < RAMFS_HASH_SIZE && wanted; i++) {
++			for (struct ramfs_node *dir = rm->rm_hash[i]; dir && wanted; dir = dir->rn_hnext) {
++				if (dir->rn_type != VDIR) continue;
++				struct ramfs_dirent *de;
++				TAILQ_FOREACH(de, &dir->rn_entries, rd_link) {
++					if (e->name_entries == 65536u) { e->names_limited = true; goto owners_named; }
++					e->name_entries++;
++					for (unsigned int k = 0; k < e->top_count; k++) {
++						if (e->top[k].nlink && !parents[k] && de->rd_node->rn_ino == e->top[k].ino) {
++							parents[k] = dir;
++							e->top[k].parent = dir->rn_ino;
++							e->top[k].name_truncated = de->rd_namelen >= sizeof(e->top[k].name);
++							ramfs_pressure_name(e->top[k].name, sizeof(e->top[k].name), de->rd_name, de->rd_namelen);
++							wanted--;
++						}
++					}
++					if (!wanted) break;
++				}
++			}
++		}
++owners_named:
++		for (unsigned int k = 0; k < e->top_count; k++) {
++			struct ramfs_node *dir = parents[k];
++			if (!dir) continue;
++			if (dir == rm->rm_root) { e->top[k].directory[0] = '/'; continue; }
++			if (!dir->rn_parent) continue;
++			struct ramfs_dirent *de;
++			TAILQ_FOREACH(de, &dir->rn_parent->rn_entries, rd_link) {
++				if (e->name_entries == 65536u) { e->names_limited = true; break; }
++				e->name_entries++;
++				if (de->rd_node == dir) {
++					e->top[k].dir_truncated = de->rd_namelen >= sizeof(e->top[k].directory);
++					ramfs_pressure_name(e->top[k].directory, sizeof(e->top[k].directory), de->rd_name, de->rd_namelen);
++					break;
++				}
+ 			}
+ 		}
+ 	}
+@@ -220,6 +306,17 @@
+ 	    RP64(e->seq), RP64(e->added), RP64(e->freed), RP64(e->reclaimed), e->vm_free, e->vm_wired,
+ 	    RP64(e->failures[0]), RP64(e->failures[1]), RP64(e->failures[2]),
+ 	    RP64(e->failures[3]), RP64(e->failures[4]));
++	if (e->top_enabled) {
++		printf("WHYRED RAMFS TOP id=%llu selected=%u name_entries=%u names_limited=%u\n",
++		    RP64(e->seq), e->top_count, e->name_entries, (unsigned int)e->names_limited);
++		for (unsigned int k = 0; k < e->top_count; k++) {
++			printf("WHYRED RAMFS TOP id=%llu rank=%u ino=%llu pages=%llu size=%llu nlink=%u uid=%u mapped=%u parent=%llu name_trunc=%u dir_trunc=%u dir=\"%s\" name=\"%s\"\n",
++			    RP64(e->seq), k, RP64(e->top[k].ino), RP64(e->top[k].pages), RP64(e->top[k].size),
++			    e->top[k].nlink, e->top[k].uid, (unsigned int)e->top[k].mapped_write, RP64(e->top[k].parent),
++			    (unsigned int)e->top[k].name_truncated, (unsigned int)e->top[k].dir_truncated,
++			    e->top[k].directory, e->top[k].name);
++		}
++	}
+ #undef RP64
+ }
+ 
+@@ -2001,6 +2098,8 @@
+ #if DEVELOPMENT || DEBUG
+ 	uint32_t trace = 0;
+ 	rm->rm_trace = PE_parse_boot_argn("whyred-ramfs-trace", &trace, sizeof(trace)) && trace == 1;
++	uint32_t top = 0;
++	rm->rm_trace_top = rm->rm_trace && PE_parse_boot_argn("whyred-ramfs-top", &top, sizeof(top)) && top == 1;
+ #endif
+ 	/* a runaway writer must not be able to take the whole machine: a quarter of memory at most */
+ 	rm->rm_max_pages = MIN(max_mem / 4, WHYRED_RAMFS_DATA_LIMIT) / PAGE_SIZE;

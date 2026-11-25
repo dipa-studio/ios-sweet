@@ -1,0 +1,93 @@
+diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
+--- a/osfmk/arm64/sweet_early.c
++++ b/osfmk/arm64/sweet_early.c
+@@ -10,6 +10,11 @@
+ #if defined(SWEET)
+ #include <stdint.h>
+ #include <kern/misc_protos.h>
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <pexpert/pexpert.h>
++#include "whyred_splash.h"
++#include "whyred_splash_image.h"
++#endif
+ 
+ 
+ #if defined(WHYRED_UARTDM)
+@@ -204,12 +209,45 @@
+ 	__asm__ volatile("dsb sy" ::: "memory");
+ }
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++static void
++whyred_early_splash(void)
++{
++	uint32_t enabled = 0;
++	if (!PE_parse_boot_argn("whyred-splash", &enabled, sizeof(enabled)) || enabled != 1 ||
++	    WHYRED_SPLASH_WIDTH != EARLY_WIDTH || WHYRED_SPLASH_HEIGHT != EARLY_HEIGHT) return;
++	if (!whyred_splash_draw(EARLY_FB, (uint64_t)EARLY_STRIDE * EARLY_HEIGHT * 4,
++	    EARLY_WIDTH, EARLY_HEIGHT, EARLY_STRIDE, whyred_splash_rgb565,
++	    sizeof(whyred_splash_rgb565) / sizeof(whyred_splash_rgb565[0]))) return;
++	__asm__ volatile("dsb sy" ::: "memory");
++#if defined(WHYRED_UARTDM)
++	whyred_boot_uart_string("\r\nWHYRED SPLASH: meimei begin (3s)\r\n");
++#endif
++	uint64_t frequency = __builtin_arm_rsr64("CNTFRQ_EL0");
++	uint64_t start = __builtin_arm_rsr64("CNTVCT_EL0");
++	while (whyred_splash_waiting(start, __builtin_arm_rsr64("CNTVCT_EL0"), frequency)) {
++		__asm__ volatile("isb" ::: "memory");
++	}
++	for (unsigned int y = 0; y < EARLY_HEIGHT; y++)
++		for (unsigned int x = 0; x < EARLY_WIDTH; x++) EARLY_FB[y * EARLY_STRIDE + x] = 0xff000000U;
++	early_row = early_col = early_started = 0;
++	__asm__ volatile("dsb sy" ::: "memory");
++#if defined(WHYRED_UARTDM)
++	whyred_boot_uart_string("\r\nWHYRED SPLASH: meimei end\r\n");
++#endif
++}
++#endif
++
+ void
+ sweet_early_relocate(uint64_t base)
+ {
+ 	sweet_early_mark(8, "leaving bootstrap TTBR0");
+ 	early_fb = (volatile uint32_t *)(uintptr_t)base;
+ 	__asm__ volatile("dsb sy" ::: "memory");
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	/* The final TTBR1 framebuffer alias is live; no userspace has started. */
++	whyred_early_splash();
++#endif
+ 	sweet_early_mark(9, "kernel framebuffer VA live");
+ #if defined(WHYRED_UARTDM)
+  /* TTBR0 is about to be removed; the regular UART uses its own ml_io_map. */
+diff --git a/osfmk/arm64/whyred_splash.h b/osfmk/arm64/whyred_splash.h
+new file mode 100644
+--- /dev/null
++++ b/osfmk/arm64/whyred_splash.h
+@@ -0,0 +1,27 @@
++/* Bounded RGB565 to the whyred framebuffer's native 0xAARRGGBB pixels. */
++#ifndef WHYRED_SPLASH_H
++#define WHYRED_SPLASH_H
++static inline int
++whyred_splash_draw(volatile uint32_t *fb, uint64_t fb_bytes, uint32_t width,
++    uint32_t height, uint32_t stride_pixels, const uint16_t *source,
++    uint64_t source_pixels)
++{
++	if (fb == 0 || source == 0 || width == 0 || height == 0 || stride_pixels < width ||
++	    (uint64_t)width * height > source_pixels ||
++	    ((uint64_t)(height - 1) * stride_pixels + width) > fb_bytes / 4) return 0;
++	for (uint32_t y = 0; y < height; y++) {
++		for (uint32_t x = 0; x < width; x++) {
++			uint32_t p = source[(uint64_t)y * width + x];
++			uint32_t r = (p >> 11) & 31U, g = (p >> 5) & 63U, b = p & 31U;
++			r = (r << 3) | (r >> 2); g = (g << 2) | (g >> 4); b = (b << 3) | (b >> 2);
++			fb[(uint64_t)y * stride_pixels + x] = 0xff000000U | (r << 16) | (g << 8) | b;
++		}
++	}
++	return 1;
++}
++static inline int
++whyred_splash_waiting(uint64_t start, uint64_t now, uint64_t frequency)
++{
++	return frequency != 0 && frequency <= 1000000000ULL && now - start < frequency * 3;
++}
++#endif

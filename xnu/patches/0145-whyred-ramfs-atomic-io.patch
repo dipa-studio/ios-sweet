@@ -1,0 +1,397 @@
+--- a/bsd/miscfs/whyred_ramfs/ramfs.c
++++ b/bsd/miscfs/whyred_ramfs/ramfs.c
+@@ -860,90 +860,121 @@
+ 	return error;
+ }
+ 
+-static int
+-ramfs_rename(struct vnop_rename_args *ap)
+-{
+-	struct ramfs_node *fdir = RAMFS_NODE(ap->a_fdvp);
+-	struct ramfs_node *tdir = RAMFS_NODE(ap->a_tdvp);
+-	struct ramfs_node *node = RAMFS_NODE(ap->a_fvp);
++/* Both name changes occur under the mount mutex. Open descriptors keep their nodes. */
++static bool
++ramfs_rename_cycle(struct ramfs_node *node, struct ramfs_node *parent)
++{
++	if (node->rn_type != VDIR) return false;
++	for (uint64_t depth = 0; parent != NULL; depth++) {
++		if (parent == node || depth >= WHYRED_RAMFS_MAX_NODES) return true;
++		if (parent == parent->rn_mount->rm_root) return false;
++		parent = parent->rn_parent;
++	}
++	return false;
++}
++
++static int
++ramfs_rename_common(vnode_t fdvp, vnode_t fvp, struct componentname *fcnp,
++    vnode_t tdvp, vnode_t tvp, struct componentname *tcnp, vfs_rename_flags_t flags)
++{
++	struct ramfs_node *fdir = RAMFS_NODE(fdvp), *tdir = RAMFS_NODE(tdvp);
++	struct ramfs_node *node = RAMFS_NODE(fvp), *victim = tvp ? RAMFS_NODE(tvp) : NULL;
+ 	struct ramfs_mount *rm = node->rn_mount;
+-	struct componentname *fcnp = ap->a_fcnp, *tcnp = ap->a_tcnp;
+-	struct ramfs_dirent *fde, *tde, *spare;
++	struct ramfs_dirent *fde, *tde, *spare = NULL;
++	bool swap = (flags & VFS_RENAME_SWAP) != 0, changed = false;
+ 	int error = 0;
+ 
+-	if (tcnp->cn_namelen > RAMFS_MAX_NAME) {
++	if (flags & ~(VFS_RENAME_SWAP | VFS_RENAME_EXCL)) return ENOTSUP;
++	if (swap && (flags & VFS_RENAME_EXCL)) return EINVAL;
++	if (fdir->rn_mount != rm || tdir->rn_mount != rm ||
++	    (victim && victim->rn_mount != rm)) return EXDEV;
++	if (fcnp->cn_namelen <= 0 || tcnp->cn_namelen <= 0) return EINVAL;
++	if (fcnp->cn_namelen > RAMFS_MAX_NAME || tcnp->cn_namelen > RAMFS_MAX_NAME)
+ 		return ENAMETOOLONG;
+-	}
+-	spare = ramfs_dirent_alloc(tcnp->cn_nameptr, (size_t)tcnp->cn_namelen);
++	if (!swap) spare = ramfs_dirent_alloc(tcnp->cn_nameptr, (size_t)tcnp->cn_namelen);
+ 
+ 	lck_mtx_lock(&rm->rm_lock);
+ 	fde = ramfs_dir_find(fdir, fcnp->cn_nameptr, (size_t)fcnp->cn_namelen);
+ 	tde = ramfs_dir_find(tdir, tcnp->cn_nameptr, (size_t)tcnp->cn_namelen);
+-
+-	if (fde == NULL || fde->rd_node != node || tdir->rn_nlink == 0) {
++	/* Revalidate both namei results after acquiring the filesystem lock. */
++	if (!fde || fde->rd_node != node || !fdir->rn_nlink || !tdir->rn_nlink ||
++	    (tde ? tde->rd_node : NULL) != victim) {
+ 		error = ENOENT;
+ 		goto out;
+ 	}
+-	if (node->rn_type == VDIR) {
+-		/* a directory cannot move into itself or below itself */
+-		for (struct ramfs_node *up = tdir; up != NULL; up = (up == rm->rm_root) ? NULL : up->rn_parent) {
+-			if (up == node) {
+-				error = EINVAL;
+-				goto out;
++	if ((flags & VFS_RENAME_EXCL) && tde) { error = EEXIST; goto out; }
++	if (swap && !tde) { error = ENOENT; goto out; }
++	if (node == victim) goto out; /* same path or two hard links: no identity change */
++	if (node == rm->rm_root || (victim && victim == rm->rm_root)) {
++		error = EBUSY;
++		goto out;
++	}
++	if (ramfs_rename_cycle(node, tdir) || (swap && ramfs_rename_cycle(victim, fdir))) {
++		error = EINVAL;
++		goto out;
++	}
++	if (swap) {
++		fde->rd_node = victim;
++		tde->rd_node = node;
++		if (fdir != tdir) {
++			if (node->rn_type == VDIR) {
++				fdir->rn_nlink--; tdir->rn_nlink++; node->rn_parent = tdir;
+ 			}
+-		}
+-	}
+-	if (tde != NULL && tde->rd_node == node) {
+-		/* two names of the same file: POSIX wants the rename to do nothing */
+-		goto out;
+-	}
+-
+-	if (tde != NULL) {
+-		struct ramfs_node *victim = tde->rd_node;
+-
+-		if (victim->rn_type == VDIR) {
+-			if (node->rn_type != VDIR) {
+-				error = EISDIR;
+-			} else if (victim->rn_nentries != 0) {
+-				error = ENOTEMPTY;
++			if (victim->rn_type == VDIR) {
++				tdir->rn_nlink--; fdir->rn_nlink++; victim->rn_parent = fdir;
+ 			}
+-		} else if (node->rn_type == VDIR) {
+-			error = ENOTDIR;
+-		}
+-		if (error) {
+-			goto out;
+-		}
+-		if (victim->rn_type == VDIR) {
+-			victim->rn_nlink = 0;
+-			victim->rn_parent = NULL;
+-			tdir->rn_nlink--;
++		}
++		ramfs_touch(fdir, true);
++		if (tdir != fdir) ramfs_touch(tdir, true);
++		ramfs_touch(victim, false);
++	} else {
++		if (victim) {
++			if (victim->rn_type == VDIR) {
++				if (node->rn_type != VDIR) error = EISDIR;
++				else if (victim->rn_nentries) error = ENOTEMPTY;
++			} else if (node->rn_type == VDIR) error = ENOTDIR;
++			if (error) goto out;
++			if (victim->rn_type == VDIR) {
++				victim->rn_nlink = 0; victim->rn_parent = NULL; tdir->rn_nlink--;
++			} else victim->rn_nlink--;
++			ramfs_touch(victim, false);
++			tde->rd_node = node;
++			ramfs_touch(tdir, true);
+ 		} else {
+-			victim->rn_nlink--;
+-			ramfs_touch(victim, false);
+-		}
+-		tde->rd_node = node;
+-		ramfs_touch(tdir, true);
+-	} else {
+-		ramfs_dir_add(tdir, spare, node);
+-		spare = NULL;
+-	}
+-	ramfs_dir_remove(fdir, fde);
+-	if (node->rn_type == VDIR && fdir != tdir) {
+-		fdir->rn_nlink--;
+-		tdir->rn_nlink++;
+-		node->rn_parent = tdir;
++			ramfs_dir_add(tdir, spare, node);
++			spare = NULL;
++		}
++		ramfs_dir_remove(fdir, fde);
++		if (node->rn_type == VDIR && fdir != tdir) {
++			fdir->rn_nlink--; tdir->rn_nlink++; node->rn_parent = tdir;
++		}
+ 	}
+ 	ramfs_touch(node, false);
++	changed = true;
+ out:
+ 	lck_mtx_unlock(&rm->rm_lock);
+-	if (spare != NULL) {
+-		ramfs_dirent_free(spare);
+-	}
+-	if (!error) {
+-		vnode_update_identity(ap->a_fvp, ap->a_tdvp, tcnp->cn_nameptr, tcnp->cn_namelen, tcnp->cn_hash,
+-		    VNODE_UPDATE_PARENT | VNODE_UPDATE_NAME);
++	if (spare) ramfs_dirent_free(spare);
++	if (changed) {
++		vnode_update_identity(fvp, tdvp, tcnp->cn_nameptr, tcnp->cn_namelen, tcnp->cn_hash,
++		    VNODE_UPDATE_PARENT | VNODE_UPDATE_NAME | VNODE_UPDATE_CACHE);
++		if (swap) vnode_update_identity(tvp, fdvp, fcnp->cn_nameptr, fcnp->cn_namelen, fcnp->cn_hash,
++		    VNODE_UPDATE_PARENT | VNODE_UPDATE_NAME | VNODE_UPDATE_CACHE);
+ 	}
+ 	return error;
++}
++
++static int
++ramfs_rename(struct vnop_rename_args *ap)
++{
++	return ramfs_rename_common(ap->a_fdvp, ap->a_fvp, ap->a_fcnp,
++	    ap->a_tdvp, ap->a_tvp, ap->a_tcnp, 0);
++}
++
++static int
++ramfs_renamex(struct vnop_renamex_args *ap)
++{
++	return ramfs_rename_common(ap->a_fdvp, ap->a_fvp, ap->a_fcnp,
++	    ap->a_tdvp, ap->a_tvp, ap->a_tcnp, ap->a_flags);
+ }
+ 
+ static int
+@@ -1206,88 +1237,79 @@
+ 	return error;
+ }
+ 
+-/* Classic 32-bit-inode directory entries; the offset is a byte count of the entries before it. */
++/* Darwin's getdirentries64 requires struct direntry, not the legacy dirent ABI. */
+ static int
+ ramfs_readdir(struct vnop_readdir_args *ap)
+ {
+-#define RAMFS_DIRSIZ(namlen)    ((sizeof(struct dirent) - (MAXNAMLEN + 1)) + (((namlen) + 1 + 3) & ~3))
+-	vnode_t vp = ap->a_vp;
+ 	struct uio *uio = ap->a_uio;
+-	struct ramfs_node *dir = RAMFS_NODE(vp);
++	struct ramfs_node *dir = RAMFS_NODE(ap->a_vp);
+ 	struct ramfs_mount *rm = dir->rn_mount;
+ 	struct ramfs_dirent *de;
+ 	off_t start = uio_offset(uio), pos = 0;
+-	size_t room = (size_t)MIN((user_ssize_t)PAGE_SIZE, uio_resid(uio));
+-	size_t used = 0;
+-	uint32_t entry = 0;
+-	bool eof = false;
+-	int count = 0, error;
++	bool extended = (ap->a_flags & VNODE_READDIR_EXTENDED) != 0, eof = false;
++	size_t room, used = 0;
++	int count = 0, error = 0;
+ 	char *buf;
+ 
+-	if (ap->a_flags & (VNODE_READDIR_EXTENDED | VNODE_READDIR_REQSEEKOFF)) {
+-		return EINVAL;
+-	}
+-	if (dir->rn_type != VDIR) {
+-		return ENOTDIR;
+-	}
+-	/* the entries are collected under the lock and copied out after it is dropped */
++	if (dir->rn_type != VDIR) return ENOTDIR;
++	if (start < 0 || uio_resid(uio) < 0) return EINVAL;
++	if ((ap->a_flags & VNODE_READDIR_REQSEEKOFF) && !extended) return EINVAL;
++	if (ap->a_eofflag) *ap->a_eofflag = 0;
++	if (ap->a_numdirent) *ap->a_numdirent = 0;
++	if (!uio_resid(uio)) return 0;
++	room = (size_t)MIN((user_ssize_t)PAGE_SIZE, uio_resid(uio));
+ 	buf = kalloc_data(PAGE_SIZE, Z_WAITOK | Z_NOFAIL);
+-
+ 	lck_mtx_lock(&rm->rm_lock);
+ 	de = TAILQ_FIRST(&dir->rn_entries);
+-	for (;; entry++) {
+-		struct dirent d;
++	for (uint32_t entry = 0;; entry++) {
++		uint64_t ino;
++		uint8_t type;
++		size_t namelen, reclen;
+ 		const char *name;
+-
+-		bzero(&d, sizeof(d));
+ 		if (entry == 0) {
+-			d.d_fileno = (ino_t)dir->rn_ino;
+-			d.d_type = DT_DIR;
+-			d.d_namlen = 1;
+-			name = ".";
++			ino = dir->rn_ino; type = DT_DIR; name = "."; namelen = 1;
+ 		} else if (entry == 1) {
+-			d.d_fileno = (ino_t)(dir->rn_parent ? dir->rn_parent->rn_ino : dir->rn_ino);
+-			d.d_type = DT_DIR;
+-			d.d_namlen = 2;
+-			name = "..";
++			ino = dir->rn_parent ? dir->rn_parent->rn_ino : dir->rn_ino;
++			type = DT_DIR; name = ".."; namelen = 2;
+ 		} else {
+-			if (de == NULL) {
+-				eof = true;
+-				break;
++			if (!de) { eof = true; break; }
++			ino = de->rd_node->rn_ino;
++			type = (uint8_t)IFTODT(VTTOIF(de->rd_node->rn_type));
++			name = de->rd_name; namelen = de->rd_namelen;
++			de = TAILQ_NEXT(de, rd_link);
++		}
++		reclen = extended ? ((offsetof(struct direntry, d_name) + namelen + 1 + 7) & ~7U) :
++		    ((offsetof(struct dirent, d_name) + namelen + 1 + 3) & ~3U);
++		if (pos >= start) {
++			if (used + reclen > room) { if (!used) error = EINVAL; break; }
++			if (extended) {
++				struct direntry d;
++				bzero(&d, sizeof(d));
++				d.d_fileno = ino; d.d_seekoff = (uint64_t)pos + reclen;
++				d.d_type = type; d.d_namlen = (uint16_t)namelen; d.d_reclen = (uint16_t)reclen;
++				memcpy(d.d_name, name, namelen);
++				memcpy(buf + used, &d, reclen);
++			} else {
++				struct dirent d;
++				bzero(&d, sizeof(d));
++				d.d_fileno = (ino_t)ino; d.d_type = type;
++				d.d_namlen = (uint8_t)namelen; d.d_reclen = (uint16_t)reclen;
++				memcpy(d.d_name, name, namelen);
++				memcpy(buf + used, &d, reclen);
+ 			}
+-			d.d_fileno = (ino_t)de->rd_node->rn_ino;
+-			d.d_type = (uint8_t)IFTODT(VTTOIF(de->rd_node->rn_type));
+-			d.d_namlen = (uint8_t)de->rd_namelen;
+-			name = de->rd_name;
+-			de = TAILQ_NEXT(de, rd_link);
+-		}
+-		d.d_reclen = (uint16_t)RAMFS_DIRSIZ(d.d_namlen);
+-		if (pos >= start) {
+-			if (used + d.d_reclen > room) {
+-				break;
+-			}
+-			memcpy(d.d_name, name, d.d_namlen);
+-			memcpy(buf + used, &d, d.d_reclen);
+-			used += d.d_reclen;
+-			count++;
+-		}
+-		pos += d.d_reclen;
++			used += reclen; count++;
++		}
++		pos += reclen;
+ 	}
+ 	lck_mtx_unlock(&rm->rm_lock);
+-
+-	error = used ? uiomove(buf, (int)used, uio) : 0;
++	if (!error && used) error = uiomove(buf, (int)used, uio);
+ 	kfree_data(buf, PAGE_SIZE);
+ 	if (!error) {
+-		uio_setoffset(uio, pos);
+-		if (ap->a_eofflag) {
+-			*ap->a_eofflag = eof;
+-		}
+-		if (ap->a_numdirent) {
+-			*ap->a_numdirent = count;
+-		}
++		uio_setoffset(uio, MAX(start, pos)); /* never rewind a cookie after directory removal */
++		if (ap->a_eofflag) *ap->a_eofflag = eof;
++		if (ap->a_numdirent) *ap->a_numdirent = count;
+ 	}
+ 	return error;
+-#undef RAMFS_DIRSIZ
+ }
+ 
+ static int
+@@ -1302,10 +1324,34 @@
+ 	return uiomove(node->rn_target, (int)node->rn_size, ap->a_uio);
+ }
+ 
+-static int
+-ramfs_ioctl(__unused struct vnop_ioctl_args *ap)
+-{
+-	return ENOTTY;
++/* Volatile fsync orders mapped writes into the backing pages; it promises no media durability. */
++static int
++ramfs_sync_file(vnode_t vp)
++{
++	struct ramfs_node *node = RAMFS_NODE(vp);
++	if (node->rn_type != VREG || !node->rn_mapped_write) return 0;
++	off_t size = ubc_getsize(vp);
++	if (size <= 0) return 0;
++	/* Never hold rm_lock: pageout takes it. Propagate paging errors to callers. */
++	return ubc_msync(vp, 0, size, NULL, UBC_PUSHDIRTY | UBC_SYNC);
++}
++
++static int
++ramfs_fsync(struct vnop_fsync_args *ap)
++{
++	return ramfs_sync_file(ap->a_vp);
++}
++
++static int
++ramfs_ioctl(struct vnop_ioctl_args *ap)
++{
++	switch (ap->a_command) {
++	case F_FULLFSYNC:
++	case F_BARRIERFSYNC:
++		return ramfs_sync_file(ap->a_vp);
++	default:
++		return ENOTTY;
++	}
+ }
+ 
+ /* Last reference gone: a node without a name has no reason to linger in the vnode cache. */
+@@ -1702,10 +1748,11 @@
+ 	{ .opve_op = &vnop_read_desc, .opve_impl = (VOPFUNC)ramfs_read },
+ 	{ .opve_op = &vnop_write_desc, .opve_impl = (VOPFUNC)ramfs_write },
+ 	{ .opve_op = &vnop_ioctl_desc, .opve_impl = (VOPFUNC)ramfs_ioctl },
+-	{ .opve_op = &vnop_fsync_desc, .opve_impl = (VOPFUNC)nop_fsync },
++	{ .opve_op = &vnop_fsync_desc, .opve_impl = (VOPFUNC)ramfs_fsync },
+ 	{ .opve_op = &vnop_remove_desc, .opve_impl = (VOPFUNC)ramfs_remove },
+ 	{ .opve_op = &vnop_link_desc, .opve_impl = (VOPFUNC)ramfs_link },
+ 	{ .opve_op = &vnop_rename_desc, .opve_impl = (VOPFUNC)ramfs_rename },
++	{ .opve_op = &vnop_renamex_desc, .opve_impl = (VOPFUNC)ramfs_renamex },
+ 	{ .opve_op = &vnop_mkdir_desc, .opve_impl = (VOPFUNC)ramfs_mkdir },
+ 	{ .opve_op = &vnop_rmdir_desc, .opve_impl = (VOPFUNC)ramfs_rmdir },
+ 	{ .opve_op = &vnop_symlink_desc, .opve_impl = (VOPFUNC)ramfs_symlink },
+@@ -1978,6 +2025,8 @@
+ 		    VOL_CAP_FMT_PERSISTENTOBJECTIDS |
+ 		    VOL_CAP_FMT_PATH_FROM_ID;
+ 		cap->capabilities[VOL_CAPABILITIES_INTERFACES] =
++		    VOL_CAP_INT_RENAME_SWAP |
++		    VOL_CAP_INT_RENAME_EXCL |
+ 		    VOL_CAP_INT_ADVLOCK |
+ 		    VOL_CAP_INT_FLOCK |
+ 		    VOL_CAP_INT_EXTENDED_SECURITY |
+@@ -1999,6 +2048,8 @@
+ 		    VOL_CAP_FMT_HIDDEN_FILES |
+ 		    VOL_CAP_FMT_PATH_FROM_ID;
+ 		cap->valid[VOL_CAPABILITIES_INTERFACES] =
++		    VOL_CAP_INT_RENAME_SWAP |
++		    VOL_CAP_INT_RENAME_EXCL |
+ 		    VOL_CAP_INT_SEARCHFS |
+ 		    VOL_CAP_INT_ATTRLIST |
+ 		    VOL_CAP_INT_NFSEXPORT |

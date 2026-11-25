@@ -1,0 +1,14 @@
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -1078,7 +1078,9 @@ common_start:
+ #if defined(WHYRED_UARTDM)
++	mov	x19, x0			/* preserve arm_init's boot_args pointer */
+ 	adrp	x0, EXT(ExceptionVectorsBase)@page
+ 	add	x0, x0, EXT(ExceptionVectorsBase)@pageoff
+ 	add	x0, x0, x22
+ 	sub	x0, x0, x23
+ 	MSR_VBAR_EL1_X0
++	mov	x0, x19
+ #endif
+

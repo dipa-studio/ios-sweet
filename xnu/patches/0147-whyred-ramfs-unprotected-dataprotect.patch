@@ -1,0 +1,34 @@
+--- a/bsd/miscfs/whyred_ramfs/ramfs.c
++++ b/bsd/miscfs/whyred_ramfs/ramfs.c
+@@ -1011,6 +1011,8 @@
+ 	VATTR_RETURN(vap, va_iosize, PAGE_SIZE);
+ 	VATTR_RETURN(vap, va_uid, node->rn_uid);
+ 	VATTR_RETURN(vap, va_gid, node->rn_gid);
++	/* This volatile filesystem has no content-protection keys. */
++	VATTR_RETURN(vap, va_dataprotect_class, 0);
+ 	VATTR_RETURN(vap, va_mode, node->rn_mode);
+ 	VATTR_RETURN(vap, va_flags, node->rn_bsdflags);
+ 	VATTR_RETURN(vap, va_create_time, node->rn_btime);
+@@ -1054,6 +1056,11 @@
+ 	bool resized = false;
+ 	uint64_t size = 0;
+ 
++	/* Class zero means unprotected; never claim to install protection. */
++	if (VATTR_IS_ACTIVE(vap, va_dataprotect_class) && vap->va_dataprotect_class != 0) {
++		return ENOTSUP;
++	}
++
+ 	if (VATTR_IS_ACTIVE(vap, va_data_size)) {
+ 		if (vap->va_data_size > rm->rm_max_pages * PAGE_SIZE) return EFBIG;
+ 		if (node->rn_type == VDIR) {
+@@ -1084,6 +1091,9 @@
+ 	if (VATTR_IS_ACTIVE(vap, va_gid)) {
+ 		node->rn_gid = vap->va_gid;
+ 		VATTR_SET_SUPPORTED(vap, va_gid);
++	}
++	if (VATTR_IS_ACTIVE(vap, va_dataprotect_class)) {
++		VATTR_SET_SUPPORTED(vap, va_dataprotect_class);
+ 	}
+ 	if (VATTR_IS_ACTIVE(vap, va_flags)) {
+ 		node->rn_bsdflags = vap->va_flags;
+

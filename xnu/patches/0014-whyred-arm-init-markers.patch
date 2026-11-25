@@ -1,0 +1,30 @@
+diff --git a/osfmk/arm/arm_init.c b/osfmk/arm/arm_init.c
+index 42362c5..73c1401 100644
+--- a/osfmk/arm/arm_init.c
++++ b/osfmk/arm/arm_init.c
+@@ -350,20 +350,25 @@ arm_init(
+ 	sweet_early_mark(1, "arm_init entered (MMU on)");
+ 
+ 	arm_setup_pre_sign();
++	sweet_early_mark(10, "arm_setup_pre_sign done");
+ 
+ 	arm_slide_rebase_and_sign_image();
++	sweet_early_mark(11, "arm_slide_rebase_and_sign_image done");
+ 
+ 	/* If kernel integrity is supported, use a constant copy of the boot args. */
+ 	const_boot_args = *args;
+ 	BootArgs = args = &const_boot_args;
++	sweet_early_mark(12, "boot_args copied");
+ 
+ 	cpu_data_init(&BootCpuData);
++	sweet_early_mark(13, "cpu_data_init done");
+ #if defined(HAS_APPLE_PAC)
+ 	/* bootstrap cpu process dependent key for kernel has been loaded by start.s */
+ 	BootCpuData.rop_key = ml_default_rop_pid();
+ 	BootCpuData.jop_key = ml_default_jop_pid();
+ #endif /* defined(HAS_APPLE_PAC) */
+ 
++	sweet_early_mark(14, "before PE_init_platform");
+ 	PE_init_platform(FALSE, args); /* Get platform expert set up */
+ 	sweet_early_mark(2, "PE_init_platform done");
+ 

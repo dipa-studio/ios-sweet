@@ -1,0 +1,52 @@
+name: whyred-gestalt-cache
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/whyred-early-fb]
+    paths: [.github/workflows/whyred-gestalt-cache.yml, tools/whyred-gestalt-cache.m]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile native and verify physical target guards
+        run: |
+          mkdir -p out/gestalt
+          clang -fobjc-arc -O1 -g -Wall -Wextra -Werror -Wno-deprecated-declarations tools/whyred-gestalt-cache.m -framework Foundation -o out/gestalt/whyred-gestalt-cache-native
+          python3 - <<'PY'
+          import subprocess
+          for args in [['probe'], ['seed', '0'*64], ['rollback', '0'*64]]:
+              p=subprocess.run(['out/gestalt/whyred-gestalt-cache-native', *args],capture_output=True,text=True,timeout=5)
+              assert p.returncode==1 and 'requires the physical iOS target' in p.stdout and not p.stderr
+          PY
+      - name: Build and audit signed iOS tool
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -target arm64-apple-ios16.4 -isysroot "$SDK" -mcpu=generic+crypto -mno-outline-atomics -fobjc-arc -O1 -g -Wall -Wextra -Werror -Wno-deprecated-declarations tools/whyred-gestalt-cache.m -framework Foundation -o out/gestalt/whyred-gestalt-cache
+          cat > out/gestalt/entitlements.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.private.MobileGestalt.AllowedProtectedKeys</key><array><string>UniqueDeviceID</string><string>UniqueDeviceIDData</string></array></dict></plist>
+          PLIST
+          codesign --force --sign - --timestamp=none --entitlements out/gestalt/entitlements.plist out/gestalt/whyred-gestalt-cache
+          codesign --verify --strict out/gestalt/whyred-gestalt-cache
+          codesign -d --entitlements :- out/gestalt/whyred-gestalt-cache > out/gestalt/signed-entitlements.plist
+          otool -l out/gestalt/whyred-gestalt-cache > out/gestalt/load-commands.txt
+          xcrun llvm-objdump -d out/gestalt/whyred-gestalt-cache > out/gestalt/isa.txt
+          python3 - <<'PY'
+          import hashlib,json,os,plistlib,re
+          from pathlib import Path
+          p=Path('out/gestalt'); b=p/'whyred-gestalt-cache'
+          assert re.search(r'platform\s+(?:2|IOS)\b',(p/'load-commands.txt').read_text())
+          assert not re.search(r'\b(?:cas[a-z]*|ldadd[a-z]*|swp[a-z]*|stadd[a-z]*)\s+[wx]',(p/'isa.txt').read_text())
+          assert plistlib.loads((p/'signed-entitlements.plist').read_bytes())=={'com.apple.private.MobileGestalt.AllowedProtectedKeys':['UniqueDeviceID','UniqueDeviceIDData']}
+          (p/'report.json').write_text(json.dumps({'source':os.environ['GITHUB_SHA'],'sha256':hashlib.sha256(b.read_bytes()).hexdigest(),'bytes':b.stat().st_size,'device_tested':False,'explicit_volatile_cache_write':True,'persistent_partition_write':False},indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whyred-gestalt-cache
+          path: out/gestalt/
+          retention-days: 7

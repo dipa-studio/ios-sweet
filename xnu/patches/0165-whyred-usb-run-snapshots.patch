@@ -1,0 +1,122 @@
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -196,10 +196,12 @@
+ #define EP_TX           3               /* 0x81 bulk IN */
+ #define EP_INT          5               /* 0x82 interrupt IN */
+ #define TRBCTL_NORMAL   (1u << 4)
+ 
+ #define UD_TXQ          32
++#define UD_SNAPSHOT_WORDS 34
++#define UD_SNAPSHOT_LIMIT 32
+ 
+ static struct {
+ 	vm_offset_t dwc;
+ 	vm_offset_t dma;
+ 	uint64_t    dma_pa;
+@@ -211,10 +213,12 @@
+ 	bool        configured;
+ 	uint32_t    failed;
+ 	uint8_t     resource[6];
+ 	bool        active[6];
+ 	uint64_t    start_reports;
++	uint32_t    snapshot_reports;
++	uint32_t    snapshot_previous[UD_SNAPSHOT_WORDS];
+ 	uint16_t    max_packet;
+ 	uint16_t    packet_filter;
+ 	uint8_t     data_alt;       /* data interface alternate setting */
+ 	/* network */
+ 	ifnet_t     ifp;
+@@ -234,10 +238,51 @@
+ 
+ static inline uint32_t
+ dwc_rd(uint32_t off)
+ {
+ 	return usb_rd(ud.dwc, off);
++}
++
++/* Only startup (before thread creation) and the event thread call this.
++ * Each register is read once per sample. The samples are not atomic hardware
++ * snapshots. Bus-error addresses may be historical; no status is cleared here.
++ * No command, PHY test/charger override, clock, reset or DMA ownership changes.
++ */
++static void
++ud_snapshot(unsigned int stage)
++{
++	if (ud.snapshot_reports >= UD_SNAPSHOT_LIMIT) return;
++	uint32_t w[UD_SNAPSHOT_WORDS] = {
++		dwc_rd(GCTL), dwc_rd(0xc118), dwc_rd(DCTL), dwc_rd(DSTS), dwc_rd(DCFG),
++		dwc_rd(DEVTEN), dwc_rd(DALEPENA), dwc_rd(GEVNTADRLO), dwc_rd(GEVNTADRHI),
++		dwc_rd(GEVNTSIZ), dwc_rd(GEVNTCOUNT), dwc_rd(DEPCMD(0)), dwc_rd(DEPCMD(1)),
++		usb_rd(usb_hw.phy, 0xb4), usb_rd(usb_hw.phy, 0x38), usb_rd(usb_hw.phy, 0xb8),
++		usb_rd(usb_hw.phy, 0xc0), usb_rd(usb_hw.phy, 0xc4), usb_rd(usb_hw.phy, 0xf4),
++		usb_rd(usb_hw.qs, 0x10), usb_rd(usb_hw.qs, 0x30), usb_rd(usb_hw.qs, 0x08),
++		dwc_rd(0xc100), dwc_rd(0xc104), dwc_rd(0xc130), dwc_rd(0xc134),
++		dwc_rd(0xc200), dwc_rd(0xc2c0), dwc_rd(0xc12c), dwc_rd(0xc630),
++		dwc_rd(0xc140), dwc_rd(0xc144), dwc_rd(0xc14c), ud.events
++	};
++	/* DSTS frame/microframe bits change under normal SOF traffic. Ignore
++	 * just that field for change detection; print its actual sampled value.
++	 */
++	bool changed = stage != 2 || !ud.snapshot_reports;
++	for (unsigned int i = 0; i < UD_SNAPSHOT_WORDS; i++) {
++		uint32_t mask = i == 3 ? ~(0x3fffu << 3) : ~0u;
++		if ((w[i] & mask) != (ud.snapshot_previous[i] & mask)) changed = true;
++	}
++	if (!changed) return;
++	memcpy(ud.snapshot_previous, w, sizeof(w));
++	uint32_t id = ++ud.snapshot_reports;
++	printf("WHYRED USB: snapshot=%u stage=%u GCTL=%08x GSTS=%08x DCTL=%08x DSTS=%08x DCFG=%08x U2CFG=%08x U3CFG=%08x HW0=%08x HW1=%08x HW3=%08x\n",
++	    id, stage, w[0], w[1], w[2], w[3], w[4], w[26], w[27], w[30], w[31], w[32]);
++	printf("WHYRED USB: snapshot=%u events=%u EVT=%08x/%08x SIZE=%08x COUNT=%08x DEVTEN=%08x EPENA=%08x EP0CMD=%08x EP1CMD=%08x\n",
++	    id, w[33], w[7], w[8], w[9], w[10], w[5], w[6], w[11], w[12]);
++	printf("WHYRED USB: snapshot=%u PHY_POWER=%08x PLL=%08x TEST=%08x UTMI1=%08x UTMI2=%08x LINE=%08x QHS=%08x QSS=%08x QGEN=%08x\n",
++	    id, w[13], w[14], w[15], w[16], w[17], w[18], w[19], w[20], w[21]);
++	printf("WHYRED USB: snapshot=%u BUSCFG=%08x/%08x BUSERR=%08x/%08x GUCTL=%08x GFLADJ=%08x\n",
++	    id, w[22], w[23], w[24], w[25], w[28], w[29]);
+ }
+ 
+ static void
+ ud_fail(const char *reason)
+ {
+@@ -936,12 +981,17 @@
+ 
+ static void
+ ud_thread(void *arg __unused, wait_result_t wr __unused)
+ {
+ 	uint32_t ticks = 0;
++	uint64_t next_snapshot = 0;
+ 	for (;;) {
+ 		if (os_atomic_load(&ud.failed, acquire)) { ud_data_stop(true); return; }
++		if (mach_absolute_time() >= next_snapshot) {
++			ud_snapshot(2);
++			clock_interval_to_deadline(1, NSEC_PER_SEC, &next_snapshot);
++		}
+ 		uint32_t count = dwc_rd(GEVNTCOUNT) & 0xffff;
+ 		if (count > UD_EVT_SIZE || (count & 3u)) { ud_fail("invalid event byte count"); continue; }
+ 		if (count) {
+ 			ud_sync(UD_EVT, UD_EVT_SIZE);
+ 			for (uint32_t done = 0; done < count; done += 4) {
+@@ -1017,10 +1067,11 @@
+ {
+ 	thread_t thread;
+ 
+ 	ud.dwc = dwc;
+ 	ud.max_packet = 512;
++	ud_snapshot(0);
+ 	if (!whyred_usb_hw_select_utmi(&usb_io, &usb_hw)) { ud_fail("UTMI mux readback"); return; }
+ 	/* Stop the bootloader controller before installing any new DMA addresses. */
+ 	dwc_wr(DCTL, dwc_rd(DCTL) & ~DCTL_RUN_STOP);
+ 	unsigned halt;
+ 	for (halt = 0; halt < 500 && !(dwc_rd(DSTS) & DSTS_DEVCTRLHLT); halt++) delay(1000);
+@@ -1089,10 +1140,11 @@
+ 		printf("WHYRED USB: VBUS override on: HS_PHY_CTRL 0x%08x SS_PHY_CTRL 0x%08x\n",
+ 		    usb_rd(qs, QSCRATCH_HS_PHY_CTRL), usb_rd(qs, QSCRATCH_SS_PHY_CTRL));
+ 	}
+ 	if ((usb_rd(qs, QSCRATCH_HS_PHY_CTRL) & (UTMI_OTG_VBUS_VALID | SW_SESSVLD_SEL)) !=
+ 	    (UTMI_OTG_VBUS_VALID | SW_SESSVLD_SEL)) { ud_fail("VBUS override readback"); return; }
++	ud_snapshot(1);
+ 	if (kernel_thread_start(ud_thread, NULL, &thread) != KERN_SUCCESS) { ud_fail("event thread unavailable"); return; }
+ 	thread_deallocate(thread);
+ 
+ 	dwc_wr(DCTL, dwc_rd(DCTL) | DCTL_RUN_STOP);
+ 	for (i = 0; i < 500 && (dwc_rd(DSTS) & DSTS_DEVCTRLHLT); i++) {

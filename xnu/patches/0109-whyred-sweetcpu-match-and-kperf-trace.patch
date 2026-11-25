@@ -1,0 +1,51 @@
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -44,7 +44,7 @@
+     "   {"
+     "     'IOClass'         = SweetCPU;"
+     "     'IOProviderClass' = IOPlatformDevice;"
+-    "     'IONameMatch'     = 'qcom,kryo470';"
++    "     'IONameMatch'     = 'whyred,kryo260';"
+     "     'IOProbeScore'    = 10000:32;"
+     "   },"
+     "   {"
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -144,9 +144,9 @@
+ 		}
+ 		IOSleep(1);
+ 	}
+-	/* The supplied ADT has cpu0 as the boot CPU and ascending A55 nodes. */
+-	if (topology->boot_cpu->cpu_id != 0 || topology->boot_cpu->phys_id != 0) {
+-		panic("SWEET CPU: expected boot MPIDR 0 and logical CPU 0");
++	/* Whyred starts XNU on the Gold core at Aff1=1, Aff0=0 (MPIDR 0x100). */
++	if (topology->boot_cpu->cpu_id != 0 || topology->boot_cpu->phys_id != 0x100) {
++		panic("SWEET CPU: expected whyred boot MPIDR 0x100 and logical CPU 0");
+ 	}
+ 	for (unsigned int i = 0; i < topology->num_cpus; i++) {
+ 		SweetCPU *cpu = __atomic_load_n(&sweet_cpus[i], __ATOMIC_ACQUIRE);
+--- a/osfmk/kperf/kperf.c
++++ b/osfmk/kperf/kperf.c
+@@ -42,6 +42,7 @@
+ #include <kperf/lazy.h>
+ #include <kperf/pet.h>
+ #include <kperf/sample.h>
++#include <pexpert/pexpert.h>
+ 
+ /* from libkern/libkern.h */
+ extern uint64_t strtouq(const char *, char **, int);
+@@ -80,7 +81,13 @@
+ 	 * kperf allocates based on the number of CPUs and requires them to all be
+ 	 * accounted for.
+ 	 */
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: kperf before ml_wait_max_cpus\n");
++#endif
+ 	ml_wait_max_cpus();
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: kperf ml_wait_max_cpus returned\n");
++#endif
+ 
+ 	boolean_t found_kperf = FALSE;
+ 	char kperf_config_str[64];
+

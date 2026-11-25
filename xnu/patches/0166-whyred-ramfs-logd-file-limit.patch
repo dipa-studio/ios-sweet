@@ -1,0 +1,260 @@
+--- a/bsd/miscfs/whyred_ramfs/ramfs.c
++++ b/bsd/miscfs/whyred_ramfs/ramfs.c
+@@ -54,10 +54,11 @@
+ extern unsigned int vm_page_free_count, vm_page_wire_count;
+ 
+ #define RAMFS_MAX_NAME          255
+ #define RAMFS_MAX_XATTR         (1u * 1024 * 1024)
+ #define WHYRED_RAMFS_DATA_LIMIT (128ULL * 1024 * 1024)
++#define WHYRED_RAMFS_LOGD_UID 272u
+ #define WHYRED_RAMFS_XATTR_LIMIT (8ULL * 1024 * 1024)
+ #define WHYRED_RAMFS_MAX_NODES 32768ULL
+ #define RAMFS_ROOT_INO          2
+ 
+ struct ramfs_mount;
+@@ -117,16 +118,18 @@
+ #define RAMFS_N_WANTED          0x2         /* somebody sleeps on the node */
+ 
+ /* Sampled, default-off diagnostics; optional bounded names, no file payloads/policy changes. */
+ enum ramfs_pressure_reason {
+ 	RAMFS_PRESSURE_QUOTA, RAMFS_PRESSURE_PAGE, RAMFS_PRESSURE_SLOTS,
+-	RAMFS_PRESSURE_GETXATTR, RAMFS_PRESSURE_LISTXATTR, RAMFS_PRESSURE_COUNT
++	RAMFS_PRESSURE_GETXATTR, RAMFS_PRESSURE_LISTXATTR, RAMFS_PRESSURE_FILE_LIMIT, RAMFS_PRESSURE_COUNT
+ };
+ struct ramfs_pressure_event {
+ 	bool valid;
+ 	enum ramfs_pressure_reason reason;
+ 	uint64_t seq, ino, off, length, pages, limit, peak, nodes, xattr_bytes;
++	uint64_t file_limit;
++	uint32_t uid;
+ 	uint64_t added, freed, reclaimed, hash_pages, unlinked_pages, unlinked_nodes;
+ 	uint64_t failures[RAMFS_PRESSURE_COUNT];
+ 	unsigned int vm_free, vm_wired;
+ 	kern_return_t allocation_error; /* meaningful only for a data-page failure */
+ 	bool top_enabled, names_limited;
+@@ -145,10 +148,11 @@
+ 	struct ramfs_node  *rm_root;
+ 	uint64_t            rm_next_ino;
+ 	uint64_t            rm_nodes;
+ 	uint64_t            rm_pages;           /* file pages in use */
+ 	uint64_t            rm_max_pages;
++	uint64_t            rm_logd_file_limit; /* zero disables the opt-in per-file bound */
+ 	uint64_t            rm_xattr_bytes;
+ 	bool                rm_trace, rm_trace_top;
+ 	unsigned int        rm_reports;
+ 	uint64_t            rm_failure_seq, rm_added, rm_freed, rm_reclaimed, rm_peak;
+ 	uint64_t            rm_failures[RAMFS_PRESSURE_COUNT];
+@@ -167,10 +171,30 @@
+ static LCK_GRP_DECLARE(ramfs_lck_grp, "ramfs");
+ 
+ extern int(**ramfs_vnodeop_p)(void *);
+ 
+ /* Diagnostic names only: bounded printable ASCII, never file content. */
++/* A development policy for the confirmed System v70 _logd UID. It bounds
++ * each regular file, not aggregate UID use. No existing data is removed.
++ */
++static uint64_t
++ramfs_logd_limit_from_arg(uint32_t mib, uint64_t max_pages)
++{
++	if (mib < 1 || mib > 64) return 0;
++	return MIN((uint64_t)mib * 1024 * 1024 / PAGE_SIZE, max_pages) * PAGE_SIZE;
++}
++
++static uint64_t
++ramfs_file_limit(struct ramfs_mount *rm, uid_t uid)
++{
++	uint64_t limit = rm->rm_max_pages * PAGE_SIZE;
++	if (uid == WHYRED_RAMFS_LOGD_UID && rm->rm_logd_file_limit) {
++		limit = MIN(limit, rm->rm_logd_file_limit);
++	}
++	return limit;
++}
++
+ static void
+ ramfs_pressure_name(char *dst, size_t capacity, const char *src, size_t length)
+ {
+ 	if (!capacity) return;
+ 	size_t i;
+@@ -193,10 +217,11 @@
+ 	uint64_t seq = ++rm->rm_failure_seq;
+ 	e->valid = false;
+ 	if (rm->rm_reports >= 32 || (seq > 16 && (seq & (seq - 1)) != 0)) return;
+ 	*e = (struct ramfs_pressure_event){ .valid = true, .reason = reason, .seq = seq,
+ 	    .ino = node->rn_ino, .off = off, .length = length, .pages = rm->rm_pages,
++	    .uid = node->rn_uid, .file_limit = ramfs_file_limit(rm, node->rn_uid),
+ 	    .limit = rm->rm_max_pages, .peak = rm->rm_peak, .nodes = rm->rm_nodes,
+ 	    .xattr_bytes = rm->rm_xattr_bytes, .added = rm->rm_added, .freed = rm->rm_freed,
+ 	    .reclaimed = rm->rm_reclaimed,
+ 	    .top_enabled = rm->rm_trace_top && reason == RAMFS_PRESSURE_QUOTA };
+ 	memcpy(e->failures, rm->rm_failures, sizeof(e->failures));
+@@ -292,22 +317,22 @@
+ /* No mount lock, allocation, user copy, path lookup or vnode reference here. */
+ static void
+ ramfs_pressure_emit(const struct ramfs_pressure_event *e)
+ {
+ 	static const char *const names[] = { "data-quota", "data-page", "slots-nowait",
+-	    "getxattr-nowait", "listxattr-nowait" };
++	    "getxattr-nowait", "listxattr-nowait", "logd-file-limit" };
+ 	if (!e->valid) return;
+ #define RP64(v) ((unsigned long long)(v))
+-	printf("WHYRED RAMFS PRESSURE id=%llu cause=%s ino=%llu off=%llu length=%llu kr=%d\n",
+-	    RP64(e->seq), names[e->reason], RP64(e->ino), RP64(e->off), RP64(e->length), e->allocation_error);
++	printf("WHYRED RAMFS PRESSURE id=%llu cause=%s ino=%llu off=%llu length=%llu kr=%d uid=%u file_limit=%llu\n",
++	    RP64(e->seq), names[e->reason], RP64(e->ino), RP64(e->off), RP64(e->length), e->allocation_error, e->uid, RP64(e->file_limit));
+ 	printf("WHYRED RAMFS PRESSURE id=%llu pages=%llu limit=%llu peak=%llu nodes=%llu xattr_bytes=%llu hash_pages=%llu unlinked_pages=%llu unlinked_nodes=%llu\n",
+ 	    RP64(e->seq), RP64(e->pages), RP64(e->limit), RP64(e->peak), RP64(e->nodes),
+ 	    RP64(e->xattr_bytes), RP64(e->hash_pages), RP64(e->unlinked_pages), RP64(e->unlinked_nodes));
+-	printf("WHYRED RAMFS PRESSURE id=%llu added=%llu freed=%llu reclaimed=%llu vm_free_sample=%u vm_wired_sample=%u quota=%llu page=%llu slots=%llu getxattr=%llu listxattr=%llu\n",
++	printf("WHYRED RAMFS PRESSURE id=%llu added=%llu freed=%llu reclaimed=%llu vm_free_sample=%u vm_wired_sample=%u quota=%llu page=%llu slots=%llu getxattr=%llu listxattr=%llu file_limit_hits=%llu\n",
+ 	    RP64(e->seq), RP64(e->added), RP64(e->freed), RP64(e->reclaimed), e->vm_free, e->vm_wired,
+ 	    RP64(e->failures[0]), RP64(e->failures[1]), RP64(e->failures[2]),
+-	    RP64(e->failures[3]), RP64(e->failures[4]));
++	    RP64(e->failures[3]), RP64(e->failures[4]), RP64(e->failures[5]));
+ 	if (e->top_enabled) {
+ 		printf("WHYRED RAMFS TOP id=%llu selected=%u name_entries=%u names_limited=%u\n",
+ 		    RP64(e->seq), e->top_count, e->name_entries, (unsigned int)e->names_limited);
+ 		for (unsigned int k = 0; k < e->top_count; k++) {
+ 			printf("WHYRED RAMFS TOP id=%llu rank=%u ino=%llu pages=%llu size=%llu nlink=%u uid=%u mapped=%u parent=%llu name_trunc=%u dir_trunc=%u dir=\"%s\" name=\"%s\"\n",
+@@ -696,12 +721,17 @@
+  */
+ static int
+ ramfs_store(struct ramfs_node *node, uint64_t off, const void *src, size_t len, void **spare)
+ {
+ 	struct ramfs_mount *rm = node->rn_mount;
+-	uint64_t limit = rm->rm_max_pages * PAGE_SIZE;
+-	if (off > limit || len > limit - off) return EFBIG;
++	uint64_t limit = ramfs_file_limit(rm, node->rn_uid);
++	if (off > limit || len > limit - off) {
++		if (node->rn_uid == WHYRED_RAMFS_LOGD_UID && rm->rm_logd_file_limit) {
++			ramfs_pressure_record_locked(node, RAMFS_PRESSURE_FILE_LIMIT, off, len);
++		}
++		return EFBIG;
++	}
+ 	uint64_t index = off / PAGE_SIZE;
+ 	int error = ramfs_grow_slots(node, index);
+ 
+ 	if (error) {
+ 		return error;
+@@ -1265,10 +1295,27 @@
+ 		/* what a mapping changed must reach us before the size moves under it */
+ 		ramfs_sync_mapping(vp, node);
+ 	}
+ 
+ 	lck_mtx_lock(&rm->rm_lock);
++	/* Check the final owner/size together before changing attributes. This
++	 * covers truncate and owner transfer of an already allocated file.
++	 */
++	uid_t final_uid = VATTR_IS_ACTIVE(vap, va_uid) ? vap->va_uid : node->rn_uid;
++	uint64_t final_size = VATTR_IS_ACTIVE(vap, va_data_size) ? vap->va_data_size : node->rn_size;
++	if (node->rn_type == VREG &&
++	    (VATTR_IS_ACTIVE(vap, va_uid) || VATTR_IS_ACTIVE(vap, va_data_size)) &&
++	    final_size > ramfs_file_limit(rm, final_uid)) {
++		struct ramfs_pressure_event pressure = {0};
++		if (final_uid == node->rn_uid && final_uid == WHYRED_RAMFS_LOGD_UID && rm->rm_logd_file_limit) {
++			ramfs_pressure_record_locked(node, RAMFS_PRESSURE_FILE_LIMIT, final_size, 0);
++			ramfs_pressure_take_locked(rm, &pressure);
++		}
++		lck_mtx_unlock(&rm->rm_lock);
++		ramfs_pressure_emit(&pressure);
++		return EFBIG;
++	}
+ 	if (VATTR_IS_ACTIVE(vap, va_data_size)) {
+ 		size = vap->va_data_size;
+ 		ramfs_resize(node, size);
+ 		resized = true;
+ 		VATTR_SET_SUPPORTED(vap, va_data_size);
+@@ -1384,14 +1431,22 @@
+ 	lck_mtx_lock(&rm->rm_lock);
+ 	old_size = node->rn_size;
+ 	if (ap->a_ioflag & IO_APPEND) {
+ 		uio_setoffset(uio, (off_t)old_size);
+ 	}
++	start = (uint64_t)uio_offset(uio);
++	uint64_t limit = ramfs_file_limit(rm, node->rn_uid);
++	if (start > limit || (uint64_t)uio_resid(uio) > limit - start) {
++		if (node->rn_uid == WHYRED_RAMFS_LOGD_UID && rm->rm_logd_file_limit) {
++			ramfs_pressure_record_locked(node, RAMFS_PRESSURE_FILE_LIMIT, start, (uint64_t)uio_resid(uio));
++			ramfs_pressure_take_locked(rm, &pressure);
++		}
++		lck_mtx_unlock(&rm->rm_lock);
++		ramfs_pressure_emit(&pressure);
++		return EFBIG;
++	}
+ 	lck_mtx_unlock(&rm->rm_lock);
+-	start = (uint64_t)uio_offset(uio);
+-	uint64_t limit = rm->rm_max_pages * PAGE_SIZE;
+-	if (start > limit || (uint64_t)uio_resid(uio) > limit - start) return EFBIG;
+ 
+ 	bounce = kalloc_data(PAGE_SIZE, Z_WAITOK | Z_NOFAIL);
+ 	while (uio_resid(uio) > 0) {
+ 		uint64_t off = (uint64_t)uio_offset(uio);
+ 		size_t len = MIN((size_t)uio_resid(uio), PAGE_SIZE - (size_t)(off & PAGE_MASK));
+@@ -1404,11 +1459,11 @@
+ 			spare = ramfs_page_alloc(true, &page_error);
+ 		}
+ 		ramfs_reserve_slots(rm, node, off / PAGE_SIZE);
+ 		lck_mtx_lock(&rm->rm_lock);
+ 		error = ramfs_store(node, off, bounce, len, &spare);
+-		if (error == ENOSPC) ramfs_pressure_take_locked(rm, &pressure);
++		if (error == ENOSPC || error == EFBIG) ramfs_pressure_take_locked(rm, &pressure);
+ 		lck_mtx_unlock(&rm->rm_lock);
+ 		if (error) {
+ 			/* nothing of this piece was stored: hand it back to the caller's count */
+ 			uio_setoffset(uio, (off_t)off);
+ 			uio_setresid(uio, uio_resid(uio) + (user_ssize_t)len);
+@@ -1436,11 +1491,11 @@
+ 		/* cached pages of the range are stale now: brought up to date in place */
+ 		if (ubc_pages_resident(vp)) {
+ 			ramfs_refresh_cache(vp, node, start, (uint64_t)uio_offset(uio));
+ 		}
+ 		/* a partial write is a success */
+-		if (error == ENOSPC) {
++		if (error == ENOSPC || error == EFBIG) {
+ 			error = 0;
+ 		}
+ 	}
+ 	return error;
+ }
+@@ -1725,11 +1780,11 @@
+ 			ramfs_page_free(spare);
+ 		}
+ 	}
+ 	if (!error) {
+ 		ramfs_touch(node, true);
+-	} else if (error == ENOSPC) {
++	} else if (error == ENOSPC || error == EFBIG) {
+ 		ramfs_pressure_take_locked(rm, &pressure);
+ 	}
+ 	lck_mtx_unlock(&rm->rm_lock);
+ 	if (pressure.valid && pressure.reason == RAMFS_PRESSURE_PAGE) pressure.allocation_error = page_error;
+ 	ramfs_pressure_emit(&pressure);
+@@ -2057,11 +2112,11 @@
+         struct ramfs_pressure_event pressure = {0};
+         void *spare = ramfs_page_alloc(true, &page_error);
+         ramfs_reserve_slots(rm, node, 0);
+         lck_mtx_lock(&rm->rm_lock);
+         error = ramfs_store(node, 0, s->data, s->size, &spare);
+-        if (error == ENOSPC) ramfs_pressure_take_locked(rm, &pressure);
++        if (error == ENOSPC || error == EFBIG) ramfs_pressure_take_locked(rm, &pressure);
+         lck_mtx_unlock(&rm->rm_lock);
+         if (pressure.valid && pressure.reason == RAMFS_PRESSURE_PAGE) pressure.allocation_error = page_error;
+         ramfs_pressure_emit(&pressure);
+         if (spare) ramfs_page_free(spare);
+     }
+@@ -2101,10 +2156,16 @@
+ 	uint32_t top = 0;
+ 	rm->rm_trace_top = rm->rm_trace && PE_parse_boot_argn("whyred-ramfs-top", &top, sizeof(top)) && top == 1;
+ #endif
+ 	/* a runaway writer must not be able to take the whole machine: a quarter of memory at most */
+ 	rm->rm_max_pages = MIN(max_mem / 4, WHYRED_RAMFS_DATA_LIMIT) / PAGE_SIZE;
++#if DEVELOPMENT || DEBUG
++	uint32_t logd_file_mib = 0;
++	if (PE_parse_boot_argn("whyred-logd-file-mb", &logd_file_mib, sizeof(logd_file_mib))) {
++		rm->rm_logd_file_limit = ramfs_logd_limit_from_arg(logd_file_mib, rm->rm_max_pages);
++	}
++#endif
+ 
+ 	rm->rm_hash = kalloc_type(struct ramfs_node *, RAMFS_HASH_SIZE, Z_WAITOK | Z_ZERO | Z_NOFAIL);
+ 	rm->rm_root = ramfs_node_alloc(rm, VDIR, NULL);
+ 	rm->rm_root->rn_ino = RAMFS_ROOT_INO;
+ 	ramfs_hash_insert(rm, rm->rm_root);

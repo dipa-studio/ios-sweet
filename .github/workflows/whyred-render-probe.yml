@@ -1,0 +1,74 @@
+name: whyred-render-probe
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/whyred-early-fb]
+    paths: [.github/workflows/whyred-render-probe.yml, tools/whyred-render-probe.m, tools/whyred-surface-ipc.m, tools/prepare-whyred-display-image.py, tools/whyred_boot_profile.py, tools/test_whyred_boot_profile.py, tools/whyred-display-image-compare.c]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile native software renderer diagnostic
+        run: |
+          mkdir -p out/render
+          python3 tools/prepare-whyred-display-image.py --self-test
+          python3 tools/test_whyred_boot_profile.py
+          clang -fobjc-arc -O1 -g -Wall -Wextra -Werror tools/whyred-render-probe.m -framework Foundation -framework CoreImage -framework CoreGraphics -framework QuartzCore -framework ImageIO -framework IOSurface -o out/render/whyred-render-probe-native
+          clang -DWHYRED_PROBE_IOSURFACE_DECLS=1 -fobjc-arc -O1 -g -Wall -Wextra -Werror tools/whyred-surface-ipc.m -framework Foundation -framework IOSurface -o out/render/whyred-surface-ipc-native
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          b = str(Path('out/render/whyred-render-probe-native').resolve())
+          for mode in ('capture', 'capture-png', 'present-once', 'present-window', 'live-window', 'live', 'remote-layer', 'remote-layer-lcd', 'remote-layer-lcd-window'):
+              p = subprocess.run([b, mode], capture_output=True, text=True, timeout=10)
+              assert p.returncode == 1 and 'requires the physical iOS target' in p.stdout and not p.stderr, (mode, p)
+          for mode in ('layer', 'surface'):
+              subprocess.run([b, mode], check=True, timeout=20)
+          ipc = str(Path('out/render/whyred-surface-ipc-native').resolve())
+          p = subprocess.run([ipc, 'run'], check=True, capture_output=True, text=True, timeout=25)
+          assert 'child lookup=1 initial_pixels=PASS' in p.stdout and 'parent shared_pixels=PASS' in p.stdout, p.stdout
+          Path('out/render/surface-ipc-native.txt').write_text(p.stdout)
+          PY
+      - name: Build signed iOS diagnostic
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -target arm64-apple-ios16.4 -isysroot "$SDK" -mcpu=generic+crypto -mno-outline-atomics -fobjc-arc -O1 -g -Wall -Wextra -Werror -Wno-deprecated-declarations tools/whyred-render-probe.m -framework Foundation -framework CoreImage -framework CoreGraphics -framework QuartzCore -framework ImageIO -framework IOSurface -framework OpenGLES -o out/render/whyred-render-probe
+          clang -target arm64-apple-ios16.4 -isysroot "$SDK" -mcpu=generic+crypto -mno-outline-atomics -fobjc-arc -O1 -g -Wall -Wextra -Werror tools/whyred-surface-ipc.m -framework Foundation -framework IOSurface -o out/render/whyred-surface-ipc
+          cat > out/render/render-entitlements.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.QuartzCore.displayable-context</key><true/><key>com.apple.QuartzCore.global-capture</key><true/></dict></plist>
+          PLIST
+          codesign --force --sign - --timestamp=none --entitlements out/render/render-entitlements.plist out/render/whyred-render-probe
+          codesign --verify --strict out/render/whyred-render-probe
+          codesign -d --entitlements :- out/render/whyred-render-probe > out/render/signed-render-entitlements.plist
+          codesign --force --sign - --timestamp=none out/render/whyred-surface-ipc
+          codesign --verify --strict out/render/whyred-surface-ipc
+          otool -l out/render/whyred-surface-ipc > out/render/ipc-load-commands.txt
+          xcrun llvm-objdump -d out/render/whyred-surface-ipc > out/render/ipc-isa.txt
+          otool -l out/render/whyred-render-probe > out/render/load-commands.txt
+          otool -L out/render/whyred-render-probe > out/render/dependencies.txt
+          xcrun llvm-objdump -d out/render/whyred-render-probe > out/render/isa.txt
+          python3 - <<'PY'
+          import hashlib,json,os,re,plistlib
+          from pathlib import Path
+          p=Path('out/render'); b=p/'whyred-render-probe'
+          assert re.search(r'platform\s+(?:2|IOS)\b',(p/'load-commands.txt').read_text())
+          assert not re.search(r'\b(?:cas[a-z]*|ldadd[a-z]*|swp[a-z]*|stadd[a-z]*)\s+[wx]',(p/'isa.txt').read_text())
+          entitlements=plistlib.loads((p/'signed-render-entitlements.plist').read_bytes())
+          assert entitlements == {'com.apple.QuartzCore.displayable-context':True,'com.apple.QuartzCore.global-capture':True}
+          ipc=p/'whyred-surface-ipc'
+          assert re.search(r'platform\s+(?:2|IOS)\b',(p/'ipc-load-commands.txt').read_text())
+          assert not re.search(r'\b(?:cas[a-z]*|ldadd[a-z]*|swp[a-z]*|stadd[a-z]*)\s+[wx]',(p/'ipc-isa.txt').read_text())
+          (p/'ipc-report.json').write_text(json.dumps({'source':os.environ['GITHUB_SHA'],'sha256':hashlib.sha256(ipc.read_bytes()).hexdigest(),'bytes':ipc.stat().st_size,'device_tested':False,'display_changed':False,'files_written':False},indent=2)+'\n')
+          (p/'report.json').write_text(json.dumps({'source':os.environ['GITHUB_SHA'],'sha256':hashlib.sha256(b.read_bytes()).hexdigest(),'bytes':b.stat().st_size,'device_tested':False,'files_written':False,'bitmap_pixels':256},indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whyred-render-probe
+          path: out/render/
+          retention-days: 7

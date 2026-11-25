@@ -1,0 +1,12 @@
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -988,7 +988,7 @@
+ 					};
+ 					bool relevant = false;
+ 					for (size_t k = 0; needles[k] != NULL; k++) {
+-						if (strstr(text, needles[k]) != NULL) {
++						if (strnstr(text, needles[k], m) != NULL) {
+ 							relevant = true;
+ 							break;
+ 						}
+ 					}

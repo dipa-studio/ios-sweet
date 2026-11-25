@@ -1,0 +1,62 @@
+--- a/iokit/Kernel/IOPlatformExpert.cpp
++++ b/iokit/Kernel/IOPlatformExpert.cpp
+@@ -2295,20 +2295,55 @@
+ * the kernel with a suitable message.
+ *********************************************************************/
+ 
++#if defined(SWEET)
++/* Diagnostic fallback for the explicitly selected whyred bring-up image. */
++class IOPanicPlatform : public IODTPlatformExpert {
++	OSDeclareDefaultStructors(IOPanicPlatform);
++public:
++	IOService *probe(IOService *provider, SInt32 *score) APPLE_KEXT_OVERRIDE;
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++	const char *deleteList(void) APPLE_KEXT_OVERRIDE { return NULL; }
++	const char *excludeList(void) APPLE_KEXT_OVERRIDE { return NULL; }
++	void processTopLevel(IORegistryEntry *root) APPLE_KEXT_OVERRIDE;
++};
++OSDefineMetaClassAndStructors(IOPanicPlatform, IODTPlatformExpert);
++
++IOService *
++IOPanicPlatform::probe(IOService *provider, SInt32 *score)
++{
++	return IOPlatformExpert::probe(provider, score);
++}
++
++void
++IOPanicPlatform::processTopLevel(IORegistryEntry *root)
++{
++	IORegistryEntry *cpus = root->childFromPath("cpus", gIODTPlane);
++	if (cpus) {
++		createNubs(this, IODTFindMatchingEntries(cpus, kIODTExclusive, NULL));
++		cpus->release();
++	}
++	createNubs(this, IODTFindMatchingEntries(root, kIODTExclusive, NULL));
++}
++#else
+ class IOPanicPlatform : IOPlatformExpert {
+ 	OSDeclareDefaultStructors(IOPanicPlatform);
+-
+ public:
+ 	bool start(IOService * provider) APPLE_KEXT_OVERRIDE;
+ };
+-
+-
+ OSDefineMetaClassAndStructors(IOPanicPlatform, IOPlatformExpert);
++#endif
+ 
+ 
+ bool
+ IOPanicPlatform::start(IOService * provider)
+ {
++#if defined(SWEET)
++	int whyred_platform = 0;
++	if (PE_parse_boot_argn("-whyred-platform", &whyred_platform, sizeof(whyred_platform))) {
++		kprintf("WHYRED: starting diagnostic generic platform expert\n");
++		return IODTPlatformExpert::start(provider);
++	}
++#endif
+ 	const char * platform_name = "(unknown platform name)";
+ 
+ 	if (provider) {
+

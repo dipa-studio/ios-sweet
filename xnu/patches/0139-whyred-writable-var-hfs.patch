@@ -1,0 +1,30 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -1184,6 +1184,25 @@
+ 
+ 	bsd_init_kprintf("bsd_do_post - done");
+ 
++#if defined(SWEET)
++	/* The iOS system APFS is read-only; supply a RAM-backed writable /var. */
++	uint32_t whyred_var_md0 = 0;
++	if (PE_parse_boot_argn("whyred-var-md0", &whyred_var_md0,
++	    sizeof(whyred_var_md0)) && whyred_var_md0 == 1) {
++		char device_name[] = "/dev/md0";
++		char *device_name_ptr = device_name;
++		char **device_name_pp = &device_name_ptr;
++		int mount_error = kernel_mount("hfs", NULLVP, NULLVP,
++		    "/private/var", device_name_pp, 0, MNT_DONTBROWSE,
++		    KERNEL_MOUNT_NOAUTH, vfs_context_kernel());
++		if (mount_error != 0) {
++			panic("WHYRED VAR: failed to mount HFS /dev/md0 at /private/var: %d",
++			    mount_error);
++		}
++		printf("WHYRED VAR: writable RAM HFS mounted at /private/var from md0\n");
++	}
++#endif
++
+ 	load_init_program(p);
+ 	lock_trace = 1;
+ }
+

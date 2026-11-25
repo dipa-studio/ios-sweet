@@ -1,0 +1,111 @@
+diff --git a/bsd/dev/whyred_emmc_pio_probe.c b/bsd/dev/whyred_emmc_pio_probe.c
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -98,6 +98,8 @@
+ #define WHYRED_EMMC_OCR                  0x40ff8000
+ #define WHYRED_SDCC1_CLOCK_SOURCE_MAX_HZ 384000000ULL
+ #define WHYRED_EMMC_INIT_CLOCK_HZ        200000
++#define WHYRED_EMMC_LEGACY_CLOCK_HZ      24000000
++#define WHYRED_EMMC_LEGACY_MAX_CLOCK_HZ  26000000
+ #define WHYRED_EMMC_OCR_READY            0x80000000
+ #define WHYRED_EXT_CSD_BYTES             512
+ #define WHYRED_EMMC_TIMEOUT_MS           1000
+@@ -334,6 +336,87 @@
+ 	    (unsigned long long)source_hz, base_mhz, divider,
+ 	    WHYRED_EMMC_INIT_CLOCK_HZ,
+ 	    (unsigned long long)(source_hz / (2 * divider)));
++	return 0;
++}
++
++/*
++ * Keep the card in its default legacy, 1-bit mode, but stop using the
++ * identification clock for block reads. 24 MHz is below the eMMC legacy
++ * 26 MHz limit and the Qualcomm v5 DLL remains disabled at this rate.
++ */
++static int
++whyred_emmc_set_legacy_transfer_clock(volatile uint8_t *base, uint32_t caps)
++{
++	uint32_t base_mhz = (caps >> 8) & 0xff;
++	if (base_mhz == 0) {
++		printf("WHYRED EMMC: transfer clock base is zero; keeping identification clock\n");
++		return -1;
++	}
++	uint64_t source_hz = (uint64_t)base_mhz * 1000000;
++	if (source_hz < WHYRED_SDCC1_CLOCK_SOURCE_MAX_HZ) {
++		source_hz = WHYRED_SDCC1_CLOCK_SOURCE_MAX_HZ;
++	}
++	uint32_t divider = (uint32_t)((source_hz +
++	    (2ULL * WHYRED_EMMC_LEGACY_CLOCK_HZ - 1)) /
++	    (2ULL * WHYRED_EMMC_LEGACY_CLOCK_HZ));
++	if (divider == 0) divider = 1;
++	if (divider > 1023 || source_hz / (2ULL * divider) >
++	    WHYRED_EMMC_LEGACY_MAX_CLOCK_HZ) {
++		printf("WHYRED EMMC: safe legacy transfer divider unavailable; keeping identification clock\n");
++		return -1;
++	}
++
++	uint32_t present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++	if ((present & (SDHCI_PSTATE_CMD_INHIBIT | SDHCI_PSTATE_DATA_INHIBIT)) != 0) {
++		printf("WHYRED EMMC: host busy before transfer clock change present=0x%08x\n",
++		    present);
++		return -1;
++	}
++	uint16_t old_clock = whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL);
++	whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL,
++	    old_clock & (uint16_t)~SDHCI_CLOCK_CARD_ENABLE);
++	__asm__ volatile("dsb sy" ::: "memory");
++	if ((whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL) &
++	    SDHCI_CLOCK_CARD_ENABLE) != 0) {
++		printf("WHYRED EMMC: card clock would not stop for transfer rate change\n");
++		return -1;
++	}
++
++	uint16_t clock = old_clock & (uint16_t)~(SDHCI_CLOCK_CARD_ENABLE |
++	    SDHCI_CLOCK_DIV_MASK | SDHCI_CLOCK_INT_STABLE);
++	clock |= (uint16_t)(((divider & 0xff) << 8) |
++	    ((divider & 0x300) >> 2) | SDHCI_CLOCK_INT_ENABLE);
++	whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, clock);
++	uint64_t frequency = __builtin_arm_rsr64("CNTFRQ_EL0");
++	if (frequency == 0) {
++		whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, old_clock);
++		printf("WHYRED EMMC: CNTFRQ is zero; restored identification clock\n");
++		return -1;
++	}
++	uint64_t timeout = frequency / 10; /* 100 ms */
++	uint64_t start = whyred_emmc_counter();
++	while ((whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL) &
++	    SDHCI_CLOCK_INT_STABLE) == 0) {
++		if ((whyred_emmc_counter() - start) >= timeout) {
++			whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, old_clock);
++			printf("WHYRED EMMC: 24 MHz internal clock did not stabilize; restored identification clock\n");
++			return -1;
++		}
++	}
++	clock = whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL) |
++	    SDHCI_CLOCK_CARD_ENABLE;
++	whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, clock);
++	uint64_t output_hz = source_hz / (2ULL * divider);
++	if ((whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL) &
++	    (SDHCI_CLOCK_INT_STABLE | SDHCI_CLOCK_CARD_ENABLE)) !=
++	    (SDHCI_CLOCK_INT_STABLE | SDHCI_CLOCK_CARD_ENABLE)) {
++		whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, old_clock);
++		printf("WHYRED EMMC: transfer clock readback failed; restored identification clock\n");
++		return -1;
++	}
++	printf("WHYRED EMMC: legacy 1-bit transfer clock source=%lluHz divider=%u output=%lluHz (<=26MHz); card mode unchanged\n",
++	    (unsigned long long)source_hz, divider,
++	    (unsigned long long)output_hz);
+ 	return 0;
+ }
+ 
+@@ -1343,6 +1426,9 @@
+ 			printf("WHYRED GPT: unsupported addressing/sector/partition state ocr=0x%08x sector_size=%u partition_config=0x%02x\n",
+ 			    ocr, (unsigned int)ext_csd[61], (unsigned int)ext_csd[179]);
+ 		} else {
++			if (whyred_emmc_set_legacy_transfer_clock(base, caps) != 0) {
++				printf("WHYRED EMMC: retaining 200kHz identification clock for GPT reads\n");
++			}
+ 			struct whyred_gpt_io io = { .base = base, .sectors = sectors };
+ 			whyred_emmc_live_io = io;
+ 			whyred_emmc_sector_count = sectors;
+

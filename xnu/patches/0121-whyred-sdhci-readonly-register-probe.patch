@@ -1,0 +1,118 @@
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -107,3 +107,4 @@
+ bsd/dev/sweet_ufs.c			standard
++bsd/dev/whyred_sdhci_probe.c			standard
+ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -261,6 +261,9 @@
+ #endif
+ 
+ extern kern_return_t IOFindBSDRoot(char *, unsigned int, dev_t *, u_int32_t *);
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++extern void whyred_sdhci_probe(void);
++#endif
+ extern void IOSecureBSDRoot(const char * rootName);
+ extern kern_return_t IOKitBSDInit(void );
+ extern boolean_t IOSetRecoveryBoot(bsd_bootfail_mode_t, uuid_t, boolean_t);
+@@ -1220,6 +1223,19 @@ setconf(void)
+ 		flags = 0;
+ 	}
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	/*
++	 * Opt-in, read-only snapshot of whyred's SDCC1/eMMC host. This only
++	 * reads controller registers; it issues no card command and writes no
++	 * eMMC data. Keep it disabled during ordinary boots.
++	 */
++	uint32_t whyred_sdhci_probe_requested = 0;
++	if (PE_parse_boot_argn("whyred-sdhci-probe", &whyred_sdhci_probe_requested,
++	    sizeof(whyred_sdhci_probe_requested)) && whyred_sdhci_probe_requested) {
++		whyred_sdhci_probe();
++	}
++#endif
++
+ #if CONFIG_NETBOOT
+ 	if (flags & 1) {
+ 		/* network device */
+--- /dev/null
++++ b/bsd/dev/whyred_sdhci_probe.c
+@@ -0,0 +1,75 @@
++/*
++ * Whyred SDCC1/eMMC controller snapshot.
++ *
++ * The function is called only with boot-arg whyred-sdhci-probe=1. It maps
++ * the SDHCI host register window and reads standard registers without
++ * changing controller state or issuing an eMMC command. This is a bring-up
++ * diagnostic, not a block driver.
++ */
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <machine/machine_routines.h>
++#include <vm/vm_kern.h>
++
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++
++#define WHYRED_SDCC1_HC_PHYS      0x0c0c4000ULL
++#define WHYRED_SDCC1_HC_SIZE      0x1000
++
++/* Not exported to the BSD layer by machine/machine_routines.h. */
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++static uint8_t
++whyred_sdhci_read8(volatile uint8_t *base, unsigned int offset)
++{
++	return *(volatile uint8_t *)(base + offset);
++}
++
++static uint16_t
++whyred_sdhci_read16(volatile uint8_t *base, unsigned int offset)
++{
++	return *(volatile uint16_t *)(base + offset);
++}
++
++static uint32_t
++whyred_sdhci_read32(volatile uint8_t *base, unsigned int offset)
++{
++	return *(volatile uint32_t *)(base + offset);
++}
++
++void
++whyred_sdhci_probe(void)
++{
++	vm_offset_t mapping = ml_io_map((vm_offset_t)WHYRED_SDCC1_HC_PHYS,
++	    WHYRED_SDCC1_HC_SIZE);
++	if (mapping == 0) {
++		printf("WHYRED SDHCI: ml_io_map failed for SDCC1 register window\n");
++		return;
++	}
++
++	volatile uint8_t *base = (volatile uint8_t *)(uintptr_t)mapping;
++	uint32_t present = whyred_sdhci_read32(base, 0x24);
++	uint8_t host_control = whyred_sdhci_read8(base, 0x28);
++	uint8_t power_control = whyred_sdhci_read8(base, 0x29);
++	uint16_t clock_control = whyred_sdhci_read16(base, 0x2c);
++	uint32_t int_status = whyred_sdhci_read32(base, 0x30);
++	uint32_t int_enable = whyred_sdhci_read32(base, 0x34);
++	uint32_t capabilities = whyred_sdhci_read32(base, 0x40);
++	uint32_t capabilities_1 = whyred_sdhci_read32(base, 0x44);
++	uint8_t software_reset = whyred_sdhci_read8(base, 0x2f);
++	uint16_t host_version = whyred_sdhci_read16(base, 0xfe);
++
++	printf("WHYRED SDHCI: read-only snapshot pa=0x%llx ver=0x%04x caps=0x%08x caps1=0x%08x\n",
++	    WHYRED_SDCC1_HC_PHYS, (unsigned int)host_version, capabilities, capabilities_1);
++	printf("WHYRED SDHCI: present=0x%08x host=0x%02x power=0x%02x clock=0x%04x reset=0x%02x int=0x%08x enable=0x%08x\n",
++	    present, (unsigned int)host_control, (unsigned int)power_control,
++	    (unsigned int)clock_control, (unsigned int)software_reset, int_status, int_enable);
++	printf("WHYRED SDHCI: no controller writes; no eMMC commands issued\n");
++}
++
++#else
++void
++whyred_sdhci_probe(void)
++{
++}
++#endif
+

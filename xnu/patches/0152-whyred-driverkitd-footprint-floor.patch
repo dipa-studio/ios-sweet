@@ -1,0 +1,241 @@
+--- a/bsd/kern/kern_memorystatus.c
++++ b/bsd/kern/kern_memorystatus.c
+@@ -175,9 +175,107 @@
+  * soon be in effect down in the ledgers.
+  */
+ 
++/* WHYRED_DRIVERKITD_POLICY_BEGIN */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++/* Opt-in, finite per-daemon experiment; this value is not a measured budget. */
++#define WHYRED_DRIVERKITD_MEM_MB_MAX 512
++static int32_t whyred_driverkitd_mem_mb;
++
++static bool
++whyred_is_driverkitd(proc_t p)
++{
++	return p != PROC_NULL && strcmp(p->p_name, "driverkitd") == 0;
++}
++
++static void
++whyred_driverkitd_boot_config(void)
++{
++	if (!PE_parse_boot_argn("whyred_driverkitd_mem_mb", &whyred_driverkitd_mem_mb,
++	    sizeof(whyred_driverkitd_mem_mb))) {
++		return;
++	}
++	if (whyred_driverkitd_mem_mb < 0 ||
++	    whyred_driverkitd_mem_mb > WHYRED_DRIVERKITD_MEM_MB_MAX) {
++		printf("WHYRED driverkitd invalid floor_mb=%d (valid 0..%d); disabled\n",
++		    whyred_driverkitd_mem_mb, WHYRED_DRIVERKITD_MEM_MB_MAX);
++		whyred_driverkitd_mem_mb = 0;
++	} else if (whyred_driverkitd_mem_mb > 0) {
++		printf("WHYRED driverkitd footprint floor_mb=%d enabled\n",
++		    whyred_driverkitd_mem_mb);
++	}
++}
++
++static int32_t
++whyred_driverkitd_effective_mb(int32_t limit)
++{
++	/* <= 0 is written to the task ledger as -1: the system default.
++	 * A zero system default means unlimited and must never be lowered. */
++	return limit > 0 ? limit : max_task_footprint_mb;
++}
++
++static int32_t
++whyred_driverkitd_memlimit(proc_t p, int32_t limit)
++{
++	if (whyred_driverkitd_mem_mb == 0 || !whyred_is_driverkitd(p)) {
++		return limit;
++	}
++	int32_t effective_mb = whyred_driverkitd_effective_mb(limit);
++	if (effective_mb > 0 && effective_mb < whyred_driverkitd_mem_mb) {
++		return whyred_driverkitd_mem_mb;
++	}
++	return limit;
++}
++
++static void
++whyred_driverkitd_log_limits(proc_t p, int32_t old_active, int32_t old_inactive,
++    const char *source)
++{
++	if (whyred_driverkitd_mem_mb == 0 || !whyred_is_driverkitd(p)) {
++		return;
++	}
++	/* Called only when assigning budgets, never from state transitions.
++	 * old_* is the requested budget before the floor, not a prior sample.
++	 * effective_mb=0 denotes an unlimited system default. */
++	printf("WHYRED driverkitd limits source=%s pid=%d floor_mb=%d "
++	    "old_active_raw_mb=%d old_inactive_raw_mb=%d "
++	    "old_active_effective_mb=%d old_inactive_effective_mb=%d "
++	    "new_active_effective_mb=%d new_inactive_effective_mb=%d "
++	    "active_fatal=%d inactive_fatal=%d footprint_bytes=%llu\n",
++	    source, proc_getpid(p), whyred_driverkitd_mem_mb, old_active, old_inactive,
++	    whyred_driverkitd_effective_mb(old_active),
++	    whyred_driverkitd_effective_mb(old_inactive),
++	    whyred_driverkitd_effective_mb(p->p_memstat_memlimit_active),
++	    whyred_driverkitd_effective_mb(p->p_memstat_memlimit_inactive),
++	    !!(p->p_memstat_state & P_MEMSTAT_MEMLIMIT_ACTIVE_FATAL),
++	    !!(p->p_memstat_state & P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL),
++	    get_task_phys_footprint(proc_task(p)));
++}
++
++static void
++whyred_driverkitd_log_footprint(proc_t p, boolean_t warning,
++    boolean_t active, boolean_t fatal)
++{
++	if (!whyred_is_driverkitd(p)) {
++		return;
++	}
++	int ledger_mb = -1;
++	kern_return_t kr = task_get_phys_footprint_limit(proc_task(p), &ledger_mb);
++	printf("WHYRED driverkitd footprint event=%s pid=%d ledger_mb=%d "
++	    "ledger_status=%d active=%d fatal=%d floor_mb=%d "
++	    "footprint_bytes=%llu active_raw_mb=%d inactive_raw_mb=%d\n",
++	    warning ? "warning" : "exceeded", proc_getpid(p), ledger_mb, kr,
++	    active, fatal, whyred_driverkitd_mem_mb,
++	    get_task_phys_footprint(proc_task(p)),
++	    p->p_memstat_memlimit_active, p->p_memstat_memlimit_inactive);
++}
++#else
++#define whyred_driverkitd_memlimit(p, limit) (limit)
++#endif /* ARM64_BOARD_CONFIG_SWEET */
++/* WHYRED_DRIVERKITD_POLICY_END */
++
+ #define SET_ACTIVE_LIMITS_LOCKED(p, limit, is_fatal)                    \
+ MACRO_BEGIN                                                             \
+-(p)->p_memstat_memlimit_active = (limit);                               \
++(p)->p_memstat_memlimit_active = whyred_driverkitd_memlimit((p), (limit));                               \
+    if (is_fatal) {                                                      \
+ 	   (p)->p_memstat_state |= P_MEMSTAT_MEMLIMIT_ACTIVE_FATAL;     \
+    } else {                                                             \
+@@ -187,7 +285,7 @@
+ 
+ #define SET_INACTIVE_LIMITS_LOCKED(p, limit, is_fatal)                  \
+ MACRO_BEGIN                                                             \
+-(p)->p_memstat_memlimit_inactive = (limit);                             \
++(p)->p_memstat_memlimit_inactive = whyred_driverkitd_memlimit((p), (limit));                             \
+    if (is_fatal) {                                                      \
+ 	   (p)->p_memstat_state |= P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL;   \
+    } else {                                                             \
+@@ -565,6 +663,52 @@
+ 	}
+ }
+ 
++/* WHYRED_DRIVERKITD_EXEC_BEGIN */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++void
++memorystatus_whyred_driverkitd_exec(proc_t p)
++{
++	if (whyred_driverkitd_mem_mb == 0 || !whyred_is_driverkitd(p)) {
++		return;
++	}
++	/* launchd may spawn xpcproxy with the budget, then exec driverkitd
++	 * without POSIX_SPAWN_JETSAM_SET. Reapply only after the actual image
++	 * name and new proc/task association are installed, before user return. */
++	proc_list_lock();
++	int32_t old_active = p->p_memstat_memlimit_active;
++	int32_t old_inactive = p->p_memstat_memlimit_inactive;
++	boolean_t active_fatal = !!(p->p_memstat_state & P_MEMSTAT_MEMLIMIT_ACTIVE_FATAL);
++	boolean_t inactive_fatal = !!(p->p_memstat_state & P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL);
++	SET_ACTIVE_LIMITS_LOCKED(p, old_active, active_fatal);
++	SET_INACTIVE_LIMITS_LOCKED(p, old_inactive, inactive_fatal);
++	boolean_t use_active = proc_jetsam_state_is_active_locked(p);
++	/* Do not disturb a direct ledger setting when this floor changed
++	 * neither the selected budget nor its fatal policy. The other slot
++	 * will be picked up by the normal active/inactive transition path. */
++	if ((use_active && p->p_memstat_memlimit_active != old_active) ||
++	    (!use_active && p->p_memstat_memlimit_inactive != old_inactive)) {
++		boolean_t is_fatal;
++		if (use_active) {
++			CACHE_ACTIVE_LIMITS_LOCKED(p, is_fatal);
++		} else {
++			CACHE_INACTIVE_LIMITS_LOCKED(p, is_fatal);
++		}
++		if (memorystatus_highwater_enabled) {
++			kern_return_t kr = task_set_phys_footprint_limit_internal(proc_task(p),
++			    p->p_memstat_memlimit > 0 ? p->p_memstat_memlimit : -1,
++			    NULL, use_active, is_fatal);
++			if (kr != KERN_SUCCESS) {
++				printf("WHYRED driverkitd exec ledger update failed pid=%d status=%d\n",
++				    proc_getpid(p), kr);
++			}
++		}
++	}
++	whyred_driverkitd_log_limits(p, old_active, old_inactive, "exec");
++	proc_list_unlock();
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
++/* WHYRED_DRIVERKITD_EXEC_END */
++
+ void
+ memorystatus_act_on_legacy_footprint_entitlement(proc_t p, boolean_t footprint_increase)
+ {
+@@ -1311,6 +1455,10 @@
+ {
+ 	kern_return_t result;
+ 	int i;
++
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	whyred_driverkitd_boot_config();
++#endif
+ 
+ #if CONFIG_FREEZE
+ 	memorystatus_freeze_jetsam_band = JETSAM_PRIORITY_FREEZER;
+@@ -2550,6 +2698,10 @@
+ 		 * Initialize the inactive limit variants for this process.
+ 		 */
+ 		SET_INACTIVE_LIMITS_LOCKED(p, memlimit_inactive, memlimit_inactive_is_fatal);
++
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		whyred_driverkitd_log_limits(p, memlimit_active, memlimit_inactive, "spawn");
++#endif
+ 
+ 		/*
+ 		 * Initialize the cached limits for target process.
+@@ -4227,6 +4379,10 @@
+ 	os_reason_t jetsam_reason = OS_REASON_NULL;
+ 
+ 	proc_t p = current_proc();
++
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	whyred_driverkitd_log_footprint(p, warning, memlimit_is_active, memlimit_is_fatal);
++#endif
+ 
+ #if VM_PRESSURE_EVENTS
+ 	if (warning == TRUE) {
+@@ -7696,6 +7852,10 @@
+ 	 * Store the inactive limit variants in the proc.
+ 	 */
+ 	SET_INACTIVE_LIMITS_LOCKED(p, p_entry->memlimit_inactive, p_entry->memlimit_inactive_attr);
++
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	whyred_driverkitd_log_limits(p, p_entry->memlimit_active, p_entry->memlimit_inactive, "update");
++#endif
+ 
+ 	/*
+ 	 * Enforce appropriate limit variant by updating the cached values
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -3250,6 +3250,9 @@
+ 	proc_legacy_footprint_entitled(p, task);
+ 	proc_ios13extended_footprint_entitled(p, task);
+ 	proc_increased_memory_limit_entitled(p, task);
++#if CONFIG_MEMORYSTATUS && defined(ARM64_BOARD_CONFIG_SWEET)
++	memorystatus_whyred_driverkitd_exec(p);
++#endif
+ }
+ #endif /* __arm64__ */
+ 
+--- a/bsd/sys/kern_memorystatus.h
++++ b/bsd/sys/kern_memorystatus.h
+@@ -620,6 +620,9 @@
+ void memorystatus_act_on_legacy_footprint_entitlement(proc_t p, boolean_t footprint_increase);
+ void memorystatus_act_on_ios13extended_footprint_entitlement(proc_t p);
+ void memorystatus_act_on_entitled_task_limit(proc_t p);
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++void memorystatus_whyred_driverkitd_exec(proc_t p);
++#endif
+ #endif /* __arm64__ */
+ 
+ #endif /* CONFIG_MEMORYSTATUS */

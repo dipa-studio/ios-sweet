@@ -1,0 +1,56 @@
+--- a/osfmk/arm64/cpu.c
++++ b/osfmk/arm64/cpu.c
+@@ -480,10 +480,29 @@
+ 	}
+ 
+ 	return ipending || (nirqc != irqc);
+ }
+ 
++#if defined(SWEET)
++static bool
++whyred_idle_wait_pending(void)
++{
++	/* Idle_context runs on CPU_ISTACKPTR. An IRQ handler resets SP to
++	 * that same top, so it must not execute until Idle_load_context has
++	 * restored the thread stack. WFI wakes for a pending GIC IRQ with
++	 * PSTATE.I set; WFE is not required to treat that as an event.
++	 * Keep the existing GIC priority/group enables and DAIF mask intact.
++	 */
++	assert(!ml_get_interrupts_enabled());
++	while (!cpu_interrupt_is_pending()) {
++		__builtin_arm_dsb(DSB_SY);
++		__builtin_arm_wfi();
++	}
++	return true;
++}
++#endif
++
+ /*
+  *	Routine:	cpu_idle
+  *	Function:
+  */
+ void __attribute__((noreturn))
+@@ -548,20 +567,20 @@
+ 			KDBG(CPUPM_IDLE_TIMER_WFE | DBG_FUNC_START, ipending, cpu_data_ptr->wfe_count, ~0ULL);
+ #if defined(SWEET)
+ 			static uint32_t whyred_timer_wfe_probe_state;
+ 			if (whyred_select_probe_active && whyred_timer_wfe_probe_state == 0) {
+ 				whyred_timer_wfe_probe_state = 1;
+-				kprintf("WHYRED IDLE: timer WFE begin daif=%llx isr=%llx hppir1=%llx cntvct=%llx ctl=%llx tval=%llx rtcPop=%llx\n",
++				kprintf("WHYRED IDLE: timer masked WFI begin daif=%llx isr=%llx hppir1=%llx cntvct=%llx ctl=%llx tval=%llx rtcPop=%llx\n",
+ 				    __builtin_arm_rsr64("DAIF"), __builtin_arm_rsr64("ISR_EL1"),
+ 				    __builtin_arm_rsr64("ICC_HPPIR1_EL1"), __builtin_arm_rsr64("CNTVCT_EL0"),
+ 				    __builtin_arm_rsr64("CNTV_CTL_EL0"), __builtin_arm_rsr64("CNTV_TVAL_EL0"),
+ 				    cpu_data_ptr->rtcPop);
+ 			}
+-			ipending = wfe_to_deadline_or_interrupt(cid, ~0ULL, cpu_data_ptr, true);
++			ipending = whyred_idle_wait_pending();
+ 			if (whyred_select_probe_active && whyred_timer_wfe_probe_state == 1) {
+ 				whyred_timer_wfe_probe_state = 2;
+-				kprintf("WHYRED IDLE: timer WFE returned ipending=%u daif=%llx isr=%llx hppir1=%llx cntvct=%llx ctl=%llx tval=%llx rtcPop=%llx\n",
++				kprintf("WHYRED IDLE: timer masked WFI returned ipending=%u daif=%llx isr=%llx hppir1=%llx cntvct=%llx ctl=%llx tval=%llx rtcPop=%llx\n",
+ 				    ipending, __builtin_arm_rsr64("DAIF"), __builtin_arm_rsr64("ISR_EL1"),
+ 				    __builtin_arm_rsr64("ICC_HPPIR1_EL1"), __builtin_arm_rsr64("CNTVCT_EL0"),
+ 				    __builtin_arm_rsr64("CNTV_CTL_EL0"), __builtin_arm_rsr64("CNTV_TVAL_EL0"),
+ 				    cpu_data_ptr->rtcPop);
+ 			}

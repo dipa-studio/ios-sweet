@@ -1,0 +1,30 @@
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -456,7 +456,11 @@
+ 			return 0;
+ 		}
+ 		if ((whyred_emmc_counter() - start) >= timeout) {
+-			return -1;
++			/* The reader may have been descheduled after the first MMIO sample.
++			 * Check completion once more before declaring a timeout; no new wait. */
++			status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++			if (status_out != NULL) *status_out = status;
++			return (status & (wanted | SDHCI_INT_ERROR_MASK)) != 0 ? 0 : -1;
+ 		}
+ 	}
+ }
+--- a/bsd/dev/whyred_emmc_perf.h
++++ b/bsd/dev/whyred_emmc_perf.h
+@@ -368,8 +368,10 @@
+ 		whyred_emmc_perf.cmd17++;
+ 		if (whyred_emmc_read_sector(io, lba + n, data + n * 512) == 0) continue;
+ 		whyred_emmc_perf.errors++;
+-		if (!whyred_emmc_xo_active || whyred_emmc_recover_read(io) != 0 ||
+-		    whyred_emmc_restore_clock(io->base) != 0) goto failed;
++		/* Baseline CMD17 needs recovery too, including after a batch fallback.
++		 * Restore the inherited clock only when an XO override is still active. */
++		if (whyred_emmc_recover_read(io) != 0 ||
++		    (whyred_emmc_xo_active && whyred_emmc_restore_clock(io->base) != 0)) goto failed;
+ 		whyred_emmc_perf.fallbacks++;
+ 		whyred_emmc_multi_enabled = false;
+ 		whyred_emmc_perf.cmd17++;

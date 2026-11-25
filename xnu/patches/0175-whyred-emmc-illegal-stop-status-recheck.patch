@@ -1,0 +1,38 @@
+--- a/bsd/dev/whyred_emmc_perf.h
++++ b/bsd/dev/whyred_emmc_perf.h
+@@ -221,15 +221,32 @@
+ 		response = 0;
+ 		int status_error = whyred_emmc_command(base, WHYRED_EMMC_RCA << 16,
+ 		    (13U << 8) | SDHCI_CMD_RESP_SHORT_CRC_INDEX, &response);
++		uint32_t prior_status = response;
++		bool status_rechecked = false;
++		/* A failed STOP issued after a completed single-block read can leave
++		 * ILLEGAL_COMMAND in the first status response. Never mask that error:
++		 * require a second, error-free status before allowing a fresh reread. */
++		if (stop_error && !status_error &&
++		    (response & WHYRED_EMMC_R1_FAILURE_MASK) == (1U << 22) &&
++		    ((response >> 9) & 15U) == WHYRED_EMMC_STATUS_TRANSFER &&
++		    (response & WHYRED_EMMC_STATUS_READY) &&
++		    !(whyred_emmc_read32(base, SDHCI_PRESENT_STATE) & 3U)) {
++			status_rechecked = true;
++			response = 0;
++			status_error = whyred_emmc_command(base, WHYRED_EMMC_RCA << 16,
++			    (13U << 8) | SDHCI_CMD_RESP_SHORT_CRC_INDEX, &response);
++		}
+ 		uint32_t present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
+ 		uint32_t pending = whyred_emmc_read32(base, SDHCI_INT_STATUS);
+-		printf("WHYRED EMMC: recovery attempt=%u stop=%d status=%d r1=%08x present=%08x int=%08x\n",
+-		    attempt + 1, stop_error, status_error, response, present, pending);
++		uint32_t fifo = whyred_emmc_read32(base, SDHCI_CORE_MCI_FIFO_COUNT);
++		printf("WHYRED EMMC: recovery attempt=%u stop=%d status=%d r1=%08x prior=%08x recheck=%u present=%08x int=%08x fifo=%08x\n",
++		    attempt + 1, stop_error, status_error, response, prior_status,
++		    status_rechecked, present, pending, fifo);
+ 		if (!status_error && !(response & WHYRED_EMMC_R1_FAILURE_MASK) &&
+ 		    ((response >> 9) & 15U) == WHYRED_EMMC_STATUS_TRANSFER &&
+ 		    (response & WHYRED_EMMC_STATUS_READY) &&
+ 		    !(present & (3U | SDHCI_PSTATE_DATA_AVAILABLE)) && pending == 0 &&
+-		    whyred_emmc_read32(base, SDHCI_CORE_MCI_FIFO_COUNT) == 0) return 0;
++		    fifo == 0) return 0;
+ 		if (attempt == 0 && whyred_emmc_reset_read_host(base) != 0) return -1;
+ 	}
+ 	return -1;

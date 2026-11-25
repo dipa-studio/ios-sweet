@@ -1,0 +1,36 @@
+--- a/bsd/dev/arm/whyred_container_trace.h
++++ b/bsd/dev/arm/whyred_container_trace.h
+@@ -213,6 +213,25 @@
+ 	return error;
+ }
+ 
++/* Best-effort post-call snapshot: user memory can change after the failure.
++ * No attribute values or output buffer bytes are inspected. */
++static void
++whyred_ct_attrlist(unsigned int id, unsigned short code, const uint64_t *args)
++{
++	unsigned int slot;
++	if (code == SYS_getattrlist || code == SYS_fgetattrlist || code == SYS_getattrlistbulk) slot = 1;
++	else if (code == SYS_getattrlistat) slot = 2;
++	else return;
++	/* ARM64 attrlist is two 16-bit fields followed by five 32-bit masks. */
++	struct { uint16_t count, reserved; uint32_t common, volume, directory, file, fork; } a = {0};
++	int copied = copyin((user_addr_t)args[slot], &a, sizeof(a));
++	if (copied) bzero(&a, sizeof(a));
++	printf("WHYRED FSERR: id=%u attrlist_copy_errno=%d count=%u reserved=%u common=0x%x volume=0x%x\n",
++	    id, copied, (unsigned int)a.count, (unsigned int)a.reserved, a.common, a.volume);
++	printf("WHYRED FSERR: id=%u directory=0x%x file=0x%x fork=0x%x bufsize=%llu options=0x%llx\n",
++	    id, a.directory, a.file, a.fork, args[slot + 2], args[slot + 3]);
++}
++
+ static void
+ whyred_container_trace_error(struct proc *proc, struct uthread *uthread,
+     struct arm_saved_state *state, unsigned short code, int error)
+@@ -260,6 +279,7 @@
+ 	}
+ 	printf("WHYRED FSERR: id=%u args=%llx,%llx,%llx,%llx,%llx,%llx,%llx\n",
+ 	    id, args[0], args[1], args[2], args[3], args[4], args[5], args[6]);
++	if (error == EINVAL) whyred_ct_attrlist(id, code, args);
+ 	char path[WHYRED_CT_PATH_BYTES];
+ 	if (call.path0 >= 0) {
+ 		int result = whyred_ct_userpath((user_addr_t)args[call.path0], path);

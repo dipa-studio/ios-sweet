@@ -1,0 +1,212 @@
+--- a/bsd/miscfs/apfs/apfs.h
++++ b/bsd/miscfs/apfs/apfs.h
+@@ -25,6 +25,10 @@
+ 
+ /* Buckets in the table that finds an existing vnode by object identifier. */
+ #define APFS_HASH_BUCKETS 1024
++
++/* Bounded diagnostics; enabled only by whyred-apfs-errors=1 before mount I/O. */
++void apfs_read_error(const char *stage, uint64_t ino, uint64_t offset,
++    uint64_t length, int error, int detail);
+ 
+ struct apfs_node;
+ struct apfs_devctx;
+--- a/bsd/miscfs/apfs/apfs_vfsops.c
++++ b/bsd/miscfs/apfs/apfs_vfsops.c
+@@ -20,6 +20,27 @@
+ #include <os/atomic_private.h>
+ #include <pexpert/pexpert.h>
+ 
++/* No allocation, pathname lookup or VFS recursion on a failing paging path. */
++static int apfs_error_trace;
++static uint32_t apfs_error_sequence;
++extern unsigned int vm_page_free_count, vm_page_wire_count;
++
++void
++apfs_read_error(const char *stage, uint64_t ino, uint64_t offset,
++    uint64_t length, int error, int detail)
++{
++    if (!apfs_error_trace || !error ||
++        os_atomic_load(&apfs_error_sequence, relaxed) >= 32) return;
++    uint32_t sequence = os_atomic_inc_orig(&apfs_error_sequence, relaxed);
++    if (sequence >= 32) return;
++    printf("WHYRED APFS ERROR: seq=%u stage=%s ino=%llu off=%llu length=%llu "
++        "errno=%d detail=0x%x free=%u wired=%u\n", sequence + 1, stage,
++        (unsigned long long)ino, (unsigned long long)offset,
++        (unsigned long long)length, error, (unsigned int)detail,
++        os_atomic_load(&vm_page_free_count, relaxed),
++        os_atomic_load(&vm_page_wire_count, relaxed));
++}
++
+ static LCK_GRP_DECLARE(apfs_lck_grp, "whyred-apfs");
+ 
+ struct apfs_devctx {
+@@ -38,22 +59,30 @@
+ 
+     if (off > dc->size || len > dc->size - off ||
+         (off % dc->block) != 0 || (len % dc->block) != 0) {
++        apfs_read_error("dev-bounds", 0, off, len, EIO, dc->block);
+         return EIO;
+     }
+     error = vnode_getwithref(dc->vp);
+-    if (error) return error;
++    if (error) { apfs_read_error("dev-vnode", 0, off, len, error, 0); return error; }
+     while (len != 0) {
+         size_t n = MIN(len, 64 * 1024);
+         buf_t bp = buf_alloc(dc->vp);
+-        if (bp == NULL) { error = ENOMEM; break; }
++        if (bp == NULL) { error = ENOMEM; apfs_read_error("dev-buf-alloc", 0, off, n, error, 0); break; }
+         buf_reset(bp, B_READ);
+         buf_setblkno(bp, (daddr64_t)(off / dc->block));
+         buf_setlblkno(bp, (daddr64_t)(off / dc->block));
+         buf_setcount(bp, (uint32_t)n);
+         buf_setdataptr(bp, (uintptr_t)out);
+         error = VNOP_STRATEGY(bp);
+-        if (error == 0) error = (int)buf_biowait(bp);
+-        if (error == 0 && (buf_resid(bp) != 0 || buf_count(bp) != n)) error = EIO;
++        if (error) apfs_read_error("dev-strategy", 0, off, n, error, 0);
++        if (error == 0) {
++            error = (int)buf_biowait(bp);
++            if (error) apfs_read_error("dev-biowait", 0, off, n, error, (int)buf_resid(bp));
++        }
++        if (error == 0 && (buf_resid(bp) != 0 || buf_count(bp) != n)) {
++            error = EIO;
++            apfs_read_error("dev-short", 0, off, n, error, (int)buf_resid(bp));
++        }
+         buf_free(bp);
+         if (error) break;
+         off += n;
+@@ -294,6 +323,9 @@
+     /* The whyred BSD eMMC and md transports both use 512-byte block numbers. */
+     if (block != 512 || blocks < 8 || blocks > UINT64_MAX / block) return EINVAL;
+ 
++    /* Parse once before parser/device operations and before taking mount locks. */
++    (void)PE_parse_boot_argn("whyred-apfs-errors", &apfs_error_trace, sizeof(apfs_error_trace));
++    apfs_error_trace = (apfs_error_trace == 1);
+     am = kalloc_type(struct apfs_mount, Z_WAITOK | Z_ZERO);
+     if (am == NULL) return ENOMEM;
+     lck_mtx_init(&am->am_lock, &apfs_lck_grp, LCK_ATTR_NULL);
+--- a/bsd/miscfs/apfs/apfs_vnops.c
++++ b/bsd/miscfs/apfs/apfs_vnops.c
+@@ -298,10 +298,12 @@
+ 		apfs_unlock(am);
+ 		os_atomic_dec(&am->am_nx.requests, relaxed);
+ 		if (error) {
++			apfs_read_error("fill-file", ino->obj_id, at, want, error, (int)got);
+ 			break;
+ 		}
+ 		if (got == 0) {
+ 			error = EIO; /* metadata promised bytes before EOF */
++			apfs_read_error("fill-empty", ino->obj_id, at, want, error, 0);
+ 			break;
+ 		}
+ 		at += (off_t)got;
+@@ -326,11 +328,13 @@
+ 		vm_offset_t address = 0;
+ 		upl_t upl = NULL;
+ 		int upl_size;
++		kern_return_t kr;
+ 
+ 		/* what the cache has already, up to the first page it has not */
+ 		error = cluster_copy_ubc_data(vp, uio, &resid, 0);
+ 		*cached += (uint64_t)(count - resid);
+ 		if (error) {
++			apfs_read_error("read-cache-copy", ino->obj_id, uio_offset(uio), count, error, resid);
+ 			break;
+ 		}
+ 		if (resid == 0) {
+@@ -364,12 +368,16 @@
+ 			upl_end = upl_pos + APFS_FILL_MAX;
+ 		}
+ 		upl_size = (int)(upl_end - upl_pos);
+-		if (ubc_create_upl_kernel(vp, upl_pos, upl_size, &upl, &pl, UPL_SET_LITE,
+-		    VM_KERN_MEMORY_FILE) != KERN_SUCCESS || upl == NULL) {
++		kr = ubc_create_upl_kernel(vp, upl_pos, upl_size, &upl, &pl, UPL_SET_LITE,
++		    VM_KERN_MEMORY_FILE);
++		if (kr != KERN_SUCCESS || upl == NULL) {
+ 			error = EIO;
+-			break;
+-		}
+-		if (ubc_upl_map(upl, &address) != KERN_SUCCESS || address == 0) {
++			apfs_read_error("read-upl-create", ino->obj_id, upl_pos, upl_size, error, kr);
++			break;
++		}
++		kr = ubc_upl_map(upl, &address);
++		if (kr != KERN_SUCCESS || address == 0) {
++			apfs_read_error("read-upl-map", ino->obj_id, upl_pos, upl_size, EIO, kr);
+ 			ubc_upl_abort_range(upl, 0, (upl_size_t)upl_size, UPL_ABORT_FREE_ON_EMPTY);
+ 			error = EIO;
+ 			break;
+@@ -397,12 +405,14 @@
+ 		copy = (int)(MIN(upl_end, want_end) - pos);
+ 		copy_resid = copy;
+ 		error = cluster_copy_upl_data(uio, upl, (int)(pos - upl_pos), &copy_resid);
++		if (error) apfs_read_error("read-upl-copy", ino->obj_id, pos, copy, error, copy_resid);
+ 		ubc_upl_commit_range(upl, 0, (upl_size_t)upl_size, UPL_COMMIT_FREE_ON_EMPTY |
+ 		    UPL_COMMIT_INACTIVATE | UPL_COMMIT_CLEAR_DIRTY | UPL_COMMIT_WRITTEN_BY_KERNEL);
+ 		if (error) {
+ 			break;
+ 		}
+ 		if (copy_resid == copy) {
++			apfs_read_error("read-no-progress", ino->obj_id, pos, copy, EIO, copy_resid);
+ 			error = EIO;            /* (nothing copied: cannot happen, and must not loop) */
+ 			break;
+ 		}
+@@ -455,6 +465,7 @@
+ 			error = apfs_read_file(&am->am_vol, &ino, &APFS_VP(vp)->an_cf,
+ 			    (uint64_t)uio_offset(uio), buf, want, &got);
+ 			apfs_unlock(am);
++			if (error) apfs_read_error("direct-file", ino.obj_id, uio_offset(uio), want, error, (int)got);
+ 			if (error || got == 0) {
+ 				break;
+ 			}
+@@ -501,7 +512,8 @@
+ 	if (uio_offset(uio) < 0) {
+ 		return EINVAL;
+ 	}
+-	if (!am->am_ubc_read || !UBCINFOEXISTS(vp)) {
++	/* F_NOCACHE is translated to IO_NOCACHE by vn_read; retain a true direct path. */
++	if ((ap->a_ioflag & IO_NOCACHE) || !am->am_ubc_read || !UBCINFOEXISTS(vp)) {
+ 		return apfs_read_direct(ap);
+ 	}
+ 	ino = APFS_VP(vp)->an_ino;
+@@ -543,20 +555,25 @@
+ 	uint64_t t0 = apfs_ticks();
+ 	struct apfs_lock_proc *lp = NULL;
+ 	off_t at, end;
++	kern_return_t kr = KERN_SUCCESS;
+ 	int error = 0;
+ 
+ 	if (upl == NULL) {
++		apfs_read_error("pagein-no-upl", APFS_VP(vp)->an_id, offset, ap->a_size, EINVAL, ap->a_flags);
+ 		return EINVAL;
+ 	}
+ 	if (offset < 0 || ap->a_size <= 0 || (uint64_t)offset > INT64_MAX - (uint64_t)ap->a_size ||
+ 	    (offset & PAGE_MASK_64) || (ap->a_size & PAGE_MASK) ||
+ 	    (upl_offset & PAGE_MASK)) {
+ 		error = EINVAL;
++		apfs_read_error("pagein-args", APFS_VP(vp)->an_id, offset, ap->a_size, error, ap->a_flags);
+ 	} else {
+ 		ino = APFS_VP(vp)->an_ino;
+ 		size = APFS_VP(vp)->an_size;
+-		if (ubc_upl_map(upl, &address) != KERN_SUCCESS) {
++		kr = ubc_upl_map(upl, &address);
++		if (kr != KERN_SUCCESS) {
+ 			error = ENOMEM;
++			apfs_read_error("pagein-upl-map", ino.obj_id, offset, ap->a_size, error, kr);
+ 		}
+ 	}
+ 	if (error) {
+@@ -603,10 +620,12 @@
+ 		apfs_unlock(am);
+ 		os_atomic_dec(&am->am_nx.requests, relaxed);
+ 		if (error) {
++			apfs_read_error("pagein-file", ino.obj_id, at, want, error, (int)got);
+ 			break;
+ 		}
+ 		if (got == 0) {
+ 			error = EIO; /* do not execute zero-filled replacements for missing data */
++			apfs_read_error("pagein-empty", ino.obj_id, at, want, error, 0);
+ 			break;
+ 		}
+ 		at += got;

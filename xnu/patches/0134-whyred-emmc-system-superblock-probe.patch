@@ -1,0 +1,62 @@
+From: Codex <codex@openai.com>
+Subject: [PATCH] whyred: add opt-in read-only system superblock probe
+
+Read one bounded sector from the validated system GPT partition and report
+the ext4 superblock magic. Keep md0 as root and never write eMMC media.
+
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -801,6 +801,45 @@
+ static LCK_MTX_DECLARE(whyred_emmc_lock, &whyred_emmc_grp);
+ static struct whyred_gpt_io whyred_emmc_live_io;
+ 
++static void
++whyred_emmc_system_probe(void)
++{
++	uint32_t requested = 0;
++	if (!PE_parse_boot_argn("whyred-emmc-system-probe", &requested,
++	    sizeof(requested)) || requested == 0) {
++		return;
++	}
++	const struct whyred_gpt_partition *system = NULL;
++	for (uint32_t i = 0; i < whyred_gpt_part_count; i++) {
++		if (strcmp(whyred_gpt_parts[i].name, "system") == 0) {
++			if (system != NULL) {
++				printf("WHYRED ROOTFS PROBE: duplicate system GPT entries; skipped\n");
++				return;
++			}
++			system = &whyred_gpt_parts[i];
++		}
++	}
++	if (system == NULL || system->last - system->first < 2 ||
++	    system->first > UINT32_MAX - 2 || system->first + 2 >= whyred_emmc_sector_count) {
++		printf("WHYRED ROOTFS PROBE: valid system partition not found; skipped\n");
++		return;
++	}
++
++	/* ext4's 1024-byte superblock begins at partition offset 1024. */
++	uint8_t sector[WHYRED_GPT_BLOCK_BYTES];
++	uint32_t lba = (uint32_t)system->first + 2;
++	lck_mtx_lock(&whyred_emmc_lock);
++	int read_error = whyred_emmc_read_sector(&whyred_emmc_live_io, lba, sector);
++	lck_mtx_unlock(&whyred_emmc_lock);
++	if (read_error != 0) {
++		printf("WHYRED ROOTFS PROBE: system superblock sector read failed lba=%u\n", lba);
++		return;
++	}
++	uint16_t ext4_magic = (uint16_t)sector[0x38] | ((uint16_t)sector[0x39] << 8);
++	printf("WHYRED ROOTFS PROBE: one read-only system superblock sector lba=%u ext4_magic=0x%04x result=%s\n",
++	    lba, ext4_magic, ext4_magic == 0xef53 ? "ext4" : "not-ext4");
++}
++
+ static const struct whyred_gpt_partition *
+ whyred_emmc_partition(dev_t dev)
+ {
+@@ -1359,6 +1398,7 @@
+ 					printf("WHYRED EMMC DISK: registration failed error=%d\n", publish_error);
+ 				} else {
+ 					whyred_emmc_block_ready = true;
++					whyred_emmc_system_probe();
+ 				}
+ 			}
+ 		}

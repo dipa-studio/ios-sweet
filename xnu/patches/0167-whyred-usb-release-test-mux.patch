@@ -1,0 +1,97 @@
+--- a/bsd/dev/whyred_usb_hw.h
++++ b/bsd/dev/whyred_usb_hw.h
+@@ -23,10 +23,15 @@
+ #define WHYRED_USB_QS_SIZE 0x100u
+ #define WHYRED_USB_CLK_OFF (1u << 31)
+ #define WHYRED_USB_PLL_LOCK (1u << 5)
+ #define WHYRED_USB_PHY_POWERDOWN 0xb4u
+ #define WHYRED_USB_PHY_PLL_STATUS 0x38u
++#define WHYRED_USB_PHY_UTMI_CTRL1 0xc0u
++#define WHYRED_USB_PHY_UTMI_CTRL2 0xc4u
++#define WHYRED_USB_UTMI_TEST_MUX (1u << 6)
++#define WHYRED_USB_UTMI_NONDRIVE_FS ((1u << 4) | (1u << 2) | 1u)
++#define WHYRED_USB_UTMI_OVERRIDE_MASK 0x1fu
+ #define WHYRED_USB_CLOCKS 6u
+ #define WHYRED_USB_CLOCK_POLLS 1000u
+ #define WHYRED_USB_PHY_POLLS 1000u
+ #define WHYRED_USB_PHY_SETTLE_US 150u
+ 
+@@ -52,10 +57,12 @@
+     uintptr_t gcc, dwc, phy, qs;
+     uint32_t gdscr, reset, clocks[WHYRED_USB_CLOCKS], changed_clocks, sampled_clocks;
+     uint32_t ref_gate, ref_vote, phy_power, phy_pll, id, gctl, phy_cfg;
+     uint32_t qusb_reset, ahb_reset, phy_power_before, phy_pll_before;
+     uint32_t phy_wake_attempted, phy_wake_changed, phy_wake_restored, phy_polls;
++    uint32_t utmi1_before, utmi2_before, utmi2_after, utmi2_restore;
++    uint32_t utmi_release_attempted, utmi_release_changed, utmi_release_restored;
+ };
+ 
+ /* Only undo branch enable bits introduced by this attempt, before DMA starts. */
+ static void
+ whyred_usb_hw_rollback(const struct whyred_usb_io *io, struct whyred_usb_hw *hw)
+@@ -168,10 +175,46 @@
+ map_error:
+     whyred_usb_hw_rollback(io, hw);
+     return WHYRED_USB_HW_MAP;
+ }
+ 
++/* MiCode's charger high-Z sequence overrides the controller's UTMI outputs
++ * with non-drive via TEST_MUX. V87 observes CTRL1=0x35 and CTRL2=0x40 after
++ * powered wake. Release only that mux, after the controller is halted and
++ * before installing DMA. Leave CTRL1, interface-select, tuning and PLL alone.
++ * Major-rev1 PHY registers have byte data (word reads can replicate the byte).
++ * Reject unfamiliar active overrides; never claim that readback proves a link.
++ */
++static bool
++whyred_usb_hw_release_test(const struct whyred_usb_io *io, struct whyred_usb_hw *hw)
++{
++    if (!hw->phy || !hw->dwc) return false;
++    if ((io->read(io->context, hw->dwc, 0xc704) & (1u << 31)) ||
++        !(io->read(io->context, hw->dwc, 0xc70c) & (1u << 22))) return false;
++    hw->utmi1_before = io->read(io->context, hw->phy, WHYRED_USB_PHY_UTMI_CTRL1);
++    hw->utmi2_before = io->read(io->context, hw->phy, WHYRED_USB_PHY_UTMI_CTRL2);
++    hw->utmi2_after = hw->utmi2_before;
++    uint32_t before = hw->utmi2_before & 0xffu;
++    if (!(before & WHYRED_USB_UTMI_TEST_MUX)) return true;
++    if ((hw->utmi1_before & WHYRED_USB_UTMI_OVERRIDE_MASK) !=
++        WHYRED_USB_UTMI_NONDRIVE_FS) return false;
++    hw->utmi_release_attempted = 1;
++    uint32_t target = before & ~WHYRED_USB_UTMI_TEST_MUX;
++    io->write(io->context, hw->phy, WHYRED_USB_PHY_UTMI_CTRL2, target);
++    hw->utmi2_after = io->read(io->context, hw->phy, WHYRED_USB_PHY_UTMI_CTRL2);
++    if ((hw->utmi2_after & 0xffu) == target) {
++        hw->utmi_release_changed = 1;
++        return true;
++    }
++    /* On failure restore only our mux bit, retaining other sampled bits. */
++    io->write(io->context, hw->phy, WHYRED_USB_PHY_UTMI_CTRL2,
++        (hw->utmi2_after & 0xffu) | WHYRED_USB_UTMI_TEST_MUX);
++    hw->utmi2_restore = io->read(io->context, hw->phy, WHYRED_USB_PHY_UTMI_CTRL2);
++    hw->utmi_release_restored = (hw->utmi2_restore & 0xffu) == before;
++    return false;
++}
++
+ /* Exact high/full-speed-only PIPE mux sequence from SDM660 dwc3-msm.c.
+  * Use the already running UTMI clock, without touching QMP/PHY or PLL registers.
+  */
+ static bool
+ whyred_usb_hw_select_utmi(const struct whyred_usb_io *io, struct whyred_usb_hw *hw)
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -1074,10 +1074,16 @@
+ 	/* Stop the bootloader controller before installing any new DMA addresses. */
+ 	dwc_wr(DCTL, dwc_rd(DCTL) & ~DCTL_RUN_STOP);
+ 	unsigned halt;
+ 	for (halt = 0; halt < 500 && !(dwc_rd(DSTS) & DSTS_DEVCTRLHLT); halt++) delay(1000);
+ 	if (!(dwc_rd(DSTS) & DSTS_DEVCTRLHLT)) { ud_fail("bootloader controller did not halt"); return; }
++	bool utmi_released = whyred_usb_hw_release_test(&usb_io, &usb_hw);
++	printf("WHYRED USB: UTMI test before=%08x/%08x after=%08x release=%u changed=%u restore=%u/%08x\n",
++	    usb_hw.utmi1_before, usb_hw.utmi2_before, usb_hw.utmi2_after,
++	    usb_hw.utmi_release_attempted, usb_hw.utmi_release_changed,
++	    usb_hw.utmi_release_restored, usb_hw.utmi2_restore);
++	if (!utmi_released) { ud_fail("PHY UTMI test override readback/state"); return; }
+ 	if (kmem_alloc_contig(kernel_map, &ud.dma, UD_SIZE, PAGE_MASK, 0, 0,
+ 	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+ 		printf("WHYRED USB: no DMA memory\n");
+ 		ud_fail("DMA allocation"); return;
+ 	}

@@ -1,0 +1,282 @@
+diff --git a/iokit/Kernel/arm/SweetKeyStore.cpp b/iokit/Kernel/arm/SweetKeyStore.cpp
+--- a/iokit/Kernel/arm/SweetKeyStore.cpp
++++ b/iokit/Kernel/arm/SweetKeyStore.cpp
+@@ -24,6 +24,17 @@
+ #include <IOKit/IOMemoryDescriptor.h>
+ #include <libkern/c++/OSString.h>
+ #include <sys/proc.h>
++
++#if defined(ARM64_BOARD_CONFIG_SWEET) && (DEVELOPMENT || DEBUG)
++/* This board configuration is the SDM636 whyred port. Volatile /var only. */
++#define WHYRED_AKS_VOLATILE_WRAP 1
++#include <libkern/crypto/aes.h>
++#include <sys/random.h>
++#include <pexpert/pexpert.h>
++#include "SweetKeyStoreWrap.h"
++#else
++#define WHYRED_AKS_VOLATILE_WRAP 0
++#endif
+ 
+ /* libaks selectors (AppleKeyStore.framework, iOS 16.7). */
+ enum {
+@@ -62,8 +73,24 @@
+ class AppleKeyStore : public IOService {
+ 	OSDeclareDefaultStructors(AppleKeyStore);
+ 
++#if WHYRED_AKS_VOLATILE_WRAP
++	/* Independent class KEKs bind the class as well as the wrapped bytes.
++	 * Service-owned, generated once before publication, never persisted/logged.
++	 * Accept the unversioned file/keychain class range 1..12, including
++	 * early boot class 1. No rolled generations or SEP policy are claimed.
++	 */
++	uint8_t fClassKEKs[12][32];
++	bool fVolatileWrapEnabled;
++#endif
+ public:
+ 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++#if WHYRED_AKS_VOLATILE_WRAP
++	void free(void) APPLE_KEXT_OVERRIDE;
++	bool volatileWrapEnabled(void) const { return fVolatileWrapEnabled; }
++	const uint8_t *wrapKey(uint32_t cls) const {
++		return fVolatileWrapEnabled && cls >= 1 && cls <= 12 ? fClassKEKs[cls - 1] : NULL;
++	}
++#endif
+ };
+ 
+ OSDefineMetaClassAndStructors(AppleKeyStore, IOService);
+@@ -74,11 +101,32 @@
+ 	if (!IOService::start(provider)) {
+ 		return false;
+ 	}
++#if WHYRED_AKS_VOLATILE_WRAP
++	/* read_random is backed by this port's registered kernel HMAC DRBG.
++	 * random_buf/cc_rand_generate depend on the absent corecrypto kext.
++	 */
++	int enable = 0;
++	fVolatileWrapEnabled = PE_parse_boot_argn("whyred_aks_volatile_wrap", &enable,
++	    sizeof(enable)) && enable == 1;
++	if (fVolatileWrapEnabled) {
++		read_random(fClassKEKs, sizeof(fClassKEKs));
++		IOLog("WHYRED AKS: volatile development wrapping enabled for system bag 0\n");
++	}
++#endif
+ 	setProperty(kIOUserClientClassKey, "AppleKeyStoreUserClient");
+ 	registerService();
+ 	IOLog("SWEET AKS: AppleKeyStore registered (no passcode, unlocked)\n");
+ 	return true;
+ }
++
++#if WHYRED_AKS_VOLATILE_WRAP
++void
++AppleKeyStore::free(void)
++{
++	sweet_aks_clear(fClassKEKs, sizeof(fClassKEKs));
++	IOService::free();
++}
++#endif
+ 
+ class AppleKeyStoreUserClient : public IOUserClient {
+ 	OSDeclareDefaultStructors(AppleKeyStoreUserClient);
+@@ -170,6 +218,105 @@
+ 	       (uint32_t)args->structureOutputDescriptor->getLength() : args->structureOutputSize;
+ }
+ 
++#if WHYRED_AKS_VOLATILE_WRAP
++static int
++whyred_aks_encrypt(void *ctx, const uint8_t *in, uint8_t *out)
++{
++	return aes_encrypt(in, out, (aes_encrypt_ctx *)ctx);
++}
++
++static int
++whyred_aks_decrypt(void *ctx, const uint8_t *in, uint8_t *out)
++{
++	return aes_decrypt(in, out, (aes_decrypt_ctx *)ctx);
++}
++
++/* Exact 20F66 libaks ABI: [bag handle, class], wrap returns actualClass;
++ * unwrap has no scalar outputs. This format is local to this volatile boot.
++ */
++static IOReturn
++whyred_aks_wrap(AppleKeyStore *store, IOExternalMethodArguments *args, bool unwrap)
++{
++	uint8_t input[SWEET_AKS_MAX_WRAPPED_BYTES], output[SWEET_AKS_MAX_WRAPPED_BYTES];
++	aes_ctx context;
++	uint32_t output_len = 0;
++	uint64_t input_len = args->structureInputDescriptor != NULL ?
++	    args->structureInputDescriptor->getLength() : args->structureInputSize;
++	uint64_t capacity = args->structureOutputDescriptor != NULL ?
++	    args->structureOutputDescriptor->getLength() : args->structureOutputSize;
++	uint32_t scalar_capacity = args->scalarOutputCount;
++	IOReturn ret = kIOReturnBadArgument;
++	const uint8_t *kek = NULL;
++
++	/* No output length or actualClass is reported on any failing call. */
++	args->scalarOutputCount = 0;
++	args->structureOutputSize = 0;
++	args->structureOutputDescriptorSize = 0;
++	if (store != NULL && !store->volatileWrapEnabled()) {
++		ret = kIOReturnUnsupported;
++		goto done;
++	}
++	if (store == NULL || args->scalarInputCount != 2 || args->scalarInput == NULL ||
++	    scalar_capacity != (unwrap ? 0u : 1u) ||
++	    (!unwrap && args->scalarOutput == NULL) ||
++	    args->scalarInput[0] != SWEET_AKS_SYSTEM_HANDLE ||
++	    args->scalarInput[1] > 12 ||
++	    (kek = store->wrapKey((uint32_t)args->scalarInput[1])) == NULL ||
++	    input_len < (unwrap ? 24u : 16u) || (input_len & 7u) != 0 ||
++	    input_len > (unwrap ? SWEET_AKS_MAX_WRAPPED_BYTES : SWEET_AKS_MAX_KEY_BYTES)) {
++		goto done;
++	}
++	if (capacity < (unwrap ? input_len - 8u : input_len + 8u)) {
++		ret = kIOReturnNoSpace;
++		goto done;
++	}
++	if (args->structureOutputDescriptor == NULL && args->structureOutput == NULL) goto done;
++	if (args->structureInputDescriptor != NULL) {
++		if (args->structureInputDescriptor->readBytes(0, input, input_len) != input_len) {
++			ret = kIOReturnUnderrun;
++			goto done;
++		}
++	} else {
++		if (args->structureInput == NULL) goto done;
++		memcpy(input, args->structureInput, (size_t)input_len);
++	}
++	if ((unwrap ? aes_decrypt_key256(kek, &context.decrypt) :
++	    aes_encrypt_key256(kek, &context.encrypt)) != aes_good) {
++		ret = kIOReturnError;
++		goto done;
++	}
++	{
++		int result = sweet_aks_kw(unwrap, unwrap ? whyred_aks_decrypt : whyred_aks_encrypt,
++		    unwrap ? (void *)&context.decrypt : (void *)&context.encrypt,
++		    input, (uint32_t)input_len, output, sizeof(output), &output_len);
++		if (result != SWEET_KW_OK) {
++			ret = result == SWEET_KW_INTEGRITY ? kIOReturnNotPermitted : kIOReturnError;
++			goto done;
++		}
++	}
++	if (args->structureOutputDescriptor != NULL) {
++		if (args->structureOutputDescriptor->writeBytes(0, output, output_len) != output_len) {
++			ret = kIOReturnUnderrun;
++			goto done;
++		}
++		args->structureOutputDescriptorSize = output_len;
++	} else {
++		memcpy(args->structureOutput, output, output_len);
++		args->structureOutputSize = output_len;
++	}
++	if (!unwrap) {
++		args->scalarOutput[0] = args->scalarInput[1];
++		args->scalarOutputCount = 1;
++	}
++	ret = kIOReturnSuccess;
++done:
++	sweet_aks_clear(&context, sizeof(context));
++	sweet_aks_clear(input, sizeof(input));
++	sweet_aks_clear(output, sizeof(output));
++	return ret;
++}
++#endif
++
+ IOReturn
+ AppleKeyStoreUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
+     __unused IOExternalMethodDispatch *dispatch, __unused OSObject *target,
+@@ -184,6 +331,16 @@
+ 	uint64_t arg0 = in_scalars > 0 ? args->scalarInput[0] : 0;
+ 
+ 	switch (selector) {
++#if WHYRED_AKS_VOLATILE_WRAP
++	case kAKSWrapKey:
++	case kAKSUnwrapKey:
++		ret = whyred_aks_wrap(OSDynamicCast(AppleKeyStore, getProvider()), args,
++		    selector == kAKSUnwrapKey);
++		IOLog("WHYRED AKS volatile: sel=%u bag=%llu class=%llu in=%u out=%u ret=0x%x\n",
++		    selector, arg0, in_scalars > 1 ? args->scalarInput[1] : 0,
++		    in_struct, out_struct, ret);
++		break;
++#endif
+ 	case kAKSOpen:
+ 	case kAKSUnloadBag:
+ 	case kAKSSetSystem:
+diff --git a/iokit/Kernel/arm/SweetKeyStoreWrap.h b/iokit/Kernel/arm/SweetKeyStoreWrap.h
+new file mode 100644
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetKeyStoreWrap.h
+@@ -0,0 +1,75 @@
++/* Development-only whyred AKS: bounded RFC 3394 AES key wrap.
++ * AES itself is supplied by XNU's existing constant-time SWEET provider.
++ * The callback operates on exactly one 16-byte block and returns 0 on success.
++ * Unwrap never copies unauthenticated plaintext to its output.
++ */
++#ifndef SWEET_KEYSTORE_WRAP_H
++#define SWEET_KEYSTORE_WRAP_H
++#include <stdint.h>
++
++#define SWEET_AKS_MAX_KEY_BYTES 64u
++#define SWEET_AKS_MAX_WRAPPED_BYTES (SWEET_AKS_MAX_KEY_BYTES + 8u)
++
++typedef int (*sweet_aks_block_fn)(void *, const uint8_t *, uint8_t *);
++enum { SWEET_KW_OK = 0, SWEET_KW_ARGUMENT = -1,
++       SWEET_KW_NOSPACE = -2, SWEET_KW_CRYPTO = -3, SWEET_KW_INTEGRITY = -4 };
++
++static void
++sweet_aks_clear(void *p, uint32_t n)
++{
++	volatile uint8_t *v = (volatile uint8_t *)p;
++	while (n-- != 0) *v++ = 0;
++}
++
++static int
++sweet_aks_kw(int unwrap, sweet_aks_block_fn block, void *ctx,
++    const uint8_t *input, uint32_t input_len, uint8_t *output,
++    uint32_t capacity, uint32_t *output_len)
++{
++	uint8_t work[SWEET_AKS_MAX_WRAPPED_BYTES], b[16];
++	uint32_t plain_len, result_len, n;
++	int ret = SWEET_KW_ARGUMENT;
++	if (output_len == 0) return ret;
++	*output_len = 0;
++	if (block == 0 || ctx == 0 || input == 0 || output == 0 ||
++	    (unwrap != 0 && unwrap != 1)) return ret;
++	if ((input_len & 7u) != 0 ||
++	    input_len < (unwrap ? 24u : 16u) ||
++	    input_len > (unwrap ? SWEET_AKS_MAX_WRAPPED_BYTES : SWEET_AKS_MAX_KEY_BYTES)) return ret;
++	plain_len = unwrap ? input_len - 8u : input_len;
++	result_len = unwrap ? plain_len : plain_len + 8u;
++	if (capacity < result_len) return SWEET_KW_NOSPACE;
++	n = plain_len / 8u;
++	for (uint32_t k = 0; k < 8u; k++) work[k] = unwrap ? input[k] : 0xa6;
++	for (uint32_t k = 0; k < plain_len; k++) work[k + 8u] = input[k + (unwrap ? 8u : 0u)];
++	for (int j = unwrap ? 5 : 0; unwrap ? j >= 0 : j < 6; unwrap ? j-- : j++) {
++		for (uint32_t step = 0; step < n; step++) {
++			uint32_t i = unwrap ? n - step : step + 1u;
++			uint64_t t = (uint64_t)n * (uint32_t)j + i;
++			for (uint32_t k = 0; k < 8u; k++) {
++				b[k] = work[k];
++				b[k + 8u] = work[i * 8u + k];
++			}
++			if (unwrap) for (uint32_t k = 0; k < 8u; k++) b[7u - k] ^= (uint8_t)(t >> (8u * k));
++			if (block(ctx, b, b) != 0) { ret = SWEET_KW_CRYPTO; goto done; }
++			if (!unwrap) for (uint32_t k = 0; k < 8u; k++) b[7u - k] ^= (uint8_t)(t >> (8u * k));
++			for (uint32_t k = 0; k < 8u; k++) {
++				work[k] = b[k];
++				work[i * 8u + k] = b[k + 8u];
++			}
++		}
++	}
++	if (unwrap) {
++		uint8_t difference = 0;
++		for (uint32_t k = 0; k < 8u; k++) difference |= work[k] ^ 0xa6u;
++		if (difference != 0) { ret = SWEET_KW_INTEGRITY; goto done; }
++	}
++	for (uint32_t k = 0; k < result_len; k++) output[k] = work[k + (unwrap ? 8u : 0u)];
++	*output_len = result_len;
++	ret = SWEET_KW_OK;
++done:
++	sweet_aks_clear(b, sizeof(b));
++	sweet_aks_clear(work, sizeof(work));
++	return ret;
++}
++#endif

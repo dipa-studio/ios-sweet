@@ -1,0 +1,92 @@
+From: Codex <codex@openai.com>
+Subject: [PATCH] whyred: pass kernel-local RAM /var mount arguments safely
+
+The v57 mount reached HFS but failed with EFAULT: the kernel stack arguments
+were passed through user copyin in both VFS local-device handling and HFS.
+Keep the exception tied to the prevalidated writable HFS /private/var mount,
+read the kernel device pointer and pathname in kernel space, and let HFS copy
+its arguments directly only when that mount carries the supplemental flag.
+
+---
+--- a/bsd/sys/mount_internal.h
++++ b/bsd/sys/mount_internal.h
+@@ -282,6 +282,9 @@
+  * exhausted, so this is intended as a supplement.
+  */
+ #define MNTK_SUPL_BASESYSTEM    0x00000001
++#if defined(SWEET)
++#define MNTK_SUPL_WHYRED_RAMVAR 0x00000002
++#endif
+ 
+ 
+ /*
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -1256,6 +1256,11 @@
+ 
+ 	if (kernelmount) {
+ 		mp->mnt_kern_flag |= MNTK_KERNEL_MOUNT;
++#if defined(SWEET)
++		if (whyred_ramvar_mount) {
++			mp->mnt_supl_kern_flag |= MNTK_SUPL_WHYRED_RAMVAR;
++		}
++#endif
+ 	}
+ 	if ((internal_flags & KERNEL_MOUNT_PERMIT_UNMOUNT) != 0) {
+ 		mp->mnt_kern_flag |= MNTK_PERMIT_UNMOUNT;
+@@ -1329,6 +1334,17 @@
+ 	if (vfsp->vfc_vfsflags & VFC_VFSLOCALARGS &&
+ 	    !(internal_flags & (KERNEL_MOUNT_SNAPSHOT | KERNEL_MOUNT_VOLBYROLE_MASK))) {
+ 		boolean_t do_copyin_devpath = true;
++#if defined(SWEET)
++		if (whyred_ramvar_mount) {
++			/* kernel_mount() passed a pointer to kernel-local arguments. */
++			_Static_assert(sizeof(char **) == sizeof(fsmountargs), "fsmountargs should fit a (kernel) address");
++			char **devnamepp = (char **)fsmountargs;
++			char *devnamep = *devnamepp;
++			devpath = CAST_USER_ADDR_T(devnamep);
++			do_copyin_devpath = false;
++			fsmountargs += sizeof(*devnamepp);
++		}
++#endif
+ #if CONFIG_BASESYSTEMROOT
+ 		if (internal_flags & KERNEL_MOUNT_BASESYSTEMROOT) {
+ 			// KERNEL_MOUNT_BASESYSTEMROOT implies subtle behavior worh nothing:
+@@ -1378,6 +1394,11 @@
+ 				seg = UIO_SYSSPACE;
+ 			}
+ #endif // CONFIG_BASESYSTEMROOT
++#if defined(SWEET)
++			if (whyred_ramvar_mount) {
++				seg = UIO_SYSSPACE;
++			}
++#endif
+ 
+ 			NDINIT(&nd, LOOKUP, OP_MOUNT, FOLLOW, seg, devpath, ctx);
+ 			if ((error = namei(&nd))) {
+--- a/bsd/sweet_hfs/core/hfs_vfsops.c
++++ b/bsd/sweet_hfs/core/hfs_vfsops.c
+@@ -73,6 +73,9 @@
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <sys/kauth.h>
++#if defined(SWEET)
++#include <sys/mount_internal.h>
++#endif
+ 
+ #include <sys/ubc.h>
+ #include <sys/sysctl.h>
+@@ -190,6 +193,13 @@
+ 	int retval = E_NONE;
+ 	u_int32_t cmdflags;
+ 
++	#if defined(SWEET)
++	if (data && (mp->mnt_supl_kern_flag & MNTK_SUPL_WHYRED_RAMVAR)) {
++		/* VFS scoped this direct copy to the validated RAM /private/var mount. */
++		bcopy((const void *)(uintptr_t)data, (caddr_t)&args, sizeof(args));
++		printf("WHYRED HFS: kernel RAM /var mount arguments accepted\n");
++	} else
++	#endif
+ 	if (data && (retval = copyin(data, (caddr_t)&args, sizeof(args)))) {
+ 		if (HFS_MOUNT_DEBUG) {
+ 			printf("hfs_mount: copyin returned %d for fs\n", retval);

@@ -1,0 +1,192 @@
+--- a/bsd/kern/sys_generic.c
++++ b/bsd/kern/sys_generic.c
+@@ -1038,6 +1038,11 @@
+ static int seldrop(struct proc *p, u_int32_t *ibits, int nfd, int lim);
+ static int select_internal(struct proc *p, struct select_nocancel_args *uap, uint64_t timeout, int32_t *retval);
+ 
++#if defined(SWEET)
++extern void kprintf(const char *fmt, ...);
++volatile int whyred_select_probe_active;
++#endif
++
+ /*
+  * This is used for the special device nodes that do not implement
+  * a proper kevent filter (see filt_specattach).
+@@ -1439,15 +1444,35 @@
+ 		panic("selprocess: 2nd pass assertwaiting");
+ 	}
+ 
++#if defined(SWEET)
++	if (p->p_pid == 1 && uap->nd == 0 && uap->tv != 0) {
++		whyred_select_probe_active = 1;
++		kprintf("WHYRED SELECT: wait begin now=%llx deadline=%llx\n",
++		    mach_absolute_time(), seldata->abstime);
++	}
++#endif
+ 	wait_result = waitq_assert_wait64_leeway(uth->uu_selset,
+ 	    NO_EVENT64, THREAD_ABORTSAFE,
+ 	    TIMEOUT_URGENCY_USER_NORMAL,
+ 	    seldata->abstime,
+ 	    TIMEOUT_NO_LEEWAY);
++#if defined(SWEET)
++	if (whyred_select_probe_active) {
++		kprintf("WHYRED SELECT: waitq result=%d deadline=%llx\n",
++		    wait_result, seldata->abstime);
++	}
++#endif
+ 	if (wait_result != THREAD_AWAKENED) {
+ 		/* there are no preposted events */
+ 		error = tsleep1(NULL, PSOCK | PCATCH,
+ 		    "select", 0, selcontinue);
++#if defined(SWEET)
++		if (whyred_select_probe_active) {
++			kprintf("WHYRED SELECT: tsleep returned error=%d now=%llx\n",
++			    error, mach_absolute_time());
++			whyred_select_probe_active = 0;
++		}
++#endif
+ 	} else {
+ 		prepost = 1;
+ 		error = 0;
+--- a/osfmk/kern/waitq.c
++++ b/osfmk/kern/waitq.c
+@@ -55,6 +55,7 @@
+  */
+ 
+ #include <kern/ast.h>
++#include <kern/debug.h>
+ #include <kern/backtrace.h>
+ #include <kern/kern_types.h>
+ #include <kern/mach_param.h>
+@@ -74,6 +75,10 @@
+ #include <vm/vm_kern.h>
+ 
+ #include <sys/kdebug.h>
++
++#if defined(SWEET)
++extern volatile int whyred_select_probe_active;
++#endif
+ 
+ /*!
+  * @const waitq_set_unlink_batch
+@@ -1396,6 +1401,12 @@
+ 				thread->wait_timer_active++;
+ 			}
+ 			thread->wait_timer_armed = true;
++#if defined(SWEET)
++			if (whyred_select_probe_active) {
++				kprintf("WHYRED SELECT: timer queued deadline=%llx was_active=%u active=%u\n",
++				    deadline, (unsigned)was_active, (unsigned)thread->wait_timer_active);
++			}
++#endif
+ 		}
+ 
+ 		if (waitq_is_global(safeq)) {
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -43,6 +43,7 @@
+ #include <console/serial_protos.h>
+ #include <kern/machine.h>
+ #include <kern/misc_protos.h>
++#include <kern/debug.h>
+ #include <prng/random.h>
+ #include <kern/startup.h>
+ #include <kern/thread.h>
+@@ -90,6 +91,10 @@
+ 
+ #if KPC
+ #include <kern/kpc.h>
++#endif
++
++#if defined(SWEET)
++extern volatile int whyred_select_probe_active;
+ #endif
+ 
+ #define MPIDR_CPU_ID(mpidr_el1_val)             (((mpidr_el1_val) & MPIDR_AFF0_MASK) >> MPIDR_AFF0_SHIFT)
+@@ -2053,6 +2058,17 @@
+ 	} else {
+ 		__builtin_arm_wsr64("CNTV_TVAL_EL0", (uint64_t)dec_value);
+ 	}
++#if defined(SWEET)
++	static uint32_t probe_writes;
++	if (whyred_select_probe_active && probe_writes < 4) {
++		probe_writes++;
++		kprintf("WHYRED TIMER: dec=%u tval=%llx ctl=%llx cntvct=%llx cntfrq=%llx\n",
++		    dec_value, __builtin_arm_rsr64("CNTV_TVAL_EL0"),
++		    __builtin_arm_rsr64("CNTV_CTL_EL0"),
++		    __builtin_arm_rsr64("CNTVCT_EL0"),
++		    __builtin_arm_rsr64("CNTFRQ_EL0"));
++	}
++#endif
+ }
+ 
+ /**
+--- a/osfmk/arm64/sleh.c
++++ b/osfmk/arm64/sleh.c
+@@ -71,6 +71,10 @@
+ #endif
+ 
+ #include <prng/entropy.h>
++
++#if defined(SWEET)
++extern volatile int whyred_select_probe_active;
++#endif
+ 
+ 
+ 
+@@ -1863,6 +1867,14 @@
+ 	 */
+ 	uint64_t iar = __builtin_arm_rsr64("ICC_IAR1_EL1");
+ 	uint32_t intid = (uint32_t)(iar & 0xFFFFFF);
++	static uint32_t probe_irq_logs;
++	if (whyred_select_probe_active && probe_irq_logs < 8) {
++		probe_irq_logs++;
++		kprintf("WHYRED IRQ: iar=%llx intid=%u expected=%u cntvctl=%llx tval=%llx\n",
++		    iar, intid, sweet_vtimer_intid,
++		    __builtin_arm_rsr64("CNTV_CTL_EL0"),
++		    __builtin_arm_rsr64("CNTV_TVAL_EL0"));
++	}
+ 
+ 	if (intid >= 1020 && intid <= 1023) {
+ 		return; /* spurious */
+--- a/pexpert/arm/pe_fiq.c
++++ b/pexpert/arm/pe_fiq.c
+@@ -213,6 +213,11 @@
+ 	}
+ 	__builtin_arm_wsr64("ICC_IGRPEN1_EL1", 1);
+ 	__builtin_arm_isb(ISB_SY);
++	kprintf("WHYRED GIC: dctlr=%x group=%x enable=%x pending=%x pmr=%llx igrpen1=%llx timer=%u\n",
++	    gicd_read32(GICD_CTLR), gicr_read32(GICR_IGROUPR0),
++	    gicr_read32(GICR_ISENABLER0), gicr_read32(0x10200),
++	    __builtin_arm_rsr64("ICC_PMR_EL1"),
++	    __builtin_arm_rsr64("ICC_IGRPEN1_EL1"), sweet_vtimer_intid);
+ #else
+ 	// Enable the forwarding of the vtimer interrupt
+ 	uint32_t gicd_ctlr = gicd_read32(GICD_CTLR);
+--- a/osfmk/kern/sched_prim.c
++++ b/osfmk/kern/sched_prim.c
+@@ -798,6 +798,10 @@
+ }
+ 
+ 
++#if defined(SWEET)
++extern volatile int whyred_select_probe_active;
++#endif
++
+ /*
+  *	Thread wait timer expiration.
+  *	Runs in timer interrupt context with interrupts disabled.
+@@ -812,6 +816,12 @@
+ 	assert(ml_get_interrupts_enabled() == FALSE);
+ 
+ 	thread_lock(thread);
++#if defined(SWEET)
++	if (whyred_select_probe_active) {
++		kprintf("WHYRED TIMER: callback thread=%p armed=%u\n",
++		    thread, (unsigned)thread->wait_timer_armed);
++	}
++#endif
+ 
+ 	if (thread->wait_timer_armed) {
+ 		thread->wait_timer_armed = false;
+

@@ -1,0 +1,69 @@
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -39,6 +39,8 @@
+ #define SDHCI_CORE_DLL_CONFIG            0x200
+ #define SDHCI_CORE_DLL_STATUS            0x208
+ #define SDHCI_CORE_VENDOR_SPEC           0x20c
++#define SDHCI_CORE_VENDOR_SPEC3          0x250
++#define SDHCI_CORE_FIFO_ALT_EN           0x00000400
+ #define SDHCI_CORE_CLK_PWRSAVE           0x00000002
+ #define SDHCI_CORE_DLL_PDN               0x20000000
+ #define SDHCI_CORE_DLL_RST               0x40000000
+@@ -132,6 +134,28 @@
+ 	*(volatile uint32_t *)(base + offset) = value;
+ }
+ 
++/*
++ * whyred-o-oss sdhci-msm.c explicitly clears CORE_FIFO_ALT_EN at probe.
++ * Its MCI-removed/v5 offset table puts VENDOR_SPEC3 at 0x250. The bootloader
++ * may leave the alternative FIFO selected; SDHCI_BUFFER PIO needs it off.
++ * Call only with the host idle and the card clock stopped.
++ */
++static int
++whyred_emmc_select_sdhci_fifo(volatile uint8_t *base)
++{
++	uint32_t before = whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC3);
++	uint32_t desired = before & ~SDHCI_CORE_FIFO_ALT_EN;
++	if (desired != before) {
++		whyred_emmc_write32(base, SDHCI_CORE_VENDOR_SPEC3, desired);
++	}
++	__asm__ volatile("dsb sy" ::: "memory");
++	uint32_t after = whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC3);
++	printf("WHYRED EMMC INIT: SDHCI FIFO select vendor3_before=0x%08x vendor3_after=0x%08x alt_before=%u alt_after=%u\n",
++	    before, after, (before & SDHCI_CORE_FIFO_ALT_EN) != 0,
++	    (after & SDHCI_CORE_FIFO_ALT_EN) != 0);
++	return (after & SDHCI_CORE_FIFO_ALT_EN) == 0 ? 0 : -1;
++}
++
+ static int
+ whyred_emmc_configure_sdc1_pads(void)
+ {
+@@ -215,6 +239,17 @@
+ 	uint16_t old_clock = whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL);
+ 	uint16_t clock = old_clock & (uint16_t)~SDHCI_CLOCK_CARD_ENABLE;
+ 	whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, clock);
++	__asm__ volatile("dsb sy" ::: "memory");
++	if ((whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL) &
++	    SDHCI_CLOCK_CARD_ENABLE) != 0) {
++		printf("WHYRED EMMC INIT: card clock did not stop; no FIFO change\n");
++		return -1;
++	}
++	if (whyred_emmc_select_sdhci_fifo(base) != 0) {
++		whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, old_clock);
++		printf("WHYRED EMMC INIT: SDHCI FIFO selection failed; no command sent\n");
++		return -1;
++	}
+ 
+ 	/*
+ 	 * Qualcomm's SDHCI-MSM driver keeps CLK_PWRSAVE off during card
+@@ -547,6 +582,10 @@
+ 	    whyred_emmc_read32(base, SDHCI_CORE_DLL_CONFIG),
+ 	    whyred_emmc_read32(base, SDHCI_CORE_DLL_STATUS),
+ 	    whyred_emmc_read32(base, 0x34));
++	printf("WHYRED EMMC: FIFO route stage=%s vendor3=0x%08x alt=%u\n",
++	    stage, whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC3),
++	    (whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC3) &
++	    SDHCI_CORE_FIFO_ALT_EN) != 0);
+ }
+ 
+ static int

@@ -1,0 +1,23 @@
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -29,8 +29,9 @@
+ #define SDHCI_COMMAND                    0x0e
+ #define SDHCI_RESPONSE                   0x10
+ #define SDHCI_BUFFER                     0x20
+-#define SDHCI_CORE_DLL_STATUS            0x108
+-#define SDHCI_CORE_VENDOR_SPEC           0x10c
++/* The whyred DT compatible is qcom,sdhci-msm-v5; do not use old MCI offsets. */
++#define SDHCI_CORE_DLL_STATUS            0x208
++#define SDHCI_CORE_VENDOR_SPEC           0x20c
+ #define SDHCI_PSTATE_CMD_INHIBIT         0x00000001
+ #define SDHCI_PSTATE_DATA_INHIBIT        0x00000002
+ #define SDHCI_PSTATE_DATA_AVAILABLE      0x00000800
+@@ -221,7 +222,7 @@
+ 	vendor |= SDHCI_CORE_MCLK_SEL_DEFAULT;
+ 	whyred_emmc_write32(base, SDHCI_CORE_VENDOR_SPEC, vendor);
+ 	(void)whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC);
+-	printf("WHYRED EMMC INIT: host set to 1-bit legacy; host2=0x%04x vendor=0x%08x\n",
++	printf("WHYRED EMMC INIT: SDHCI MSM v5 host set to 1-bit legacy; host2=0x%04x vendor=0x%08x\n",
+ 	    whyred_emmc_read16(base, SDHCI_HOST_CONTROL2),
+ 	    whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC));
+ }

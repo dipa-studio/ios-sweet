@@ -1,0 +1,94 @@
+--- a/bsd/dev/whyred_emmc_perf.h
++++ b/bsd/dev/whyred_emmc_perf.h
+@@ -30,6 +30,7 @@
+ static bool whyred_emmc_multi_enabled, whyred_emmc_xo_active;
+ static bool whyred_emmc_perf_enabled, whyred_emmc_transport_ok = true;
+ static uint32_t whyred_emmc_saved_cfg;
++static uint32_t whyred_emmc_recovery_snapshots;
+ static uint16_t whyred_emmc_saved_clock;
+ static uint8_t whyred_emmc_reference[WHYRED_EMMC_BATCH_BYTES];
+ static uint8_t whyred_emmc_trial[WHYRED_EMMC_BATCH_BYTES];
+@@ -174,7 +175,25 @@
+ 	return whyred_emmc_restore_clock(base) == 0 ? 0 : -1;
+ }
+ 
+-/* CMD12 is a read-stop command, including when DATA_INHIBIT is still set. */
++/* A command timeout leaves CMD_INHIBIT latched on SDHCI. Clearing interrupt
++ * status alone does not release the command state machine for CMD13. */
++static int
++whyred_emmc_reset_read_host(volatile uint8_t *base)
++{
++	uint64_t timeout = whyred_emmc_timeout_ticks();
++	if (!timeout) return -1;
++	whyred_emmc_write8(base, SDHCI_SOFTWARE_RESET, 0x06); /* CMD and DATA only */
++	uint64_t start = whyred_emmc_counter();
++	while (whyred_emmc_read8(base, SDHCI_SOFTWARE_RESET) & 0x06) {
++		if (whyred_emmc_counter() - start >= timeout) return -1;
++	}
++	whyred_emmc_write32(base, SDHCI_INT_STATUS, whyred_emmc_read32(base, SDHCI_INT_STATUS));
++	return 0;
++}
++
++/* CMD12 may time out when the card has already returned to TRAN. Reset the
++ * host after that error, then require a clean CMD13 before accepting a reread.
++ * At most two stop/status attempts; never accept bytes from the failed read. */
+ static int
+ whyred_emmc_recover_read(struct whyred_gpt_io *io)
+ {
+@@ -182,24 +201,38 @@
+ 	uint64_t timeout = whyred_emmc_timeout_ticks(), start;
+ 	uint32_t response = 0;
+ 	if (!timeout) return -1;
+-	whyred_emmc_write8(base, SDHCI_SOFTWARE_RESET, 0x06); /* CMD and DATA only */
+-	start = whyred_emmc_counter();
+-	while (whyred_emmc_read8(base, SDHCI_SOFTWARE_RESET) & 0x06) {
+-		if (whyred_emmc_counter() - start >= timeout) return -1;
+-	}
+-	whyred_emmc_write32(base, SDHCI_INT_STATUS, whyred_emmc_read32(base, SDHCI_INT_STATUS));
+-	(void)whyred_emmc_command(base, 0, WHYRED_EMMC_R1B_ABORT, &response);
+-	start = whyred_emmc_counter();
+-	while (whyred_emmc_read32(base, SDHCI_PRESENT_STATE) & 3U) {
+-		if (whyred_emmc_counter() - start >= timeout) return -1;
+-	}
+-	if (whyred_emmc_reset_data_path(base) != 0) return -1;
+-	if (whyred_emmc_command(base, WHYRED_EMMC_RCA << 16,
+-	    (13U << 8) | SDHCI_CMD_RESP_SHORT_CRC_INDEX, &response) != 0 ||
+-	    (response & WHYRED_EMMC_R1_FAILURE_MASK) ||
+-	    ((response >> 9) & 15U) != WHYRED_EMMC_STATUS_TRANSFER ||
+-	    !(response & WHYRED_EMMC_STATUS_READY)) return -1;
+-	return 0;
++	/* Preserve the failing FIFO route/counters before either reset erases them. */
++	if (whyred_emmc_recovery_snapshots < 8) {
++		whyred_emmc_recovery_snapshots++;
++		whyred_emmc_log_msm_v5_snapshot(base, "read recovery entry");
++	}
++	if (whyred_emmc_reset_read_host(base) != 0) return -1;
++	for (unsigned int attempt = 0; attempt < 2; attempt++) {
++		int stop_error = whyred_emmc_command(base, 0, WHYRED_EMMC_R1B_ABORT, &response);
++		bool host_busy = false;
++		start = whyred_emmc_counter();
++		if (!stop_error) {
++			while (whyred_emmc_read32(base, SDHCI_PRESENT_STATE) & 3U) {
++				if (whyred_emmc_counter() - start >= timeout) { host_busy = true; break; }
++			}
++		}
++		if ((stop_error || host_busy) && whyred_emmc_reset_read_host(base) != 0) return -1;
++		if (whyred_emmc_reset_data_path(base) != 0) return -1;
++		response = 0;
++		int status_error = whyred_emmc_command(base, WHYRED_EMMC_RCA << 16,
++		    (13U << 8) | SDHCI_CMD_RESP_SHORT_CRC_INDEX, &response);
++		uint32_t present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++		uint32_t pending = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++		printf("WHYRED EMMC: recovery attempt=%u stop=%d status=%d r1=%08x present=%08x int=%08x\n",
++		    attempt + 1, stop_error, status_error, response, present, pending);
++		if (!status_error && !(response & WHYRED_EMMC_R1_FAILURE_MASK) &&
++		    ((response >> 9) & 15U) == WHYRED_EMMC_STATUS_TRANSFER &&
++		    (response & WHYRED_EMMC_STATUS_READY) &&
++		    !(present & (3U | SDHCI_PSTATE_DATA_AVAILABLE)) && pending == 0 &&
++		    whyred_emmc_read32(base, SDHCI_CORE_MCI_FIFO_COUNT) == 0) return 0;
++		if (attempt == 0 && whyred_emmc_reset_read_host(base) != 0) return -1;
++	}
++	return -1;
+ }
+ 
+ static int

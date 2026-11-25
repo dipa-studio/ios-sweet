@@ -1,0 +1,48 @@
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -19,6 +19,7 @@
+ #include <pexpert/pexpert.h>
+ 
+ extern "C" void sweet_secondary_entry(void);
++extern "C" void cpu_signal_handler(void);
+ extern "C" boolean_t sweet_cpu_signal_is_enabled(unsigned int cpu);
+ 
+ class SweetCPU;
+@@ -205,15 +206,33 @@
+ 
+ 	ml_broadcast_cpu_event(CPU_BOOTED, getCPUNumber());
+ 
+-	/* Secondary startup runs at splsched: queue the self-IPI and return.
+-	 * startAll waits for its delivery after the startup thread unmasks IRQs.
+-	 * Waiting here with DAIF.I set would deadlock every secondary. */
+-	signalCPU(this);
++	const ml_topology_info_t *topology = ml_get_topology_info();
++	if (topology->num_cpus == 1) {
++		/*
++		 * There is no secondary CPU on this bring-up profile. Complete the
++		 * boot CPU's initial signal-state transition in software instead of
++		 * depending on a self-targeted GIC SGI before normal startup proceeds.
++		 * cpu_signal_handler() clears SIGPdisabled and drains any queued local
++		 * signals, matching the work the SGI handler would perform.
++		 */
++		IOLog("SWEET CPU: single boot CPU; completing local signal init\n");
++	} else {
++		/*
++		 * Secondary startup runs at splsched: queue the self-IPI and return.
++		 * startAll waits for its delivery after startup unmasks IRQs. Waiting
++		 * here with DAIF.I set would deadlock every secondary.
++		 */
++		signalCPU(this);
++	}
+ 	setCPUState(kIOCPUStateRunning);
+ 	kprintf("SWEET CPU: cpu=%u entered initCPU mpidr=0x%llx EL%llu IRQs=%u\n",
+ 	    getCPUNumber(), __builtin_arm_rsr64("MPIDR_EL1") & 0xffffULL,
+ 	    __builtin_arm_rsr64("CurrentEL") >> 2, ml_get_interrupts_enabled());
+ 	__atomic_store_n(&initialized, 1, __ATOMIC_RELEASE);
++	if (topology->num_cpus == 1) {
++		cpu_signal_handler();
++		IOLog("SWEET CPU: single boot CPU signal state enabled\n");
++	}
+ }
+ 
+ void

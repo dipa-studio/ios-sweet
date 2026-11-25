@@ -1,0 +1,572 @@
+diff --git a/config/MASTER.arm64.sweet b/config/MASTER.arm64.sweet
+index e305f0d..ec609f0 100644
+--- a/config/MASTER.arm64.sweet
++++ b/config/MASTER.arm64.sweet
+@@ -96,6 +96,7 @@ machine		"arm64"						# <arm64>
+ makeoptions	OSFMK_MACHINE = "arm64"				# <mach>
+ 
+ options		COUNT_SYSCALLS		# count bsd system calls 	# <countcalls>
++options		WHYRED_UARTDM		# whyred Qualcomm UARTDM diagnostic console
+ options     TRASH_VFP_ON_SAVE   # <debug,trash_vfp>
+ options		ALTERNATE_DEBUGGER	# <alternate_debugger>
+ 
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
+index 2a21aa1..68d556f 100644
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -42,6 +42,68 @@
+ 
+ 
+ 
++
++#if defined(WHYRED_UARTDM)
++/* Stackless PIO. TX preserves x0-x8, x13-x30; clobbers x9-x12 and flags. */
++.macro WHYRED_UART_TX
++ mov x12, #0x10000
++91:
++ ldr w11, [x9, #0x08]
++ tbnz w11, #3, 92f
++ ldr w11, [x9, #0x14]
++ tbnz w11, #7, 92f
++ subs x12, x12, #1
++ b.ne 91b
++ b 95f
++92:
++ mov w11, #0x300
++ str w11, [x9, #0x10]
++ mov w11, $0
++ str w11, [x9, #0x40]
++ ldr w11, [x9, #0x40]
++ mov x12, #0x10000
++93:
++ ldr w11, [x9, #0x08]
++ tbnz w11, #2, 94f
++ subs x12, x12, #1
++ b.ne 93b
++ b 95f
++94:
++ str w10, [x9, #0x70]
++95:
++.endmacro
++
++.macro WHYRED_UART_WORD
++ MOV64 x9, 0x0c170000
++ mov w10, (($0) & 0xffff)
++ movk w10, ((($0) >> 16) & 0xffff), lsl #16
++ WHYRED_UART_TX 4
++ mov w10, #0x0a0d
++ WHYRED_UART_TX 2
++ dsb sy
++.endmacro
++
++/* Exception-only helper; x14 is the value, x15 is the nibble counter. */
++.macro WHYRED_UART_HEX
++ mov x15, #16
++96:
++ lsr x10, x14, #60
++ cmp w10, #9
++ add w11, w10, #0x30
++ add w10, w10, #0x57
++ csel w10, w11, w10, ls
++ WHYRED_UART_TX 1
++ lsl x14, x14, #4
++ subs x15, x15, #1
++ b.ne 96b
++ mov w10, #0x0a0d
++ WHYRED_UART_TX 2
++.endmacro
++#else
++.macro WHYRED_UART_WORD
++.endmacro
++#endif
++
+ .macro MSR_VBAR_EL1_X0
+ #if defined(KERNEL_INTEGRITY_KTRR)
+ 	mov	x1, lr
+@@ -233,41 +295,124 @@ LEXT(_start)
+ 	.global	EXT(LowExceptionVectorBase)
+ LEXT(LowExceptionVectorBase)
+ 	/* EL1 SP 0 */
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	/* EL1 SP1 */
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	/* EL0 64 */
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	/* EL0 32 */
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
++#endif
+ 	.align	7
++#if defined(WHYRED_UARTDM)
++	b Lwhyred_boot_exception
++#else
+ 	b		.
+-	.align 12, 0
++#endif
++
++
++#if defined(WHYRED_UARTDM)
++Lwhyred_boot_exception:
++ WHYRED_UART_WORD 0x21435845 /* EXC! */
++ WHYRED_UART_WORD 0x3d525345 /* ESR= */
++ mrs x14, ESR_EL1
++ WHYRED_UART_HEX
++ WHYRED_UART_WORD 0x3d524c45 /* ELR= */
++ mrs x14, ELR_EL1
++ WHYRED_UART_HEX
++ WHYRED_UART_WORD 0x3d524146 /* FAR= */
++ mrs x14, FAR_EL1
++ WHYRED_UART_HEX
++ dsb sy
++97:
++ wfe
++ b 97b
++#endif
++ .align 12, 0
+ 
+ #if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
+ /*
+@@ -506,6 +651,8 @@ start_cpu:
+ 	.globl EXT(start_first_cpu)
+ LEXT(start_first_cpu)
+ 
++	WHYRED_UART_WORD 0x30554e58 /* XNU0: before any startup prerequisites. */
++
+ 	// Unlock the core for debugging
+ 	msr		OSLAR_EL1, xzr
+ 	msr		DAIFSet, #(DAIFSC_ALL)				// Disable all interrupts
+@@ -532,6 +679,8 @@ Lsweet_mark_pixel:
+ 	dsb		sy
+ #endif
+ 
++	WHYRED_UART_WORD 0x31554e58 /* XNU1: OSLAR/framebuffer complete. */
++
+ 	// Set low reset vector before attempting any loads
+ 	adrp	x0, EXT(LowExceptionVectorBase)@page
+ 	add		x0, x0, EXT(LowExceptionVectorBase)@pageoff
+@@ -590,6 +739,8 @@ Lsweet_mark_pixel:
+ 	 *	Page 4 - KVA L2 table
+ 	 */
+ 
++	WHYRED_UART_WORD 0x32554e58 /* XNU2: boot_args and stack registers loaded. */
++
+ 	// Invalidate all entries in the bootstrap page tables
+ 	mov		x0, #(ARM_TTE_EMPTY)				// Load invalid entry template
+ 	mov		x1, x25								// Start at V=P pagetable root
+@@ -695,6 +846,19 @@ Lkernelcache_base_found:
+ 	str		x11, [x13, x12, lsl #TTE_SHIFT]
+ #endif
+ 
++
++#if defined(WHYRED_UARTDM)
++ /* whyred UART: Device-nGnRnE, PXN/UXN, in the existing bootstrap V=P L2. */
++ MOV64 x10, 0x0c000000
++ MOV64 x11, (ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID | ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY) | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_DISABLE) | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_PNX | ARM_TTE_BLOCK_NX)
++ orr x11, x11, x10
++ and x12, x10, #(ARM_TT_L2_INDEX_MASK)
++ lsr x12, x12, #(ARM_TT_L2_SHIFT)
++ add x13, x25, #(2 * PGBYTES)
++ str x11, [x13, x12, lsl #TTE_SHIFT]
++#endif
++ WHYRED_UART_WORD 0x33554e58 /* XNU3: bootstrap tables built, UART mapped. */
++
+ 	/* Ensure TTEs are visible */
+ 	dsb		ish
+ 
+@@ -832,11 +996,21 @@ common_start:
+ 	PAC_INIT_KEY_STATE tmp=x0, tmp2=x1
+ #endif /* HAS_APPLE_PAC */
+ 
++#if defined(WHYRED_UARTDM)
++	/* ADRP already gives the PA while executing with the MMU off. */
++	adrp	x0, EXT(LowExceptionVectorBase)@page
++	add	x0, x0, EXT(LowExceptionVectorBase)@pageoff
++	MSR_VBAR_EL1_X0
++	WHYRED_UART_WORD 0x34554e58 /* XNU4: diagnostic V=P vectors active, MMU off. */
++#endif
++
+ 	// Enable caches, MMU, ROP and JOP
+ 	MOV64   x0, SCTLR_EL1_DEFAULT
+ 	MSR_SCTLR_EL1_X0
+ 	isb		sy
+ 
++	WHYRED_UART_WORD 0x35554e58 /* XNU5: MMU enabled; UART uses Device V=P mapping. */
++
+ #if !VMAPPLE && !defined(SWEET)
+ 	MOV64   x1, SCTLR_EL1_DEFAULT
+ 	cmp		x0, x1
+@@ -899,6 +1073,16 @@ common_start:
+ 	mov	lr, x21
+ #endif
+ 
++	WHYRED_UART_WORD 0x36554e58 /* XNU6: about to enter arm_init in KVA. */
++
++#if defined(WHYRED_UARTDM)
++	adrp	x0, EXT(ExceptionVectorsBase)@page
++	add	x0, x0, EXT(ExceptionVectorsBase)@pageoff
++	add	x0, x0, x22
++	sub	x0, x0, x23
++	MSR_VBAR_EL1_X0
++#endif
++
+ 	// Return to arm_init()
+ 	ret
+ 
+diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
+index fce00c8..3cd41e7 100644
+--- a/osfmk/arm64/sweet_early.c
++++ b/osfmk/arm64/sweet_early.c
+@@ -11,6 +11,48 @@
+ #include <stdint.h>
+ #include <kern/misc_protos.h>
+ 
++
++#if defined(WHYRED_UARTDM)
++/* Only valid while the bootstrap identity UART mapping is installed. */
++static unsigned int whyred_boot_uart_disabled;
++static volatile uint32_t * const whyred_boot_uart = (volatile uint32_t *)(uintptr_t)0x0c170000;
++
++static void
++whyred_boot_uart_putc(char c)
++{
++ if (whyred_boot_uart_disabled) {
++  return;
++ }
++ uint32_t i;
++ for (i = 0; i < 0x10000; i++) {
++  if ((whyred_boot_uart[0x08 / 4] & (1u << 3)) ||
++      (whyred_boot_uart[0x14 / 4] & (1u << 7))) {
++   break;
++  }
++ }
++ if (i == 0x10000) {
++  return;
++ }
++ whyred_boot_uart[0x10 / 4] = 0x300;
++ whyred_boot_uart[0x40 / 4] = 1;
++ (void)whyred_boot_uart[0x40 / 4];
++ for (i = 0; i < 0x10000; i++) {
++  if (whyred_boot_uart[0x08 / 4] & (1u << 2)) {
++   whyred_boot_uart[0x70 / 4] = (unsigned char)c;
++   return;
++  }
++ }
++}
++
++static void
++whyred_boot_uart_string(const char *s)
++{
++ while (*s) {
++  whyred_boot_uart_putc(*s++);
++ }
++}
++#endif
++
+ static volatile uint32_t *early_fb = (volatile uint32_t *)(uintptr_t)0x9d400000;
+ #define EARLY_FB early_fb
+ #define EARLY_WIDTH 1080u
+@@ -89,6 +131,17 @@ sweet_early_string(const char *s)
+ void
+ sweet_early_mark(unsigned int stage, const char *label)
+ {
++#if defined(WHYRED_UARTDM)
++ whyred_boot_uart_string("\r\nXNU_C");
++ if (stage >= 10) {
++  whyred_boot_uart_putc((char)('0' + stage / 10));
++ }
++ whyred_boot_uart_putc((char)('0' + stage % 10));
++ whyred_boot_uart_string(": ");
++ whyred_boot_uart_string(label);
++ whyred_boot_uart_string("\r\n");
++#endif
++
+ 	if (early_disabled || stage > 20) {
+ 		return;
+ 	}
+@@ -116,6 +169,14 @@ sweet_early_panic(const char *fmt, va_list *args)
+ 		return;
+ 	}
+ 	early_panicking = 1;
++#if defined(WHYRED_UARTDM)
++ whyred_boot_uart_string("\r\nXNU_EARLY_PANIC: ");
++ va_list uart_copy;
++ va_copy(uart_copy, *args);
++ _doprnt(fmt, &uart_copy, whyred_boot_uart_putc, 16);
++ va_end(uart_copy);
++ whyred_boot_uart_string("\r\n");
++#endif
+ 	sweet_early_string("\nSWEET EARLY PANIC: ");
+ 	va_list copy;
+ 	va_copy(copy, *args);
+@@ -132,11 +193,18 @@ sweet_early_relocate(uint64_t base)
+ 	early_fb = (volatile uint32_t *)(uintptr_t)base;
+ 	__asm__ volatile("dsb sy" ::: "memory");
+ 	sweet_early_mark(9, "kernel framebuffer VA live");
++#if defined(WHYRED_UARTDM)
++ /* TTBR0 is about to be removed; the regular UART uses its own ml_io_map. */
++ whyred_boot_uart_disabled = 1;
++#endif
+ }
+ 
+ void
+ sweet_early_disable(void)
+ {
++#if defined(WHYRED_UARTDM)
++ whyred_boot_uart_disabled = 1;
++#endif
+ 	early_disabled = 1;
+ 	__asm__ volatile("dsb sy" ::: "memory");
+ }
+diff --git a/pexpert/arm/pe_identify_machine.c b/pexpert/arm/pe_identify_machine.c
+index aa75c0a..749a450 100644
+--- a/pexpert/arm/pe_identify_machine.c
++++ b/pexpert/arm/pe_identify_machine.c
+@@ -188,8 +188,18 @@ pe_arm_get_soc_base_phys(void)
+ 			strlcpy(gPESoCDeviceTypeBuffer, tmpStr, SOC_DEVICE_TYPE_BUFFER_SIZE);
+ 			gPESoCDeviceType = gPESoCDeviceTypeBuffer;
+ 
+-			SecureDTGetProperty(entryP, "ranges", (void const **)&ranges_prop, &prop_size);
+-			gPESoCBasePhys = *(ranges_prop + 1);
++			if (SecureDTGetProperty(entryP, "ranges", (void const **)&ranges_prop, &prop_size) == kSuccess &&
++			    prop_size >= 2 * sizeof(*ranges_prop)) {
++				gPESoCBasePhys = *(ranges_prop + 1);
++			} else {
++				/* whyred synthetic ADT provides arm-io reg, not ranges. */
++				uintptr_t const *reg_prop = NULL;
++				if (SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size) != kSuccess ||
++				    prop_size < sizeof(*reg_prop)) {
++					return 0;
++				}
++				gPESoCBasePhys = *reg_prop;
++			}
+ 		}
+ 		return gPESoCBasePhys;
+ 	}
+diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
+index 19f27cd..14ea4b2 100644
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -698,6 +698,115 @@ register_serial_functions(struct pe_serial_functions *fns)
+ 	gPESF = fns;
+ }
+ 
++#ifdef WHYRED_UARTDM
++/*
++ * whyred debug UART: ABL and the shim use UARTDM at physical 0x0c170000.
++ * Preserve the firmware's 115200 8-N-1 clock/pin configuration; only push
++ * single-byte PIO words through the TX FIFO. All waits are bounded so a
++ * missing/unclocked peripheral cannot hang kernel startup.
++ */
++#define WHYRED_UARTDM_PA       0x0c170000ULL
++#define WHYRED_UARTDM_SIZE     0x1000
++#define WHYRED_UARTDM_CR       0x10
++#define WHYRED_UARTDM_ISR      0x14
++#define WHYRED_UARTDM_SR       0x08
++#define WHYRED_UARTDM_NCF_TX   0x40
++#define WHYRED_UARTDM_TX       0x70
++#define WHYRED_UARTDM_CR_RESET_TX_READY 0x300
++#define WHYRED_UARTDM_SR_TX_READY       (1u << 2)
++
++static volatile uint32_t *whyred_uartdm_registers;
++
++static uint32_t
++whyred_uartdm_read(unsigned int offset)
++{
++	return whyred_uartdm_registers[offset / sizeof(uint32_t)];
++}
++
++static void
++whyred_uartdm_write(unsigned int offset, uint32_t value)
++{
++	whyred_uartdm_registers[offset / sizeof(uint32_t)] = value;
++}
++
++static unsigned int
++whyred_uartdm_transmit_ready(void)
++{
++	/* transmit_data() performs a bounded hardware-ready poll itself. */
++	return whyred_uartdm_registers != NULL;
++}
++
++static void
++whyred_uartdm_transmit_data(uint8_t c)
++{
++	if (whyred_uartdm_registers == NULL) {
++		return;
++	}
++	/* Match the working shim protocol: drain TX before changing NCF_TX. */
++	uint32_t idle;
++	for (idle = 0; idle < 0x10000; idle++) {
++		if ((whyred_uartdm_read(WHYRED_UARTDM_SR) & (1u << 3)) ||
++		    (whyred_uartdm_read(WHYRED_UARTDM_ISR) & (1u << 7))) {
++			break;
++		}
++	}
++	if (idle == 0x10000) {
++		return;
++	}
++	whyred_uartdm_write(WHYRED_UARTDM_CR, WHYRED_UARTDM_CR_RESET_TX_READY);
++	whyred_uartdm_write(WHYRED_UARTDM_NCF_TX, 1);
++	(void)whyred_uartdm_read(WHYRED_UARTDM_NCF_TX);
++	for (uint32_t i = 0; i < 0x10000; i++) {
++		if (whyred_uartdm_read(WHYRED_UARTDM_SR) & WHYRED_UARTDM_SR_TX_READY) {
++			whyred_uartdm_write(WHYRED_UARTDM_TX, c);
++			return;
++		}
++	}
++}
++
++static unsigned int
++whyred_uartdm_receive_ready(void)
++{
++	return 0;
++}
++
++static uint8_t
++whyred_uartdm_receive_data(void)
++{
++	return 0;
++}
++
++static void
++whyred_uartdm_init(void)
++{
++	static const char banner[] = "\r\n[whyred-XNU] UARTDM console ready\r\n";
++	for (const char *p = banner; *p; p++) {
++		whyred_uartdm_transmit_data((uint8_t)*p);
++	}
++}
++
++static SECURITY_READ_ONLY_LATE(struct pe_serial_functions) whyred_uartdm_serial_functions = {
++	.init = whyred_uartdm_init,
++	.transmit_ready = whyred_uartdm_transmit_ready,
++	.transmit_data = whyred_uartdm_transmit_data,
++	.receive_ready = whyred_uartdm_receive_ready,
++	.receive_data = whyred_uartdm_receive_data,
++	.device = SERIAL_WHYRED_UARTDM
++};
++
++static void
++whyred_uartdm_probe(void)
++{
++	if (whyred_uartdm_registers != NULL) {
++		return;
++	}
++	whyred_uartdm_registers = (volatile uint32_t *)ml_io_map(WHYRED_UARTDM_PA, WHYRED_UARTDM_SIZE);
++	if (whyred_uartdm_registers != NULL) {
++		register_serial_functions(&whyred_uartdm_serial_functions);
++	}
++}
++#endif /* WHYRED_UARTDM */
++
+ /*****************************************************************************/
+ 
+ /*
+@@ -1044,6 +1153,10 @@ serial_init(void)
+ 	}
+ #endif /* APPLE_UART */
+ 
++	#ifdef WHYRED_UARTDM
++	whyred_uartdm_probe();
++	#endif /* WHYRED_UARTDM */
++
+ 	if (gPESF == NULL) {
+ 		return 0;
+ 	}
+diff --git a/pexpert/pexpert/arm/protos.h b/pexpert/pexpert/arm/protos.h
+index 9004f2b..ee6869c 100644
+--- a/pexpert/pexpert/arm/protos.h
++++ b/pexpert/pexpert/arm/protos.h
+@@ -51,7 +51,8 @@ typedef enum serial_device {
+ 	SERIAL_PI3_UART=0x4,
+ 	SERIAL_VMAPPLE_UART=0x8,
+ 	SERIAL_DCC_UART=0x10,
+-	SERIAL_SWEET_FBCON=0x20
++	SERIAL_SWEET_FBCON=0x20,
++	SERIAL_WHYRED_UARTDM=0x40
+ } serial_device_t;
+ 
+ kern_return_t serial_irq_enable(serial_device_t device);

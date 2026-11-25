@@ -1,0 +1,407 @@
+--- a/osfmk/console/serial_console.c
++++ b/osfmk/console/serial_console.c
+@@ -270,8 +270,8 @@
+ extern void sweet_log_append(const char *c, int size);  /* bsd/dev/sweet_ufs.c */
+ /*
+  * Set by AppleCLCD (boot-arg sweetfb_noconsole=1) once the GUI presents:
+- * console text still goes to the persistent log, but is not drawn over
+- * the GUI. A panic draws again.
++ * Only fbcon_transmit_data observes this flag. UART and the persistent
++ * console log keep receiving text. A panic draws on the screen again.
+  */
+ int sweet_console_muted;
+ #endif
+@@ -283,9 +283,6 @@
+ 
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ 	sweet_log_append(c, size);
+-	if (sweet_console_muted && !panic_active()) {
+-		return;
+-	}
+ #endif
+ 
+ 	if (disableConsoleOutput) {
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -870,6 +870,10 @@
+ static void
+ fbcon_transmit_data(uint8_t c)
+ {
++	extern int sweet_console_muted;
++	if (sweet_console_muted && !panic_active()) {
++		return;
++	}
+ 	if (c == '\r') {
+ 		fbcon_col = 0;
+ 		return;
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -25,17 +25,18 @@
+  *   28 GetDotPitch, 72 Enable/DisableNotifications [func, refcon, type, 0]
+  * Everything else is accepted and logged once.
+  *
+- * SwapEnd copies the enabled layers' surfaces into the panel memory (no
+- * scaling, CPU copy). Vsync (notification type 5) is a 60 Hz timer that
++ * SwapEnd queues retained IOSurface layers for CPU presentation scaled
++ * from the logical canvas to the physical panel. Vsync (notification type 5) is a 60 Hz timer that
+  * sends (count, mach_absolute_time, 0) as 32-bit halves to clients that
+  * enabled it, through the port they registered (IOConnectSetNotificationPort).
+  *
+  * The panel memory itself is published as an IOSurface and returned as the
+  * default framebuffer surface. The kernel text console keeps drawing over
+  * the GUI by default: boot-arg sweetfb_noconsole=1 stops drawing it from
+- * the first swap on (it still reaches the persistent log; panics draw).
++ * the first copied layer on (UART remains active; panics draw).
+  */
+ #include "SweetSurface.h"
++#include "SweetFramebufferBlit.h"
+ 
+ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
+ 
+@@ -113,6 +114,8 @@
+ 	uint32_t      fSwapID;
+ 	bool          fConsolePaused;
+ 	uint8_t       fPending[SWEET_FB_SWAP_REC_SIZE];     /* latest swap, not yet shown */
++	SweetSurface *fPendingSurfaces[SWEET_FB_LAYERS]; /* retained until replaced */
++	uint64_t      fPresented;
+ 	bool          fDirty;
+ 	uint32_t      fFlushTicks;    /* vsync ticks between panel copies */
+ 	bool          fPowerOff;      /* RequestPowerChange(0) */
+@@ -122,7 +125,7 @@
+ 	void addClient(IOMobileFramebufferUserClient *client);
+ 	void removeClient(IOMobileFramebufferUserClient *client);
+ 	void swap(const uint8_t *rec);
+-	void present(const uint8_t *rec);
++	void present(const uint8_t *rec, SweetSurface *const *surfaces);
+ };
+ 
+ OSDefineMetaClassAndStructors(AppleCLCD, IOMobileFramebuffer);
+@@ -193,6 +196,15 @@
+ 		IOLog("SWEET FB: no vsync timer\n");
+ 		return false;
+ 	}
++	bzero(fPending, sizeof(fPending));
++	bzero(fPendingSurfaces, sizeof(fPendingSurfaces));
++	fPresented = 0;
++	fDirty = false;
++	fConsolePaused = false;
++	fPowerOff = false;
++	fFadeStep = 0;
++	fVsyncCount = 0;
++	fSwapID = 0;
+ 	uint32_t hz = 10;
+ 	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
+ 	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
+@@ -245,16 +257,24 @@
+ 	}
+ 	bool flush = fb->fDirty && (count % fb->fFlushTicks) == 0;
+ 	uint8_t *rec = NULL;
++	SweetSurface *surfaces[SWEET_FB_LAYERS] = {};
+ 	if (flush) {
+ 		rec = (uint8_t *)IOMallocData(SWEET_FB_SWAP_REC_SIZE);
+ 		if (rec != NULL) {
+ 			memcpy(rec, fb->fPending, SWEET_FB_SWAP_REC_SIZE);
+ 			fb->fDirty = false;
++			for (uint32_t i = 0; i < SWEET_FB_LAYERS; i++) {
++				surfaces[i] = fb->fPendingSurfaces[i];
++				if (surfaces[i] != NULL) surfaces[i]->retain();
++			}
+ 		}
+ 	}
+ 	IOLockUnlock(fb->fLock);
+ 	if (rec != NULL) {
+-		fb->present(rec);
++		fb->present(rec, surfaces);
++		for (uint32_t i = 0; i < SWEET_FB_LAYERS; i++) {
++			OSSafeReleaseNULL(surfaces[i]);
++		}
+ 		IOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);
+ 	}
+ 	sender->setTimeoutUS(SWEET_FB_VSYNC_US);
+@@ -287,118 +307,89 @@
+ 	return v;
+ }
+ 
+-static uint32_t sweet_fb_swaps_logged;
+ static uint64_t sweet_fb_swap_count;
+ 
+-/* Copy each enabled layer's surface into the panel memory (no scaling). */
+-/*
+- * A swap only records the frame: copying 10 MB into the panel on every
+- * swap (backboardd presents at 60 Hz) took the whole CPU. The vsync timer
+- * shows the latest frame every fFlushTicks ticks (boot-arg sweetfb_hz,
+- * default 10 Hz).
+- */
++/* Retain layer memory while a throttled frame waits for the vsync timer. */
+ void
+ AppleCLCD::swap(const uint8_t *rec)
+ {
++	uint32_t mask = get32(rec, 0x104);
++	SweetSurface *next[SWEET_FB_LAYERS] = {};
++	SweetSurface *old[SWEET_FB_LAYERS] = {};
++	for (uint32_t i = 0; i < SWEET_FB_LAYERS; i++) {
++		if (mask & (1u << i)) next[i] = sweet_surface_copy(get32(rec, 0x54 + 4 * i));
++	}
+ 	IOLockLock(fLock);
++	for (uint32_t i = 0; i < SWEET_FB_LAYERS; i++) {
++		old[i] = fPendingSurfaces[i];
++		fPendingSurfaces[i] = next[i];
++	}
+ 	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
+ 	fDirty = true;
++	uint64_t count = ++sweet_fb_swap_count;
+ 	IOLockUnlock(fLock);
+-	if ((++sweet_fb_swap_count % 1000) == 0) {
+-		IOLog("SWEET FB: %llu swaps\n", sweet_fb_swap_count);
++	for (uint32_t i = 0; i < SWEET_FB_LAYERS; i++) OSSafeReleaseNULL(old[i]);
++	if (count <= 8 || count % 1000 == 0) {
++		IOLog("WHYRED FB: queued count=%llu swap=%u set=0x%x clear=0x%x surfaces=%u,%u,%u,%u\n",
++		    count, get32(rec, 0x50), mask, get32(rec, 0x108),
++		    get32(rec, 0x54), get32(rec, 0x58), get32(rec, 0x5c), get32(rec, 0x60));
+ 	}
+ }
+ 
+ void
+-AppleCLCD::present(const uint8_t *rec)
+-{
+-	uint32_t mask = get32(rec, 0x104);
+-
+-
++AppleCLCD::present(const uint8_t *rec, SweetSurface *const *surfaces)
++{
++	uint32_t mask = get32(rec, 0x104), layers = 0;
++	uint64_t pixels = 0;
++	struct sweet_fb_image panel = {
++		(uint8_t *)fPixels, fSurface->memory->getLength(),
++		fWidth, fHeight, fRowBytes, 0, SWEET_FB_BGRA
++	};
++	for (uint32_t layer = 0; layer < SWEET_FB_LAYERS; layer++) {
++		SweetSurface *s = surfaces[layer];
++		if (!(mask & (1u << layer)) || s == NULL || s == fSurface) continue;
++		if (s->bytesPerElement != 4 || s->elementWidth != 1 ||
++		    s->elementHeight != 1 || s->planeCount != 0 || s->memory == NULL) continue;
++		struct sweet_fb_image image = {
++			(uint8_t *)s->kernelAddress(), s->memory->getLength(),
++			s->width, s->height, s->bytesPerRow, s->offset, s->pixelFormat
++		};
++		const uint8_t *a = rec + 0x64 + 16 * layer;
++		const uint8_t *b = rec + 0xc4 + 16 * layer;
++		struct sweet_fb_rect source = { (int32_t)get32(a, 0), (int32_t)get32(a, 4),
++		    (int32_t)get32(a, 8), (int32_t)get32(a, 12) };
++		struct sweet_fb_rect target = { (int32_t)get32(b, 0), (int32_t)get32(b, 4),
++		    (int32_t)get32(b, 8), (int32_t)get32(b, 12) };
++		uint64_t copied = sweet_fb_blit(&image, &panel, fLogicalW, fLogicalH, source, target);
++		if (copied != 0) {
++			pixels += copied;
++			layers++;
++		}
++	}
++	if (pixels == 0) {
++		static uint32_t empty_logged;
++		if (empty_logged++ < 8) {
++			IOLog("WHYRED FB: no copied layer swap=%u mask=0x%x; console preserved\n",
++			    get32(rec, 0x50), mask);
++		}
++		return;
++	}
++	/* Publish stores through the write-combined mapping before reporting a frame. */
++	__sync_synchronize();
+ 	if (!fConsolePaused) {
+ 		int quiet = 0;
+ 		fConsolePaused = true;
+ 		if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
+-			/* Not PE_initialize_console(kPEDisableScreen): its console switch
+-			 * writes the read-only-late cons_ops_index and panics. */
+-			sweet_console_muted = 1;
+-		}
+-	}
+-
+-	for (uint32_t layer = 0; layer < SWEET_FB_LAYERS; layer++) {
+-		uint32_t id = get32(rec, 0x54 + 4 * layer);
+-		const uint8_t *a = rec + 0x64 + 16 * layer;
+-		const uint8_t *b = rec + 0xc4 + 16 * layer;
+-		int32_t sx = (int32_t)get32(a, 0), sy = (int32_t)get32(a, 4);
+-		int32_t dx = (int32_t)get32(b, 0), dy = (int32_t)get32(b, 4);
+-		int32_t w = (int32_t)get32(b, 8), h = (int32_t)get32(b, 12);
+-
+-		if (!(mask & (1u << layer)) || id == 0) {
+-			continue;
+-		}
+-		SweetSurface *s = sweet_surface_copy(id);
+-		if (sweet_fb_swaps_logged < 16) {
+-			sweet_fb_swaps_logged++;
+-			IOLog("SWEET FB: swap %u layer %u surface %u %ux%u fmt 0x%x bpr %u a %d,%d %ux%u b %d,%d %dx%d\n",
+-			    get32(rec, 0x50), layer, id, s ? s->width : 0, s ? s->height : 0,
+-			    s ? s->pixelFormat : 0, s ? s->bytesPerRow : 0, sx, sy, get32(a, 8),
+-			    get32(a, 12), dx, dy, w, h);
+-		}
+-		if (s == NULL || s == fSurface) {
+-			OSSafeReleaseNULL(s);
+-			continue;
+-		}
+-		uintptr_t src = s->kernelAddress();
+-		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
+-		if (w <= 0 || h <= 0) {
+-			w = (int32_t)s->width;
+-			h = (int32_t)s->height;
+-		}
+-		if (sx < 0 || sy < 0) {
+-			sx = sy = 0;
+-		}
+-		if (dx < 0 || dy < 0) {
+-			dx = dy = 0;
+-		}
+-		/* Logical (presented) display coordinates -> panel coordinates. */
+-		dx -= fOffX;
+-		dy -= fOffY;
+-		if (dx < 0) {
+-			sx -= dx;
+-			w += dx;
+-			dx = 0;
+-		}
+-		if (dy < 0) {
+-			sy -= dy;
+-			h += dy;
+-			dy = 0;
+-		}
+-		if (w > (int32_t)s->width - sx) {
+-			w = (int32_t)s->width - sx;
+-		}
+-		if (h > (int32_t)s->height - sy) {
+-			h = (int32_t)s->height - sy;
+-		}
+-		if (w > (int32_t)fWidth - dx) {
+-			w = (int32_t)fWidth - dx;
+-		}
+-		if (h > (int32_t)fHeight - dy) {
+-			h = (int32_t)fHeight - dy;
+-		}
+-		uint64_t last = (uint64_t)s->offset + (uint64_t)(sy + h - 1) * s->bytesPerRow +
+-		    (uint64_t)(sx + w) * 4;
+-		if (w <= 0 || h <= 0 || s->elementWidth != 1 || s->elementHeight != 1 ||
+-		    s->memory == NULL || last > s->memory->getLength()) {
+-			src = 0;
+-		}
+-		if (src != 0 && bpe == 4) {
+-			for (int32_t y = 0; y < h; y++) {
+-				memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
+-				    (const void *)(src + s->offset + (uint64_t)(sy + y) * s->bytesPerRow + (uint64_t)sx * 4),
+-				    (size_t)w * 4);
+-			}
+-		}
+-		s->release();
++			sweet_console_muted = 1; /* only fbcon observes it; UART keeps running */
++		}
++	}
++	uint64_t count = ++fPresented;
++	if (count <= 8 || count % 300 == 0) {
++		uint32_t first = get32((const uint8_t *)fPixels, 0);
++		uint32_t center = get32((const uint8_t *)fPixels,
++		    (fHeight / 2) * fRowBytes + (fWidth / 2) * 4);
++		IOLog("WHYRED FB: presented count=%llu swap=%u layers=%u pixels=%llu sample=%08x,%08x\n",
++		    count, get32(rec, 0x50), layers, pixels, first, center);
+ 	}
+ }
+ 
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetFramebufferBlit.h
+@@ -0,0 +1,99 @@
++/* CPU presentation for the boot framebuffer; no GPU or Apple display MMIO. */
++#ifndef SWEET_FRAMEBUFFER_BLIT_H
++#define SWEET_FRAMEBUFFER_BLIT_H
++#include <stdint.h>
++
++#define SWEET_FB_BGRA 0x42475241u
++#define SWEET_FB_RGBA 0x52474241u
++#define SWEET_FB_MAX_DIM 16384u
++
++struct sweet_fb_image {
++	uint8_t *pixels;
++	uint64_t length;
++	uint32_t width, height, row_bytes, offset, format;
++};
++
++struct sweet_fb_rect {
++	int32_t x, y, w, h;
++};
++
++static inline int
++sweet_fb_image_valid(const struct sweet_fb_image *image)
++{
++	if (!image->pixels || !image->width || !image->height ||
++	    image->width > SWEET_FB_MAX_DIM || image->height > SWEET_FB_MAX_DIM ||
++	    image->row_bytes < (uint64_t)image->width * 4 ||
++	    (image->format != SWEET_FB_BGRA && image->format != SWEET_FB_RGBA)) {
++		return 0;
++	}
++	uint64_t end = (uint64_t)image->offset +
++	    (uint64_t)(image->height - 1) * image->row_bytes + (uint64_t)image->width * 4;
++	return end <= image->length;
++}
++
++/*
++ * Destination coordinates use the logical iPhone canvas. Map pixel centers
++ * onto the real panel so all of a 1125x2436 frame fits whyred's 1080x2160
++ * panel. Signed 64-bit math covers every signed 32-bit destination rectangle;
++ * source spans are bounded before multiplication. Samples outside the source
++ * are skipped. Length checks precede every use of the mappings.
++ */
++static inline uint64_t
++sweet_fb_blit(const struct sweet_fb_image *source, struct sweet_fb_image *panel,
++    uint32_t logical_w, uint32_t logical_h,
++    struct sweet_fb_rect src, struct sweet_fb_rect dst)
++{
++	if (!sweet_fb_image_valid(source) || !sweet_fb_image_valid(panel) ||
++	    panel->format != SWEET_FB_BGRA || !logical_w || !logical_h ||
++	    logical_w > SWEET_FB_MAX_DIM || logical_h > SWEET_FB_MAX_DIM ||
++	    src.w <= 0 || src.h <= 0 || src.w > (int32_t)SWEET_FB_MAX_DIM ||
++	    src.h > (int32_t)SWEET_FB_MAX_DIM || dst.w <= 0 || dst.h <= 0) {
++		return 0;
++	}
++	int64_t right = (int64_t)dst.x + dst.w;
++	int64_t bottom = (int64_t)dst.y + dst.h;
++	if (right <= 0 || bottom <= 0 || dst.x >= (int64_t)logical_w ||
++	    dst.y >= (int64_t)logical_h) {
++		return 0;
++	}
++	uint32_t x0 = dst.x <= 0 ? 0 : (uint64_t)dst.x * panel->width / logical_w;
++	uint32_t y0 = dst.y <= 0 ? 0 : (uint64_t)dst.y * panel->height / logical_h;
++	uint32_t x1 = right >= logical_w ? panel->width :
++	    ((uint64_t)right * panel->width + logical_w - 1) / logical_w;
++	uint32_t y1 = bottom >= logical_h ? panel->height :
++	    ((uint64_t)bottom * panel->height + logical_h - 1) / logical_h;
++	uint64_t copied = 0;
++	for (uint32_t y = y0; y < y1; y++) {
++		int64_t yn = (int64_t)(2 * y + 1) * logical_h - (int64_t)dst.y * 2 * panel->height;
++		int64_t yd = (int64_t)dst.h * 2 * panel->height;
++		if (yn < 0 || yn >= yd) {
++			continue;
++		}
++		int64_t sy = (int64_t)src.y + yn * src.h / yd;
++		if (sy < 0 || sy >= source->height) {
++			continue;
++		}
++		const uint8_t *srow = source->pixels + source->offset + (uint64_t)sy * source->row_bytes;
++		uint8_t *drow = panel->pixels + panel->offset + (uint64_t)y * panel->row_bytes;
++		for (uint32_t x = x0; x < x1; x++) {
++			int64_t xn = (int64_t)(2 * x + 1) * logical_w - (int64_t)dst.x * 2 * panel->width;
++			int64_t xd = (int64_t)dst.w * 2 * panel->width;
++			if (xn < 0 || xn >= xd) {
++				continue;
++			}
++			int64_t sx = (int64_t)src.x + xn * src.w / xd;
++			if (sx < 0 || sx >= source->width) {
++				continue;
++			}
++			const uint8_t *s = srow + (uint64_t)sx * 4;
++			uint8_t *d = drow + (uint64_t)x * 4;
++			d[0] = s[source->format == SWEET_FB_RGBA ? 2 : 0];
++			d[1] = s[1];
++			d[2] = s[source->format == SWEET_FB_RGBA ? 0 : 2];
++			d[3] = s[3];
++			copied++;
++		}
++	}
++	return copied;
++}
++#endif

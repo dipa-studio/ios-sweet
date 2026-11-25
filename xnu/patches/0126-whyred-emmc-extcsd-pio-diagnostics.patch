@@ -1,0 +1,146 @@
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -292,6 +292,13 @@
+ 	uint16_t old_block_count = whyred_emmc_read16(base, SDHCI_BLOCK_COUNT);
+ 	uint16_t old_transfer_mode = whyred_emmc_read16(base, SDHCI_TRANSFER_MODE);
+ 	uint32_t response = 0;
++	uint32_t status = 0;
++	uint32_t present = 0;
++	uint32_t after_pio_status = 0;
++	uint32_t sample[4] = { 0, 0, 0, 0 };
++	uint64_t timeout;
++	uint64_t start;
++	int result = -1;
+ 
+ 	whyred_emmc_write16(base, SDHCI_BLOCK_SIZE, WHYRED_EXT_CSD_BYTES);
+ 	whyred_emmc_write16(base, SDHCI_BLOCK_COUNT, 1);
+@@ -302,67 +309,97 @@
+ 	uint16_t command = (SDHCI_CMD_SEND_EXT_CSD << 8) |
+ 	    SDHCI_CMD_RESP_SHORT_CRC_INDEX | SDHCI_CMD_DATA_PRESENT;
+ 	if (whyred_emmc_command(base, 0, command, &response) != 0) {
+-		return -1;
+-	}
+-
+-	uint64_t timeout = whyred_emmc_timeout_ticks();
++		goto out;
++	}
++	printf("WHYRED EMMC: EXT_CSD CMD8 response=0x%08x\n", response);
++
++	timeout = whyred_emmc_timeout_ticks();
+ 	if (timeout == 0) {
+-		return -1;
+-	}
+-	uint64_t start = whyred_emmc_counter();
+-	uint32_t status = 0;
+-	while ((whyred_emmc_read32(base, SDHCI_PRESENT_STATE) &
+-	    SDHCI_PSTATE_DATA_AVAILABLE) == 0) {
++		goto out;
++	}
++	start = whyred_emmc_counter();
++	for (;;) {
++		present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++		if ((present & SDHCI_PSTATE_DATA_AVAILABLE) != 0) {
++			break;
++		}
+ 		status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
+ 		if ((status & SDHCI_INT_ERROR_MASK) != 0) {
+-			printf("WHYRED EMMC: EXT_CSD data error int=0x%08x\n", status);
++			printf("WHYRED EMMC: EXT_CSD data error int=0x%08x present=0x%08x\n",
++			    status, present);
+ 			whyred_emmc_write32(base, SDHCI_INT_STATUS,
+ 			    status & SDHCI_INT_ERROR_MASK);
+-			return -1;
++			goto out;
+ 		}
+ 		if ((status & SDHCI_INT_DATA_END) != 0) {
+-			printf("WHYRED EMMC: EXT_CSD ended before PIO data\n");
++			printf("WHYRED EMMC: EXT_CSD ended before PIO data int=0x%08x present=0x%08x\n",
++			    status, present);
+ 			whyred_emmc_write32(base, SDHCI_INT_STATUS, SDHCI_INT_DATA_END);
+-			return -1;
++			goto out;
+ 		}
+ 		if ((whyred_emmc_counter() - start) >= timeout) {
+-			printf("WHYRED EMMC: EXT_CSD PIO data-ready timeout int=0x%08x\n",
+-			    status);
+-			return -1;
+-		}
+-	}
++			printf("WHYRED EMMC: EXT_CSD PIO ready timeout int=0x%08x present=0x%08x\n",
++			    status, present);
++			goto out;
++		}
++	}
++	status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++	printf("WHYRED EMMC: EXT_CSD PIO ready present=0x%08x int=0x%08x size=%u count=%u xfer=0x%04x\n",
++	    present, status,
++	    (unsigned int)whyred_emmc_read16(base, SDHCI_BLOCK_SIZE),
++	    (unsigned int)whyred_emmc_read16(base, SDHCI_BLOCK_COUNT),
++	    whyred_emmc_read16(base, SDHCI_TRANSFER_MODE));
+ 
+ 	/* SDHCI PIO exposes a complete block when DATA_AVAILABLE is asserted. */
+ 	for (unsigned int words = 0; words < (WHYRED_EXT_CSD_BYTES / 4); words++) {
+ 		uint32_t value = whyred_emmc_read32(base, SDHCI_BUFFER);
++		if (words < 4) {
++			sample[words] = value;
++		}
+ 		ext_csd[words * 4 + 0] = (uint8_t)value;
+ 		ext_csd[words * 4 + 1] = (uint8_t)(value >> 8);
+ 		ext_csd[words * 4 + 2] = (uint8_t)(value >> 16);
+ 		ext_csd[words * 4 + 3] = (uint8_t)(value >> 24);
+ 	}
+-	status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
+-	if ((status & SDHCI_INT_DATA_AVAILABLE) != 0) {
+-		whyred_emmc_write32(base, SDHCI_INT_STATUS, SDHCI_INT_DATA_AVAILABLE);
+-	}
+-
++	after_pio_status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++	present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++	printf("WHYRED EMMC: EXT_CSD PIO drained words=128 int=0x%08x present=0x%08x count=%u samples=%08x,%08x,%08x,%08x\n",
++	    after_pio_status, present,
++	    (unsigned int)whyred_emmc_read16(base, SDHCI_BLOCK_COUNT),
++	    sample[0], sample[1], sample[2], sample[3]);
++	if ((after_pio_status & SDHCI_INT_DATA_AVAILABLE) != 0) {
++		whyred_emmc_write32(base, SDHCI_INT_STATUS,
++		    SDHCI_INT_DATA_AVAILABLE);
++	}
++
++	/* Give the completed PIO block a fresh bounded window to assert DATA_END. */
++	start = whyred_emmc_counter();
+ 	status = 0;
+-	if (whyred_emmc_wait_status(base, SDHCI_INT_DATA_END, start,
+-	    timeout, &status) != 0 || (status & SDHCI_INT_DATA_END) == 0 ||
++	int wait_result = whyred_emmc_wait_status(base, SDHCI_INT_DATA_END,
++	    start, timeout, &status);
++	present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++	if (wait_result != 0 || (status & SDHCI_INT_DATA_END) == 0 ||
+ 	    (status & SDHCI_INT_ERROR_MASK) != 0) {
+-		printf("WHYRED EMMC: EXT_CSD completion error int=0x%08x\n", status);
++		printf("WHYRED EMMC: EXT_CSD no DATA_END rc=%d int=0x%08x present=0x%08x count=%u size=%u xfer=0x%04x\n",
++		    wait_result, status, present,
++		    (unsigned int)whyred_emmc_read16(base, SDHCI_BLOCK_COUNT),
++		    (unsigned int)whyred_emmc_read16(base, SDHCI_BLOCK_SIZE),
++		    whyred_emmc_read16(base, SDHCI_TRANSFER_MODE));
+ 		if (status != 0) {
+ 			whyred_emmc_write32(base, SDHCI_INT_STATUS,
+ 			    status & (SDHCI_INT_DATA_END | SDHCI_INT_ERROR_MASK));
+ 		}
+-		return -1;
++		goto out;
+ 	}
+ 	whyred_emmc_write32(base, SDHCI_INT_STATUS, SDHCI_INT_DATA_END);
++	result = 0;
++
++out:
+ 	whyred_emmc_write16(base, SDHCI_BLOCK_SIZE, old_block_size);
+ 	whyred_emmc_write16(base, SDHCI_BLOCK_COUNT, old_block_count);
+ 	whyred_emmc_write16(base, SDHCI_TRANSFER_MODE, old_transfer_mode);
+-	return 0;
+-}
+-
++	return result;
++}
+ static void
+ whyred_emmc_restore_signals(volatile uint8_t *base, uint32_t signal_enable)
+ {
+

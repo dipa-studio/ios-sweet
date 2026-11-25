@@ -1,0 +1,33 @@
+diff --git a/pexpert/arm/pe_init.c b/pexpert/arm/pe_init.c
+index 04dda53..de388e2 100644
+--- a/pexpert/arm/pe_init.c
++++ b/pexpert/arm/pe_init.c
+@@ -21,6 +21,7 @@
+ #include <os/overflow.h>
+ 
+ #include <pexpert/arm64/board_config.h>
++#include <arm64/sweet_early.h>
+ 
+ 
+ /* extern references */
+@@ -422,8 +423,11 @@ PE_init_platform(boolean_t vm_initialized, void *args)
+ 		 * so the console can be found and the right I/O space
+ 		 * can be used..
+ 		 */
++		sweet_early_mark(17, "PE before SecureDTInit");
+ 		SecureDTInit(PE_state.deviceTreeHead, PE_state.deviceTreeSize);
++		sweet_early_mark(18, "PE SecureDTInit done");
+ 		pe_identify_machine(boot_args_ptr);
++		sweet_early_mark(19, "PE identify machine done");
+ 	} else {
+ 		pe_arm_init_interrupts(args);
+ 		pe_arm_init_debug(args);
+@@ -500,6 +504,7 @@ PE_init_platform(boolean_t vm_initialized, void *args)
+ 			}
+ 		}
+ 		pe_init_debug();
++		sweet_early_mark(20, "PE init debug done");
+ 	}
+ }
+ 
+

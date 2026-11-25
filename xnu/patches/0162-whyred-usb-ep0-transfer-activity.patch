@@ -1,0 +1,142 @@
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -211,6 +211,8 @@
+ 	bool        configured;
+ 	uint32_t    failed;
+ 	uint8_t     resource[6];
++	bool        active[6];
++	uint64_t    start_reports;
+ 	uint16_t    max_packet;
+ 	uint16_t    packet_filter;
+ 	uint8_t     data_alt;       /* data interface alternate setting */
+@@ -269,34 +271,63 @@
+ 	dwc_wr(DEPCMDPAR2(ep), p2);
+ 	dwc_wr(DEPCMD(ep), cmd | DEPCMD_CMDACT);
+ 	for (int i = 0; i < 1000; i++) {
+-		uint32_t v = dwc_rd(DEPCMD(ep));
+-		if (!(v & DEPCMD_CMDACT)) {
+-			uint32_t status = (v >> 12) & 0xf;
+-			if (status) {
+-				printf("WHYRED USB: ep%u cmd 0x%x status %u\n", ep, cmd & 0xf, status);
+-				ud_fail("endpoint command status");
+-				return -1;
++		uint32_t completed = dwc_rd(DEPCMD(ep));
++		if (completed & DEPCMD_CMDACT) { delay(1); continue; }
++		uint32_t status = (completed >> 12) & 0xf;
++		if (status) {
++			printf("WHYRED USB: ep%u cmd=0x%x raw=0x%08x status=%u\n", ep, cmd & 0xf, completed, status);
++			ud_fail("endpoint command status"); return -1;
++		}
++		if ((cmd & 0xf) == DEPCMD_STARTTRANSFER) {
++			/* Linux retrieves the transfer index with a separate DEPCMD read.
++			 * Allow a bounded result-settle window, checking its status too.
++			 */
++			uint32_t result = completed;
++			for (unsigned int probe = 0; probe < 32; probe++) {
++				result = dwc_rd(DEPCMD(ep));
++				if (!(result & DEPCMD_CMDACT)) {
++					if ((result >> 12) & 0xf) {
++						printf("WHYRED USB: ep%u start result=0x%08x\n", ep, result);
++						ud_fail("transfer result status"); return -1;
++					}
++					if ((result >> 16) & 0x7f) break;
++				}
++				if (probe + 1 < 32) delay(1);
+ 			}
+-			if ((cmd & 0xf) == DEPCMD_STARTTRANSFER) {
+-				ud.resource[ep] = (uint8_t)((v >> 16) & 0x7f);
+-				if (!ud.resource[ep]) { ud_fail("missing transfer resource"); return -1; }
++			if (result & DEPCMD_CMDACT) { ud_fail("transfer result remained active"); return -1; }
++			ud.resource[ep] = (uint8_t)((result >> 16) & 0x7f);
++			/* EP0 Linux uses a BUSY flag and does not reject index zero.
++			 * Keep the same distinction: activity/HWO protect ownership.
++			 * Non-control endpoints still require a usable resource index.
++			 */
++			if (!ud.resource[ep] && ep > 1) {
++				printf("WHYRED USB: ep%u missing resource completion=0x%08x result=0x%08x DSTS=0x%08x\n",
++				    ep, completed, result, dwc_rd(DSTS));
++				ud_fail("missing data transfer resource"); return -1;
+ 			}
+-			if ((cmd & 0xf) == DEPCMD_ENDTRANSFER) ud.resource[ep] = 0;
+-			return 0;
+-		}
+-		delay(1);
++			ud.active[ep] = true;
++			/* EP0 is issued by the startup thread, then the sole event thread. */
++			if (ep < 2 && ud.start_reports++ < 12) {
++				printf("WHYRED USB: ep%u start completion=0x%08x result=0x%08x resource=%u DSTS=0x%08x\n",
++				    ep, completed, result, ud.resource[ep], dwc_rd(DSTS));
++			}
++		}
++		if ((cmd & 0xf) == DEPCMD_ENDTRANSFER) {
++			ud.resource[ep] = 0;
++			ud.active[ep] = false;
++		}
++		return 0;
+ 	}
+ 	printf("WHYRED USB: ep%u cmd 0x%x timeout\n", ep, cmd & 0xf);
+ 	ud_fail("endpoint command timeout");
+ 	return -1;
+ }
+ 
+-/* One TRB (at DMA offset trb) on physical endpoint ep. */
+ static int
+ ud_start_trb(unsigned ep, uint32_t trb, uint32_t buf, uint32_t len, uint32_t ctl)
+ {
+ 	if (ep >= 6 || (trb & 15u) || trb > UD_SIZE - 16u || buf > UD_SIZE ||
+-	    len > UD_SIZE - buf || ud.resource[ep] || os_atomic_load(&ud.failed, acquire)) {
++	    len > UD_SIZE - buf || ud.active[ep] || ud.resource[ep] || os_atomic_load(&ud.failed, acquire)) {
+ 		ud_fail("invalid or active DMA transfer"); return -1;
+ 	}
+ 	volatile uint32_t *t = (volatile uint32_t *)(ud.dma + trb);
+@@ -463,7 +494,7 @@
+ 	bool ok = true;
+ 	/* A new SETUP must not overwrite the previous IN transfer's data. */
+ 	ud_sync(UD_TRB_IN, 16);
+-	if (ud.resource[1] || (((volatile uint32_t *)(ud.dma + UD_TRB_IN))[3] & TRB_HWO)) {
++	if (ud.active[1] || ud.resource[1] || (((volatile uint32_t *)(ud.dma + UD_TRB_IN))[3] & TRB_HWO)) {
+ 		ud_fail("control IN still active at SETUP"); return;
+ 	}
+ 	ud.data_in = (type & 0x80) != 0;
+@@ -573,7 +604,7 @@
+ 	while (!ud.tx_busy && ud.txq_count > 0 && ud.configured && ud.data_alt == 1 &&
+ 	    ud.packet_filter && !os_atomic_load(&ud.failed, acquire)) {
+ 		ud_sync(UD_TRB_TX, 16);
+-		if (ud.resource[EP_TX] || (((volatile uint32_t *)(ud.dma + UD_TRB_TX))[3] & TRB_HWO)) {
++		if (ud.active[EP_TX] || ud.resource[EP_TX] || (((volatile uint32_t *)(ud.dma + UD_TRB_TX))[3] & TRB_HWO)) {
+ 			ud_fail("TX buffer still owned by controller"); break;
+ 		}
+ 		mbuf_t m = ud.txq[ud.txq_head];
+@@ -677,6 +708,12 @@
+ {
+ 	if (ud.state == EP0_SETUP || os_atomic_load(&ud.failed, acquire)) return;
+ 	for (unsigned ep = 0; ep < 2; ep++) {
++		/* Without an index we cannot prove ENDTRANSFER retirement. Fail
++		 * closed on a mid-control reset rather than reusing owned DMA.
++		 */
++		if (ud.active[ep] && !ud.resource[ep]) {
++			ud_fail("cannot retire unindexed EP0 transfer"); return;
++		}
+ 		if (ud.resource[ep]) {
+ 			if (ud_epcmd(ep, DEPCMD_ENDTRANSFER | DEPCMD_CMDIOC | DEPCMD_HIPRI_FORCERM |
+ 			    ((uint32_t)ud.resource[ep] << 16), 0, 0, 0)) return;
+@@ -842,7 +879,10 @@
+ 	unsigned ep = (ev >> 1) & 0x1f;
+ 	unsigned type = (ev >> 6) & 0xf;
+ 	unsigned status = (ev >> 12) & 0xf;
+-	if (ep < 6 && ep != EP_TX && type == 1) ud.resource[ep] = 0;
++	if (ep < 6 && ep != EP_TX && type == 1) {
++		ud.resource[ep] = 0;
++		ud.active[ep] = false;
++	}
+ 	if (os_atomic_load(&ud.failed, acquire)) return;
+ 
+ 	if (type == 1 && (status & 1u)) { ud_fail("transfer bus error"); return; }
+@@ -853,6 +893,7 @@
+ 	if (ep == EP_TX && type == 1) {
+ 		lck_mtx_lock(ud.lock);
+ 		ud.resource[EP_TX] = 0;
++		ud.active[EP_TX] = false;
+ 		ud.tx_busy = false;
+ 		ud_tx_kick_locked();
+ 		lck_mtx_unlock(ud.lock);

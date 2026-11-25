@@ -1,0 +1,75 @@
+name: whyred-ssh-userland
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/whyred-early-fb]
+    paths:
+      - .github/workflows/whyred-ssh.yml
+      - tools/build-whyred-ssh.py
+      - tools/test-whyred-ssh.py
+      - tools/whyredctl.c
+      - tools/whyred-ssh-udp.h
+      - tools/whyreddiag.c
+      - tools/test-whyred-ssh-udp.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: whyred-ssh-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check SDK and host build tools
+        run: |
+          xcrun --sdk iphoneos --show-sdk-path
+          command -v autoconf || brew install autoconf
+      - name: Verify bounded USB auth log mirror
+        run: python3 tools/test-whyred-ssh-udp.py
+      - name: Build native and iOS diagnostics
+        run: python3 tools/build-whyred-ssh.py --output out/ssh-userland
+      - name: Verify key authentication and command transport
+        run: python3 tools/test-whyred-ssh.py out/ssh-userland --output out/ssh-host-test
+      - name: Collect distributable binaries and reports
+        run: |
+          mkdir -p out/ssh-artifact
+          cp out/ssh-userland/build-report.json out/ssh-artifact/
+          cp out/ssh-host-test/report.json out/ssh-artifact/host-test-report.json
+          cp -R out/ssh-userland/ios/bin out/ssh-artifact/ios-bin
+          cp -R out/ssh-userland/native/bin out/ssh-artifact/native-bin
+          cp out/ssh-userland/ios/DROPBEAR-LICENSE out/ssh-artifact/
+          cp out/ssh-userland/ios/DASH-COPYING out/ssh-artifact/
+          python3 - <<'PY'
+          import hashlib,json,subprocess
+          from pathlib import Path
+          root=Path('out/ssh-artifact')
+          report={}
+          for path in sorted((root/'ios-bin').iterdir()):
+              load=subprocess.check_output(['otool','-l',str(path)],text=True)
+              deps=subprocess.check_output(['otool','-L',str(path)],text=True)
+              isa=subprocess.check_output(['xcrun','llvm-objdump','-d',str(path)],text=True)
+              import re
+              if not re.search(r'platform\s+(?:2|IOS)\b',load):
+                  raise SystemExit('Wrong Mach-O platform: '+path.name)
+              if re.search(r'\b(?:cas[a-z]*|ldadd[a-z]*|swp[a-z]*|stadd[a-z]*)\s+[wx]',isa):
+                  raise SystemExit('Unsupported LSE instruction: '+path.name)
+              if any(line.strip().startswith(('@rpath','@loader_path','@executable_path')) for line in deps.splitlines()[1:]):
+                  raise SystemExit('Unexpected runtime search-path dependency')
+              report[path.name]={'load_commands':load,'dependencies':deps,
+                  'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
+          (root/'macho-audit.json').write_text(json.dumps(report,indent=2)+'\n')
+          (root/'source-commit.txt').write_text(__import__('os').environ['GITHUB_SHA']+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whyred-ssh-userland
+          path: out/ssh-artifact/
+          retention-days: 7

@@ -1,0 +1,123 @@
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -93,10 +93,19 @@
+ 		if (!(usb_hw.sampled_clocks & (1u << i))) continue;
+ 		printf("WHYRED USB: GCC offset=0x%x value=0x%08x\n", whyred_usb_clocks[i], usb_hw.clocks[i]);
+ 	}
+-	printf("WHYRED USB: ref_gate=0x%08x ref_vote=0x%08x GCTL=0x%08x PHYCFG=0x%08x\n",
+-	    usb_hw.ref_gate, usb_hw.ref_vote, usb_hw.gctl, usb_hw.phy_cfg);
++	printf("WHYRED USB: ref_gate=0x%08x ref_vote=0x%08x QUSB_BCR=0x%08x AHB_BCR=0x%08x\n",
++	    usb_hw.ref_gate, usb_hw.ref_vote, usb_hw.qusb_reset, usb_hw.ahb_reset);
++	printf("WHYRED USB: PHY before=0x%08x/0x%08x wake=%u polls=%u restored=%u\n",
++	    usb_hw.phy_power_before, usb_hw.phy_pll_before, usb_hw.phy_wake_attempted,
++	    usb_hw.phy_polls, usb_hw.phy_wake_restored);
++	if (usb_hw.dwc) {
++		printf("WHYRED USB: core sampled ID=0x%08x GCTL=0x%08x PHYCFG=0x%08x\n",
++		    usb_hw.id, usb_hw.gctl, usb_hw.phy_cfg);
++	} else {
++		printf("WHYRED USB: core not sampled (handoff stopped before core access)\n");
++	}
+ 	if (status != WHYRED_USB_HW_OK) {
+-		printf("WHYRED USB: handoff unavailable; controller not started (cold PHY power-up unsupported)\n");
++		printf("WHYRED USB: handoff unavailable; controller not started (full cold PHY init unsupported)\n");
+ 		return;
+ 	}
+ 	if (mode == 2) sweet_usb_gadget_start((vm_offset_t)usb_hw.dwc);
+--- a/bsd/dev/whyred_usb_hw.h
++++ b/bsd/dev/whyred_usb_hw.h
+@@ -1,7 +1,7 @@
+ /* whyred SDM636/SDM660 USB2 handoff. No PMIC, PLL, reset or SMMU programming.
+  * Register provenance: MiCode whyred-o-oss efbbb9cce47475c49f28d227b2a52eca6f0d02a7
+  * gcc-sdm660.c, phy-msm-qusb.c, dwc3-msm.c and the saved board device tree.
+- * This first port requires the bootloader's powered, locked QUSB2 PHY.
++ * May release the legacy powered shutdown state; full cold init is unsupported.
+  */
+ #ifndef WHYRED_USB_HW_H
+ #define WHYRED_USB_HW_H
+@@ -13,6 +13,8 @@
+ #define WHYRED_USB_GCC_SIZE 0x00090000u
+ #define WHYRED_USB_GDSCR 0x0f004u
+ #define WHYRED_USB_BCR 0x0f000u
++#define WHYRED_USB_QUSB_BCR 0x12000u
++#define WHYRED_USB_AHB2PHY_BCR 0x6a000u
+ #define WHYRED_USB_DWC_PA 0x0a800000u
+ #define WHYRED_USB_DWC_SIZE 0x0000d000u
+ #define WHYRED_USB_PHY_PA 0x0c012000u
+@@ -25,6 +27,8 @@
+ #define WHYRED_USB_PHY_PLL_STATUS 0x38u
+ #define WHYRED_USB_CLOCKS 6u
+ #define WHYRED_USB_CLOCK_POLLS 1000u
++#define WHYRED_USB_PHY_POLLS 1000u
++#define WHYRED_USB_PHY_SETTLE_US 150u
+ 
+ static const uint32_t whyred_usb_clocks[WHYRED_USB_CLOCKS] = {
+     0xf008, 0xf00c, 0xf010, 0x05018, 0xf03c, 0x6a004
+@@ -41,19 +45,28 @@
+ enum whyred_usb_hw_status {
+     WHYRED_USB_HW_OK = 0, WHYRED_USB_HW_OFF, WHYRED_USB_HW_MAP,
+     WHYRED_USB_HW_POWER, WHYRED_USB_HW_RESET, WHYRED_USB_HW_CLOCK,
+-    WHYRED_USB_HW_PHY, WHYRED_USB_HW_CORE
++    WHYRED_USB_HW_PHY, WHYRED_USB_HW_CORE, WHYRED_USB_HW_PHY_WAKE
+ };
+ 
+ struct whyred_usb_hw {
+     uintptr_t gcc, dwc, phy, qs;
+     uint32_t gdscr, reset, clocks[WHYRED_USB_CLOCKS], changed_clocks, sampled_clocks;
+     uint32_t ref_gate, ref_vote, phy_power, phy_pll, id, gctl, phy_cfg;
++    uint32_t qusb_reset, ahb_reset, phy_power_before, phy_pll_before;
++    uint32_t phy_wake_attempted, phy_wake_changed, phy_wake_restored, phy_polls;
+ };
+ 
+ /* Only undo branch enable bits introduced by this attempt, before DMA starts. */
+ static void
+ whyred_usb_hw_rollback(const struct whyred_usb_io *io, struct whyred_usb_hw *hw)
+ {
++    /* Restore our PHY power vote while its bus clocks are still enabled. */
++    if (hw->phy_wake_changed) {
++        io->write(io->context, hw->phy, WHYRED_USB_PHY_POWERDOWN, 0x23u);
++        hw->phy_power = io->read(io->context, hw->phy, WHYRED_USB_PHY_POWERDOWN);
++        hw->phy_wake_changed = 0;
++        hw->phy_wake_restored = 1;
++    }
+     for (unsigned int i = WHYRED_USB_CLOCKS; i-- > 0;) {
+         if (hw->changed_clocks & (1u << i)) {
+             uint32_t value = io->read(io->context, hw->gcc, whyred_usb_clocks[i]);
+@@ -100,10 +113,38 @@
+     }
+     hw->ref_gate = io->read(io->context, hw->gcc, 0x88018);
+     hw->ref_vote = io->read(io->context, hw->gcc, 0x88014);
++    hw->qusb_reset = io->read(io->context, hw->gcc, WHYRED_USB_QUSB_BCR);
++    hw->ahb_reset = io->read(io->context, hw->gcc, WHYRED_USB_AHB2PHY_BCR);
++    if ((hw->qusb_reset | hw->ahb_reset) & 1u) {
++        whyred_usb_hw_rollback(io, hw);
++        return WHYRED_USB_HW_RESET;
++    }
+     hw->phy = io->map(io->context, WHYRED_USB_PHY_PA, WHYRED_USB_PHY_SIZE);
+     if (!hw->phy) goto map_error;
+     hw->phy_power = io->read(io->context, hw->phy, WHYRED_USB_PHY_POWERDOWN);
+     hw->phy_pll = io->read(io->context, hw->phy, WHYRED_USB_PHY_PLL_STATUS);
++    hw->phy_power_before = hw->phy_power;
++    hw->phy_pll_before = hw->phy_pll;
++    /* MiCode major-rev=1: shutdown writes 0x23; init enables with 0x22,
++     * then waits >=150 us. Only resume that exact low-byte state with its
++     * reference gate on. Retain bootloader tuning; no reset/PLL/rail writes.
++     */
++    if (mode == 2 && (hw->phy_power & 0xffu) == 0x23u && (hw->ref_gate & 1u)) {
++        hw->phy_wake_attempted = 1;
++        hw->phy_wake_changed = 1;
++        io->write(io->context, hw->phy, WHYRED_USB_PHY_POWERDOWN, 0x22u);
++        io->delay_us(io->context, WHYRED_USB_PHY_SETTLE_US);
++        for (hw->phy_polls = 0; hw->phy_polls < WHYRED_USB_PHY_POLLS; hw->phy_polls++) {
++            hw->phy_power = io->read(io->context, hw->phy, WHYRED_USB_PHY_POWERDOWN);
++            hw->phy_pll = io->read(io->context, hw->phy, WHYRED_USB_PHY_PLL_STATUS);
++            if ((hw->phy_power & 0x23u) == 0x22u && (hw->phy_pll & WHYRED_USB_PLL_LOCK)) break;
++            io->delay_us(io->context, 1);
++        }
++        if (hw->phy_polls == WHYRED_USB_PHY_POLLS) {
++            whyred_usb_hw_rollback(io, hw);
++            return WHYRED_USB_HW_PHY_WAKE;
++        }
++    }
+     if ((hw->phy_power & 0x23u) != 0x22u || !(hw->phy_pll & WHYRED_USB_PLL_LOCK)) {
+         whyred_usb_hw_rollback(io, hw);
+         return WHYRED_USB_HW_PHY;

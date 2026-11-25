@@ -1,0 +1,76 @@
+From: Codex <codex@openai.com>
+Subject: [PATCH] whyred: allow only the RAM /var kernel HFS mount
+
+The generic VFS rejects local-argument filesystems from kernel_mount().
+Permit the one explicit writable HFS mount at /private/var needed by this
+bring-up, and reject the private permission bit for any other mount.
+
+---
+--- a/bsd/sys/mount_internal.h
++++ b/bsd/sys/mount_internal.h
+@@ -484,6 +484,9 @@
+ #define KERNEL_MOUNT_DEVFS             0x100 /* kernel startup mount of devfs */
+ #define KERNEL_MOUNT_FMOUNT            0x200 /* is fmount() system call */
+ #define KERNEL_MOUNT_KMOUNT            0x400 /* is kernel_mount() call */
++#if defined(SWEET)
++#define KERNEL_MOUNT_WHYRED_RAMVAR     0x800 /* tightly scoped writable RAM HFS mount */
++#endif
+ 
+ /* mask for checking if any of the "mount volume by role" flags are set */
+ #define KERNEL_MOUNT_VOLBYROLE_MASK (KERNEL_MOUNT_DATAVOL | KERNEL_MOUNT_VMVOL | KERNEL_MOUNT_PREBOOTVOL | KERNEL_MOUNT_RECOVERYVOL)
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -1019,6 +1019,9 @@
+ 	struct proc *p = vfs_context_proc(ctx);
+ 	int error, flag = 0;
+ 	bool flag_set = false;
++#if defined(SWEET)
++	bool whyred_ramvar_mount = (internal_flags & KERNEL_MOUNT_WHYRED_RAMVAR) != 0;
++#endif
+ 	user_addr_t devpath = USER_ADDR_NULL;
+ 	int ronly = 0;
+ 	int mntalloc = 0;
+@@ -1167,11 +1170,30 @@
+ 		goto out1;
+ 	}
+ 
++#if defined(SWEET)
++	/* This exception is only for the writable in-memory /private/var HFS. */
++	if (whyred_ramvar_mount &&
++	    (!kernelmount || strncmp(fstypename, "hfs", MFSNAMELEN) != 0 ||
++	    cnp->cn_pnbuf == NULL || strcmp(cnp->cn_pnbuf, "/private/var") != 0 ||
++	    (flags & (MNT_UPDATE | MNT_RDONLY)) != 0 ||
++	    (internal_flags & (KERNEL_MOUNT_SNAPSHOT | KERNEL_MOUNT_VOLBYROLE_MASK |
++	    KERNEL_MOUNT_BASESYSTEMROOT)) != 0)) {
++		error = EINVAL;
++		goto out1;
++	}
++
++	/* Consume the private permission bit before the generic mount path. */
++	internal_flags &= ~KERNEL_MOUNT_WHYRED_RAMVAR;
++#endif
++
+ 	/*
+ 	 * VFC_VFSLOCALARGS is not currently supported for kernel mounts,
+-	 * except in ROSV configs and for the initial BaseSystem root.
++	 * except in ROSV configs, the initial BaseSystem root, and SWEET RAM /var.
+ 	 */
+ 	if (kernelmount && (vfsp->vfc_vfsflags & VFC_VFSLOCALARGS) &&
++#if defined(SWEET)
++	    !whyred_ramvar_mount &&
++#endif
+ 	    ((internal_flags & KERNEL_MOUNT_VOLBYROLE_MASK) == 0) &&
+ 	    ((internal_flags & KERNEL_MOUNT_BASESYSTEMROOT) == 0)) {
+ 		error = EINVAL;  /* unsupported request */
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -1145,7 +1145,8 @@
+ 		printf("WHYRED VAR: mounting RAM HFS before PID 1\n");
+ 		int mount_error = kernel_mount("hfs", NULLVP, NULLVP,
+ 		    "/private/var", &mount_args, sizeof(mount_args), MNT_DONTBROWSE,
+-		    KERNEL_MOUNT_NOAUTH, vfs_context_kernel());
++		    KERNEL_MOUNT_NOAUTH | KERNEL_MOUNT_WHYRED_RAMVAR,
++		    vfs_context_kernel());
+ 		if (mount_error != 0) {
+ 			panic("WHYRED VAR: failed to mount HFS /dev/md0 at /private/var: %d",
+ 			    mount_error);

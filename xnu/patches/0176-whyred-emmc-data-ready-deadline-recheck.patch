@@ -1,0 +1,22 @@
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -795,9 +795,17 @@
+ 		if ((present & SDHCI_PSTATE_DATA_AVAILABLE) != 0) {
+ 			break;
+ 		}
+-		if ((status & SDHCI_INT_DATA_END) != 0 ||
+-		    whyred_emmc_counter() - start >= timeout) {
++		if ((status & SDHCI_INT_DATA_END) != 0) {
+ 			goto out;
++		}
++		if (whyred_emmc_counter() - start >= timeout) {
++			/* Scheduling may delay us after sampling an empty FIFO. Recheck
++			 * once at the deadline; never extend the wait or ignore errors. */
++			status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++			present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++			if ((status & SDHCI_INT_ERROR_MASK) != 0 ||
++			    (present & SDHCI_PSTATE_DATA_AVAILABLE) == 0) goto out;
++			break;
+ 		}
+ 	}
+ 	if ((status & SDHCI_INT_DATA_AVAILABLE) != 0) {

@@ -1,0 +1,651 @@
+diff --git a/bsd/dev/whyred_emmc_pio_probe.c b/bsd/dev/whyred_emmc_pio_probe.c
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -1,10 +1,11 @@
+ /*
+- * Whyred read-only eMMC initialization and metadata probe.
++ * Whyred read-only eMMC initialization, GPT discovery and root block device.
+  *
+  * This opt-in diagnostic preserves the existing SDCC1 power rails, returns
+  * the card and host to the eMMC legacy 1-bit initialization mode, then reads
+- * EXT_CSD and opt-in primary GPT metadata. It issues no media-write command
+- * and does not read partition contents.
++ * EXT_CSD and primary GPT metadata before publishing a read-only root device.
++ * Optional performance modes are compared against baseline reads first.
++ * It issues no media-write command.
+  */
+ #include <sys/param.h>
+ #include <sys/systm.h>
+@@ -820,10 +821,15 @@
+ 		goto out;
+ 	}
+ 	whyred_emmc_write32(base, SDHCI_INT_STATUS, SDHCI_INT_DATA_END);
+-	present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
+-	if ((present & (SDHCI_PSTATE_CMD_INHIBIT | SDHCI_PSTATE_DATA_INHIBIT |
+-	    SDHCI_PSTATE_DATA_AVAILABLE)) != 0 ||
+-	    whyred_emmc_read32(base, SDHCI_INT_STATUS) != 0 ||
++	/* DATA_END can precede the final inhibit deassertion by a few clocks. */
++	start = whyred_emmc_counter();
++	for (;;) {
++		present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++		if ((present & (SDHCI_PSTATE_CMD_INHIBIT | SDHCI_PSTATE_DATA_INHIBIT |
++		    SDHCI_PSTATE_DATA_AVAILABLE)) == 0) break;
++		if (whyred_emmc_counter() - start >= timeout) goto out;
++	}
++	if (whyred_emmc_read32(base, SDHCI_INT_STATUS) != 0 ||
+ 	    whyred_emmc_read32(base, SDHCI_CORE_MCI_FIFO_COUNT) != 0) {
+ 		goto out;
+ 	}
+@@ -883,6 +889,8 @@
+ static LCK_GRP_DECLARE(whyred_emmc_grp, "whyred_emmc");
+ static LCK_MTX_DECLARE(whyred_emmc_lock, &whyred_emmc_grp);
+ static struct whyred_gpt_io whyred_emmc_live_io;
++
++#include "whyred_emmc_perf.h"
+ 
+ static void
+ whyred_emmc_system_probe(void)
+@@ -989,18 +997,23 @@
+ 		goto done;
+ 	}
+ 	lck_mtx_lock(&whyred_emmc_lock);
+-	for (uint32_t done_bytes = 0; done_bytes < count;
+-	    done_bytes += WHYRED_GPT_BLOCK_BYTES) {
+-		uint8_t sector[WHYRED_GPT_BLOCK_BYTES];
++	uint64_t io_start = whyred_emmc_counter();
++	uint32_t done_bytes = 0;
++	while (done_bytes < count) {
++		uint32_t blocks = (count - done_bytes) / WHYRED_GPT_BLOCK_BYTES;
++		if (blocks > WHYRED_EMMC_BATCH_SECTORS) blocks = WHYRED_EMMC_BATCH_SECTORS;
++		if (!whyred_emmc_multi_enabled) blocks = 1;
+ 		uint64_t lba = part->first + (offset + done_bytes) / WHYRED_GPT_BLOCK_BYTES;
+ 		if (lba >= whyred_emmc_sector_count || lba > UINT32_MAX ||
+-		    whyred_emmc_read_sector(&whyred_emmc_live_io, (uint32_t)lba, sector) != 0) {
++		    whyred_emmc_read_blocks(&whyred_emmc_live_io, (uint32_t)lba,
++		    blocks, (uint8_t *)vaddr + done_bytes) != 0) {
+ 			error = EIO;
+ 			break;
+ 		}
+-		memcpy(vaddr + done_bytes, sector, sizeof(sector));
+-		buf_setresid(bp, count - done_bytes - sizeof(sector));
+-	}
++		done_bytes += blocks * WHYRED_GPT_BLOCK_BYTES;
++		buf_setresid(bp, count - done_bytes);
++	}
++	whyred_emmc_perf_record(done_bytes, io_start);
+ 	lck_mtx_unlock(&whyred_emmc_lock);
+ 	buf_unmap(bp);
+ done:
+@@ -1468,8 +1481,9 @@
+ 			printf("WHYRED GPT: unsupported addressing/sector/partition state ocr=0x%08x sector_size=%u partition_config=0x%02x\n",
+ 			    ocr, (unsigned int)ext_csd[61], (unsigned int)ext_csd[179]);
+ 		} else {
+-			if (whyred_emmc_set_legacy_transfer_clock(base, caps) != 0) {
+-				printf("WHYRED EMMC: retaining 200kHz identification clock for GPT reads\n");
++			whyred_emmc_perf_configure(base);
++			if (!whyred_emmc_fast_requested && whyred_emmc_set_legacy_transfer_clock(base, caps) != 0) {
++				printf("WHYRED EMMC: retaining baseline clock for GPT reads; card rate unmeasured\n");
+ 			}
+ 			struct whyred_gpt_io io = { .base = base, .sectors = sectors };
+ 			whyred_emmc_live_io = io;
+@@ -1481,6 +1495,8 @@
+ 				    SDHCI_PSTATE_DATA_INHIBIT) != 0) {
+ 					(void)whyred_emmc_reset_data_path(base);
+ 				}
++			} else if (whyred_emmc_perf_prepare(&io) != 0) {
++				printf("WHYRED EMMC: performance validation/recovery failed; no block device published\n");
+ 			} else if (whyred_emmc_force_gpt) {
+ 				int publish_error = whyred_emmc_publish();
+ 				if (publish_error != 0) {
+diff --git a/bsd/dev/whyred_emmc_perf.h b/bsd/dev/whyred_emmc_perf.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/whyred_emmc_perf.h
+@@ -0,0 +1,411 @@
++/*
++ * Whyred SDCC1 read-only performance path. Included after the proven CMD17
++ * reader and GPT state. GCC/RCG2 register facts are from Xiaomi whyred-o-oss
++ * gcc-sdm660.c, clk-rcg2.c and sdm660_whyred.dtsi. No PLL, rail, pad, card
++ * timing or bus-width change: the optional clock uses the existing 19.2 MHz XO.
++ */
++#ifndef WHYRED_EMMC_PERF_H
++#define WHYRED_EMMC_PERF_H
++
++#define WHYRED_GCC_SDCC1_PHYS 0x00116000ULL
++#define WHYRED_GCC_SDCC1_SIZE 0x1000U
++#define WHYRED_GCC_APPS_CBCR 0x04U
++#define WHYRED_GCC_AHB_CBCR 0x08U
++#define WHYRED_GCC_CMD 0x2cU
++#define WHYRED_GCC_CFG 0x30U
++#define WHYRED_GCC_M 0x34U
++#define WHYRED_GCC_N 0x38U
++#define WHYRED_GCC_D 0x3cU
++#define WHYRED_GCC_UPDATE 1U
++#define WHYRED_GCC_ROOT_OFF 0x80000000U
++#define WHYRED_GCC_CFG_MASK 0x371fU
++/* parent=XO(0), integer mode, HID=(2*1)-1: 19.2 MHz without M/N. */
++#define WHYRED_GCC_XO_CFG 1U
++#define WHYRED_EMMC_BATCH_SECTORS 32U
++#define WHYRED_EMMC_BATCH_BYTES (WHYRED_EMMC_BATCH_SECTORS * 512U)
++#define WHYRED_EMMC_R1B_ABORT ((12U << 8) | 0x00dbU)
++
++static volatile uint8_t *whyred_emmc_gcc;
++static bool whyred_emmc_fast_requested, whyred_emmc_multi_requested;
++static bool whyred_emmc_multi_enabled, whyred_emmc_xo_active;
++static bool whyred_emmc_perf_enabled, whyred_emmc_transport_ok = true;
++static uint32_t whyred_emmc_saved_cfg;
++static uint16_t whyred_emmc_saved_clock;
++static uint8_t whyred_emmc_reference[WHYRED_EMMC_BATCH_BYTES];
++static uint8_t whyred_emmc_trial[WHYRED_EMMC_BATCH_BYTES];
++static struct {
++	uint64_t bytes, io_ticks, first_tick, report_tick, report_bytes;
++	uint64_t requests, cmd17, cmd18, fallbacks, errors;
++	uint32_t reports;
++} whyred_emmc_perf;
++
++static uint64_t
++whyred_emmc_ticks_us(uint64_t ticks, uint64_t frequency)
++{
++	if (frequency == 0) return 0;
++	return (ticks / frequency) * 1000000ULL +
++	    ((ticks % frequency) * 1000000ULL) / frequency;
++}
++
++static bool
++whyred_emmc_valid_range(uint32_t lba, uint32_t count, uint32_t sectors)
++{
++	return count != 0 && count <= WHYRED_EMMC_BATCH_SECTORS &&
++	    lba < sectors && count <= sectors - lba;
++}
++
++static bool
++whyred_emmc_boot_flag(const char *name)
++{
++	uint32_t requested = 0;
++	return PE_parse_boot_argn(name, &requested, sizeof(requested)) && requested == 1;
++}
++
++static void
++whyred_emmc_clock_snapshot(volatile uint8_t *base, const char *stage)
++{
++	if (whyred_emmc_gcc == NULL) return;
++	printf("WHYRED CLOCK: %s apps=%08x ahb=%08x cmd=%08x cfg=%08x m=%08x n=%08x d=%08x host=%04x\n",
++	    stage, whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_APPS_CBCR),
++	    whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_AHB_CBCR),
++	    whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_CMD),
++	    whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_CFG),
++	    whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_M),
++	    whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_N),
++	    whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_D),
++	    whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL));
++}
++
++static void
++whyred_emmc_perf_configure(volatile uint8_t *base)
++{
++	whyred_emmc_fast_requested = whyred_emmc_boot_flag("whyred-emmc-fast");
++	whyred_emmc_multi_requested = whyred_emmc_boot_flag("whyred-emmc-multi");
++	whyred_emmc_perf_enabled = whyred_emmc_boot_flag("whyred-emmc-perf");
++	if (whyred_emmc_fast_requested || whyred_emmc_perf_enabled) {
++		vm_offset_t mapping = ml_io_map(WHYRED_GCC_SDCC1_PHYS, WHYRED_GCC_SDCC1_SIZE);
++		whyred_emmc_gcc = (volatile uint8_t *)(uintptr_t)mapping;
++		whyred_emmc_clock_snapshot(base, "inherited; card rate unmeasured");
++	}
++}
++
++static int
++whyred_emmc_gcc_config(uint32_t cfg)
++{
++	whyred_emmc_write32(whyred_emmc_gcc, WHYRED_GCC_CFG, cfg);
++	__asm__ volatile("dsb sy" ::: "memory");
++	whyred_emmc_write32(whyred_emmc_gcc, WHYRED_GCC_CMD,
++	    whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_CMD) | WHYRED_GCC_UPDATE);
++	for (unsigned int n = 0; n < 500; n++) {
++		uint32_t cmd = whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_CMD);
++		if ((cmd & WHYRED_GCC_UPDATE) == 0) {
++			return (cmd & WHYRED_GCC_ROOT_OFF) == 0 &&
++			    whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_CFG) == cfg ? 0 : -1;
++		}
++		whyred_emmc_delay_us(1);
++	}
++	return -1;
++}
++
++static int
++whyred_emmc_enable_clock(volatile uint8_t *base, uint16_t desired)
++{
++	uint64_t ticks = whyred_emmc_timeout_ticks() / 10;
++	if (ticks == 0) return -1;
++	whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL,
++	    desired & (uint16_t)~(SDHCI_CLOCK_CARD_ENABLE | SDHCI_CLOCK_INT_STABLE));
++	uint64_t start = whyred_emmc_counter();
++	while ((whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL) & SDHCI_CLOCK_INT_STABLE) == 0) {
++		if (whyred_emmc_counter() - start >= ticks) return -1;
++	}
++	whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL,
++	    (desired & (uint16_t)~SDHCI_CLOCK_INT_STABLE) | SDHCI_CLOCK_CARD_ENABLE);
++	__asm__ volatile("dsb sy" ::: "memory");
++	start = whyred_emmc_counter();
++	while ((whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL) & 7U) != 7U) {
++		if (whyred_emmc_counter() - start >= ticks) return -1;
++	}
++	return 0;
++}
++
++static int
++whyred_emmc_restore_clock(volatile uint8_t *base)
++{
++	whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, 0);
++	__asm__ volatile("dsb sy" ::: "memory");
++	if (whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL) & SDHCI_CLOCK_CARD_ENABLE)
++		return -1;
++	if (whyred_emmc_gcc_config(whyred_emmc_saved_cfg) != 0 ||
++	    whyred_emmc_enable_clock(base, whyred_emmc_saved_clock) != 0)
++		return -1;
++	whyred_emmc_xo_active = false;
++	whyred_emmc_clock_snapshot(base, "restored baseline");
++	return 0;
++}
++
++/* Return 1 when changed, 0 when unchanged/restored, -1 if rollback failed. */
++static int
++whyred_emmc_try_xo(volatile uint8_t *base)
++{
++	if (whyred_emmc_gcc == NULL) return 0;
++	uint32_t busy = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++	uint32_t apps = whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_APPS_CBCR);
++	uint32_t ahb = whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_AHB_CBCR);
++	uint32_t cmd = whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_CMD);
++	if ((busy & 3U) || (apps & 0x80000001U) != 1 ||
++	    (ahb & 0x80000001U) != 1 || (cmd & (WHYRED_GCC_UPDATE | WHYRED_GCC_ROOT_OFF)) ||
++	    (whyred_emmc_read8(base, SDHCI_HOST_CONTROL) & SDHCI_HOST_WIDTH_AND_MODE_MASK) ||
++	    (whyred_emmc_read16(base, SDHCI_HOST_CONTROL2) & SDHCI_HOST2_UHS_MASK)) {
++		printf("WHYRED CLOCK: XO preconditions failed; keeping baseline\n");
++		return 0;
++	}
++	whyred_emmc_saved_cfg = whyred_emmc_read32(whyred_emmc_gcc, WHYRED_GCC_CFG);
++	whyred_emmc_saved_clock = whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL);
++	whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, 0);
++	__asm__ volatile("dsb sy" ::: "memory");
++	uint32_t desired = (whyred_emmc_saved_cfg & ~WHYRED_GCC_CFG_MASK) | WHYRED_GCC_XO_CFG;
++	if ((whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL) & SDHCI_CLOCK_CARD_ENABLE) == 0 &&
++	    whyred_emmc_gcc_config(desired) == 0 &&
++	    whyred_emmc_enable_clock(base, SDHCI_CLOCK_INT_ENABLE) == 0) {
++		whyred_emmc_xo_active = true;
++		whyred_emmc_clock_snapshot(base, "XO 19200000Hz configured; validating reads");
++		return 1;
++	}
++	return whyred_emmc_restore_clock(base) == 0 ? 0 : -1;
++}
++
++/* CMD12 is a read-stop command, including when DATA_INHIBIT is still set. */
++static int
++whyred_emmc_recover_read(struct whyred_gpt_io *io)
++{
++	volatile uint8_t *base = io->base;
++	uint64_t timeout = whyred_emmc_timeout_ticks(), start;
++	uint32_t response = 0;
++	if (!timeout) return -1;
++	whyred_emmc_write8(base, SDHCI_SOFTWARE_RESET, 0x06); /* CMD and DATA only */
++	start = whyred_emmc_counter();
++	while (whyred_emmc_read8(base, SDHCI_SOFTWARE_RESET) & 0x06) {
++		if (whyred_emmc_counter() - start >= timeout) return -1;
++	}
++	whyred_emmc_write32(base, SDHCI_INT_STATUS, whyred_emmc_read32(base, SDHCI_INT_STATUS));
++	(void)whyred_emmc_command(base, 0, WHYRED_EMMC_R1B_ABORT, &response);
++	start = whyred_emmc_counter();
++	while (whyred_emmc_read32(base, SDHCI_PRESENT_STATE) & 3U) {
++		if (whyred_emmc_counter() - start >= timeout) return -1;
++	}
++	if (whyred_emmc_reset_data_path(base) != 0) return -1;
++	if (whyred_emmc_command(base, WHYRED_EMMC_RCA << 16,
++	    (13U << 8) | SDHCI_CMD_RESP_SHORT_CRC_INDEX, &response) != 0 ||
++	    (response & WHYRED_EMMC_R1_FAILURE_MASK) ||
++	    ((response >> 9) & 15U) != WHYRED_EMMC_STATUS_TRANSFER ||
++	    !(response & WHYRED_EMMC_STATUS_READY)) return -1;
++	return 0;
++}
++
++static int
++whyred_emmc_read_multi(struct whyred_gpt_io *io, uint32_t lba,
++    uint32_t count, uint8_t *data)
++{
++	volatile uint8_t *base = io->base;
++	uint64_t timeout = whyred_emmc_timeout_ticks(), start;
++	uint32_t response = 0, status;
++	uint16_t old_size, old_count, old_mode;
++	int result = -1;
++	if (data == NULL || count < 2 || !whyred_emmc_valid_range(lba, count, io->sectors) || !timeout)
++		return -1;
++	start = whyred_emmc_counter();
++	while (whyred_emmc_read32(base, SDHCI_PRESENT_STATE) & 3U) {
++		if (whyred_emmc_counter() - start >= timeout) return -1;
++	}
++	if (whyred_emmc_read32(base, SDHCI_INT_STATUS) != 0 ||
++	    (whyred_emmc_read32(base, SDHCI_PRESENT_STATE) & SDHCI_PSTATE_DATA_AVAILABLE)) return -1;
++	/* eMMC CMD23 fixes the card's read count; no reliable-write bit is set. */
++	if (whyred_emmc_command(base, count, (23U << 8) | SDHCI_CMD_RESP_SHORT_CRC_INDEX,
++	    &response) != 0 || (response & WHYRED_EMMC_R1_FAILURE_MASK)) return -1;
++	old_size = whyred_emmc_read16(base, SDHCI_BLOCK_SIZE);
++	old_count = whyred_emmc_read16(base, SDHCI_BLOCK_COUNT);
++	old_mode = whyred_emmc_read16(base, SDHCI_TRANSFER_MODE);
++	whyred_emmc_write16(base, SDHCI_BLOCK_SIZE, 512);
++	whyred_emmc_write16(base, SDHCI_BLOCK_COUNT, (uint16_t)count);
++	whyred_emmc_write16(base, SDHCI_TRANSFER_MODE,
++	    SDHCI_XFER_BLOCK_COUNT_ENABLE | SDHCI_XFER_READ | 0x20U);
++	if (whyred_emmc_command(base, lba, (18U << 8) |
++	    SDHCI_CMD_RESP_SHORT_CRC_INDEX | SDHCI_CMD_DATA_PRESENT,
++	    &response) != 0 || (response & WHYRED_EMMC_R1_FAILURE_MASK)) goto out;
++	start = whyred_emmc_counter();
++	for (uint32_t block = 0; block < count; block++) {
++		for (;;) {
++			status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++			if (status & SDHCI_INT_ERROR_MASK) goto out;
++			if (whyred_emmc_read32(base, SDHCI_PRESENT_STATE) & SDHCI_PSTATE_DATA_AVAILABLE) break;
++			if ((status & SDHCI_INT_DATA_END) || whyred_emmc_counter() - start >= timeout * 2) goto out;
++		}
++		if (status & SDHCI_INT_DATA_AVAILABLE)
++			whyred_emmc_write32(base, SDHCI_INT_STATUS, SDHCI_INT_DATA_AVAILABLE);
++		for (uint32_t word = 0; word < 128; word++) {
++			uint32_t value = whyred_emmc_read32(base, SDHCI_BUFFER);
++			uint32_t offset = block * 512 + word * 4;
++			data[offset] = (uint8_t)value;
++			data[offset + 1] = (uint8_t)(value >> 8);
++			data[offset + 2] = (uint8_t)(value >> 16);
++			data[offset + 3] = (uint8_t)(value >> 24);
++		}
++	}
++	status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++	if (status & SDHCI_INT_DATA_AVAILABLE)
++		whyred_emmc_write32(base, SDHCI_INT_STATUS, SDHCI_INT_DATA_AVAILABLE);
++	start = whyred_emmc_counter();
++	if (whyred_emmc_wait_status(base, SDHCI_INT_DATA_END, start, timeout, &status) != 0 ||
++	    !(status & SDHCI_INT_DATA_END) || (status & SDHCI_INT_ERROR_MASK)) goto out;
++	whyred_emmc_write32(base, SDHCI_INT_STATUS, SDHCI_INT_DATA_END);
++	start = whyred_emmc_counter();
++	while (whyred_emmc_read32(base, SDHCI_PRESENT_STATE) &
++	    (3U | SDHCI_PSTATE_DATA_AVAILABLE)) {
++		if (whyred_emmc_counter() - start >= timeout) goto out;
++	}
++	if (whyred_emmc_read32(base, SDHCI_INT_STATUS) != 0 ||
++	    whyred_emmc_read32(base, SDHCI_CORE_MCI_FIFO_COUNT) != 0 ||
++	    whyred_emmc_read16(base, SDHCI_BLOCK_COUNT) != 0) goto out;
++	result = 0;
++out:
++	whyred_emmc_write16(base, SDHCI_BLOCK_SIZE, old_size);
++	whyred_emmc_write16(base, SDHCI_BLOCK_COUNT, old_count);
++	whyred_emmc_write16(base, SDHCI_TRANSFER_MODE, old_mode);
++	return result;
++}
++
++static int
++whyred_emmc_read_baseline(struct whyred_gpt_io *io, uint32_t lba, uint8_t *data)
++{
++	if (!whyred_emmc_valid_range(lba, WHYRED_EMMC_BATCH_SECTORS, io->sectors)) return -1;
++	for (uint32_t n = 0; n < WHYRED_EMMC_BATCH_SECTORS; n++)
++		if (whyred_emmc_read_sector(io, lba + n, data + n * 512) != 0) return -1;
++	return 0;
++}
++
++/* Called before publication, after GPT CRC/bounds validation. */
++static int
++whyred_emmc_perf_prepare(struct whyred_gpt_io *io)
++{
++	if (!whyred_emmc_fast_requested && !whyred_emmc_multi_requested) return 0;
++	uint32_t lba = 0;
++	char name[37] = "";
++	unsigned matches = 0;
++	PE_parse_boot_argn("whyred-emmc-partition", name, sizeof(name));
++	name[sizeof(name) - 1] = 0;
++	for (uint32_t n = 0; n < whyred_gpt_part_count; n++) {
++		const struct whyred_gpt_partition *p = &whyred_gpt_parts[n];
++		if (strcmp(p->name, name) == 0 && p->first <= UINT32_MAX &&
++		    p->last - p->first + 1 >= WHYRED_EMMC_BATCH_SECTORS) {
++			lba = (uint32_t)p->first;
++			matches++;
++		}
++	}
++	if (matches != 1) return 0;
++	uint64_t before = whyred_emmc_counter();
++	if (whyred_emmc_read_baseline(io, lba, whyred_emmc_reference) != 0) return -1;
++	uint64_t old_ticks = whyred_emmc_counter() - before;
++	if (whyred_emmc_fast_requested) {
++		int changed = whyred_emmc_try_xo(io->base);
++		if (changed < 0) return -1;
++		if (changed == 0 && (whyred_emmc_read_baseline(io, lba, whyred_emmc_trial) != 0 ||
++		    memcmp(whyred_emmc_trial, whyred_emmc_reference, sizeof(whyred_emmc_trial)))) return -1;
++		if (changed > 0) {
++			before = whyred_emmc_counter();
++			int error = whyred_emmc_read_baseline(io, lba, whyred_emmc_trial);
++			uint64_t new_ticks = whyred_emmc_counter() - before;
++			if (error || memcmp(whyred_emmc_trial, whyred_emmc_reference, sizeof(whyred_emmc_trial))) {
++				printf("WHYRED CLOCK: read comparison failed; rolling back\n");
++				if ((error && whyred_emmc_recover_read(io) != 0) ||
++				    whyred_emmc_restore_clock(io->base) != 0 ||
++				    whyred_emmc_read_baseline(io, lba, whyred_emmc_trial) != 0 ||
++				    memcmp(whyred_emmc_trial, whyred_emmc_reference, sizeof(whyred_emmc_trial))) return -1;
++			} else {
++				uint64_t hz = __builtin_arm_rsr64("CNTFRQ_EL0");
++				printf("WHYRED CLOCK: verified bytes=%u baseline_us=%llu xo_us=%llu\n",
++				    WHYRED_EMMC_BATCH_BYTES, whyred_emmc_ticks_us(old_ticks, hz),
++				    whyred_emmc_ticks_us(new_ticks, hz));
++			}
++		}
++	}
++	if (whyred_emmc_multi_requested) {
++		before = whyred_emmc_counter();
++		int error = whyred_emmc_read_multi(io, lba, WHYRED_EMMC_BATCH_SECTORS, whyred_emmc_trial);
++		uint64_t ticks = whyred_emmc_counter() - before;
++		if (error || memcmp(whyred_emmc_trial, whyred_emmc_reference, sizeof(whyred_emmc_trial))) {
++			printf("WHYRED EMMC: CMD18 comparison failed; keeping CMD17\n");
++			if ((error && whyred_emmc_recover_read(io) != 0) ||
++			    whyred_emmc_read_baseline(io, lba, whyred_emmc_trial) != 0 ||
++			    memcmp(whyred_emmc_trial, whyred_emmc_reference, sizeof(whyred_emmc_trial))) return -1;
++		} else {
++			whyred_emmc_multi_enabled = true;
++			printf("WHYRED EMMC: CMD18 verified blocks=%u bytes=%u us=%llu\n",
++			    WHYRED_EMMC_BATCH_SECTORS, WHYRED_EMMC_BATCH_BYTES,
++			    whyred_emmc_ticks_us(ticks, __builtin_arm_rsr64("CNTFRQ_EL0")));
++		}
++	}
++	return 0;
++}
++
++/* Failed batches are never accepted. Recover, disable new modes, reread them. */
++static int
++whyred_emmc_read_blocks(struct whyred_gpt_io *io, uint32_t lba,
++    uint32_t count, uint8_t *data)
++{
++	if (!whyred_emmc_transport_ok || data == NULL ||
++	    !whyred_emmc_valid_range(lba, count, io->sectors)) return -1;
++	if (whyred_emmc_multi_enabled && count > 1) {
++		whyred_emmc_perf.cmd18++;
++		if (whyred_emmc_read_multi(io, lba, count, data) == 0) return 0;
++		whyred_emmc_perf.errors++;
++		whyred_emmc_perf.fallbacks++;
++		whyred_emmc_multi_enabled = false;
++		printf("WHYRED EMMC: CMD18 failed lba=%u blocks=%u; disabling batch mode\n", lba, count);
++		if (whyred_emmc_recover_read(io) != 0) goto failed;
++		if (whyred_emmc_xo_active && whyred_emmc_restore_clock(io->base) != 0) goto failed;
++	}
++	for (uint32_t n = 0; n < count; n++) {
++		whyred_emmc_perf.cmd17++;
++		if (whyred_emmc_read_sector(io, lba + n, data + n * 512) == 0) continue;
++		whyred_emmc_perf.errors++;
++		if (!whyred_emmc_xo_active || whyred_emmc_recover_read(io) != 0 ||
++		    whyred_emmc_restore_clock(io->base) != 0) goto failed;
++		whyred_emmc_perf.fallbacks++;
++		whyred_emmc_multi_enabled = false;
++		whyred_emmc_perf.cmd17++;
++		if (whyred_emmc_read_sector(io, lba + n, data + n * 512) != 0) goto failed;
++	}
++	return 0;
++failed:
++	whyred_emmc_transport_ok = false;
++	printf("WHYRED EMMC: read recovery failed; rejecting further I/O\n");
++	return -1;
++}
++
++/* Called under the existing device mutex; bounded to 64 summary lines/boot. */
++static void
++whyred_emmc_perf_record(uint32_t bytes, uint64_t start)
++{
++	uint64_t now = whyred_emmc_counter();
++	uint64_t hz = __builtin_arm_rsr64("CNTFRQ_EL0");
++	if (whyred_emmc_perf.requests++ == 0) {
++		whyred_emmc_perf.first_tick = start;
++		whyred_emmc_perf.report_tick = start;
++	}
++	whyred_emmc_perf.bytes += bytes;
++	whyred_emmc_perf.io_ticks += now - start;
++	if (!whyred_emmc_perf_enabled || whyred_emmc_perf.reports >= 64 || !hz) return;
++	if (whyred_emmc_perf.reports &&
++	    whyred_emmc_perf.bytes - whyred_emmc_perf.report_bytes < 32ULL * 1024 * 1024 &&
++	    now - whyred_emmc_perf.report_tick < hz * 30) return;
++	whyred_emmc_perf.reports++;
++	whyred_emmc_perf.report_tick = now;
++	whyred_emmc_perf.report_bytes = whyred_emmc_perf.bytes;
++	printf("WHYRED IO: bytes=%llu requests=%llu cmd17=%llu cmd18=%llu io_us=%llu elapsed_us=%llu errors=%llu fallbacks=%llu xo=%u multi=%u\n",
++	    whyred_emmc_perf.bytes, whyred_emmc_perf.requests, whyred_emmc_perf.cmd17,
++	    whyred_emmc_perf.cmd18, whyred_emmc_ticks_us(whyred_emmc_perf.io_ticks, hz),
++	    whyred_emmc_ticks_us(now - whyred_emmc_perf.first_tick, hz),
++	    whyred_emmc_perf.errors, whyred_emmc_perf.fallbacks,
++	    whyred_emmc_xo_active, whyred_emmc_multi_enabled);
++}
++#endif
+diff --git a/bsd/sys/whyred_boot_log.h b/bsd/sys/whyred_boot_log.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/sys/whyred_boot_log.h
+@@ -0,0 +1,9 @@
++/* Keep initial observations and exponentially spaced success summaries. */
++#ifndef WHYRED_BOOT_LOG_H
++#define WHYRED_BOOT_LOG_H
++static inline int
++whyred_boot_log_sample(unsigned int count)
++{
++	return count != 0 && (count <= 4 || (count & (count - 1)) == 0);
++}
++#endif
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -173,6 +173,9 @@
+ #include <machine/pal_routines.h>
+ 
+ #include <pexpert/pexpert.h>
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/whyred_boot_log.h>
++#endif
+ 
+ #if CONFIG_MEMORYSTATUS
+ #include <sys/kern_memorystatus.h>
+@@ -7415,8 +7418,17 @@
+ 				goto done;
+ 			}
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+-			/* SWEET runs every iOS binary this way: one short line per exec. */
+-			printf("exec %s\n", p->p_name);
++			/* Optional quiet profile samples xpcproxy; keep actual daemon execs. */
++			uint32_t whyred_quiet = 0;
++			static uint32_t whyred_proxy_count;
++			if (strcmp(p->p_name, "xpcproxy") != 0 ||
++			    !PE_parse_boot_argn("whyred-quiet", &whyred_quiet, sizeof(whyred_quiet)) ||
++			    whyred_quiet != 1) {
++				printf("exec %s\n", p->p_name);
++			} else {
++				uint32_t n = os_atomic_inc_orig(&whyred_proxy_count, relaxed) + 1;
++				if (whyred_boot_log_sample(n)) printf("exec xpcproxy count=%u\n", n);
++			}
+ #else
+ 			printf("Allowing spawn of iOS binary %s since it has "
+ 			    "com.apple.private.security.no-sandbox entitlement or unentitled_ios_sim_launch "
+diff --git a/iokit/Kernel/arm/SweetKeyStore.cpp b/iokit/Kernel/arm/SweetKeyStore.cpp
+--- a/iokit/Kernel/arm/SweetKeyStore.cpp
++++ b/iokit/Kernel/arm/SweetKeyStore.cpp
+@@ -10,8 +10,8 @@
+  * answer is kIOReturnNotFound; answering with a handle is the path a
+  * userspace reboot takes, so no bag file is needed.
+  *
+- * Every call is logged (selector, caller, argument shapes, result) so the
+- * next selectors the system needs show up on the console; unknown ones fail
++ * Calls log selector, caller, argument shapes and result. whyred-quiet=1
++ * samples repeated successes while keeping errors; unknown selectors fail
+  * with kIOReturnUnsupported.
+  */
+ #include <pexpert/arm64/board_config.h>
+@@ -24,6 +24,13 @@
+ #include <IOKit/IOMemoryDescriptor.h>
+ #include <libkern/c++/OSString.h>
+ #include <sys/proc.h>
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <pexpert/pexpert.h>
++#include <os/atomic_private.h>
++#include <sys/whyred_boot_log.h>
++static bool whyred_aks_quiet;
++static uint32_t whyred_aks_success_count[128];
++#endif
+ 
+ #if defined(ARM64_BOARD_CONFIG_SWEET) && (DEVELOPMENT || DEBUG)
+ /* This board configuration is the SDM636 whyred port. Volatile /var only. */
+@@ -101,6 +108,10 @@
+ 	if (!IOService::start(provider)) {
+ 		return false;
+ 	}
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	uint32_t quiet = 0;
++	whyred_aks_quiet = PE_parse_boot_argn("whyred-quiet", &quiet, sizeof(quiet)) && quiet == 1;
++#endif
+ #if WHYRED_AKS_VOLATILE_WRAP
+ 	/* read_random is backed by this port's registered kernel HMAC DRBG.
+ 	 * random_buf/cc_rand_generate depend on the absent corecrypto kext.
+@@ -336,9 +347,11 @@
+ 	case kAKSUnwrapKey:
+ 		ret = whyred_aks_wrap(OSDynamicCast(AppleKeyStore, getProvider()), args,
+ 		    selector == kAKSUnwrapKey);
+-		IOLog("WHYRED AKS volatile: sel=%u bag=%llu class=%llu in=%u out=%u ret=0x%x\n",
+-		    selector, arg0, in_scalars > 1 ? args->scalarInput[1] : 0,
+-		    in_struct, out_struct, ret);
++		if (!whyred_aks_quiet || ret != kIOReturnSuccess) {
++			IOLog("WHYRED AKS volatile: sel=%u bag=%llu class=%llu in=%u out=%u ret=0x%x\n",
++			    selector, arg0, in_scalars > 1 ? args->scalarInput[1] : 0,
++			    in_struct, out_struct, ret);
++		}
+ 		break;
+ #endif
+ 	case kAKSOpen:
+@@ -389,10 +402,19 @@
+ 		break;
+ 	}
+ 
+-	char name[32];
+-	proc_selfname(name, sizeof(name));
+-	IOLog("SWEET AKS: %s sel %u arg0 %llu in %u/%u out %u/%u -> 0x%x\n", name, selector,
+-	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
++	bool log_call = true;
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	if (whyred_aks_quiet && ret == kIOReturnSuccess && selector < 128) {
++		uint32_t n = os_atomic_inc_orig(&whyred_aks_success_count[selector], relaxed) + 1;
++		log_call = whyred_boot_log_sample(n);
++	}
++#endif
++	if (log_call) {
++		char name[32];
++		proc_selfname(name, sizeof(name));
++		IOLog("SWEET AKS: %s sel %u arg0 %llu in %u/%u out %u/%u -> 0x%x\n", name, selector,
++		    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
++	}
+ 	return ret;
+ }
+ #endif /* SWEET */
+diff --git a/bsd/sys/Makefile b/bsd/sys/Makefile
+--- a/bsd/sys/Makefile
++++ b/bsd/sys/Makefile
+@@ -229,6 +229,7 @@
+ 	code_signing.h \
+ 
+ XNU_ONLY_EXPORTS = \
++	whyred_boot_log.h \
+ 	bsdtask_info.h \
+ 	file_internal.h \
+ 	filedesc.h \

@@ -1,8 +1,15 @@
-name: xnu
+name: whyred-xnu
 
 on:
   workflow_dispatch:
     inputs:
+      runner_image:
+        description: Build host pool (kernel target remains ARM64)
+        type: choice
+        options:
+          - macos-15-intel
+          - macos-15
+        default: macos-15-intel
       macos_version:
         description: macOS release whose xnu to build (13.5 = xnu-8796, iOS 16 era)
         default: "13.5"
@@ -16,9 +23,36 @@ on:
         description: make -k (collect all compile errors in one run)
         default: "true"
   push:
-    branches: [main]
+    branches: [main, codex/whyred-early-fb]
     paths:
       - "xnu/patches/**"
+      - "tools/sweet-init.S"
+      - "tools/apfs/**"
+      - "tools/apfs-*"
+      - "tools/test-whyred-apfs.py"
+      - "tools/test-whyred-apfs-errors.py"
+      - "tools/test-whyred-touch.py"
+      - "tools/test-whyred-framebuffer.py"
+      - "tools/test-whyred-framebuffer-content.py"
+      - "tools/test-whyred-aks-wrap.py"
+      - "tools/test-whyred-driverkit-memory.py"
+      - "tools/test-whyred-container-trace.py"
+      - "tools/whyred-container-trace-host.c"
+      - "tools/test-whyred-emmc-contract.py"
+      - "tools/test-whyred-multiuser.py"
+      - "tools/test-whyred-emmc-perf.py"
+      - "tools/whyred-emmc-perf-host.c"
+      - "tools/prepare-whyred-ramfs-io-check.py"
+      - "tools/test-whyred-ramfs-pressure.py"
+      - "tools/whyred-ramfs-pressure-host.c"
+      - "tools/test-whyred-idle-services.py"
+      - "tools/whyred-idle-services-host.c"
+      - "tools/test-whyred-usb.py"
+      - "tools/whyred-usb-host.c"
+      - "tools/whyred-usbnet.py"
+      - "tools/mkapfs-test-root.py"
+      - "tools/apfs-host-windows/**"
+      - "tools/verify-whyred-apfs-source.py"
       - ".github/workflows/xnu.yml"
 
 concurrency:
@@ -34,9 +68,10 @@ env:
 
 jobs:
   build:
-    # macos-14 still ships Xcode 15.x: its iig matches the xnu-8796 IORPC ABI
-    # (Xcode 16's iig emits IORPC.kernelContent, which this xnu lacks)
-    runs-on: macos-14
+    # macos-14 is in scheduled brownouts and retires on 2026-11-02.
+    # The ARM64 hosted pool has capacity constraints; use the standard Intel pool.
+    # ARCH_CONFIG remains ARM64 for the target kernel.
+    runs-on: ${{ inputs.runner_image || 'macos-15-intel' }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -48,31 +83,199 @@ jobs:
           git -C dxb checkout -q FETCH_HEAD
           # 12.5-14.3 use the top-level patches dir; ours go next to blacktop's
           cp xnu/patches/*.patch xnu/patches/*.sh dxb/patches/
-          # libfirehose_kernel is built arm64e-only; the SWEET kernel is plain arm64
-          sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
-          grep -c 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh
+          # The kernel needs only the plain ARM64 libfirehose slice.
+          sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="arm64" VALID_ARCHS="arm64"/' dxb/build.sh
+          # libfirehose is built separately from XNU and must avoid LSE too.
+          python3 - <<'PY'
+          from pathlib import Path
+          script = Path("dxb/build.sh")
+          text = script.read_text()
+          target = 'xcodebuild install -target libfirehose_kernel -sdk macosx ARCHS="arm64" VALID_ARCHS="arm64"'
+          flags = " 'OTHER_CFLAGS=$(inherited) -mcpu=generic -mno-outline-atomics'"
+          if text.count(target) != 1:
+              raise SystemExit("Unexpected libfirehose build command")
+          script.write_text(text.replace(target, target + flags))
+          PY
           ls dxb/patches
+
+      - name: Require whyred source diagnostics before compiling
+        # The verifier also pins bring-up to the one confirmed Gold CPU and checks start diagnostics.
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          script = Path("dxb/build.sh")
+          text = script.read_text()
+          marker = "    patches\n"
+          if text.count(marker) != 1:
+              raise SystemExit("Pinned build script patch entry point changed")
+          guard = '    python3 "${WORK_DIR}/../tools/make-whyred-splash.py" "${WORK_DIR}/../assets/meimei.jpg" --output "${WORK_DIR}/xnu/osfmk/arm64/whyred_splash_image.h" --report "${WORK_DIR}/../out/splash-image.json" --expected-sha256 5bff1c39a707e16be19810774912fa65cca1e010f21dd805effb7dd46a21b409\n'
+          guard += '    python3 "${WORK_DIR}/../tools/verify-whyred-xnu.py" "${WORK_DIR}/xnu" --report "${WORK_DIR}/whyred-source-report.json" --expected-upstream-commit 1b191cb58250d0705d8a51287127505aa4bc0789\n'
+          guard += '    python3 "${WORK_DIR}/../tools/verify-whyred-apfs-source.py" "${WORK_DIR}/xnu" --report "${WORK_DIR}/whyred-apfs-source-report.json"\n'
+          guard += '    python3 "${WORK_DIR}/../tools/test-whyred-apfs-errors.py" "${WORK_DIR}/xnu" --output "${WORK_DIR}/whyred-apfs-errors-check"\n'
+          guard += '    python3 "${WORK_DIR}/../tools/test-whyred-emmc-contract.py" "${WORK_DIR}/xnu" --output "${WORK_DIR}/whyred-emmc-contract"\n'
+          guard += '    python3 "${WORK_DIR}/../tools/test-whyred-multiuser.py" "${WORK_DIR}/xnu" --output "${WORK_DIR}/whyred-multiuser-check"\n'
+          script.write_text(text.replace(marker, marker + guard))
+          PY
 
       - name: Deps
         run: |
-          brew install jq gum bash cmake ninja
-          # build.sh only checks that xcodes exists (Xcode is preinstalled); no bottle on macOS 14
+          brew install jq gum bash cmake ninja openssl@3
+          # build.sh only checks that xcodes exists; Xcode is preinstalled.
           printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/xcodes >/dev/null
           sudo chmod +x /usr/local/bin/xcodes
           sw_vers
           ls -d /Applications/Xcode*.app
-          XC=$(ls -d /Applications/Xcode_*.app | sort -V | head -1)
+          XC=/Applications/Xcode_16.4.app
+          test -d "$XC"
           echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
           sudo xcode-select -s "$XC"
           xcodebuild -version
           xcrun --find iig
+          xcrun iig -help 2>&1 || true
+
+      - name: Build 7 MiB raw HFS /private/var ramdisk
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          image="$GITHUB_WORKSPACE/out/whyred-var.hfs"
+          mountpoint="$GITHUB_WORKSPACE/out/whyred-var-mount"
+          mkdir -p "$mountpoint"
+          attach_output="$(hdiutil attach -nomount ram://14336 2>&1)" || {
+            printf '%s\n' "$attach_output" >&2
+            exit 1
+          }
+          dev="$(printf '%s\n' "$attach_output" | sed -nE 's#.*(/dev/disk[0-9]+).*#\1#p' | head -n 1)"
+          if [ -z "$dev" ]; then
+            echo "hdiutil did not return a recognizable disk device; output was:" >&2
+            printf '%s\n' "$attach_output" >&2
+            exit 1
+          fi
+          rawdev="/dev/rdisk${dev#/dev/disk}"
+          mounted=0
+          cleanup() {
+            if [ "$mounted" = 1 ]; then sudo umount "$mountpoint" || true; fi
+            if [ -n "${dev:-}" ]; then hdiutil detach "$dev" -quiet || true; fi
+          }
+          trap cleanup EXIT
+          sudo newfs_hfs -v SWEETVAR "$rawdev"
+          sudo mount -t hfs -o owners "$dev" "$mountpoint"
+          mounted=1
+          sudo mkdir -p \
+            "$mountpoint/db/uuidtext" "$mountpoint/db/diagnostics" \
+            "$mountpoint/db/dyld" "$mountpoint/db/launchd" \
+            "$mountpoint/db/analyticsd" "$mountpoint/run" "$mountpoint/tmp" \
+            "$mountpoint/log" "$mountpoint/logs" "$mountpoint/mobile/Library" \
+            "$mountpoint/root/Library" "$mountpoint/containers" \
+            "$mountpoint/folders" "$mountpoint/Keychains" \
+            "$mountpoint/preferences" "$mountpoint/MobileDevice" \
+            "$mountpoint/Managed Preferences/mobile" "$mountpoint/empty"
+          sudo chown -R 0:0 "$mountpoint"
+          sudo chown -R 501:501 "$mountpoint/mobile"
+          sudo chmod 1777 "$mountpoint/tmp"
+          sudo chmod 0700 "$mountpoint/root"
+          sudo chmod 0555 "$mountpoint/empty"
+          sudo python3 "$GITHUB_WORKSPACE/tools/seed-whyred-var.py" "$mountpoint"
+          sudo python3 "$GITHUB_WORKSPACE/tools/seed-whyred-var.py" "$mountpoint" --verify
+          sudo sync
+          sudo umount "$mountpoint"
+          mounted=0
+          sudo dd if="$rawdev" of="$image" bs=1m count=7
+          sudo chown "$(id -u):$(id -g)" "$image"
+          hdiutil detach "$dev" -quiet
+          dev=""
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("out/whyred-var.hfs")
+          with path.open("rb") as image:
+              image.seek(1024)
+              signature = image.read(2)
+          if path.stat().st_size != 7 * 1024 * 1024 or signature != b"H+":
+              raise SystemExit(f"invalid raw HFS+ image: size={path.stat().st_size}, signature={signature!r}")
+          print(f"raw HFS+ /private/var image ready: {path.stat().st_size} bytes")
+          PY
 
       - name: Build
         working-directory: dxb
         env:
+          # Replay verified Xcode 15 output while preserving xnu-8796's IORPC ABI.
+          IIG: ${{ github.workspace }}/tools/iig-8796.py
           # keep going after errors so one run reports every compile failure
           MAKEFLAGS: ${{ inputs.keep_going == 'false' && '' || '-k' }}
-        run: bash build.sh
+        run: |
+          set -o pipefail
+          bash build.sh 2>&1 | tee build.log
+
+      - name: Verify bounded container filesystem trace
+        run: |
+          python3 tools/test-whyred-container-trace.py dxb/xnu --output out/container-trace-host-check
+
+      - name: Check bounded eMMC clock, batches and recovery
+        run: |
+          python3 tools/test-whyred-emmc-perf.py dxb/xnu --output out/emmc-perf-host-check
+
+      - name: Check early boot image and three-second timer
+        run: |
+          python3 tools/test-whyred-splash.py dxb/xnu --output out/splash-host-check
+
+      - name: Check framebuffer pixel copy, scaling and bounds
+        run: |
+          python3 tools/test-whyred-framebuffer.py dxb/xnu --output out/framebuffer-host-check
+
+      - name: Check whole-frame content diagnostics
+        run: |
+          python3 tools/test-whyred-framebuffer-content.py dxb/xnu --output out/framebuffer-content-host-check
+
+      - name: Test whyred digitizer geometry and frame decoder
+        run: python3 tools/test-whyred-touch.py dxb/xnu --output out/touch-host-check
+
+      - name: Check volatile AKS key wrapping
+        run: |
+          python3 tools/test-whyred-aks-wrap.py dxb/xnu --output out/aks-host-check
+
+      - name: Check driverkitd memory policy
+        run: |
+          python3 tools/test-whyred-driverkit-memory.py dxb/xnu --output out/driverkit-memory-host-check
+
+      - name: Check read-only APFS parser on synthetic images
+        run: |
+          python3 tools/test-whyred-apfs.py --source dxb/xnu --output out/apfs-host-test
+
+      - name: Check RAMFS atomic writes and directory ABI
+        run: |
+          python3 tools/prepare-whyred-ramfs-io-check.py dxb/xnu/bsd/miscfs/whyred_ramfs/ramfs.c out/ramfs-io-host-check
+          sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror -O1 -isysroot "$sdk_path" out/ramfs-io-host-check/ramfs-io.c -o out/ramfs-io-host-check/ramfs-io
+          out/ramfs-io-host-check/ramfs-io
+
+      - name: Check RAMFS pressure causes and reclamation
+        run: |
+          python3 tools/test-whyred-ramfs-pressure.py dxb/xnu --output out/ramfs-pressure-host-check --sanitize address,undefined
+
+      - name: Check whyred USB handoff, CDC and live logging
+        run: |
+          python3 tools/test-whyred-usb.py dxb/xnu --output out/usb-host-check --sanitize address,undefined
+          python3 tools/whyred-usbnet.py --self-test
+
+      - name: Check idle stack safety and service lifecycle trace
+        run: |
+          python3 tools/test-whyred-idle-services.py dxb/xnu --output out/idle-services-host-check --sanitize address,undefined
+
+      - name: Build minimal mockfs PID 1
+        run: |
+          mkdir -p out
+          xcrun clang -target arm64-apple-ios16.0 -c tools/sweet-init.S -o out/sweet-init.o
+          python3 tools/mkinit.py out/sweet-init.o out/sweet-init.macho
+          python3 tools/mkapfs-test-root.py --init out/sweet-init.macho --output out/whyred-test-root.apfs
+          python3 - <<'PY'
+          from pathlib import Path
+          import struct
+          image = Path("out/sweet-init.macho").read_bytes()
+          magic, cpu, _, kind = struct.unpack_from("<4I", image)
+          if (magic, cpu, kind) != (0xfeedfacf, 0x0100000c, 2):
+              raise SystemExit("mockfs init is not a signed arm64 Mach-O executable")
+          Path("out/sweet-init-build.txt").write_text(
+              "mockfs PID 1: signed static arm64 Mach-O\\n")
+          PY
 
       - name: Package build tree for local compiles
         if: always()
@@ -82,10 +285,13 @@ jobs:
           SDK=$(xcrun --sdk macosx --show-sdk-path)
           mkdir -p sdk-kernel-platform
           cp -R "$SDK/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform" sdk-kernel-platform/ || true
+          tar_paths=(xnu)
+          [ -d dxb/build/xnu.obj ] && tar_paths+=(build/xnu.obj)
+          [ -d dxb/fakeroot/usr/local/include ] && tar_paths+=(fakeroot/usr/local/include)
           tar czf buildtree.tgz \
             --exclude='*.o' --exclude='*.cpo' --exclude='*.a' --exclude='*.dSYM' --exclude='*.unstripped' \
             --exclude='kernel.development.*' --exclude='.git' \
-            -C dxb build/xnu.obj fakeroot/usr/local/include xnu \
+            -C dxb "${tar_paths[@]}" \
             -C .. sdk-kernel-platform
           ls -la buildtree.tgz
 
@@ -100,25 +306,39 @@ jobs:
         if: always()
         run: |
           mkdir -p out/kdk-libs
+          found=0
           for lib in /Library/Developer/KDKs/*/System/Library/KernelSupport/lib*.a; do
+            [ -f "$lib" ] || continue
+            found=1
             b=$(basename "$lib" .a)
             ar t "$lib" > "out/kdk-libs/$b.members.txt" 2>&1 || true
             nm -m "$lib" > "out/kdk-libs/$b.nm.txt" 2>&1 || true
             lipo -info "$lib" >> out/kdk-libs/arch.txt 2>&1 || true
           done
+          if [ "$found" = 0 ]; then
+            echo "No installed KDK support libraries found."
+          fi
           ls -la out/kdk-libs
 
       - name: Collect
         if: always()
         run: |
           mkdir -p out
+          if [ -f dxb/build.log ]; then cp dxb/build.log out/; fi
           cp -R dxb/fakeroot/System/Library/Kernels/. out/ 2>/dev/null || true
+          if [ -f dxb/whyred-source-report.json ]; then cp dxb/whyred-source-report.json out/; fi
+          if [ -f dxb/whyred-apfs-source-report.json ]; then cp dxb/whyred-apfs-source-report.json out/; fi
+          if [ -f dxb/whyred-apfs-errors-check/report.json ]; then cp -R dxb/whyred-apfs-errors-check out/apfs-errors-host-check; fi
+          if [ -f dxb/whyred-emmc-contract/report.json ]; then cp dxb/whyred-emmc-contract/report.json out/whyred-emmc-contract-report.json; fi
+          if [ -f dxb/whyred-multiuser-check/report.json ]; then cp -R dxb/whyred-multiuser-check out/multiuser-host-check; fi
           ls -la out
           (cd out && shasum -a 256 kernel.* > SHA256SUMS) || true
+          if [ -f out/whyred-var.hfs ]; then (cd out && shasum -a 256 whyred-var.hfs >> SHA256SUMS); fi
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: xnu-kernel
+          name: xnu-whyred-early-fb
           path: out/
           if-no-files-found: warn
+

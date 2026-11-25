@@ -1,0 +1,57 @@
+name: whyred-display-wake
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/whyred-early-fb]
+    paths: [.github/workflows/whyred-display-wake.yml, tools/whyred-display-wake.c]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile native and check refusal
+        run: |
+          mkdir -p out/wake
+          clang -O1 -g -Wall -Wextra -Werror tools/whyred-display-wake.c -framework CoreFoundation -o out/wake/whyred-display-wake-native
+          python3 - <<'PY'
+          import subprocess
+          b='out/wake/whyred-display-wake-native'
+          for mode in ['wake','unblank','power-key','panel-on']:
+              p=subprocess.run([b,mode],capture_output=True,text=True,timeout=5)
+              assert p.returncode==1 and 'requires the physical iOS target' in p.stdout and not p.stderr
+          for args in [[],['invalid'],['wake','extra']]:
+              p=subprocess.run([b,*args],capture_output=True,text=True,timeout=5)
+              assert p.returncode==2 and 'usage:' in p.stderr and not p.stdout
+          PY
+      - name: Build and audit signed iOS tool
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -target arm64-apple-ios16.4 -isysroot "$SDK" -mcpu=generic+crypto -mno-outline-atomics -O1 -g -Wall -Wextra -Werror tools/whyred-display-wake.c -framework CoreFoundation -o out/wake/whyred-display-wake
+          cat > out/wake/entitlements.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.private.hid.client.event-dispatch</key><true/><key>com.apple.hid.system.user-access-service</key><true/></dict></plist>
+          PLIST
+          codesign --force --sign - --timestamp=none --entitlements out/wake/entitlements.plist out/wake/whyred-display-wake
+          codesign --verify --strict out/wake/whyred-display-wake
+          codesign -d --entitlements :- out/wake/whyred-display-wake > out/wake/signed-entitlements.plist
+          otool -l out/wake/whyred-display-wake > out/wake/load-commands.txt
+          xcrun llvm-objdump -d out/wake/whyred-display-wake > out/wake/isa.txt
+          python3 - <<'PY'
+          import hashlib,json,os,plistlib,re
+          from pathlib import Path
+          p=Path('out/wake'); b=p/'whyred-display-wake'
+          assert re.search(r'platform\s+(?:2|IOS)\b',(p/'load-commands.txt').read_text())
+          assert not re.search(r'\b(?:cas[a-z]*|ldadd[a-z]*|swp[a-z]*|stadd[a-z]*)\s+[wx]',(p/'isa.txt').read_text())
+          ent=(p/'signed-entitlements.plist').read_bytes()
+          assert plistlib.loads(ent)=={'com.apple.private.hid.client.event-dispatch':True,'com.apple.hid.system.user-access-service':True}
+          (p/'report.json').write_text(json.dumps({'source':os.environ['GITHUB_SHA'],'sha256':hashlib.sha256(b.read_bytes()).hexdigest(),'bytes':b.stat().st_size,'device_tested':False,'modes':['wake','unblank','power-key','panel-on'],'automatic_retry':False,'persistent_partition_write':False,'renderer_flags_changed':False},indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whyred-display-wake
+          path: out/wake/
+          retention-days: 7

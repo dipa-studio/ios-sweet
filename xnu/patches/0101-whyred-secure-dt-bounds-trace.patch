@@ -1,0 +1,68 @@
+--- a/pexpert/gen/device_tree.c
++++ b/pexpert/gen/device_tree.c
+@@ -307,13 +307,27 @@
+ 	if (trace_depth < 16) {
+ 		sweet_early_mark(40 + trace_depth, "SecureDTFindEntry recursion depth");
+ 	}
++	if (trace_depth == 0) {
++		sweet_early_hex64("DTRootNode", (uint64_t)(uintptr_t)DTRootNode);
++		sweet_early_hex64("DTEnd", (uint64_t)DTEnd);
++		sweet_early_hex64("DTSize", (uint64_t)DTSize);
++	}
+ 	ASSERT_HEADER_IN_DT(nodeP, sizeof(DeviceTreeNode));
++	if (trace_depth == 0) {
++		sweet_early_mark(97, "SecureDTFindEntry root header bounds ok");
++		sweet_early_hex64("root nProperties", nodeP->nProperties);
++		sweet_early_hex64("root nChildren", nodeP->nChildren);
++	}
+ 
+ 	if (nodeP->nProperties == 0) {
+ 		whyred_find_entry_depth--;
+ 		return kError;                        // End of the list of nodes
+ 	}
+ 	startingP = (char const *) (nodeP + 1);
++	if (trace_depth == 0) {
++		sweet_early_mark(98, "SecureDTFindEntry root header loaded");
++		sweet_early_mark(99, "SecureDTFindEntry root property scan starts");
++	}
+ 
+ 	// Search current entry
+ 	for (k = 0; k < nodeP->nProperties; ++k) {
+--- a/osfmk/arm64/sweet_early.c
++++ b/osfmk/arm64/sweet_early.c
+@@ -163,6 +163,24 @@
+ }
+ 
+ void
++sweet_early_hex64(const char *label, uint64_t value)
++{
++#if defined(WHYRED_UARTDM)
++	static const char digits[] = "0123456789abcdef";
++	whyred_boot_uart_string("\r\nXNU_HEX ");
++	whyred_boot_uart_string(label);
++	whyred_boot_uart_string("=0x");
++	for (int shift = 60; shift >= 0; shift -= 4) {
++		whyred_boot_uart_putc(digits[(value >> shift) & 0xf]);
++	}
++	whyred_boot_uart_string("\r\n");
++#else
++	(void)label;
++	(void)value;
++#endif
++}
++
++void
+ sweet_early_panic(const char *fmt, va_list *args)
+ {
+ 	if (early_disabled || early_panicking) {
+--- a/osfmk/arm64/sweet_early.h
++++ b/osfmk/arm64/sweet_early.h
+@@ -8,6 +8,7 @@
+ 
+ #if defined(SWEET)
+ void sweet_early_mark(unsigned int stage, const char *label);
++void sweet_early_hex64(const char *label, uint64_t value);
+ void sweet_early_putc(char c);
+ void sweet_early_panic(const char *fmt, va_list *args);
+ void sweet_early_relocate(uint64_t base);
+

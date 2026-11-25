@@ -1,0 +1,224 @@
+--- a/bsd/miscfs/whyred_ramfs/ramfs.c
++++ b/bsd/miscfs/whyred_ramfs/ramfs.c
+@@ -84,10 +84,12 @@
+ 	struct ramfs_mount *rn_mount;
+ 	uint64_t            rn_ino;
+ 	enum vtype          rn_type;
+ 	uint32_t            rn_mode;            /* permission bits only */
+ 	uid_t               rn_uid;
++	uint8_t             rn_logd_role;        /* sticky cache directory lineage */
++	bool                rn_logd_dsc;         /* sticky across owner/alias changes */
+ 	gid_t               rn_gid;
+ 	uint32_t            rn_bsdflags;
+ 	uint32_t            rn_nlink;
+ 	uint32_t            rn_state;
+ 	vnode_t             rn_vp;
+@@ -112,10 +114,13 @@
+ 	struct ramfs_node  *rn_hnext;           /* the next node in rm_hash's chain */
+ 	bool                rn_hashed;
+ 
+ 	TAILQ_HEAD(, ramfs_xattr) rn_xattrs;
+ };
++#define RAMFS_LOGD_DB           1u
++#define RAMFS_LOGD_UUIDTEXT     2u
++#define RAMFS_LOGD_DSC          4u
+ #define RAMFS_N_CREATING        0x1         /* a thread is in vnode_create() for this node */
+ #define RAMFS_N_WANTED          0x2         /* somebody sleeps on the node */
+ 
+ /* Sampled, default-off diagnostics; optional bounded names, no file payloads/policy changes. */
+ enum ramfs_pressure_reason {
+@@ -126,10 +131,11 @@
+ 	bool valid;
+ 	enum ramfs_pressure_reason reason;
+ 	uint64_t seq, ino, off, length, pages, limit, peak, nodes, xattr_bytes;
+ 	uint64_t file_limit;
+ 	uint32_t uid;
++	bool dsc_classified;
+ 	uint64_t added, freed, reclaimed, hash_pages, unlinked_pages, unlinked_nodes;
+ 	uint64_t failures[RAMFS_PRESSURE_COUNT];
+ 	unsigned int vm_free, vm_wired;
+ 	kern_return_t allocation_error; /* meaningful only for a data-page failure */
+ 	bool top_enabled, names_limited;
+@@ -171,25 +177,26 @@
+ static LCK_GRP_DECLARE(ramfs_lck_grp, "ramfs");
+ 
+ extern int(**ramfs_vnodeop_p)(void *);
+ 
+ /* Diagnostic names only: bounded printable ASCII, never file content. */
+-/* A development policy for the confirmed System v70 _logd UID. It bounds
+- * each regular file, not aggregate UID use. No existing data is removed.
++/* A development policy for the confirmed System v70 _logd UID. It also covers
++ * DSC cache inodes materialized as root. This is per-file, not aggregate UID
++ * use; classification never removes existing data.
+  */
+ static uint64_t
+ ramfs_logd_limit_from_arg(uint32_t mib, uint64_t max_pages)
+ {
+ 	if (mib < 1 || mib > 64) return 0;
+ 	return MIN((uint64_t)mib * 1024 * 1024 / PAGE_SIZE, max_pages) * PAGE_SIZE;
+ }
+ 
+ static uint64_t
+-ramfs_file_limit(struct ramfs_mount *rm, uid_t uid)
++ramfs_file_limit(struct ramfs_mount *rm, struct ramfs_node *node, uid_t uid)
+ {
+ 	uint64_t limit = rm->rm_max_pages * PAGE_SIZE;
+-	if (uid == WHYRED_RAMFS_LOGD_UID && rm->rm_logd_file_limit) {
++	if ((uid == WHYRED_RAMFS_LOGD_UID || node->rn_logd_dsc) && rm->rm_logd_file_limit) {
+ 		limit = MIN(limit, rm->rm_logd_file_limit);
+ 	}
+ 	return limit;
+ }
+ 
+@@ -217,11 +224,11 @@
+ 	uint64_t seq = ++rm->rm_failure_seq;
+ 	e->valid = false;
+ 	if (rm->rm_reports >= 32 || (seq > 16 && (seq & (seq - 1)) != 0)) return;
+ 	*e = (struct ramfs_pressure_event){ .valid = true, .reason = reason, .seq = seq,
+ 	    .ino = node->rn_ino, .off = off, .length = length, .pages = rm->rm_pages,
+-	    .uid = node->rn_uid, .file_limit = ramfs_file_limit(rm, node->rn_uid),
++	    .uid = node->rn_uid, .dsc_classified = node->rn_logd_dsc, .file_limit = ramfs_file_limit(rm, node, node->rn_uid),
+ 	    .limit = rm->rm_max_pages, .peak = rm->rm_peak, .nodes = rm->rm_nodes,
+ 	    .xattr_bytes = rm->rm_xattr_bytes, .added = rm->rm_added, .freed = rm->rm_freed,
+ 	    .reclaimed = rm->rm_reclaimed,
+ 	    .top_enabled = rm->rm_trace_top && reason == RAMFS_PRESSURE_QUOTA };
+ 	memcpy(e->failures, rm->rm_failures, sizeof(e->failures));
+@@ -320,12 +327,12 @@
+ {
+ 	static const char *const names[] = { "data-quota", "data-page", "slots-nowait",
+ 	    "getxattr-nowait", "listxattr-nowait", "logd-file-limit" };
+ 	if (!e->valid) return;
+ #define RP64(v) ((unsigned long long)(v))
+-	printf("WHYRED RAMFS PRESSURE id=%llu cause=%s ino=%llu off=%llu length=%llu kr=%d uid=%u file_limit=%llu\n",
+-	    RP64(e->seq), names[e->reason], RP64(e->ino), RP64(e->off), RP64(e->length), e->allocation_error, e->uid, RP64(e->file_limit));
++	printf("WHYRED RAMFS PRESSURE id=%llu cause=%s ino=%llu off=%llu length=%llu kr=%d uid=%u file_limit=%llu dsc=%u\n",
++	    RP64(e->seq), names[e->reason], RP64(e->ino), RP64(e->off), RP64(e->length), e->allocation_error, e->uid, RP64(e->file_limit), (unsigned int)e->dsc_classified);
+ 	printf("WHYRED RAMFS PRESSURE id=%llu pages=%llu limit=%llu peak=%llu nodes=%llu xattr_bytes=%llu hash_pages=%llu unlinked_pages=%llu unlinked_nodes=%llu\n",
+ 	    RP64(e->seq), RP64(e->pages), RP64(e->limit), RP64(e->peak), RP64(e->nodes),
+ 	    RP64(e->xattr_bytes), RP64(e->hash_pages), RP64(e->unlinked_pages), RP64(e->unlinked_nodes));
+ 	printf("WHYRED RAMFS PRESSURE id=%llu added=%llu freed=%llu reclaimed=%llu vm_free_sample=%u vm_wired_sample=%u quota=%llu page=%llu slots=%llu getxattr=%llu listxattr=%llu file_limit_hits=%llu\n",
+ 	    RP64(e->seq), RP64(e->added), RP64(e->freed), RP64(e->reclaimed), e->vm_free, e->vm_wired,
+@@ -595,16 +602,56 @@
+ 		}
+ 	}
+ 	return NULL;
+ }
+ 
++/* Cache materialization runs as root before logd takes ownership. Recognize
++ * /db/uuidtext/dsc inside this /var mount at the common namespace insertion.
++ * Classification follows inode aliases and directory moves for its lifetime;
++ * an owner change cannot remove it. A prepopulated directory moved into the
++ * cache is classified too. Recursion follows only db -> uuidtext -> dsc (three
++ * frames), followed by one scan of direct DSC entries; no arbitrary tree walk.
++ * The mount lock is held. No data is allocated, removed or truncated here.
++ */
++static void
++ramfs_logd_classify_locked(struct ramfs_node *dir, struct ramfs_dirent *de, struct ramfs_node *node)
++{
++	if (!dir->rn_mount->rm_logd_file_limit) return;
++	if (node->rn_type == VREG) {
++		if (dir->rn_logd_role & RAMFS_LOGD_DSC) node->rn_logd_dsc = true;
++		return;
++	}
++	if (node->rn_type != VDIR) return;
++	uint8_t role = 0;
++	if (dir == dir->rn_mount->rm_root && de->rd_namelen == 2 &&
++	    memcmp(de->rd_name, "db", 2) == 0) role = RAMFS_LOGD_DB;
++	else if ((dir->rn_logd_role & RAMFS_LOGD_DB) && de->rd_namelen == 8 &&
++	    memcmp(de->rd_name, "uuidtext", 8) == 0) role = RAMFS_LOGD_UUIDTEXT;
++	else if ((dir->rn_logd_role & RAMFS_LOGD_UUIDTEXT) && de->rd_namelen == 3 &&
++	    memcmp(de->rd_name, "dsc", 3) == 0) role = RAMFS_LOGD_DSC;
++	if (!role || (node->rn_logd_role & role)) return;
++	node->rn_logd_role |= role;
++	if (role == RAMFS_LOGD_DSC) {
++		struct ramfs_dirent *child;
++		TAILQ_FOREACH(child, &node->rn_entries, rd_link) {
++			if (child->rd_node->rn_type == VREG) child->rd_node->rn_logd_dsc = true;
++		}
++	} else {
++		const char *name = role == RAMFS_LOGD_DB ? "uuidtext" : "dsc";
++		size_t length = role == RAMFS_LOGD_DB ? 8 : 3;
++		struct ramfs_dirent *child = ramfs_dir_find(node, name, length);
++		if (child) ramfs_logd_classify_locked(node, child, child->rd_node);
++	}
++}
++
+ static void
+ ramfs_dir_add(struct ramfs_node *dir, struct ramfs_dirent *de, struct ramfs_node *node)
+ {
+ 	de->rd_node = node;
+ 	TAILQ_INSERT_TAIL(&dir->rn_entries, de, rd_link);
+ 	dir->rn_nentries++;
++	ramfs_logd_classify_locked(dir, de, node);
+ 	ramfs_touch(dir, true);
+ }
+ 
+ static void
+ ramfs_dir_remove(struct ramfs_node *dir, struct ramfs_dirent *de)
+@@ -721,11 +768,11 @@
+  */
+ static int
+ ramfs_store(struct ramfs_node *node, uint64_t off, const void *src, size_t len, void **spare)
+ {
+ 	struct ramfs_mount *rm = node->rn_mount;
+-	uint64_t limit = ramfs_file_limit(rm, node->rn_uid);
++	uint64_t limit = ramfs_file_limit(rm, node, node->rn_uid);
+ 	if (off > limit || len > limit - off) {
+ 		if (node->rn_uid == WHYRED_RAMFS_LOGD_UID && rm->rm_logd_file_limit) {
+ 			ramfs_pressure_record_locked(node, RAMFS_PRESSURE_FILE_LIMIT, off, len);
+ 		}
+ 		return EFBIG;
+@@ -1137,10 +1184,12 @@
+ 		goto out;
+ 	}
+ 	if (swap) {
+ 		fde->rd_node = victim;
+ 		tde->rd_node = node;
++		ramfs_logd_classify_locked(fdir, fde, victim);
++		ramfs_logd_classify_locked(tdir, tde, node);
+ 		if (fdir != tdir) {
+ 			if (node->rn_type == VDIR) {
+ 				fdir->rn_nlink--; tdir->rn_nlink++; node->rn_parent = tdir;
+ 			}
+ 			if (victim->rn_type == VDIR) {
+@@ -1160,10 +1209,11 @@
+ 			if (victim->rn_type == VDIR) {
+ 				victim->rn_nlink = 0; victim->rn_parent = NULL; tdir->rn_nlink--;
+ 			} else victim->rn_nlink--;
+ 			ramfs_touch(victim, false);
+ 			tde->rd_node = node;
++			ramfs_logd_classify_locked(tdir, tde, node);
+ 			ramfs_touch(tdir, true);
+ 		} else {
+ 			ramfs_dir_add(tdir, spare, node);
+ 			spare = NULL;
+ 		}
+@@ -1302,13 +1352,13 @@
+ 	 */
+ 	uid_t final_uid = VATTR_IS_ACTIVE(vap, va_uid) ? vap->va_uid : node->rn_uid;
+ 	uint64_t final_size = VATTR_IS_ACTIVE(vap, va_data_size) ? vap->va_data_size : node->rn_size;
+ 	if (node->rn_type == VREG &&
+ 	    (VATTR_IS_ACTIVE(vap, va_uid) || VATTR_IS_ACTIVE(vap, va_data_size)) &&
+-	    final_size > ramfs_file_limit(rm, final_uid)) {
++	    final_size > ramfs_file_limit(rm, node, final_uid)) {
+ 		struct ramfs_pressure_event pressure = {0};
+-		if (final_uid == node->rn_uid && final_uid == WHYRED_RAMFS_LOGD_UID && rm->rm_logd_file_limit) {
++		if (final_uid == node->rn_uid && (final_uid == WHYRED_RAMFS_LOGD_UID || node->rn_logd_dsc) && rm->rm_logd_file_limit) {
+ 			ramfs_pressure_record_locked(node, RAMFS_PRESSURE_FILE_LIMIT, final_size, 0);
+ 			ramfs_pressure_take_locked(rm, &pressure);
+ 		}
+ 		lck_mtx_unlock(&rm->rm_lock);
+ 		ramfs_pressure_emit(&pressure);
+@@ -1432,11 +1482,11 @@
+ 	old_size = node->rn_size;
+ 	if (ap->a_ioflag & IO_APPEND) {
+ 		uio_setoffset(uio, (off_t)old_size);
+ 	}
+ 	start = (uint64_t)uio_offset(uio);
+-	uint64_t limit = ramfs_file_limit(rm, node->rn_uid);
++	uint64_t limit = ramfs_file_limit(rm, node, node->rn_uid);
+ 	if (start > limit || (uint64_t)uio_resid(uio) > limit - start) {
+ 		if (node->rn_uid == WHYRED_RAMFS_LOGD_UID && rm->rm_logd_file_limit) {
+ 			ramfs_pressure_record_locked(node, RAMFS_PRESSURE_FILE_LIMIT, start, (uint64_t)uio_resid(uio));
+ 			ramfs_pressure_take_locked(rm, &pressure);
+ 		}

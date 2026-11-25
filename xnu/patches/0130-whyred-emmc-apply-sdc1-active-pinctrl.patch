@@ -1,0 +1,57 @@
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -14,6 +14,10 @@
+ 
+ #define WHYRED_SDCC1_HC_PHYS             0x0c0c4000ULL
+ #define WHYRED_SDCC1_HC_SIZE             0x1000
++#define WHYRED_TLMM_SDC1_PAD_PHYS         0x0399a000ULL
++#define WHYRED_TLMM_SDC1_PAD_SIZE         0x1000
++#define WHYRED_TLMM_SDC1_PAD_MASK         0x0001ffff
++#define WHYRED_TLMM_SDC1_PAD_ACTIVE       0x00009fe4
+ #define SDHCI_PRESENT_STATE              0x24
+ #define SDHCI_HOST_CONTROL               0x28
+ #define SDHCI_POWER_CONTROL              0x29
+@@ -128,6 +132,31 @@
+ 	*(volatile uint32_t *)(base + offset) = value;
+ }
+ 
++static int
++whyred_emmc_configure_sdc1_pads(void)
++{
++	vm_offset_t mapping = ml_io_map((vm_offset_t)WHYRED_TLMM_SDC1_PAD_PHYS,
++	    WHYRED_TLMM_SDC1_PAD_SIZE);
++	if (mapping == 0) {
++		printf("WHYRED EMMC: TLMM SDC1 pad map failed\n");
++		return -1;
++	}
++	volatile uint8_t *base = (volatile uint8_t *)(uintptr_t)mapping;
++	uint32_t before = whyred_emmc_read32(base, 0);
++	uint32_t desired = (before & ~WHYRED_TLMM_SDC1_PAD_MASK) |
++	    WHYRED_TLMM_SDC1_PAD_ACTIVE;
++	if (desired != before) {
++		whyred_emmc_write32(base, 0, desired);
++		__asm__ volatile("dsb sy" ::: "memory");
++	}
++	uint32_t after = whyred_emmc_read32(base, 0);
++	printf("WHYRED EMMC INIT: SDC1 active pads phys=0x%llx before=0x%08x desired=0x%08x after=0x%08x\n",
++	    (unsigned long long)WHYRED_TLMM_SDC1_PAD_PHYS, before,
++	    desired, after);
++	return (after & WHYRED_TLMM_SDC1_PAD_MASK) ==
++	    WHYRED_TLMM_SDC1_PAD_ACTIVE ? 0 : -1;
++}
++
+ static uint64_t
+ whyred_emmc_counter(void)
+ {
+@@ -585,6 +614,10 @@
+ 		return;
+ 	}
+ 	volatile uint8_t *base = (volatile uint8_t *)(uintptr_t)mapping;
++	if (whyred_emmc_configure_sdc1_pads() != 0) {
++		printf("WHYRED EMMC: SDC1 active pad configuration failed; no command sent\n");
++		return;
++	}
+ 	uint32_t present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
+ 	uint16_t clock = whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL);
+ 	uint8_t power = *(volatile uint8_t *)(base + SDHCI_POWER_CONTROL);
+

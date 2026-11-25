@@ -1,0 +1,57 @@
+name: whyred-ramfs-check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/whyred-early-fb]
+    paths:
+      - ".github/workflows/whyred-ramfs-check.yml"
+      - "tools/prepare-whyred-ramfs-io-check.py"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  check:
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch compiled source artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: xnu-buildtree
+          run-id: 41203015478
+          github-token: ${{ github.token }}
+          path: out/buildtree
+      - name: Restore and verify exact RAMFS source
+        run: |
+          set -euo pipefail
+          mkdir -p out/source
+          tar xzf out/buildtree/buildtree.tgz -C out/source xnu/bsd/miscfs/whyred_ramfs/ramfs.c
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          source = Path("out/source/xnu/bsd/miscfs/whyred_ramfs/ramfs.c")
+          actual = hashlib.sha256(source.read_bytes()).hexdigest()
+          expected = "ce727a6c165680cdac6486337d4cbd5e75d275a9fc1a58b3dff7f36be98f2f14"
+          if actual != expected:
+              raise SystemExit(f"RAMFS source differs from checked 0145: {actual}")
+          print("Verified exact 0145 source:", actual)
+          PY
+      - name: Compile and run RAMFS host checks
+        run: |
+          set -euo pipefail
+          python3 tools/prepare-whyred-ramfs-io-check.py out/source/xnu/bsd/miscfs/whyred_ramfs/ramfs.c out/ramfs-io-host-check
+          sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror -O1 -isysroot "$sdk_path" out/ramfs-io-host-check/ramfs-io.c -o out/ramfs-io-host-check/ramfs-io 2>&1 | tee out/ramfs-check.log
+          out/ramfs-io-host-check/ramfs-io 2>&1 | tee -a out/ramfs-check.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: whyred-ramfs-host-check
+          path: |
+            out/ramfs-check.log
+            out/ramfs-io-host-check/
+          retention-days: 7

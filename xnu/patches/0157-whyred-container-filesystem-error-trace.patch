@@ -1,0 +1,313 @@
+--- a/bsd/dev/arm/systemcalls.c
++++ b/bsd/dev/arm/systemcalls.c
+@@ -31,6 +31,11 @@
+ #include <sys/bitstring.h>
+ 
+ #include <security/audit/audit.h>
++
++#include <sys/file_internal.h>
++#include <sys/vnode.h>
++#include <sys/vnode_internal.h>
++#include "whyred_container_trace.h"
+ 
+ #if CONFIG_MACF
+ #include <security/mac_framework.h>
+@@ -204,6 +209,8 @@
+ 	assertf(prior == NULL, "thread_set_allocation_name(\"%s\") not cleared", kern_allocation_get_name(prior));
+ #endif /* DEBUG || DEVELOPMENT */
+ 
++	whyred_container_trace_error(proc, uthread, state, code, error);
++
+ 	arm_prepare_syscall_return(callp, state, uthread, error);
+ 
+ 	uthread->uu_flag &= ~UT_NOTCANCELPT;
+@@ -264,6 +271,8 @@
+ 	/*
+ 	 * Get index into sysent table
+ 	 */
++	whyred_container_trace_error(proc, uthread, regs, code, error);
++
+ 	arm_prepare_syscall_return(callp, regs, uthread, error);
+ 
+ 	uthread->uu_flag &= ~UT_NOTCANCELPT;
+--- /dev/null
++++ b/bsd/dev/arm/whyred_container_trace.h
+@@ -0,0 +1,278 @@
++/* Opt-in, bounded diagnostics for the volatile /var bring-up. Never changes errno. */
++#ifndef WHYRED_CONTAINER_TRACE_H
++#define WHYRED_CONTAINER_TRACE_H
++
++#define WHYRED_CT_PATH_BYTES 192
++#define WHYRED_CT_KEYS 128
++#define WHYRED_CT_COMMON_LIMIT 64
++#define WHYRED_CT_OTHER_LIMIT 192
++
++struct whyred_ct_call {
++	const char *name;
++	int path0, path1, fd;
++};
++
++/* Slot numbers are the unmodified ARM64 syscall argument register order. */
++static struct whyred_ct_call
++whyred_ct_call_for(unsigned short code)
++{
++#define CT(name, p0, p1, fdarg) case SYS_##name: return (struct whyred_ct_call){ #name, p0, p1, fdarg }
++	switch (code) {
++	CT(open, 0, -1, -1);
++	CT(open_nocancel, 0, -1, -1);
++	CT(open_extended, 0, -1, -1);
++	CT(open_dprotected_np, 0, -1, -1);
++	CT(guarded_open_np, 0, -1, -1);
++	CT(guarded_open_dprotected_np, 0, -1, -1);
++	CT(openat, 1, -1, -1);
++	CT(openat_nocancel, 1, -1, -1);
++	CT(openat_dprotected_np, 1, -1, -1);
++	CT(mkdir, 0, -1, -1);
++	CT(mkdir_extended, 0, -1, -1);
++	CT(mkdirat, 1, -1, -1);
++	CT(rmdir, 0, -1, -1);
++	CT(unlink, 0, -1, -1);
++	CT(unlinkat, 1, -1, -1);
++	CT(rename, 0, 1, -1);
++	CT(renameat, 1, 3, -1);
++	CT(renameatx_np, 1, 3, -1);
++	CT(link, 0, 1, -1);
++	CT(linkat, 1, 3, -1);
++	CT(symlink, 0, 1, -1);
++	CT(symlinkat, 0, 2, -1);
++	CT(readlink, 0, -1, -1);
++	CT(readlinkat, 1, -1, -1);
++	CT(clonefileat, 1, 3, -1);
++	CT(fclonefileat, 2, -1, -1);
++	CT(exchangedata, 0, 1, -1);
++	CT(access, 0, -1, -1);
++	CT(faccessat, 1, -1, -1);
++	CT(chmod, 0, -1, -1);
++	CT(chmod_extended, 0, -1, -1);
++	CT(chown, 0, -1, -1);
++	CT(lchown, 0, -1, -1);
++	CT(fchmodat, 1, -1, -1);
++	CT(fchownat, 1, -1, -1);
++	CT(stat, 0, -1, -1);
++	CT(lstat, 0, -1, -1);
++	CT(stat64, 0, -1, -1);
++	CT(lstat64, 0, -1, -1);
++	CT(stat_extended, 0, -1, -1);
++	CT(lstat_extended, 0, -1, -1);
++	CT(stat64_extended, 0, -1, -1);
++	CT(lstat64_extended, 0, -1, -1);
++	CT(fstatat, 1, -1, -1);
++	CT(fstatat64, 1, -1, -1);
++	CT(statfs, 0, -1, -1);
++	CT(statfs64, 0, -1, -1);
++	CT(getattrlist, 0, -1, -1);
++	CT(setattrlist, 0, -1, -1);
++	CT(getattrlistat, 1, -1, -1);
++	CT(setattrlistat, 1, -1, -1);
++	CT(getxattr, 0, -1, -1);
++	CT(setxattr, 0, -1, -1);
++	CT(removexattr, 0, -1, -1);
++	CT(listxattr, 0, -1, -1);
++	CT(fsctl, 0, -1, -1);
++	CT(truncate, 0, -1, -1);
++	CT(read, -1, -1, 0);
++	CT(read_nocancel, -1, -1, 0);
++	CT(pread, -1, -1, 0);
++	CT(pread_nocancel, -1, -1, 0);
++	CT(write, -1, -1, 0);
++	CT(write_nocancel, -1, -1, 0);
++	CT(pwrite, -1, -1, 0);
++	CT(pwrite_nocancel, -1, -1, 0);
++	CT(fcntl, -1, -1, 0);
++	CT(fcntl_nocancel, -1, -1, 0);
++	CT(fsync, -1, -1, 0);
++	CT(fsync_nocancel, -1, -1, 0);
++	CT(fchmod, -1, -1, 0);
++	CT(fchmod_extended, -1, -1, 0);
++	CT(fchown, -1, -1, 0);
++	CT(fstat, -1, -1, 0);
++	CT(fstat64, -1, -1, 0);
++	CT(fstat_extended, -1, -1, 0);
++	CT(fstat64_extended, -1, -1, 0);
++	CT(fstatfs, -1, -1, 0);
++	CT(fstatfs64, -1, -1, 0);
++	CT(fgetattrlist, -1, -1, 0);
++	CT(fsetattrlist, -1, -1, 0);
++	CT(fgetxattr, -1, -1, 0);
++	CT(fsetxattr, -1, -1, 0);
++	CT(fremovexattr, -1, -1, 0);
++	CT(flistxattr, -1, -1, 0);
++	CT(ffsctl, -1, -1, 0);
++	CT(ftruncate, -1, -1, 0);
++	CT(getdirentries, -1, -1, 0);
++	CT(getdirentries64, -1, -1, 0);
++	CT(getdirentriesattr, -1, -1, 0);
++	CT(getattrlistbulk, -1, -1, 0);
++	default: return (struct whyred_ct_call){ NULL, -1, -1, -1 };
++	}
++#undef CT
++}
++
++static unsigned int
++whyred_ct_target(const char *name)
++{
++	if (strcmp(name, "containermanagerd") == 0) return 1;
++	if (strcmp(name, "pkd") == 0) return 2;
++	if (strcmp(name, "calaccessd") == 0) return 3;
++	return 0;
++}
++
++static bool
++whyred_ct_is_write(unsigned short code)
++{
++	return code == SYS_write || code == SYS_write_nocancel ||
++	       code == SYS_pwrite || code == SYS_pwrite_nocancel;
++}
++
++struct whyred_ct_key {
++	unsigned short code, error;
++	unsigned int target, count;
++};
++static struct {
++	unsigned int lock, common, other;
++	struct whyred_ct_key keys[WHYRED_CT_KEYS];
++} whyred_ct_budget;
++static unsigned int whyred_ct_enabled; /* 0 unknown, 1 initializing, 2 off, 3 on */
++
++/* No waiting for a diagnostic lock, and no lock held across copyin/path/printf. */
++static unsigned int
++whyred_ct_reserve(unsigned int target, unsigned short code, unsigned int error)
++{
++	unsigned int expected = 0, report = 0;
++	if (!__atomic_compare_exchange_n(&whyred_ct_budget.lock, &expected, 1, false,
++	    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) return 0;
++	bool common = error == ENOENT || error == EEXIST || error == ENOATTR ||
++	    error == EINTR || error == EAGAIN;
++	/* Lookup misses cannot consume the slots reserved for other errors. */
++	unsigned int start = common ? 0 : WHYRED_CT_KEYS / 2;
++	unsigned int end = common ? WHYRED_CT_KEYS / 2 : WHYRED_CT_KEYS;
++	for (unsigned int i = start; i < end; i++) {
++		struct whyred_ct_key *key = &whyred_ct_budget.keys[i];
++		if (key->target && (key->target != target || key->code != code || key->error != error)) continue;
++		key->target = target;
++		key->code = code;
++		key->error = error;
++		if (key->count == UINT_MAX) break;
++		unsigned int count = ++key->count;
++		/* Preserve initial failures, then exponentially spaced recurrences. */
++		if (count > 4 && (count & (count - 1)) != 0) break;
++		unsigned int *used = common ? &whyred_ct_budget.common : &whyred_ct_budget.other;
++		unsigned int limit = common ? WHYRED_CT_COMMON_LIMIT : WHYRED_CT_OTHER_LIMIT;
++		if (*used >= limit) break;
++		++*used;
++		report = whyred_ct_budget.common + whyred_ct_budget.other;
++		break;
++	}
++	__atomic_store_n(&whyred_ct_budget.lock, 0, __ATOMIC_RELEASE);
++	return report;
++}
++
++static void
++whyred_ct_sanitize(char *path)
++{
++	for (unsigned int i = 0; i < WHYRED_CT_PATH_BYTES - 1 && path[i]; i++) {
++		unsigned char c = (unsigned char)path[i];
++		if (c < 32 || c == 127) path[i] = '?';
++	}
++	path[WHYRED_CT_PATH_BYTES - 1] = 0;
++}
++
++static int
++whyred_ct_userpath(user_addr_t address, char *path)
++{
++	size_t done = 0;
++	bzero(path, WHYRED_CT_PATH_BYTES);
++	int error = copyinstr(address, path, WHYRED_CT_PATH_BYTES, &done);
++	if (error && error != ENAMETOOLONG) path[0] = 0;
++	whyred_ct_sanitize(path);
++	return error;
++}
++
++/* The fd may have changed after the syscall: this is best-effort context. */
++static int
++whyred_ct_fdpath(struct proc *proc, int fd, char *path)
++{
++	struct fileproc *fp = NULL;
++	vnode_t vp = NULLVP;
++	int size = WHYRED_CT_PATH_BYTES;
++	bzero(path, WHYRED_CT_PATH_BYTES);
++	int error = fp_getfvp(proc, fd, &fp, &vp);
++	if (error) return error;
++	error = vnode_getwithref(vp);
++	(void)fp_drop(proc, fd, fp, 0);
++	if (error) return error;
++	error = vn_getpath(vp, path, &size);
++	vnode_put(vp);
++	if (error) path[0] = 0;
++	whyred_ct_sanitize(path);
++	return error;
++}
++
++static void
++whyred_container_trace_error(struct proc *proc, struct uthread *uthread,
++    struct arm_saved_state *state, unsigned short code, int error)
++{
++	if (error < 0 || !is_saved_state64(state)) return;
++	/* A partial ENOSPC write can correctly return success and a short count. */
++	if (error == 0 && !whyred_ct_is_write(code)) return;
++	unsigned int enabled = __atomic_load_n(&whyred_ct_enabled, __ATOMIC_ACQUIRE);
++	if (enabled == 0) {
++		unsigned int expected = 0;
++		if (__atomic_compare_exchange_n(&whyred_ct_enabled, &expected, 1, false,
++		    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
++			int option = 0;
++			(void)PE_parse_boot_argn("whyred-container-trace", &option, sizeof(option));
++			enabled = option ? 3 : 2;
++			__atomic_store_n(&whyred_ct_enabled, enabled, __ATOMIC_RELEASE);
++		}
++	}
++	if (enabled != 3) return;
++	/* p_comm truncates the 17-character daemon name; p_name preserves it. */
++	const char *name = proc->p_name[0] ? proc->p_name : proc->p_comm;
++	unsigned int target = whyred_ct_target(name);
++	if (!target || (unsigned int)error > UINT16_MAX) return;
++	struct whyred_ct_call call = whyred_ct_call_for(code);
++	if (call.name == NULL) return;
++	uint64_t written = 0, requested = 0;
++	if (error == 0) {
++		memcpy(&written, &uthread->uu_rval[0], sizeof(written));
++		requested = (uint64_t)uthread->uu_arg[2];
++		if (written >= requested) return;
++	}
++	unsigned int id = whyred_ct_reserve(target, code, (unsigned int)error);
++	if (!id) return;
++	uint64_t args[7] = { 0 };
++	unsigned int nargs = sysent[code].sy_narg;
++	if (nargs > 7) nargs = 7;
++	memcpy(args, &uthread->uu_arg[0], nargs * sizeof(args[0]));
++	/* Split records so each normal line fits the existing small console buffers. */
++	printf("WHYRED FSERR: id=%u pid=%d proc=%s op=%s code=%u errno=%d pc=0x%llx\n",
++	    id, proc_pid(proc), name, call.name, code, error,
++	    (unsigned long long)get_saved_state_pc(state));
++	if (error == 0) {
++		printf("WHYRED FSERR: id=%u reason=short-write requested=%llu returned=%llu\n",
++		    id, requested, written);
++	}
++	printf("WHYRED FSERR: id=%u args=%llx,%llx,%llx,%llx,%llx,%llx,%llx\n",
++	    id, args[0], args[1], args[2], args[3], args[4], args[5], args[6]);
++	char path[WHYRED_CT_PATH_BYTES];
++	if (call.path0 >= 0) {
++		int result = whyred_ct_userpath((user_addr_t)args[call.path0], path);
++		printf("WHYRED FSERR: id=%u path1=%s copy_errno=%d\n", id, path, result);
++	}
++	if (call.path1 >= 0) {
++		int result = whyred_ct_userpath((user_addr_t)args[call.path1], path);
++		printf("WHYRED FSERR: id=%u path2=%s copy_errno=%d\n", id, path, result);
++	}
++	if (call.fd >= 0) {
++		int fd = (int)args[call.fd];
++		int result = whyred_ct_fdpath(proc, fd, path);
++		printf("WHYRED FSERR: id=%u fd=%d fdpath=%s path_errno=%d\n", id, fd, path, result);
++	}
++}
++#endif

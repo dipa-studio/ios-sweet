@@ -1,0 +1,146 @@
+--- a/bsd/kern/kern_synch.c
++++ b/bsd/kern/kern_synch.c
+@@ -50,5 +50,6 @@
+ #if defined(SWEET)
+ extern volatile int whyred_select_probe_active;
++extern void whyred_gic_snapshot(const char *);
+ #endif
+ 
+ #include <kern/cpu_number.h>
+@@ -268,5 +269,6 @@
+ #if defined(SWEET)
+ 		if (whyred_select_probe_active && p->p_pid == 1) {
++			whyred_gic_snapshot("select-before-thread-block");
+ 			printf("WHYRED SLEEP: before thread_block pri=%x msg=%s cntvct=%llx ctl=%llx tval=%llx\n",
+ 			    pri, wmsg ? wmsg : "(null)",
+ 			    __builtin_arm_rsr64("CNTVCT_EL0"),
+--- a/osfmk/arm64/cpu.c
++++ b/osfmk/arm64/cpu.c
+@@ -34,6 +34,7 @@
+ 
+ #include <pexpert/arm64/board_config.h>
+ #include <kern/kalloc.h>
++#include <kern/debug.h>
+ #include <kern/machine.h>
+ #include <kern/cpu_number.h>
+ #include <kern/percpu.h>
+@@ -76,4 +77,8 @@
+ #include <libkern/section_keywords.h>
+ 
++#if defined(SWEET)
++extern volatile int whyred_select_probe_active;
++#endif
++
+ extern boolean_t        idle_enable;
+ extern uint64_t         wake_abstime;
+@@ -485,4 +490,14 @@
+ 	uint64_t        new_idle_timeout_ticks = 0x0ULL, lastPop;
+ 	bool idle_disallowed = false;
++#if defined(SWEET)
++	static uint32_t whyred_idle_entry_logs;
++	if (whyred_select_probe_active && whyred_idle_entry_logs < 2) {
++		whyred_idle_entry_logs++;
++		kprintf("WHYRED IDLE: cpu_idle entry=%u daif=%llx hppir1=%llx cntvct=%llx ctl=%llx tval=%llx rtcPop=%llx\n",
++		    whyred_idle_entry_logs, __builtin_arm_rsr64("DAIF"),
++		    __builtin_arm_rsr64("ICC_HPPIR1_EL1"), __builtin_arm_rsr64("CNTVCT_EL0"),
++		    __builtin_arm_rsr64("CNTV_CTL_EL0"), __builtin_arm_rsr64("CNTV_TVAL_EL0"), cpu_data_ptr->rtcPop);
++	}
++#endif
+ 
+ 	if (__improbable((!idle_enable))) {
+@@ -583,12 +598,31 @@
+ #if defined(APPLETYPHOON)
+ 		// <rdar://problem/15827409> CPU1 Stuck in WFIWT Because of MMU Prefetch
+ 		typhoon_prepare_for_wfi();
+ #endif
+ 		__builtin_arm_dsb(DSB_SY);
++#if defined(SWEET)
++		static uint32_t whyred_wfi_probe_state;
++		if (whyred_select_probe_active && whyred_wfi_probe_state == 0) {
++			whyred_wfi_probe_state = 1;
++			kprintf("WHYRED IDLE: before WFI daif=%llx hppir1=%llx cntvct=%llx ctl=%llx tval=%llx rtcPop=%llx\n",
++			    __builtin_arm_rsr64("DAIF"), __builtin_arm_rsr64("ICC_HPPIR1_EL1"),
++			    __builtin_arm_rsr64("CNTVCT_EL0"), __builtin_arm_rsr64("CNTV_CTL_EL0"),
++			    __builtin_arm_rsr64("CNTV_TVAL_EL0"), cpu_data_ptr->rtcPop);
++		}
++#endif
+ #if HAS_RETENTION_STATE
+ 		arm64_retention_wfi();
+ #else
+ 		__builtin_arm_wfi();
+ #endif
++#if defined(SWEET)
++		if (whyred_select_probe_active && whyred_wfi_probe_state == 1) {
++			whyred_wfi_probe_state = 2;
++			kprintf("WHYRED IDLE: WFI returned daif=%llx hppir1=%llx cntvct=%llx ctl=%llx tval=%llx rtcPop=%llx\n",
++			    __builtin_arm_rsr64("DAIF"), __builtin_arm_rsr64("ICC_HPPIR1_EL1"),
++			    __builtin_arm_rsr64("CNTVCT_EL0"), __builtin_arm_rsr64("CNTV_CTL_EL0"),
++			    __builtin_arm_rsr64("CNTV_TVAL_EL0"), cpu_data_ptr->rtcPop);
++		}
++#endif
+ 
+ #if defined(APPLETYPHOON)
+--- a/pexpert/arm/pe_fiq.c
++++ b/pexpert/arm/pe_fiq.c
+@@ -25,6 +25,9 @@
+ static vm_offset_t gicd_base;
+ static vm_offset_t gicr_base;
+ static vm_offset_t gicr_size;
++#if defined(SWEET)
++static vm_offset_t whyred_gicr_pe_base;
++#endif
+ 
+ static uint32_t
+ _gic_read32(vm_offset_t addr)
+@@ -146,5 +149,8 @@
+ 	// Find the redistributor for this processor
+ 	vm_offset_t gicr_pe_base = find_gicr_pe_base();
++#if defined(SWEET)
++	whyred_gicr_pe_base = gicr_pe_base;
++#endif
+ 
+ 	// Mark this PE to be awake
+ 	uint32_t gicr_waker = gicr_read32(GICR_WAKER);
+@@ -228,6 +234,40 @@ pe_init_fiq()
+ 	__builtin_arm_isb(ISB_SY);
+ #endif /* SWEET */
++#if defined(SWEET)
++	kprintf("WHYRED GIC INIT: redist=%llx typer=%llx waker=%x group=%x enable=%x pending=%x active=%x dctlr=%x pmr=%llx igrpen1=%llx\n",
++	    (uint64_t)whyred_gicr_pe_base,
++	    _gic_read64(whyred_gicr_pe_base + GICR_TYPER),
++	    _gic_read32(whyred_gicr_pe_base + GICR_WAKER),
++	    _gic_read32(whyred_gicr_pe_base + GICR_IGROUPR0),
++	    _gic_read32(whyred_gicr_pe_base + GICR_ISENABLER0),
++	    _gic_read32(whyred_gicr_pe_base + 0x10200),
++	    _gic_read32(whyred_gicr_pe_base + 0x10300),
++	    gicd_read32(GICD_CTLR),
++	    __builtin_arm_rsr64("ICC_PMR_EL1"),
++	    __builtin_arm_rsr64("ICC_IGRPEN1_EL1"));
++#endif
+ }
++
++#if defined(SWEET)
++void
++whyred_gic_snapshot(const char *tag)
++{
++	if (whyred_gicr_pe_base == 0) {
++		kprintf("WHYRED GIC SNAP: %s redistributor missing\n", tag);
++		return;
++	}
++	kprintf("WHYRED GIC SNAP: %s daif=%llx hppir1=%llx rpr=%llx pmr=%llx igrpen1=%llx dctlr=%x typer=%llx waker=%x group=%x enable=%x pending=%x active=%x\n",
++	    tag, __builtin_arm_rsr64("DAIF"),
++	    __builtin_arm_rsr64("ICC_HPPIR1_EL1"), __builtin_arm_rsr64("ICC_RPR_EL1"),
++	    __builtin_arm_rsr64("ICC_PMR_EL1"), __builtin_arm_rsr64("ICC_IGRPEN1_EL1"),
++	    gicd_read32(GICD_CTLR), _gic_read64(whyred_gicr_pe_base + GICR_TYPER),
++	    _gic_read32(whyred_gicr_pe_base + GICR_WAKER),
++	    _gic_read32(whyred_gicr_pe_base + GICR_IGROUPR0),
++	    _gic_read32(whyred_gicr_pe_base + GICR_ISENABLER0),
++	    _gic_read32(whyred_gicr_pe_base + 0x10200),
++	    _gic_read32(whyred_gicr_pe_base + 0x10300));
++}
++#endif /* SWEET */
+ #else
+ void
+ pe_init_fiq()
+
+

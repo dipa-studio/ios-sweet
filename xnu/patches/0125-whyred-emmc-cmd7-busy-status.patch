@@ -1,0 +1,32 @@
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -503,7 +503,27 @@
+ 			return;
+ 		}
+ 	}
+-	printf("WHYRED EMMC INIT: CMD7 selected; host/card remain 1-bit legacy\n");
++	uint32_t busy_status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++	if ((busy_status & SDHCI_INT_ERROR_MASK) != 0) {
++		printf("WHYRED EMMC INIT: CMD7 busy error int=0x%08x\n",
++		    busy_status);
++		whyred_emmc_write32(base, SDHCI_INT_STATUS,
++		    busy_status & SDHCI_INT_ERROR_MASK);
++		whyred_emmc_restore_signals(base, signal_enable);
++		return;
++	}
++	if ((busy_status & SDHCI_INT_DATA_END) != 0) {
++		/* CMD7 is R1b: acknowledge its latched DAT-busy completion. */
++		whyred_emmc_write32(base, SDHCI_INT_STATUS, SDHCI_INT_DATA_END);
++	}
++	busy_status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++	if (busy_status != 0) {
++		printf("WHYRED EMMC INIT: CMD7 status not clear=0x%08x; no CMD13\n",
++		    busy_status);
++		whyred_emmc_restore_signals(base, signal_enable);
++		return;
++	}
++	printf("WHYRED EMMC INIT: CMD7 R1b busy done; host status clear\n");
+ 
+ 	uint32_t card_status = 0;
+ 	uint16_t cmd13 = (SDHCI_CMD_SEND_STATUS << 8) |
+

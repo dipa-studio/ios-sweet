@@ -1,0 +1,98 @@
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -57,6 +57,7 @@
+  */
+ 
+ #include <mach/mach_types.h>
++#include <machine/atomic.h>
+ #include <mach/boolean.h>
+ #include <mach/kern_return.h>
+ #include <mach/message.h>
+@@ -899,16 +900,18 @@
+ 
+ /*
+  * SWEET: for a process named in boot-arg sweetscan (comma separated,
+- * default "backboardd,SpringBoard"; "-" = off) that dies with SIGABRT or
++ * default "ScreenTimeAgent"; "-" = off) that dies with SIGABRT or
+  * SIGTRAP (BSAssert / NSAssert style failures) print the printable text runs
+  * (>= 24 characters, at least 2 spaces) found in its malloc heap as
+- * "STR text", at most 700 lines. An uncaught NSException's reason string
++ * "STR text", once per boot, at most 8 MiB and 64 selected strings.
++ * An uncaught NSException's reason string
+  * is among them: the abort message only carries the exception's type.
+  */
+ static void
+ sweet_crash_strings(const char *name)
+ {
+ 	static char names[128];
++	static int did_scan = 0;
+ 	char *buf;
+ 	vm_map_t map = current_map();
+ 	vm_map_offset_t addr = 0;
+@@ -917,7 +920,7 @@
+ 	char last[96] = "";
+ 
+ 	if (!PE_parse_boot_argn("sweetscan", names, sizeof(names))) {
+-		strlcpy(names, "backboardd,SpringBoard", sizeof(names));
++		strlcpy(names, "ScreenTimeAgent", sizeof(names));
+ 	}
+ 	size_t n = strlen(name), found = 0;
+ 	for (const char *t = names; *t;) {
+@@ -932,15 +935,15 @@
+ 		}
+ 		t = end + 1;
+ 	}
+-	if (!found) {
++	if (!found || !os_atomic_cmpxchg(&did_scan, 0, 1, relaxed)) {
+ 		return;
+ 	}
+ 	buf = kalloc_data(65536, Z_WAITOK);
+ 	if (buf == NULL) {
+ 		return;
+ 	}
+-	printf("STR scan of %s heap\n", name);
+-	while (lines < 700 && scanned < (96ull << 20)) {
++	printf("STR scan of %s heap (one-shot, filtered, <= 8 MiB)\n", name);
++	while (lines < 64 && scanned < (8ull << 20)) {
+ 		vm_map_size_t size = 0;
+ 		natural_t depth = 0;
+ 		vm_region_submap_info_data_64_t info;
+@@ -956,12 +959,12 @@
+ 		    (VM_PROT_READ | VM_PROT_WRITE) || info.user_tag < 1 || info.user_tag > 11) {
+ 			continue;
+ 		}
+-		for (vm_map_offset_t off = 0; off < size && lines < 700; off += 65536) {
++		for (vm_map_offset_t off = 0; off < size && lines < 64 && scanned < (8ull << 20); off += 65536) {
+ 			size_t len = (size - off) < 65536 ? (size_t)(size - off) : 65536;
++			scanned += len; /* Bound attempted bytes even when copyin fails. */
+ 			if (copyin((user_addr_t)(base + off), buf, len) != 0) {
+ 				continue;
+ 			}
+-			scanned += len;
+ 			size_t start = 0;
+ 			int spaces = 0;
+ 			for (size_t i = 0; i <= len; i++) {
+@@ -976,7 +979,21 @@
+ 					size_t m = run < sizeof(text) - 1 ? run : sizeof(text) - 1;
+ 					memcpy(text, buf + start, m);
+ 					text[m] = 0;
+-					if (strncmp(text, last, sizeof(last) - 1) != 0) {
++					static const char *const needles[] = {
++					    "Exception", "exception", "NSCocoa", "NSInvalid",
++					    "CoreData", "SQLite", "sqlite", "Error", "error",
++					    "Failed", "failed", "reason", "constraint",
++					    "persistent", "store", "invalid", "Invalid",
++					    "nil", "URL", NULL
++					};
++					bool relevant = false;
++					for (size_t k = 0; needles[k] != NULL; k++) {
++						if (strstr(text, needles[k]) != NULL) {
++							relevant = true;
++							break;
++						}
++					}
++					if (relevant && strncmp(text, last, sizeof(last) - 1) != 0) {
+ 						printf("STR %s\n", text);
+ 						lines++;
+ 						strlcpy(last, text, sizeof(last));
+

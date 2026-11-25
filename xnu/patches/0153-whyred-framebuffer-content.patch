@@ -1,0 +1,127 @@
+--- a/iokit/Kernel/arm/SweetFramebufferBlit.h
++++ b/iokit/Kernel/arm/SweetFramebufferBlit.h
+@@ -29,6 +29,47 @@
+ 	uint64_t end = (uint64_t)image->offset +
+ 	    (uint64_t)(image->height - 1) * image->row_bytes + (uint64_t)image->width * 4;
+ 	return end <= image->length;
++}
++
++/* Count attempts, including rejected/offscreen frames, to bound diagnostics. */
++static inline int
++sweet_fb_should_inspect(uint64_t attempt)
++{
++	return attempt != 0 && (attempt <= 8 || attempt % 300 == 0);
++}
++
++/* Inspect visible pixels only: padding and allocation tails are not image data. */
++struct sweet_fb_content {
++	uint64_t pixels, rgb_pixels, alpha_pixels;
++	uint32_t min_x, min_y, max_x, max_y; /* exclusive maximum; zero for black */
++};
++
++static inline struct sweet_fb_content
++sweet_fb_measure(const struct sweet_fb_image *image)
++{
++	struct sweet_fb_content result = {0, 0, 0, 0, 0, 0, 0};
++	if (!sweet_fb_image_valid(image)) return result;
++	result.pixels = (uint64_t)image->width * image->height;
++	for (uint32_t y = 0; y < image->height; y++) {
++		const uint8_t *row = image->pixels + image->offset + (uint64_t)y * image->row_bytes;
++		for (uint32_t x = 0; x < image->width; x++) {
++			uint32_t pixel;
++			/* One visible pixel read, including unaligned caller offsets. */
++			__builtin_memcpy(&pixel, row + (uint64_t)x * 4, sizeof(pixel));
++			if (pixel & 0xff000000u) result.alpha_pixels++;
++			if ((pixel & 0x00ffffffu) == 0) continue;
++			if (result.rgb_pixels++ == 0) {
++				result.min_x = x; result.min_y = y;
++				result.max_x = x + 1; result.max_y = y + 1;
++			} else {
++				if (x < result.min_x) result.min_x = x;
++				if (y < result.min_y) result.min_y = y;
++				if (x >= result.max_x) result.max_x = x + 1;
++				if (y >= result.max_y) result.max_y = y + 1;
++			}
++		}
++	}
++	return result;
+ }
+ 
+ /*
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -1,6 +1,6 @@
+ /*
+  * Built-in IOMobileFramebuffer for SWEET: the ABL's continuous-splash
+- * framebuffer (1080x2400 a8r8g8b8 in RAM, the panel scans it out by
++ * framebuffer (geometry from boot arguments, a8r8g8b8 in RAM; scanned by
+  * itself) as the main display, driven by CoreAnimation's CPU renderer.
+  *
+  * IOMobileFramebuffer.framework (iOS 16.7) counts /arm-io children with
+@@ -77,7 +77,7 @@
+  * screens (UIKit: "No status bar visual provider for screen", the red
+  * rdar://45025538 bar for 360x800 points). The display is therefore
+  * presented as the iPhone X panel, 1125x2436 (375x812 points @3x), and the
+- * centered 1080x2400 part of it is shown on the 1080x2400 panel.
++ * complete logical canvas is scaled to the actual panel dimensions.
+  * Boot-arg sweetfb_native=1 presents the real panel size instead.
+  */
+ #define SWEET_FB_LOGICAL_W              1125
+@@ -116,6 +116,7 @@
+ 	uint8_t       fPending[SWEET_FB_SWAP_REC_SIZE];     /* latest swap, not yet shown */
+ 	SweetSurface *fPendingSurfaces[SWEET_FB_LAYERS]; /* retained until replaced */
+ 	uint64_t      fPresented;
++	uint64_t      fPresentAttempts;
+ 	bool          fDirty;
+ 	uint32_t      fFlushTicks;    /* vsync ticks between panel copies */
+ 	bool          fPowerOff;      /* RequestPowerChange(0) */
+@@ -199,6 +200,7 @@
+ 	bzero(fPending, sizeof(fPending));
+ 	bzero(fPendingSurfaces, sizeof(fPendingSurfaces));
+ 	fPresented = 0;
++	fPresentAttempts = 0;
+ 	fDirty = false;
+ 	fConsolePaused = false;
+ 	fPowerOff = false;
+@@ -341,6 +343,8 @@
+ {
+ 	uint32_t mask = get32(rec, 0x104), layers = 0;
+ 	uint64_t pixels = 0;
++	/* Full scans only accompany the bounded presentation diagnostics. */
++	bool inspect = sweet_fb_should_inspect(++fPresentAttempts);
+ 	struct sweet_fb_image panel = {
+ 		(uint8_t *)fPixels, fSurface->memory->getLength(),
+ 		fWidth, fHeight, fRowBytes, 0, SWEET_FB_BGRA
+@@ -361,6 +365,16 @@
+ 		struct sweet_fb_rect target = { (int32_t)get32(b, 0), (int32_t)get32(b, 4),
+ 		    (int32_t)get32(b, 8), (int32_t)get32(b, 12) };
+ 		uint64_t copied = sweet_fb_blit(&image, &panel, fLogicalW, fLogicalH, source, target);
++		if (inspect) {
++			struct sweet_fb_content content = sweet_fb_measure(&image);
++			IOLog("WHYRED FB: source swap=%u layer=%u surface=%u size=%ux%u stride=%u offset=%u "
++			    "src=%d,%d,%d,%d dst=%d,%d,%d,%d pixels=%llu rgb=%llu alpha=%llu box=%u,%u,%u,%u copied=%llu\n",
++			    get32(rec, 0x50), layer, s->id, s->width, s->height, s->bytesPerRow, s->offset,
++			    source.x, source.y, source.w, source.h, target.x, target.y, target.w, target.h,
++			    content.pixels, content.rgb_pixels, content.alpha_pixels,
++			    content.min_x, content.min_y, content.max_x, content.max_y, copied);
++		}
++
+ 		if (copied != 0) {
+ 			pixels += copied;
+ 			layers++;
+@@ -384,10 +398,14 @@
+ 		}
+ 	}
+ 	uint64_t count = ++fPresented;
+-	if (count <= 8 || count % 300 == 0) {
++	if (inspect) {
+ 		uint32_t first = get32((const uint8_t *)fPixels, 0);
+ 		uint32_t center = get32((const uint8_t *)fPixels,
+ 		    (fHeight / 2) * fRowBytes + (fWidth / 2) * 4);
++		struct sweet_fb_content content = sweet_fb_measure(&panel);
++		IOLog("WHYRED FB: panel count=%llu pixels=%llu rgb=%llu alpha=%llu box=%u,%u,%u,%u\n",
++		    count, content.pixels, content.rgb_pixels, content.alpha_pixels,
++		    content.min_x, content.min_y, content.max_x, content.max_y);
+ 		IOLog("WHYRED FB: presented count=%llu swap=%u layers=%u pixels=%llu sample=%08x,%08x\n",
+ 		    count, get32(rec, 0x50), layers, pixels, first, center);
+ 	}

@@ -1,0 +1,49 @@
+diff --git a/osfmk/arm/arm_init.c b/osfmk/arm/arm_init.c
+index 73c1401..0000000 100644
+--- a/osfmk/arm/arm_init.c
++++ b/osfmk/arm/arm_init.c
+@@ -355,9 +355,15 @@ arm_init(
+ 	arm_slide_rebase_and_sign_image();
+ 	sweet_early_mark(11, "arm_slide_rebase_and_sign_image done");
+ 
++	sweet_early_hex64("ARM_ARGS", (uint64_t)(uintptr_t)args);
++	sweet_early_hex64("ARM_DT_PRECOPY", (uint64_t)(uintptr_t)args->deviceTreeP);
++	sweet_early_hex64("ARM_DT_LEN_PRECOPY", args->deviceTreeLength);
+ 	/* If kernel integrity is supported, use a constant copy of the boot args. */
+ 	const_boot_args = *args;
+ 	BootArgs = args = &const_boot_args;
++	sweet_early_hex64("ARM_ARGS_COPY", (uint64_t)(uintptr_t)args);
++	sweet_early_hex64("ARM_DT_POSTCOPY", (uint64_t)(uintptr_t)args->deviceTreeP);
++	sweet_early_hex64("ARM_DT_LEN_POSTCOPY", args->deviceTreeLength);
+ 	sweet_early_mark(12, "boot_args copied");
+ 
+ 	cpu_data_init(&BootCpuData);
+diff --git a/pexpert/arm/pe_init.c b/pexpert/arm/pe_init.c
+index de388e2..0000000 100644
+--- a/pexpert/arm/pe_init.c
++++ b/pexpert/arm/pe_init.c
+@@ -402,7 +402,10 @@ PE_init_platform(boolean_t vm_initialized, void *args)
+ 		PE_state.initialized = TRUE;
+ 		PE_state.bootArgs = boot_args_ptr;
+ 		PE_state.deviceTreeHead = boot_args_ptr->deviceTreeP;
+ 		PE_state.deviceTreeSize = boot_args_ptr->deviceTreeLength;
++		sweet_early_hex64("PE_BOOTARGS", (uint64_t)(uintptr_t)boot_args_ptr);
++		sweet_early_hex64("PE_DT_HEAD_SET", (uint64_t)(uintptr_t)PE_state.deviceTreeHead);
++		sweet_early_hex64("PE_DT_SIZE_SET", PE_state.deviceTreeSize);
+ 		PE_state.video.v_baseAddr = boot_args_ptr->Video.v_baseAddr;
+ 		PE_state.video.v_rowBytes = boot_args_ptr->Video.v_rowBytes;
+ 		PE_state.video.v_width = boot_args_ptr->Video.v_width;
+@@ -420,8 +423,12 @@ PE_init_platform(boolean_t vm_initialized, void *args)
+ 		 * Setup the Device Tree routines
+ 		 * so the console can be found and the right I/O space
+ 		 * can be used..
+ 		 */
++		sweet_early_hex64("PE_DT_PRE_INIT", (uint64_t)(uintptr_t)PE_state.deviceTreeHead);
++		sweet_early_hex64("PE_SIZE_PRE_INIT", PE_state.deviceTreeSize);
+ 		sweet_early_mark(17, "PE before SecureDTInit");
+ 		SecureDTInit(PE_state.deviceTreeHead, PE_state.deviceTreeSize);
++		sweet_early_hex64("PE_DT_POST_INIT", (uint64_t)(uintptr_t)PE_state.deviceTreeHead);
++		sweet_early_hex64("PE_SIZE_POST_INIT", PE_state.deviceTreeSize);
+ 		sweet_early_mark(18, "PE SecureDTInit done");
+ 		pe_identify_machine(boot_args_ptr);
+

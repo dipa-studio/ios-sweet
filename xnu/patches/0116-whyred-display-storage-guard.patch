@@ -1,0 +1,37 @@
+diff --git a/config/MASTER.arm64.sweet b/config/MASTER.arm64.sweet
+--- a/config/MASTER.arm64.sweet
++++ b/config/MASTER.arm64.sweet
+@@ -2,2 +2,2 @@
+-# sweet (Redmi Note 10 Pro, SM7150): MASTER.arm64.MacOSX plus the open-source
++# whyred (Redmi Note 5, SDM636): MASTER.arm64.MacOSX plus the open-source
+ # arm64 assembly and pmap (nos_arm_asm, nos_arm_pmap). Apple's own SoC configs
+
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -67,3 +67,3 @@
+     "     'IOProviderClass' = IOPlatformDevice;"
+-    "     'IONameMatch'     = 'sweet,display';"
++    "     'IONameMatch'     = 'whyred,display';"
+     "   },"
+
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -71,3 +71,4 @@
+ 	if (armio != NULL) {
+-		createNubs(this, IODTFindMatchingEntries(armio, kIODTExclusive, "('gic')"));
++		createNubs(this, IODTFindMatchingEntries(armio, kIODTExclusive,
++		    "('gic', 'interrupt-controller')"));
+ 		armio->release();
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -9,3 +9,4 @@
+  * reads canvas-width/canvas-height from the service's provider. The class
+- * here (AppleCLCD, an IOMobileFramebuffer) matches the /arm-io/disp0 nub.
++ * here (AppleCLCD, an IOMobileFramebuffer) matches the /arm-io/display-subsystem
++ * nub through its whyred,display compatible string.
+  *
+

@@ -1,0 +1,11 @@
+--- a/bsd/kern/kern_synch.c
++++ b/bsd/kern/kern_synch.c
+@@ -143,7 +143,8 @@
+ 	syscall_result = (*ut->uu_continuation)(error);
+ #if defined(SWEET)
+ 	if (whyred_select_probe_active && p->p_pid == 1) {
+         printf("WHYRED SLEEP: syscall continuation result=%d\n", syscall_result);
++        whyred_select_probe_active = 0;
+ 	}
+ #endif
+ 	unix_syscall_return(syscall_result);

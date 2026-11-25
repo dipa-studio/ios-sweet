@@ -1,0 +1,58 @@
+name: whyred-pid1-probe
+
+on:
+  push:
+    branches: [codex/whyred-early-fb]
+    paths:
+      - tools/sweet-init.S
+      - .github/workflows/whyred-init-probe.yml
+  workflow_dispatch:
+
+jobs:
+  build-init:
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and validate minimal mockfs PID 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          {
+            set -x
+            xcrun clang -target arm64-apple-ios16.0 -c tools/sweet-init.S -o out/sweet-init.o
+            python3 tools/mkinit.py out/sweet-init.o out/sweet-init.macho
+            python3 - <<'PY'
+          from pathlib import Path
+          import struct
+          image = Path("out/sweet-init.macho").read_bytes()
+          magic, cpu, _, kind = struct.unpack_from("<4I", image)
+          if (magic, cpu, kind) != (0xfeedfacf, 0x0100000c, 2):
+              raise SystemExit("mockfs init is not a signed arm64 Mach-O executable")
+          for marker in (
+              b"SWEET init: one-shot select(5s) begin",
+              b"SWEET init: one-shot select returned OK",
+              b"SWEET init: one-shot select errno=0x",
+              b"SWEET init: one-shot diagnostic complete",
+              b"0123456789abcdef",
+          ):
+              if marker not in image:
+                  raise SystemExit(f"mockfs init missing diagnostic marker: {marker!r}")
+          Path("out/sweet-init-build.txt").write_text("signed static arm64 one-shot PID 1\n")
+          PY
+          } 2>&1 | tee out/init-build.log
+
+      - name: Upload init-only diagnostic artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: whyred-pid1-probe
+          path: |
+            out/init-build.log
+            out/sweet-init.o
+            out/sweet-init.macho
+            out/sweet-init-build.txt
+          if-no-files-found: ignore
+

@@ -1,0 +1,76 @@
+--- a/osfmk/arm/commpage/commpage_asm.s
++++ b/osfmk/arm/commpage/commpage_asm.s
+@@ -269,15 +269,19 @@
+ 	ARM64_STACK_PROLOG
+ 	PUSH_FRAME
+ 
+-	mov		w10, wzr		 // unlock value = w10 = 0
+-	mov		w11, #1			 // locked value = w11 = 1
+-
+-	// Try to grab the lock
+-	casa	w10, w11, [x3]	 // Atomic CAS with acquire barrier
+-	cbz		w10, Ltrylock_enqueue_success
+-
++	mov		w11, #1			 // locked value = 1
++
++	// One exclusive attempt: the preemptible caller retries on failure.
++	ldaxr	w10, [x3]		 // acquire load of lock
++	cbnz	w10, Ltrylock_enqueue_busy
++	stxr	w12, w11, [x3]
++	cbz		w12, Ltrylock_enqueue_success
++	b		Ltrylock_enqueue_failed
++Ltrylock_enqueue_busy:
++	clrex
++Ltrylock_enqueue_failed:
+ 	mov		x0, #-1			// Failed
+-	b Ltrylock_enqueue_exit
++	b		Ltrylock_enqueue_exit
+ 
+ 	/* We got the lock, enqueue the element */
+ 
+@@ -293,7 +297,7 @@
+ Lset_new_tail:
+ 	str		x1, [x0, #8]		// Set tail = new elem
+ 
+-	// Drop spin lock with release barrier (pairs with acquire in casa)
++	// Drop spin lock with release barrier (pairs with acquire in ldaxr)
+ 	stlr	wzr, [x3]
+ 
+ 	mov		x0, xzr				// Mark success
+@@ -319,15 +323,18 @@
+ 	ARM64_STACK_PROLOG
+ 	PUSH_FRAME
+ 
+-	// Try to grab the lock
+-	mov		w10, wzr		 // unlock value = w10 = 0
+-	mov		w11, #1			 // locked value = w11 = 1
+-
+-	casa	w10, w11, [x2]	 // Atomic CAS with acquire barrier
+-	cbz		w10, Ltrylock_dequeue_success
+-
++	// One exclusive attempt: the preemptible caller retries on failure.
++	mov		w11, #1			 // locked value = 1
++	ldaxr	w10, [x2]		 // acquire load of lock
++	cbnz	w10, Ltrylock_dequeue_busy
++	stxr	w12, w11, [x2]
++	cbz		w12, Ltrylock_dequeue_success
++	b		Ltrylock_dequeue_failed
++Ltrylock_dequeue_busy:
++	clrex
++Ltrylock_dequeue_failed:
+ 	mov		x0, #-1			// Failed
+-	b Ltrylock_dequeue_exit
++	b		Ltrylock_dequeue_exit
+ 
+ 	/* We got the lock, dequeue the element */
+ Ltrylock_dequeue_success:
+@@ -346,7 +353,7 @@
+ 
+ Lreturn_head:
+ 	mov		x0, x10			// Move head to x0
+-	stlr	wzr, [x2]		// Drop spin lock with release barrier (pairs with acquire in casa)
++	stlr	wzr, [x2]		// Drop spin lock with release barrier (pairs with acquire in ldaxr)
+ 
+ Ltrylock_dequeue_exit:
+ 	POP_FRAME
+

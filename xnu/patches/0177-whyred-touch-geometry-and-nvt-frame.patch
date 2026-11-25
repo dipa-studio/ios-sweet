@@ -1,0 +1,147 @@
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -356,11 +356,14 @@
+  * app-switcher gesture.
+  */
+ #define SWEET_TOUCH_EDGE_PX 48
++#include "WhyredTouch.h"
++
+ class SweetHIDTouch : public IOHIDEventService {
+ 	OSDeclareDefaultStructors(SweetHIDTouch);
+ public:
+ 	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+ 	void touch(int finger, bool down, int x, int y);
++	bool novatekFrame(const uint8_t *bytes, size_t length);
+ protected:
+ 	virtual UInt32 getPrimaryUsagePage() APPLE_KEXT_OVERRIDE { return kHIDPage_Digitizer; }
+ 	virtual UInt32 getPrimaryUsage() APPLE_KEXT_OVERRIDE { return kHIDUsage_Dig_TouchScreen; }
+@@ -368,6 +371,7 @@
+ private:
+ 	IOLock *fLock;
+ 	int fLogicalW, fLogicalH, fOffX, fOffY;
++	bool fWhyred;
+ 	bool fDown[SWEET_TOUCH_FINGERS];
+ 	bool fEdge[SWEET_TOUCH_FINGERS];
+ 	IOFixed fX[SWEET_TOUCH_FINGERS];
+@@ -434,8 +438,10 @@
+ 	}
+ 	int native = 0;
+ 	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
++	int whyred = 0;
++	fWhyred = PE_parse_boot_argn("-whyred-platform", &whyred, sizeof(whyred));
+ 	fLogicalW = native ? 1080 : 1125;
+-	fLogicalH = native ? 2400 : 2436;
++	fLogicalH = native ? (fWhyred ? 2160 : 2400) : 2436;
+ 	fOffX = (fLogicalW - 1080) / 2;
+ 	fOffY = (fLogicalH - 2400) / 2;
+ 	/* The digitizer covers the main display (backboardd maps it 1:1). */
+@@ -459,13 +465,18 @@
+ 		return;
+ 	}
+ 	x = x < 0 ? 0 : (x > 1079 ? 1079 : x);
+-	y = y < 0 ? 0 : (y > 2399 ? 2399 : y);
++	const int panelMaxY = fWhyred ? 2159 : 2399;
++	y = y < 0 ? 0 : (y > panelMaxY ? panelMaxY : y);
+ 
+ 	IOLockLock(fLock);
+ 	bool was = fDown[finger];
+ 	/* Panel pixels -> the presented 1125x2436 display (SweetFramebuffer.cpp). */
+-	IOFixed nx = (IOFixed)(((int64_t)(x + fOffX) << 16) / fLogicalW);
+-	IOFixed ny = (IOFixed)(((int64_t)(y + fOffY) << 16) / fLogicalH);
++	IOFixed nx = fWhyred ? whyred_touch_axis(x, 1080) :
++	    (IOFixed)(((int64_t)(x + fOffX) << 16) / fLogicalW);
++	IOFixed ny = fWhyred ? whyred_touch_axis(y, 2160) :
++	    (IOFixed)(((int64_t)(y + fOffY) << 16) / fLogicalH);
++	/* A release keeps its last position, including the collection parent. */
++	if (fWhyred && !down && was) { nx = fX[finger]; ny = fY[finger]; }
+ 	bool moved = down && (nx != fX[finger] || ny != fY[finger]);
+ 	if (was == down && !moved) {
+ 		IOLockUnlock(fLock);
+@@ -473,7 +484,7 @@
+ 	}
+ 	if (!was && down) {
+ 		fEdge[finger] = x < SWEET_TOUCH_EDGE_PX || x > 1079 - SWEET_TOUCH_EDGE_PX ||
+-		    y < SWEET_TOUCH_EDGE_PX || y > 2399 - SWEET_TOUCH_EDGE_PX;
++		    y < SWEET_TOUCH_EDGE_PX || y > panelMaxY - SWEET_TOUCH_EDGE_PX;
+ 	}
+ 
+ 	collection = IOHIDEvent::digitizerEvent(now, 0, kIOHIDDigitizerTransducerTypeHand, false, 0, 0, 0);
+@@ -538,6 +549,27 @@
+ 	collection->release();
+ }
+ 
++/* Transport adapter for a CONFIRMED Novatek controller only. The payload
++ * excludes the I2C register prefix. No MMIO, probing or controller selection. */
++bool
++SweetHIDTouch::novatekFrame(const uint8_t *bytes, size_t length)
++{
++	struct whyred_touch_frame frame;
++	if (!fWhyred || whyred_touch_decode_nvt(bytes, length, &frame)) {
++		return false;
++	}
++	for (unsigned i = 0; i < 10; ++i) {
++		touch(i, (frame.active & (1u << i)) != 0, frame.x[i], frame.y[i]);
++	}
++	return true;
++}
++
++extern "C" int
++whyred_hid_novatek_frame(const uint8_t *bytes, size_t length)
++{
++	return gSweetTouch && gSweetTouch->novatekFrame(bytes, length) ? 0 : -1;
++}
++
+ /* key: 0 power (side button), 1 volume up, 2 volume down, 3 home */
+ extern "C" void
+ sweet_hid_key(int key, int down)
+--- /dev/null
++++ b/iokit/Kernel/arm/hid/WhyredTouch.h
+@@ -0,0 +1,48 @@
++/* Whyred CPU digitizer geometry and bounded Novatek event decoding.
++ * Clean implementation from Xiaomi whyred-o-oss nvt_touch packet layout.
++ * This does not select an IC, power rails, configure pins or access I2C.
++ */
++#ifndef WHYRED_TOUCH_H
++#define WHYRED_TOUCH_H
++struct whyred_touch_frame {
++	unsigned active;
++	int x[10], y[10];
++};
++
++static inline int
++whyred_touch_axis(int value, int extent)
++{
++	if (extent <= 0) return 0;
++	if (value < 0) value = 0;
++	if (value >= extent) value = extent - 1;
++	return (int)(((int64_t)value << 16) / extent);
++}
++
++/* Exactly65 wire bytes after the register prefix; decode atomically. Keep
++ * caller output intact on truncation, recovery patterns or malformed contacts. */
++static inline int
++whyred_touch_decode_nvt(const uint8_t *bytes, size_t length,
++    struct whyred_touch_frame *out)
++{
++	struct whyred_touch_frame frame = {0, {0}, {0}};
++	if (!bytes || !out || length != 65) return -1;
++	unsigned recovery = 0, erased = 0;
++	for (unsigned i = 0; i < 6; ++i) recovery += bytes[i] == 0x77;
++	for (unsigned i = 0; i < 65; ++i) erased += bytes[i] == 0xff;
++	if (recovery == 6 || erased == 65) return -1;
++	for (unsigned i = 0; i < 10; ++i) {
++		const uint8_t *p = bytes + i * 6;
++		unsigned state = p[0] & 7, id = p[0] >> 3;
++		if (state != 1 && state != 2) continue;
++		if (!id || id > 10 || (frame.active & (1u << (id - 1)))) return -1;
++		int x = ((unsigned)p[1] << 4) | (p[3] >> 4);
++		int y = ((unsigned)p[2] << 4) | (p[3] & 15);
++		if (x > 1080 || y > 2160) return -1;
++		frame.active |= 1u << (id - 1);
++		frame.x[id - 1] = x == 1080 ? 1079 : x;
++		frame.y[id - 1] = y == 2160 ? 2159 : y;
++	}
++	*out = frame;
++	return 0;
++}
++#endif

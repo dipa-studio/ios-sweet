@@ -1,0 +1,385 @@
+From: Codex <codex@openai.com>
+Subject: [PATCH] whyred: expose validated eMMC GPT partitions as read-only BSD disks
+
+Keep the existing RAM disk as the default root. Add opt-in early eMMC init
+for a read-only GPT partition block device, plus an explicit root selector for
+future filesystem bring-up. Writes and out-of-partition requests fail closed.
+
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -8,6 +8,13 @@
+  */
+ #include <sys/param.h>
+ #include <sys/systm.h>
++#include <sys/buf.h>
++#include <sys/conf.h>
++#include <sys/disk.h>
++#include <sys/errno.h>
++#include <sys/proc.h>
++#include <miscfs/devfs/devfs.h>
++#include <kern/locks.h>
+ #include <machine/machine_routines.h>
+ #include <vm/vm_kern.h>
+ #include <pexpert/pexpert.h>
+@@ -99,6 +106,9 @@
+ 
+ /* Not exported to the BSD layer by machine/machine_routines.h. */
+ extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++void whyred_emmc_pio_probe(void);
++int whyred_emmc_block_probe(void);
++int whyred_emmc_rootdev(dev_t *dev);
+ 
+ static uint16_t
+ whyred_emmc_read16(volatile uint8_t *base, unsigned int offset)
+@@ -781,6 +791,185 @@
+ 
+ /* Used once during serialized boot discovery; keep the kernel stack small. */
+ static struct whyred_gpt_partition whyred_gpt_parts[WHYRED_GPT_MAX_ENTRIES];
++static uint32_t whyred_gpt_part_count;
++static uint32_t whyred_emmc_sector_count;
++static bool whyred_emmc_block_ready;
++static bool whyred_emmc_force_gpt;
++static int whyred_emmc_bmajor = -1;
++
++static LCK_GRP_DECLARE(whyred_emmc_grp, "whyred_emmc");
++static LCK_MTX_DECLARE(whyred_emmc_lock, &whyred_emmc_grp);
++static struct whyred_gpt_io whyred_emmc_live_io;
++
++static const struct whyred_gpt_partition *
++whyred_emmc_partition(dev_t dev)
++{
++	uint32_t minor_number = minor(dev);
++	if (minor_number == 0 || minor_number > WHYRED_GPT_MAX_ENTRIES) {
++		return NULL;
++	}
++	for (uint32_t i = 0; i < whyred_gpt_part_count; i++) {
++		if (whyred_gpt_parts[i].index == minor_number) {
++			return &whyred_gpt_parts[i];
++		}
++	}
++	return NULL;
++}
++
++static int
++whyred_emmc_open(dev_t dev, int flags, __unused int devtype, __unused struct proc *p)
++{
++	if (!whyred_emmc_block_ready || whyred_emmc_partition(dev) == NULL) {
++		return ENXIO;
++	}
++	return (flags & FWRITE) ? EROFS : 0;
++}
++
++static int
++whyred_emmc_close(__unused dev_t dev, __unused int flags,
++	__unused int devtype, __unused struct proc *p)
++{
++	return 0;
++}
++
++static void
++whyred_emmc_strategy(buf_t bp)
++{
++	int error = 0;
++	caddr_t vaddr = NULL;
++	uint32_t count = buf_count(bp);
++	uint64_t offset;
++	uint64_t partition_bytes;
++	const struct whyred_gpt_partition *part = whyred_emmc_partition(buf_device(bp));
++	buf_setresid(bp, count);
++	if ((buf_flags(bp) & B_READ) == 0) {
++		error = EROFS;
++		goto done;
++	}
++	if (part == NULL || buf_blkno(bp) < 0 ||
++	    (uint64_t)buf_blkno(bp) > UINT64_MAX / WHYRED_GPT_BLOCK_BYTES) {
++		error = ENXIO;
++		goto done;
++	}
++	offset = (uint64_t)buf_blkno(bp) * WHYRED_GPT_BLOCK_BYTES;
++	partition_bytes = (part->last - part->first + 1) * WHYRED_GPT_BLOCK_BYTES;
++	if ((offset % WHYRED_GPT_BLOCK_BYTES) != 0 ||
++	    (count % WHYRED_GPT_BLOCK_BYTES) != 0 || offset > partition_bytes ||
++	    count > partition_bytes - offset) {
++		error = EINVAL;
++		goto done;
++	}
++	if (count == 0) {
++		goto done;
++	}
++	if (buf_map(bp, &vaddr) != 0) {
++		error = EIO;
++		goto done;
++	}
++	lck_mtx_lock(&whyred_emmc_lock);
++	for (uint32_t done_bytes = 0; done_bytes < count;
++	    done_bytes += WHYRED_GPT_BLOCK_BYTES) {
++		uint8_t sector[WHYRED_GPT_BLOCK_BYTES];
++		uint64_t lba = part->first + (offset + done_bytes) / WHYRED_GPT_BLOCK_BYTES;
++		if (lba >= whyred_emmc_sector_count || lba > UINT32_MAX ||
++		    whyred_emmc_read_sector(&whyred_emmc_live_io, (uint32_t)lba, sector) != 0) {
++			error = EIO;
++			break;
++		}
++		memcpy(vaddr + done_bytes, sector, sizeof(sector));
++		buf_setresid(bp, count - done_bytes - sizeof(sector));
++	}
++	lck_mtx_unlock(&whyred_emmc_lock);
++	buf_unmap(bp);
++done:
++	if (error) {
++		buf_seterror(bp, error);
++	}
++	buf_biodone(bp);
++}
++
++static int
++whyred_emmc_ioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag,
++	__unused struct proc *p)
++{
++	uint32_t *v32 = (uint32_t *)data;
++	uint64_t *v64 = (uint64_t *)data;
++	const struct whyred_gpt_partition *part = whyred_emmc_partition(dev);
++	switch (cmd) {
++	case DKIOCGETBLOCKSIZE:
++	case DKIOCGETPHYSICALBLOCKSIZE:
++		*v32 = WHYRED_GPT_BLOCK_BYTES;
++		return 0;
++	case DKIOCGETBLOCKCOUNT:
++		if (part == NULL) return ENXIO;
++		*v64 = part->last - part->first + 1;
++		return 0;
++	case DKIOCISWRITABLE:
++		*v32 = 0;
++		return 0;
++	case DKIOCGETMAXBLOCKCOUNTREAD:
++		*v64 = 32;
++		return 0;
++	case DKIOCGETMAXSEGMENTCOUNTREAD:
++		*v64 = 1;
++		return 0;
++	case DKIOCGETMAXBLOCKCOUNTWRITE:
++	case DKIOCGETMAXSEGMENTCOUNTWRITE:
++		*v64 = 0;
++		return 0;
++	default:
++		return ENOTTY;
++	}
++}
++
++static int
++whyred_emmc_psize(dev_t dev)
++{
++	const struct whyred_gpt_partition *part = whyred_emmc_partition(dev);
++	return part == NULL ? -1 : (int)MIN(part->last - part->first + 1, INT_MAX);
++}
++
++static const struct bdevsw whyred_emmc_bdevsw = {
++	.d_open = whyred_emmc_open,
++	.d_close = whyred_emmc_close,
++	.d_strategy = whyred_emmc_strategy,
++	.d_ioctl = whyred_emmc_ioctl,
++	.d_dump = eno_dump,
++	.d_psize = whyred_emmc_psize,
++	.d_type = D_DISK,
++};
++
++static int
++whyred_emmc_publish(void)
++{
++	if (whyred_emmc_block_ready) {
++		return 0;
++	}
++	whyred_emmc_bmajor = bdevsw_add(-1, &whyred_emmc_bdevsw);
++	if (whyred_emmc_bmajor < 0) {
++		return ENXIO;
++	}
++	for (uint32_t i = 0; i < whyred_gpt_part_count; i++) {
++		char name[64];
++		char safe_part[37] = { 0 };
++		for (unsigned int j = 0; j < sizeof(safe_part) - 1 &&
++		    whyred_gpt_parts[i].name[j] != '\0'; j++) {
++			char ch = whyred_gpt_parts[i].name[j];
++			safe_part[j] = ((ch >= 'a' && ch <= 'z') ||
++			    (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
++			    ch == '-' || ch == '_') ? ch : '_';
++			safe_part[j + 1] = '\0';
++		}
++		snprintf(name, sizeof(name), "whyred-%u-%s",
++		    whyred_gpt_parts[i].index, safe_part);
++		devfs_make_node(makedev(whyred_emmc_bmajor, whyred_gpt_parts[i].index),
++		    DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0440, "%s", name);
++	}
++	whyred_emmc_block_ready = true;
++	printf("WHYRED EMMC DISK: read-only block device ready major=%d partitions=%u sectors=%u\n",
++	    whyred_emmc_bmajor, whyred_gpt_part_count, whyred_emmc_sector_count);
++	return 0;
++}
+ 
+ static int
+ whyred_gpt_probe(whyred_gpt_read_fn read_sector, void *context, uint32_t sectors)
+@@ -791,6 +980,7 @@
+ 	uint64_t entries_lba, first_usable, last_usable, backup_lba;
+ 	int protective = 0;
+ 	int disk_guid_nonzero = 0;
++	whyred_gpt_part_count = 0;
+ 	if (sectors < 4 || read_sector(context, 0, block) != 0) {
+ 		printf("WHYRED GPT: MBR read failed\n");
+ 		return -1;
+@@ -920,6 +1110,7 @@
+ 		    (unsigned long long)(part->last - part->first + 1));
+ 	}
+ 	printf("WHYRED GPT: discovery complete; no partition data read or media writes\n");
++	whyred_gpt_part_count = part_count;
+ 	return 0;
+ }
+ 
+@@ -943,6 +1134,10 @@
+ void
+ whyred_emmc_pio_probe(void)
+ {
++	if (whyred_emmc_block_ready) {
++		printf("WHYRED EMMC: block device already initialized; skipping reinit\n");
++		return;
++	}
+ 	vm_offset_t mapping = ml_io_map((vm_offset_t)WHYRED_SDCC1_HC_PHYS,
+ 	    WHYRED_SDCC1_HC_SIZE);
+ 	if (mapping == 0) {
+@@ -1140,8 +1335,8 @@
+ 	    (unsigned int)ext_csd[192], (unsigned int)ext_csd[196], sectors);
+ 	printf("WHYRED EMMC: EXT_CSD metadata stage complete; no media writes\n");
+ 	uint32_t gpt_requested = 0;
+-	if (PE_parse_boot_argn("whyred-emmc-gpt-probe", &gpt_requested,
+-	    sizeof(gpt_requested)) && gpt_requested) {
++	if ((PE_parse_boot_argn("whyred-emmc-gpt-probe", &gpt_requested,
++	    sizeof(gpt_requested)) && gpt_requested) || whyred_emmc_force_gpt) {
+ 		/* CMD17 addresses 512-byte sectors only in the confirmed user area. */
+ 		if ((ocr & 0x40000000U) == 0 || ext_csd[61] != 0 ||
+ 		    (ext_csd[179] & 7) != 0 || ext_csd[192] < 2 || sectors < 4) {
+@@ -1149,6 +1344,8 @@
+ 			    ocr, (unsigned int)ext_csd[61], (unsigned int)ext_csd[179]);
+ 		} else {
+ 			struct whyred_gpt_io io = { .base = base, .sectors = sectors };
++			whyred_emmc_live_io = io;
++			whyred_emmc_sector_count = sectors;
+ 			printf("WHYRED GPT: bounded read-only discovery begin sectors=%u block_bytes=512\n", sectors);
+ 			if (whyred_gpt_probe(whyred_emmc_read_sector, &io, sectors) != 0) {
+ 				printf("WHYRED GPT: discovery failed; no block device published\n");
+@@ -1156,10 +1353,57 @@
+ 				    SDHCI_PSTATE_DATA_INHIBIT) != 0) {
+ 					(void)whyred_emmc_reset_data_path(base);
+ 				}
++			} else if (whyred_emmc_force_gpt) {
++				int publish_error = whyred_emmc_publish();
++				if (publish_error != 0) {
++					printf("WHYRED EMMC DISK: registration failed error=%d\n", publish_error);
++				} else {
++					whyred_emmc_block_ready = true;
++				}
+ 			}
+ 		}
+ 	}
+ 	whyred_emmc_restore_signals(base, signal_enable);
++}
++
++int
++whyred_emmc_block_probe(void)
++{
++	if (whyred_emmc_block_ready) {
++		return 0;
++	}
++	whyred_emmc_force_gpt = true;
++	whyred_emmc_pio_probe();
++	return whyred_emmc_block_ready ? 0 : ENXIO;
++}
++
++int
++whyred_emmc_rootdev(dev_t *dev)
++{
++	char partition_name[37] = "";
++	if (!PE_parse_boot_argn("whyred-emmc-partition", partition_name,
++	    sizeof(partition_name)) || partition_name[0] == '\0') {
++		return EINVAL;
++	}
++	partition_name[sizeof(partition_name) - 1] = '\0';
++	if (!whyred_emmc_block_ready && whyred_emmc_block_probe() != 0) {
++		return ENXIO;
++	}
++	for (uint32_t i = 0; i < whyred_gpt_part_count; i++) {
++		if (strcmp(whyred_gpt_parts[i].name, partition_name) == 0) {
++			for (uint32_t j = i + 1; j < whyred_gpt_part_count; j++) {
++				if (strcmp(whyred_gpt_parts[j].name, partition_name) == 0) {
++					printf("WHYRED EMMC DISK: ambiguous GPT partition name: %s\n",
++					    partition_name);
++					return EINVAL;
++				}
++			}
++			*dev = makedev(whyred_emmc_bmajor, whyred_gpt_parts[i].index);
++			return 0;
++		}
++	}
++	printf("WHYRED EMMC DISK: requested GPT partition not found: %s\n", partition_name);
++	return ENXIO;
+ }
+ 
+ #else
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -264,6 +264,7 @@
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ extern void whyred_sdhci_probe(void);
+ extern void whyred_emmc_pio_probe(void);
++extern int whyred_emmc_block_probe(void);
+ #endif
+ extern void IOSecureBSDRoot(const char * rootName);
+ extern kern_return_t IOKitBSDInit(void );
+@@ -1216,6 +1217,17 @@
+ 	u_int32_t       flags;
+ 	kern_return_t   err;
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	/* Register the read-only eMMC disk before IOFindBSDRoot when requested. */
++	uint32_t whyred_emmc_block_requested = 0;
++	if (PE_parse_boot_argn("whyred-emmc-block", &whyred_emmc_block_requested,
++	    sizeof(whyred_emmc_block_requested)) && whyred_emmc_block_requested) {
++		int block_error = whyred_emmc_block_probe();
++		printf("WHYRED EMMC DISK: pre-root initialization %s error=%d\n",
++		    block_error == 0 ? "complete" : "failed", block_error);
++	}
++#endif
++
+ 	err = IOFindBSDRoot(rootdevice, sizeof(rootdevice), &rootdev, &flags);
+ 	if (err) {
+ 		printf("setconf: IOFindBSDRoot returned an error (%d);"
+@@ -1240,7 +1252,7 @@
+ 	if (PE_parse_boot_argn("whyred-emmc-pio-probe",
+ 	    &whyred_emmc_pio_probe_requested,
+ 	    sizeof(whyred_emmc_pio_probe_requested)) &&
+-	    whyred_emmc_pio_probe_requested) {
++	    whyred_emmc_pio_probe_requested && !whyred_emmc_block_requested) {
+ 		whyred_emmc_pio_probe();
+ 	}
+ #endif
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -770,6 +770,20 @@
+ //
+ //	SWEET: root on a GPT partition of the internal UFS (bsd/dev/sweet_ufs.c)
+ //
++	if (strcmp(rdBootVar, "whyredemmc0") == 0) {
++		extern int whyred_emmc_rootdev(dev_t *dev);
++		OSSafeReleaseNULL(matching);
++		int emmc_error = whyred_emmc_rootdev(root);
++		if (emmc_error) {
++			panic("IOFindBSDRoot: SWEET eMMC root %s unavailable: %d", rdBootVar, emmc_error);
++		}
++		strlcpy(rootName, rdBootVar, rootNameSize);
++		IOLog("BSD root: %s, major %d, minor %d (read-only GPT partition)\n",
++		    rootName, major(*root), minor(*root));
++		*oflags = 0;
++		goto iofrootx;
++	}
++
+ 	if (strcmp(rdBootVar, "ufsroot0") == 0) {
+ 		extern int sweet_ufs_rootdev(dev_t *dev);
+ 		OSSafeReleaseNULL(matching);
+

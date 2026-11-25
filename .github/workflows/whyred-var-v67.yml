@@ -1,0 +1,90 @@
+name: whyred-var-v67-capacity
+
+on:
+  push:
+    branches: [codex/whyred-early-fb]
+    paths:
+      - .github/workflows/whyred-var-v67.yml
+      - tools/seed-whyred-var.py
+      - tools/whyred-var-layout.json
+  workflow_dispatch:
+
+jobs:
+  build-var:
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build 45 MiB raw HFS+ /private/var image
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          image="$GITHUB_WORKSPACE/out/whyred-var-v67.hfs"
+          mountpoint="$GITHUB_WORKSPACE/out/whyred-var-mount"
+          mkdir -p "$mountpoint"
+          attach_output="$(hdiutil attach -nomount ram://92160 2>&1)" || {
+            printf '%s\n' "$attach_output" >&2
+            exit 1
+          }
+          dev="$(printf '%s\n' "$attach_output" | sed -nE 's#.*(/dev/disk[0-9]+).*#\1#p' | head -n 1)"
+          if [ -z "$dev" ]; then
+            echo "hdiutil did not return a recognizable disk device" >&2
+            printf '%s\n' "$attach_output" >&2
+            exit 1
+          fi
+          rawdev="/dev/rdisk${dev#/dev/disk}"
+          mounted=0
+          cleanup() {
+            if [ "$mounted" = 1 ]; then sudo umount "$mountpoint" || true; fi
+            if [ -n "${dev:-}" ]; then hdiutil detach "$dev" -quiet || true; fi
+          }
+          trap cleanup EXIT
+          sudo newfs_hfs -v SWEETVAR "$rawdev"
+          sudo mount -t hfs -o owners "$dev" "$mountpoint"
+          mounted=1
+          sudo mkdir -p \
+            "$mountpoint/db/uuidtext" "$mountpoint/db/diagnostics" \
+            "$mountpoint/db/dyld" "$mountpoint/db/launchd" \
+            "$mountpoint/db/analyticsd" "$mountpoint/run" "$mountpoint/tmp" \
+            "$mountpoint/log" "$mountpoint/logs" "$mountpoint/mobile/Library" \
+            "$mountpoint/root/Library" "$mountpoint/containers" \
+            "$mountpoint/folders" "$mountpoint/Keychains" \
+            "$mountpoint/preferences" "$mountpoint/MobileDevice" \
+            "$mountpoint/Managed Preferences/mobile" "$mountpoint/empty"
+          sudo chown -R 0:0 "$mountpoint"
+          sudo chown -R 501:501 "$mountpoint/mobile"
+          sudo chmod 1777 "$mountpoint/tmp"
+          sudo chmod 0700 "$mountpoint/root"
+          sudo chmod 0555 "$mountpoint/empty"
+          sudo python3 "$GITHUB_WORKSPACE/tools/seed-whyred-var.py" "$mountpoint"
+          sudo python3 "$GITHUB_WORKSPACE/tools/seed-whyred-var.py" "$mountpoint" --verify
+          sudo sync
+          sudo umount "$mountpoint"
+          mounted=0
+          sudo dd if="$rawdev" of="$image" bs=4096 count=11520
+          sudo chown "$(id -u):$(id -g)" "$image"
+          hdiutil detach "$dev" -quiet
+          dev=""
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          path = Path("out/whyred-var-v67.hfs")
+          with path.open("rb") as image:
+              image.seek(1024)
+              signature = image.read(2)
+          expected = 47_185_920
+          if path.stat().st_size != expected or signature != b"H+":
+              raise SystemExit(f"invalid raw HFS+ image: size={path.stat().st_size}, signature={signature!r}")
+          digest = hashlib.file_digest(path.open("rb"), "sha256").hexdigest()
+          print(f"raw HFS+ /private/var ready: {expected} bytes sha256={digest}")
+          PY
+          shasum -a 256 out/whyred-var-v67.hfs > out/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whyred-var-v67
+          path: out/
+          retention-days: 7
+

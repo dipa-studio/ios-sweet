@@ -1,0 +1,159 @@
+--- a/bsd/miscfs/whyred_ramfs/ramfs.c
++++ b/bsd/miscfs/whyred_ramfs/ramfs.c
+@@ -326,7 +326,7 @@
+ ramfs_pressure_emit(const struct ramfs_pressure_event *e)
+ {
+ 	static const char *const names[] = { "data-quota", "data-page", "slots-nowait",
+-	    "getxattr-nowait", "listxattr-nowait", "logd-file-limit" };
++	    "getxattr-alloc", "listxattr-alloc", "logd-file-limit" };
+ 	if (!e->valid) return;
+ #define RP64(v) ((unsigned long long)(v))
+ 	printf("WHYRED RAMFS PRESSURE id=%llu cause=%s ino=%llu off=%llu length=%llu kr=%d uid=%u file_limit=%llu dsc=%u\n",
+@@ -1874,33 +1874,45 @@
+ 	struct ramfs_mount *rm = node->rn_mount;
+ 	struct ramfs_xattr *xa;
+ 	void *copy = NULL;
+-	size_t size = 0;
++	size_t size = 0, capacity = 0;
+ 	int error = 0;
+ 	struct ramfs_pressure_event pressure = {0};
+ 
+-	lck_mtx_lock(&rm->rm_lock);
+-	xa = ramfs_xattr_find(node, ap->a_name);
+-	if (xa == NULL) {
+-		error = ENOATTR;
+-	} else {
+-		size = xa->rx_size;
+-		if (ap->a_uio != NULL) {
+-			if ((size_t)uio_resid(ap->a_uio) < size) {
+-				error = ERANGE;
+-			} else if (size != 0) {
+-				/* copied out after the lock is dropped: the attribute may be replaced meanwhile */
+-				copy = kalloc_data(size, Z_NOWAIT);
+-				if (copy == NULL) {
+-					ramfs_pressure_record_locked(node, RAMFS_PRESSURE_GETXATTR, 0, size);
+-					ramfs_pressure_take_locked(rm, &pressure);
+-					error = ENOMEM;
+-				} else {
++	/* The vnode reference pins node, but xa may change while allocation sleeps.
++	 * Re-find it under the lock; keep only a private byte snapshot across uiomove. */
++	for (;;) {
++		lck_mtx_lock(&rm->rm_lock);
++		xa = ramfs_xattr_find(node, ap->a_name);
++		if (xa == NULL) {
++			error = ENOATTR;
++		} else {
++			size = xa->rx_size;
++			if (ap->a_uio != NULL) {
++				if ((size_t)uio_resid(ap->a_uio) < size) {
++					error = ERANGE;
++				} else if (size > capacity) {
++					size_t needed = MAX(size, MIN(capacity * 2, (size_t)uio_resid(ap->a_uio)));
++					lck_mtx_unlock(&rm->rm_lock);
++					if (copy != NULL) kfree_data(copy, capacity);
++					copy = kalloc_data(needed, Z_WAITOK);
++					capacity = needed;
++					if (copy == NULL) {
++						lck_mtx_lock(&rm->rm_lock);
++						ramfs_pressure_record_locked(node, RAMFS_PRESSURE_GETXATTR, 0, size);
++						ramfs_pressure_take_locked(rm, &pressure);
++						lck_mtx_unlock(&rm->rm_lock);
++						error = ENOMEM;
++						break;
++					}
++					continue;
++				} else if (size != 0) {
+ 					memcpy(copy, xa->rx_data, size);
+ 				}
+ 			}
+ 		}
+-	}
+-	lck_mtx_unlock(&rm->rm_lock);
++		lck_mtx_unlock(&rm->rm_lock);
++		break;
++	}
+ 	ramfs_pressure_emit(&pressure);
+ 
+ 	if (!error) {
+@@ -1911,7 +1923,7 @@
+ 		}
+ 	}
+ 	if (copy != NULL) {
+-		kfree_data(copy, size);
++		kfree_data(copy, capacity);
+ 	}
+ 	return error;
+ }
+@@ -2009,29 +2021,45 @@
+ 	struct ramfs_mount *rm = node->rn_mount;
+ 	struct ramfs_xattr *xa;
+ 	char *copy = NULL;
+-	size_t total = 0, at = 0;
++	size_t total = 0, capacity = 0;
+ 	int error = 0;
+ 	struct ramfs_pressure_event pressure = {0};
+ 
+-	lck_mtx_lock(&rm->rm_lock);
+-	TAILQ_FOREACH(xa, &node->rn_xattrs, rx_link) {
+-		total += xa->rx_namelen + 1;
+-	}
+-	if (ap->a_uio != NULL && total != 0) {
+-		if ((size_t)uio_resid(ap->a_uio) < total) {
+-			error = ERANGE;
+-		} else if ((copy = kalloc_data(total, Z_NOWAIT)) == NULL) {
+-			ramfs_pressure_record_locked(node, RAMFS_PRESSURE_LISTXATTR, 0, total);
+-			ramfs_pressure_take_locked(rm, &pressure);
+-			error = ENOMEM;
+-		} else {
+-			TAILQ_FOREACH(xa, &node->rn_xattrs, rx_link) {
+-				memcpy(copy + at, xa->rx_name, xa->rx_namelen + 1);
+-				at += xa->rx_namelen + 1;
++	for (;;) {
++		size_t at = 0;
++		total = 0;
++		lck_mtx_lock(&rm->rm_lock);
++		TAILQ_FOREACH(xa, &node->rn_xattrs, rx_link) {
++			total += xa->rx_namelen + 1;
++		}
++		if (ap->a_uio != NULL && total != 0) {
++			if ((size_t)uio_resid(ap->a_uio) < total) {
++				error = ERANGE;
++			} else if (total > capacity) {
++				size_t needed = MAX(total, MIN(capacity * 2, (size_t)uio_resid(ap->a_uio)));
++				lck_mtx_unlock(&rm->rm_lock);
++				if (copy != NULL) kfree_data(copy, capacity);
++				copy = kalloc_data(needed, Z_WAITOK);
++				capacity = needed;
++				if (copy == NULL) {
++					lck_mtx_lock(&rm->rm_lock);
++					ramfs_pressure_record_locked(node, RAMFS_PRESSURE_LISTXATTR, 0, total);
++					ramfs_pressure_take_locked(rm, &pressure);
++					lck_mtx_unlock(&rm->rm_lock);
++					error = ENOMEM;
++					break;
++				}
++				continue;
++			} else {
++				TAILQ_FOREACH(xa, &node->rn_xattrs, rx_link) {
++					memcpy(copy + at, xa->rx_name, xa->rx_namelen + 1);
++					at += xa->rx_namelen + 1;
++				}
+ 			}
+ 		}
+-	}
+-	lck_mtx_unlock(&rm->rm_lock);
++		lck_mtx_unlock(&rm->rm_lock);
++		break;
++	}
+ 	ramfs_pressure_emit(&pressure);
+ 
+ 	if (!error) {
+@@ -2042,7 +2070,7 @@
+ 		}
+ 	}
+ 	if (copy != NULL) {
+-		kfree_data(copy, total);
++		kfree_data(copy, capacity);
+ 	}
+ 	return error;
+ }

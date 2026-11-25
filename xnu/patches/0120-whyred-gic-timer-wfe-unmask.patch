@@ -1,0 +1,73 @@
+--- a/pexpert/arm/pe_fiq.c
++++ b/pexpert/arm/pe_fiq.c
+@@ -179,11 +179,10 @@
+ 	 */
+ 	gicr_write32(GICR_IGROUPR0, 0xFFFFFFFF);
+ 	for (unsigned int i = 0; i < 32; i += 4) {
+ 		gicr_write32(GICR_IPRIORITYR0 + i, 0xA0A0A0A0);
+ 	}
+-	gicr_write32(GICR_ISENABLER0, (1U << sweet_vtimer_intid) | (1U << SWEET_IPI_SGI));
+ #else
+ 	// Configure timers and legacy FIQ to be group 0
+ 	gicr_write32(GICR_IGROUPR0, 0x81FFFFFF);
+ 
+ 	// Enable PPI 27
+@@ -217,10 +216,22 @@
+ 	while (gicd_read32(GICD_CTLR) & GICD_CTLR_RWP) {
+ 		;
+ 	}
+ 	__builtin_arm_wsr64("ICC_IGRPEN1_EL1", 1);
+ 	__builtin_arm_isb(ISB_SY);
++	uint32_t sweet_enable_mask = (1U << sweet_vtimer_intid) | (1U << SWEET_IPI_SGI);
++	__builtin_arm_dsb(DSB_SY);
++	gicr_write32(GICR_ISENABLER0, sweet_enable_mask);
++	__builtin_arm_dsb(DSB_SY);
++	uint32_t sweet_enable_readback = gicr_read32(GICR_ISENABLER0);
++	if ((sweet_enable_readback & sweet_enable_mask) != sweet_enable_mask) {
++		gicr_write32(GICR_ISENABLER0, sweet_enable_mask);
++		__builtin_arm_dsb(DSB_SY);
++		sweet_enable_readback = gicr_read32(GICR_ISENABLER0);
++	}
++	kprintf("WHYRED GIC ENABLE: mask=%x readback=%x timer=%u\n",
++	    sweet_enable_mask, sweet_enable_readback, sweet_vtimer_intid);
+ 	kprintf("WHYRED GIC: dctlr=%x group=%x enable=%x pending=%x pmr=%llx igrpen1=%llx timer=%u\n",
+ 	    gicd_read32(GICD_CTLR), gicr_read32(GICR_IGROUPR0),
+ 	    gicr_read32(GICR_ISENABLER0), gicr_read32(0x10200),
+ 	    __builtin_arm_rsr64("ICC_PMR_EL1"),
+ 	    __builtin_arm_rsr64("ICC_IGRPEN1_EL1"), sweet_vtimer_intid);
+--- a/osfmk/arm64/cpu.c
++++ b/osfmk/arm64/cpu.c
+@@ -544,11 +544,32 @@
+ 		if (idle_proximate_timer_wfe == 1) {
+ 			/* Poll issuing WFEs until the expected
+ 			 * timer FIQ arrives.
+ 			 */
+ 			KDBG(CPUPM_IDLE_TIMER_WFE | DBG_FUNC_START, ipending, cpu_data_ptr->wfe_count, ~0ULL);
++#if defined(SWEET)
++			static uint32_t whyred_timer_wfe_probe_state;
++			if (whyred_select_probe_active && whyred_timer_wfe_probe_state == 0) {
++				whyred_timer_wfe_probe_state = 1;
++				kprintf("WHYRED IDLE: timer WFE begin daif=%llx isr=%llx hppir1=%llx cntvct=%llx ctl=%llx tval=%llx rtcPop=%llx\n",
++				    __builtin_arm_rsr64("DAIF"), __builtin_arm_rsr64("ISR_EL1"),
++				    __builtin_arm_rsr64("ICC_HPPIR1_EL1"), __builtin_arm_rsr64("CNTVCT_EL0"),
++				    __builtin_arm_rsr64("CNTV_CTL_EL0"), __builtin_arm_rsr64("CNTV_TVAL_EL0"),
++				    cpu_data_ptr->rtcPop);
++			}
++			ipending = wfe_to_deadline_or_interrupt(cid, ~0ULL, cpu_data_ptr, true);
++			if (whyred_select_probe_active && whyred_timer_wfe_probe_state == 1) {
++				whyred_timer_wfe_probe_state = 2;
++				kprintf("WHYRED IDLE: timer WFE returned ipending=%u daif=%llx isr=%llx hppir1=%llx cntvct=%llx ctl=%llx tval=%llx rtcPop=%llx\n",
++				    ipending, __builtin_arm_rsr64("DAIF"), __builtin_arm_rsr64("ISR_EL1"),
++				    __builtin_arm_rsr64("ICC_HPPIR1_EL1"), __builtin_arm_rsr64("CNTVCT_EL0"),
++				    __builtin_arm_rsr64("CNTV_CTL_EL0"), __builtin_arm_rsr64("CNTV_TVAL_EL0"),
++				    cpu_data_ptr->rtcPop);
++			}
++#else
+ 			ipending = wfe_to_deadline_or_interrupt(cid, ~0ULL, cpu_data_ptr, false);
++#endif
+ 			KDBG(CPUPM_IDLE_TIMER_WFE | DBG_FUNC_END, ipending, cpu_data_ptr->wfe_count, ~0ULL);
+ 			assert(ipending == true);
+ 		}
+ 		Idle_load_context();
+ 	}
+

@@ -1,0 +1,11 @@
+--- a/osfmk/kern/host.c
++++ b/osfmk/kern/host.c
+@@ -1386,7 +1386,7 @@
+ kern_return_t
+ host_set_multiuser_config_flags(host_priv_t host_priv, uint32_t multiuser_config)
+ {
+-#if !defined(XNU_TARGET_OS_OSX)
++#if !defined(XNU_TARGET_OS_OSX) || (defined(ARM64_BOARD_CONFIG_SWEET) && ARM64_BOARD_CONFIG_SWEET)
+ 	if (host_priv == HOST_PRIV_NULL) {
+ 		return KERN_INVALID_ARGUMENT;
+ 	}

@@ -1,0 +1,28 @@
+--- a/osfmk/arm64/locore.s
++++ b/osfmk/arm64/locore.s
+@@ -144,6 +144,15 @@
+  */
+ .macro CHECK_KERNEL_STACK unused
+ 	stp		x2, x3, [sp, #-16]!				// Save {x2-x3}
++#if defined(SWEET)
++	/* An earlier fault can arrive with a corrupt SP before an SP-alignment
++	 * exception exists. Keep its ELR/ESR on SP1 instead of faulting again
++	 * while EL1_SP0_VECTOR writes the frame at that invalid SP_EL0.
++	 */
++	mrs		x0, SP_EL0
++	tst		x0, #0xf
++	b.ne	Lcorrupt_stack_\@
++#endif
+ 	and		x1, x1, #ESR_EC_MASK				// Mask the exception class
+ 	mov		x2, #(ESR_EC_SP_ALIGN << ESR_EC_SHIFT)
+ 	cmp		x1, x2								// If we have a stack alignment exception
+@@ -310,7 +319,9 @@
+ 	 * (syndrome 0x25) or a misaligned pointer (syndrome 0x26). We can check
+ 	 * these quickly by testing bit 5 of the exception class.
+ 	 */
++#if !defined(SWEET)
+ 	tbz		x1, #(5 + ESR_EC_SHIFT), Lkernel_stack_valid
++#endif /* SWEET checks SP alignment for every kernel synchronous exception. */
+ 	CHECK_KERNEL_STACK
+ Lkernel_stack_valid:
+ 	ldp		x0, x1, [sp], #16				// Restore x0 and x1 from the exception stack

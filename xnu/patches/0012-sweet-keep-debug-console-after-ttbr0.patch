@@ -51,7 +51,7 @@ diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
 -	sweet_early_disable();
 +#if defined(SWEET)
 +	/* The final TTBR1 is live; leave the outgoing VA=PA framebuffer alias. */
-+	sweet_early_relocate(SWEET_EARLY_FB_VA);
++	sweet_early_relocate(SWEET_EARLY_FB_VA + 0x01400000);
 +#endif
  	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
  
@@ -87,7 +87,7 @@ diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
 --- a/osfmk/arm64/sweet_early.c
 +++ b/osfmk/arm64/sweet_early.c
 @@ -2,7 +2,8 @@
-  * Redmi Note 10 Pro bootstrap console. No allocation, locks, ADT parsing or
+  * Redmi Note 5 (whyred) bootstrap console. No allocation, locks, ADT parsing or
   * per-CPU state: panic() can reach this before a current thread exists.
   * start.s maps the splash framebuffer VA=PA as Normal Non-Cacheable memory.
 - * Stop using that mapping before arm_vm_init tears down bootstrap TTBR0.
@@ -100,11 +100,11 @@ diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
  #include <stdint.h>
  #include <kern/misc_protos.h>
  
--#define EARLY_FB ((volatile uint32_t *)(uintptr_t)0x9c000000)
-+static volatile uint32_t *early_fb = (volatile uint32_t *)(uintptr_t)0x9c000000;
+-#define EARLY_FB ((volatile uint32_t *)(uintptr_t)0x9d400000)
++static volatile uint32_t *early_fb = (volatile uint32_t *)(uintptr_t)0x9d400000;
 +#define EARLY_FB early_fb
  #define EARLY_WIDTH 1080u
- #define EARLY_HEIGHT 2400u
+ #define EARLY_HEIGHT 2160u
  #define EARLY_STRIDE (4320u / 4)
 @@ -87,18 +89,21 @@
  void

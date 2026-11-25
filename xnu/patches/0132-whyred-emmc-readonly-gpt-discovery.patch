@@ -1,0 +1,350 @@
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -3,12 +3,14 @@
+  *
+  * This opt-in diagnostic preserves the existing SDCC1 power rails, returns
+  * the card and host to the eMMC legacy 1-bit initialization mode, then reads
+- * only EXT_CSD. It never reads user sectors or issues a media-write command.
++ * EXT_CSD and opt-in primary GPT metadata. It issues no media-write command
++ * and does not read partition contents.
+  */
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <machine/machine_routines.h>
+ #include <vm/vm_kern.h>
++#include <pexpert/pexpert.h>
+ 
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ 
+@@ -626,6 +628,301 @@
+ 	return 0;
+ }
+ 
++/* The sector reader is restricted to card user-area LBAs, never media writes. */
++#define WHYRED_GPT_BLOCK_BYTES 512U
++#define WHYRED_GPT_MAX_ENTRIES 256U
++#define WHYRED_GPT_MAX_ARRAY_BYTES 65536U
++#define WHYRED_EMMC_R1_FAILURE_MASK 0xffff8080U
++
++struct whyred_gpt_io {
++	volatile uint8_t *base;
++	uint32_t sectors;
++};
++
++typedef int (*whyred_gpt_read_fn)(void *, uint32_t, uint8_t *);
++
++static int
++whyred_emmc_read_sector(void *context, uint32_t lba, uint8_t *data)
++{
++	struct whyred_gpt_io *io = context;
++	volatile uint8_t *base = io->base;
++	uint32_t present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++	uint32_t status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++	uint32_t response = 0;
++	uint64_t timeout = whyred_emmc_timeout_ticks();
++	uint64_t start;
++	int result = -1;
++	uint16_t old_size, old_count, old_mode;
++
++	if (lba >= io->sectors || timeout == 0 || status != 0 ||
++	    (present & SDHCI_PSTATE_DATA_AVAILABLE) != 0) {
++		printf("WHYRED GPT: sector read refused lba=%u present=0x%08x int=0x%08x\n",
++		    lba, present, status);
++		return -1;
++	}
++	/* DAT0/CMD may deassert just after DATA_END; poll only within one timeout. */
++	start = whyred_emmc_counter();
++	while ((present & (SDHCI_PSTATE_CMD_INHIBIT |
++	    SDHCI_PSTATE_DATA_INHIBIT)) != 0) {
++		if (whyred_emmc_counter() - start >= timeout) {
++			printf("WHYRED GPT: host remained busy before CMD17 lba=%u present=0x%08x\n",
++			    lba, present);
++			return -1;
++		}
++		present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++	}
++	old_size = whyred_emmc_read16(base, SDHCI_BLOCK_SIZE);
++	old_count = whyred_emmc_read16(base, SDHCI_BLOCK_COUNT);
++	old_mode = whyred_emmc_read16(base, SDHCI_TRANSFER_MODE);
++	whyred_emmc_write16(base, SDHCI_BLOCK_SIZE, WHYRED_GPT_BLOCK_BYTES);
++	whyred_emmc_write16(base, SDHCI_BLOCK_COUNT, 1);
++	whyred_emmc_write16(base, SDHCI_TRANSFER_MODE,
++	    SDHCI_XFER_BLOCK_COUNT_ENABLE | SDHCI_XFER_READ);
++	/* CMD1 OCR must have confirmed sector addressing before this is called. */
++	if (whyred_emmc_command(base, lba, (17U << 8) |
++	    SDHCI_CMD_RESP_SHORT_CRC_INDEX | SDHCI_CMD_DATA_PRESENT,
++	    &response) != 0 || (response & WHYRED_EMMC_R1_FAILURE_MASK) != 0 ||
++	    ((response >> 9) & 0xf) != WHYRED_EMMC_STATUS_TRANSFER ||
++	    (response & WHYRED_EMMC_STATUS_READY) == 0) {
++		printf("WHYRED GPT: CMD17 failed lba=%u r1=0x%08x\n", lba, response);
++		goto out;
++	}
++	start = whyred_emmc_counter();
++	for (;;) {
++		status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++		present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++		if ((status & SDHCI_INT_ERROR_MASK) != 0) {
++			goto out;
++		}
++		if ((present & SDHCI_PSTATE_DATA_AVAILABLE) != 0) {
++			break;
++		}
++		if ((status & SDHCI_INT_DATA_END) != 0 ||
++		    whyred_emmc_counter() - start >= timeout) {
++			goto out;
++		}
++	}
++	if ((status & SDHCI_INT_DATA_AVAILABLE) != 0) {
++		whyred_emmc_write32(base, SDHCI_INT_STATUS, SDHCI_INT_DATA_AVAILABLE);
++	}
++	for (unsigned int word = 0; word < WHYRED_GPT_BLOCK_BYTES / 4; word++) {
++		uint32_t value = whyred_emmc_read32(base, SDHCI_BUFFER);
++		data[word * 4] = (uint8_t)value;
++		data[word * 4 + 1] = (uint8_t)(value >> 8);
++		data[word * 4 + 2] = (uint8_t)(value >> 16);
++		data[word * 4 + 3] = (uint8_t)(value >> 24);
++	}
++	status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++	if ((status & SDHCI_INT_ERROR_MASK) != 0) {
++		goto out;
++	}
++	if ((status & SDHCI_INT_DATA_AVAILABLE) != 0) {
++		whyred_emmc_write32(base, SDHCI_INT_STATUS,
++		    SDHCI_INT_DATA_AVAILABLE);
++	}
++	start = whyred_emmc_counter();
++	if (whyred_emmc_wait_status(base, SDHCI_INT_DATA_END, start,
++	    timeout, &status) != 0 || (status & SDHCI_INT_DATA_END) == 0 ||
++	    (status & SDHCI_INT_ERROR_MASK) != 0) {
++		goto out;
++	}
++	whyred_emmc_write32(base, SDHCI_INT_STATUS, SDHCI_INT_DATA_END);
++	present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++	if ((present & (SDHCI_PSTATE_CMD_INHIBIT | SDHCI_PSTATE_DATA_INHIBIT |
++	    SDHCI_PSTATE_DATA_AVAILABLE)) != 0 ||
++	    whyred_emmc_read32(base, SDHCI_INT_STATUS) != 0 ||
++	    whyred_emmc_read32(base, SDHCI_CORE_MCI_FIFO_COUNT) != 0) {
++		goto out;
++	}
++	result = 0;
++out:
++	if (result != 0) {
++		printf("WHYRED GPT: CMD17/PIO incomplete lba=%u int=0x%08x present=0x%08x\n",
++		    lba, whyred_emmc_read32(base, SDHCI_INT_STATUS),
++		    whyred_emmc_read32(base, SDHCI_PRESENT_STATE));
++	}
++	whyred_emmc_write16(base, SDHCI_BLOCK_SIZE, old_size);
++	whyred_emmc_write16(base, SDHCI_BLOCK_COUNT, old_count);
++	whyred_emmc_write16(base, SDHCI_TRANSFER_MODE, old_mode);
++	return result;
++}
++
++static uint32_t
++whyred_gpt_le32(const uint8_t *p)
++{
++	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
++	       ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++
++static uint64_t
++whyred_gpt_le64(const uint8_t *p)
++{
++	return whyred_gpt_le32(p) | ((uint64_t)whyred_gpt_le32(p + 4) << 32);
++}
++
++static uint32_t
++whyred_gpt_crc32(uint32_t crc, const uint8_t *data, uint32_t bytes)
++{
++	for (uint32_t i = 0; i < bytes; i++) {
++		crc ^= data[i];
++		for (unsigned int bit = 0; bit < 8; bit++) {
++			crc = (crc >> 1) ^ ((crc & 1) ? 0xedb88320U : 0);
++		}
++	}
++	return crc;
++}
++
++struct whyred_gpt_partition {
++	uint64_t first, last;
++	uint8_t guid[16];
++	uint32_t index;
++	char name[37];
++};
++
++/* Used once during serialized boot discovery; keep the kernel stack small. */
++static struct whyred_gpt_partition whyred_gpt_parts[WHYRED_GPT_MAX_ENTRIES];
++
++static int
++whyred_gpt_probe(whyred_gpt_read_fn read_sector, void *context, uint32_t sectors)
++{
++	uint8_t block[WHYRED_GPT_BLOCK_BYTES];
++	uint32_t header_size, expected_crc, count, entry_size, array_bytes;
++	uint32_t array_blocks, array_crc, part_count = 0;
++	uint64_t entries_lba, first_usable, last_usable, backup_lba;
++	int protective = 0;
++	int disk_guid_nonzero = 0;
++	if (sectors < 4 || read_sector(context, 0, block) != 0) {
++		printf("WHYRED GPT: MBR read failed\n");
++		return -1;
++	}
++	if (block[510] != 0x55 || block[511] != 0xaa) {
++		printf("WHYRED GPT: invalid MBR signature\n");
++		return -1;
++	}
++	for (unsigned int i = 0; i < 4; i++) {
++		const uint8_t *entry = block + 446 + i * 16;
++		if (entry[4] == 0xee && whyred_gpt_le32(entry + 8) == 1) {
++			protective = 1;
++		}
++	}
++	if (!protective || read_sector(context, 1, block) != 0) {
++		printf("WHYRED GPT: protective MBR missing or header read failed\n");
++		return -1;
++	}
++	if (memcmp(block, "EFI PART", 8) != 0 ||
++	    whyred_gpt_le32(block + 8) != 0x00010000 ||
++	    whyred_gpt_le32(block + 20) != 0) {
++		printf("WHYRED GPT: invalid primary header signature/revision\n");
++		return -1;
++	}
++	for (unsigned int i = 0; i < 16; i++) {
++		disk_guid_nonzero |= block[56 + i];
++	}
++	if (disk_guid_nonzero == 0) {
++		printf("WHYRED GPT: empty disk GUID\n");
++		return -1;
++	}
++	header_size = whyred_gpt_le32(block + 12);
++	if (header_size < 92 || header_size > WHYRED_GPT_BLOCK_BYTES) {
++		printf("WHYRED GPT: unsupported header size=%u\n", header_size);
++		return -1;
++	}
++	expected_crc = whyred_gpt_le32(block + 16);
++	memset(block + 16, 0, 4);
++	if ((whyred_gpt_crc32(0xffffffffU, block, header_size) ^ 0xffffffffU)
++	    != expected_crc) {
++		printf("WHYRED GPT: primary header CRC mismatch\n");
++		return -1;
++	}
++	backup_lba = whyred_gpt_le64(block + 32);
++	first_usable = whyred_gpt_le64(block + 40);
++	last_usable = whyred_gpt_le64(block + 48);
++	entries_lba = whyred_gpt_le64(block + 72);
++	count = whyred_gpt_le32(block + 80);
++	entry_size = whyred_gpt_le32(block + 84);
++	array_crc = whyred_gpt_le32(block + 88);
++	if (whyred_gpt_le64(block + 24) != 1 || backup_lba != (uint64_t)sectors - 1 ||
++	    first_usable < 2 || first_usable > last_usable || last_usable >= backup_lba ||
++	    entries_lba < 2 || entries_lba >= first_usable || count == 0 ||
++	    count > WHYRED_GPT_MAX_ENTRIES ||
++	    (entry_size != 128 && entry_size != 256 && entry_size != 512) ||
++	    count > WHYRED_GPT_MAX_ARRAY_BYTES / entry_size) {
++		printf("WHYRED GPT: header geometry/entry bounds rejected\n");
++		return -1;
++	}
++	array_bytes = count * entry_size;
++	array_blocks = (array_bytes + WHYRED_GPT_BLOCK_BYTES - 1) / WHYRED_GPT_BLOCK_BYTES;
++	if ((uint64_t)array_blocks > first_usable - entries_lba) {
++		printf("WHYRED GPT: entry array overlaps usable sectors\n");
++		return -1;
++	}
++	expected_crc = 0xffffffffU;
++	for (uint32_t b = 0; b < array_blocks; b++) {
++		uint32_t used = array_bytes - b * WHYRED_GPT_BLOCK_BYTES;
++		if (used > WHYRED_GPT_BLOCK_BYTES) {
++			used = WHYRED_GPT_BLOCK_BYTES;
++		}
++		/* The checked array ends before first_usable and hence below sectors. */
++		if (read_sector(context, (uint32_t)(entries_lba + b), block) != 0) {
++			printf("WHYRED GPT: entry array read failed block=%u\n", b);
++			return -1;
++		}
++		expected_crc = whyred_gpt_crc32(expected_crc, block, used);
++		for (uint32_t off = 0; off < used; off += entry_size) {
++			const uint8_t *entry = block + off;
++			uint8_t type_bits = 0, guid_bits = 0;
++			for (unsigned int i = 0; i < 16; i++) {
++				type_bits |= entry[i];
++				guid_bits |= entry[16 + i];
++			}
++			if (type_bits == 0) {
++				continue;
++			}
++			struct whyred_gpt_partition *part = &whyred_gpt_parts[part_count];
++			part->first = whyred_gpt_le64(entry + 32);
++			part->last = whyred_gpt_le64(entry + 40);
++			part->index = (b * WHYRED_GPT_BLOCK_BYTES + off) / entry_size + 1;
++			if (guid_bits == 0 || part->first < first_usable ||
++			    part->last > last_usable || part->first > part->last) {
++				printf("WHYRED GPT: invalid partition bounds/GUID index=%u\n", part->index);
++				return -1;
++			}
++			memcpy(part->guid, entry + 16, 16);
++			for (uint32_t i = 0; i < part_count; i++) {
++				const struct whyred_gpt_partition *old = &whyred_gpt_parts[i];
++				if ((part->first <= old->last && old->first <= part->last) ||
++				    memcmp(part->guid, old->guid, 16) == 0) {
++					printf("WHYRED GPT: overlapping/duplicate partition index=%u\n", part->index);
++					return -1;
++				}
++			}
++			for (unsigned int i = 0; i < 36; i++) {
++				uint16_t ch = (uint16_t)entry[56 + i * 2] |
++				    ((uint16_t)entry[57 + i * 2] << 8);
++				part->name[i] = ch == 0 ? '\0' :
++				    (ch >= 0x20 && ch <= 0x7e && ch != '"' && ch != '\\' ? (char)ch : '?');
++			}
++			part->name[36] = '\0';
++			part_count++;
++		}
++	}
++	if ((expected_crc ^ 0xffffffffU) != array_crc) {
++		printf("WHYRED GPT: entry array CRC mismatch\n");
++		return -1;
++	}
++	printf("WHYRED GPT: primary CRCs valid sectors=%u entries=%u entry_size=%u partitions=%u\n",
++	    sectors, count, entry_size, part_count);
++	for (uint32_t i = 0; i < part_count; i++) {
++		const struct whyred_gpt_partition *part = &whyred_gpt_parts[i];
++		printf("WHYRED GPT: part=%u name=\"%s\" first=%llu last=%llu sectors=%llu\n",
++		    part->index, part->name, (unsigned long long)part->first,
++		    (unsigned long long)part->last,
++		    (unsigned long long)(part->last - part->first + 1));
++	}
++	printf("WHYRED GPT: discovery complete; no partition data read or media writes\n");
++	return 0;
++}
++
+ static void
+ whyred_emmc_restore_signals(volatile uint8_t *base, uint32_t signal_enable)
+ {
+@@ -841,7 +1138,27 @@
+ 	    ((uint32_t)ext_csd[215] << 24);
+ 	printf("WHYRED EMMC: EXT_CSD read ok rev=%u card_type=0x%02x sec_count=%u\n",
+ 	    (unsigned int)ext_csd[192], (unsigned int)ext_csd[196], sectors);
+-	printf("WHYRED EMMC: read-only metadata probe complete; no user sectors read or written\n");
++	printf("WHYRED EMMC: EXT_CSD metadata stage complete; no media writes\n");
++	uint32_t gpt_requested = 0;
++	if (PE_parse_boot_argn("whyred-emmc-gpt-probe", &gpt_requested,
++	    sizeof(gpt_requested)) && gpt_requested) {
++		/* CMD17 addresses 512-byte sectors only in the confirmed user area. */
++		if ((ocr & 0x40000000U) == 0 || ext_csd[61] != 0 ||
++		    (ext_csd[179] & 7) != 0 || ext_csd[192] < 2 || sectors < 4) {
++			printf("WHYRED GPT: unsupported addressing/sector/partition state ocr=0x%08x sector_size=%u partition_config=0x%02x\n",
++			    ocr, (unsigned int)ext_csd[61], (unsigned int)ext_csd[179]);
++		} else {
++			struct whyred_gpt_io io = { .base = base, .sectors = sectors };
++			printf("WHYRED GPT: bounded read-only discovery begin sectors=%u block_bytes=512\n", sectors);
++			if (whyred_gpt_probe(whyred_emmc_read_sector, &io, sectors) != 0) {
++				printf("WHYRED GPT: discovery failed; no block device published\n");
++				if ((whyred_emmc_read32(base, SDHCI_PRESENT_STATE) &
++				    SDHCI_PSTATE_DATA_INHIBIT) != 0) {
++					(void)whyred_emmc_reset_data_path(base);
++				}
++			}
++		}
++	}
+ 	whyred_emmc_restore_signals(base, signal_enable);
+ }
+ 
+

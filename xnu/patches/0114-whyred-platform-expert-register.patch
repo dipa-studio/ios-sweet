@@ -1,0 +1,25 @@
+diff --git a/iokit/Kernel/IOPlatformExpert.cpp b/iokit/Kernel/IOPlatformExpert.cpp
+--- a/iokit/Kernel/IOPlatformExpert.cpp
++++ b/iokit/Kernel/IOPlatformExpert.cpp
+@@ -2341,7 +2341,19 @@ IOPanicPlatform::start(IOService * provider)
+ 	int whyred_platform = 0;
+ 	if (PE_parse_boot_argn("-whyred-platform", &whyred_platform, sizeof(whyred_platform))) {
+ 		kprintf("WHYRED: starting diagnostic generic platform expert\n");
+-		return IODTPlatformExpert::start(provider);
++		bool started = IODTPlatformExpert::start(provider);
++		kprintf("WHYRED: IODTPlatformExpert::start returned %d\n", started);
++		if (started) {
++			/*
++			 * The panic fallback normally never publishes itself. In the explicit
++			 * whyred diagnostic mode it is the only platform expert, so BSD's
++			 * IOSecureBSDRoot service wait requires it to be registered here.
++			 */
++			kprintf("WHYRED: registering diagnostic platform expert\n");
++			registerService();
++			kprintf("WHYRED: diagnostic platform expert registered\n");
++		}
++		return started;
+ 	}
+ #endif
+ 	const char * platform_name = "(unknown platform name)";
+

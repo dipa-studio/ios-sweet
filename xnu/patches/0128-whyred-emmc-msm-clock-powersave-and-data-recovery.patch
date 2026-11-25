@@ -1,0 +1,239 @@
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -18,22 +18,31 @@
+ #define SDHCI_HOST_CONTROL               0x28
+ #define SDHCI_POWER_CONTROL              0x29
+ #define SDHCI_CLOCK_CONTROL              0x2c
+ #define SDHCI_INT_STATUS                 0x30
+ #define SDHCI_SIGNAL_ENABLE              0x38
++#define SDHCI_SOFTWARE_RESET             0x2f
++#define SDHCI_RESET_DATA                 0x04
+ #define SDHCI_HOST_CONTROL2              0x3e
+ #define SDHCI_CAPABILITIES               0x40
+ #define SDHCI_ARGUMENT                   0x08
+ #define SDHCI_BLOCK_SIZE                 0x04
+ #define SDHCI_BLOCK_COUNT                0x06
+ #define SDHCI_TRANSFER_MODE              0x0c
+ #define SDHCI_COMMAND                    0x0e
+ #define SDHCI_RESPONSE                   0x10
+ #define SDHCI_BUFFER                     0x20
+ /* The whyred DT compatible is qcom,sdhci-msm-v5; do not use old MCI offsets. */
++#define SDHCI_CORE_DLL_CONFIG            0x200
+ #define SDHCI_CORE_DLL_STATUS            0x208
+ #define SDHCI_CORE_VENDOR_SPEC           0x20c
++#define SDHCI_CORE_CLK_PWRSAVE           0x00000002
++/* qcom,sdhci-msm-v5 (MCI removed) diagnostic registers. */
++#define SDHCI_CORE_MCI_FIFO_COUNT        0x308
++#define SDHCI_CORE_MCI_STATUS            0x324
++#define SDHCI_CORE_SDCC_DEBUG            0x358
++#define SDHCI_CORE_MCI_DATA_COUNT        0x35c
+ #define SDHCI_PSTATE_CMD_INHIBIT         0x00000001
+ #define SDHCI_PSTATE_DATA_INHIBIT        0x00000002
+ #define SDHCI_PSTATE_DATA_AVAILABLE      0x00000800
+ #define SDHCI_PSTATE_DAT4_TO_DAT7        0x000000f0
+ #define SDHCI_PSTATE_DAT0_TO_DAT3        0x00f00000
+@@ -170,11 +179,33 @@
+ 		printf("WHYRED EMMC INIT: 200kHz divider out of range: %u\n",
+ 		    divider);
+ 		return -1;
+ 	}
+ 
+-	uint16_t clock = whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL);
++	uint16_t old_clock = whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL);
++	uint16_t clock = old_clock & (uint16_t)~SDHCI_CLOCK_CARD_ENABLE;
++	whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, clock);
++
++	/*
++	 * Qualcomm's SDHCI-MSM driver keeps CLK_PWRSAVE off during card
++	 * initialization and at clocks <= 400 kHz. Disable auto-gating before
++	 * changing to the 200 kHz identification clock.
++	 */
++	uint32_t vendor_before = whyred_emmc_read32(base,
++	    SDHCI_CORE_VENDOR_SPEC);
++	uint32_t vendor = vendor_before & ~SDHCI_CORE_CLK_PWRSAVE;
++	whyred_emmc_write32(base, SDHCI_CORE_VENDOR_SPEC, vendor);
++	vendor = whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC);
++	printf("WHYRED EMMC INIT: Qualcomm CLK_PWRSAVE cleared before init vendor_before=0x%08x vendor_after=0x%08x\n",
++	    vendor_before, vendor);
++	if ((vendor & SDHCI_CORE_CLK_PWRSAVE) != 0) {
++		whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, old_clock);
++		printf("WHYRED EMMC INIT: failed to disable Qualcomm clock auto-gating\n");
++		return -1;
++	}
++
++	clock = whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL);
+ 	clock &= (uint16_t)~(SDHCI_CLOCK_CARD_ENABLE | SDHCI_CLOCK_DIV_MASK |
+ 	    SDHCI_CLOCK_INT_STABLE);
+ 	clock |= (uint16_t)(((divider & 0xff) << 8) |
+ 	    ((divider & 0x300) >> 2) | SDHCI_CLOCK_INT_ENABLE);
+ 	whyred_emmc_write16(base, SDHCI_CLOCK_CONTROL, clock);
+@@ -215,12 +246,12 @@
+ 	uint16_t host2 = whyred_emmc_read16(base, SDHCI_HOST_CONTROL2);
+ 	host2 &= (uint16_t)~SDHCI_HOST2_UHS_MASK;
+ 	whyred_emmc_write16(base, SDHCI_HOST_CONTROL2, host2);
+ 
+ 	uint32_t vendor = whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC);
+-	vendor &= ~(SDHCI_CORE_MCLK_SEL_MASK | SDHCI_CORE_HC_SELECT_IN_EN |
+-	    SDHCI_CORE_HC_SELECT_IN_MASK);
++	vendor &= ~(SDHCI_CORE_CLK_PWRSAVE | SDHCI_CORE_MCLK_SEL_MASK |
++	    SDHCI_CORE_HC_SELECT_IN_EN | SDHCI_CORE_HC_SELECT_IN_MASK);
+ 	vendor |= SDHCI_CORE_MCLK_SEL_DEFAULT;
+ 	whyred_emmc_write32(base, SDHCI_CORE_VENDOR_SPEC, vendor);
+ 	(void)whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC);
+ 	printf("WHYRED EMMC INIT: SDHCI MSM v5 host set to 1-bit legacy; host2=0x%04x vendor=0x%08x\n",
+ 	    whyred_emmc_read16(base, SDHCI_HOST_CONTROL2),
+@@ -283,20 +314,24 @@
+ 	*response = whyred_emmc_read32(base, SDHCI_RESPONSE);
+ 	whyred_emmc_write32(base, SDHCI_INT_STATUS, SDHCI_INT_RESPONSE);
+ 	return 0;
+ }
+ 
++static void whyred_emmc_log_msm_v5_snapshot(volatile uint8_t *base,
++    const char *stage);
++
+ static int
+ whyred_emmc_read_ext_csd(volatile uint8_t *base, uint8_t *ext_csd)
+ {
+ 	uint16_t old_block_size = whyred_emmc_read16(base, SDHCI_BLOCK_SIZE);
+ 	uint16_t old_block_count = whyred_emmc_read16(base, SDHCI_BLOCK_COUNT);
+ 	uint16_t old_transfer_mode = whyred_emmc_read16(base, SDHCI_TRANSFER_MODE);
+ 	uint32_t response = 0;
+ 	uint32_t status = 0;
+ 	uint32_t present = 0;
+ 	uint32_t after_pio_status = 0;
++	uint32_t ext_sectors;
+ 	uint32_t sample[4] = { 0, 0, 0, 0 };
+ 	uint64_t timeout;
+ 	uint64_t start;
+ 	int result = -1;
+ 
+@@ -383,10 +418,19 @@
+ 	present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
+ 	printf("WHYRED EMMC: EXT_CSD PIO drained words=128 int=0x%08x present=0x%08x count=%u samples=%08x,%08x,%08x,%08x\n",
+ 	    after_pio_status, present,
+ 	    (unsigned int)whyred_emmc_read16(base, SDHCI_BLOCK_COUNT),
+ 	    sample[0], sample[1], sample[2], sample[3]);
++	ext_sectors = (uint32_t)ext_csd[212] |
++	    ((uint32_t)ext_csd[213] << 8) |
++	    ((uint32_t)ext_csd[214] << 16) |
++	    ((uint32_t)ext_csd[215] << 24);
++	printf("WHYRED EMMC: EXT_CSD fields rev=%u card_type=0x%02x bus_width=%u hs_timing=%u sec_count=%u\n",
++	    (unsigned int)ext_csd[192], (unsigned int)ext_csd[196],
++	    (unsigned int)ext_csd[183], (unsigned int)ext_csd[185],
++	    ext_sectors);
++	whyred_emmc_log_msm_v5_snapshot(base, "after PIO drain");
+ 	if ((after_pio_status & SDHCI_INT_DATA_AVAILABLE) != 0) {
+ 		whyred_emmc_write32(base, SDHCI_INT_STATUS,
+ 		    SDHCI_INT_DATA_AVAILABLE);
+ 	}
+ 
+@@ -401,10 +445,11 @@
+ 		printf("WHYRED EMMC: EXT_CSD no DATA_END rc=%d int=0x%08x present=0x%08x count=%u size=%u xfer=0x%04x\n",
+ 		    wait_result, status, present,
+ 		    (unsigned int)whyred_emmc_read16(base, SDHCI_BLOCK_COUNT),
+ 		    (unsigned int)whyred_emmc_read16(base, SDHCI_BLOCK_SIZE),
+ 		    whyred_emmc_read16(base, SDHCI_TRANSFER_MODE));
++		whyred_emmc_log_msm_v5_snapshot(base, "DATA_END timeout");
+ 		if (status != 0) {
+ 			whyred_emmc_write32(base, SDHCI_INT_STATUS,
+ 			    status & (SDHCI_INT_DATA_END | SDHCI_INT_ERROR_MASK));
+ 		}
+ 		goto out;
+@@ -416,10 +461,68 @@
+ 	whyred_emmc_write16(base, SDHCI_BLOCK_SIZE, old_block_size);
+ 	whyred_emmc_write16(base, SDHCI_BLOCK_COUNT, old_block_count);
+ 	whyred_emmc_write16(base, SDHCI_TRANSFER_MODE, old_transfer_mode);
+ 	return result;
+ }
++static void
++whyred_emmc_log_msm_v5_snapshot(volatile uint8_t *base, const char *stage)
++{
++	printf("WHYRED EMMC: Qualcomm v5 snapshot stage=%s data_cnt=0x%08x fifo_cnt=0x%08x mci_status=0x%08x sdcc_debug=0x%08x\n",
++	    stage,
++	    whyred_emmc_read32(base, SDHCI_CORE_MCI_DATA_COUNT),
++	    whyred_emmc_read32(base, SDHCI_CORE_MCI_FIFO_COUNT),
++	    whyred_emmc_read32(base, SDHCI_CORE_MCI_STATUS),
++	    whyred_emmc_read32(base, SDHCI_CORE_SDCC_DEBUG));
++	printf("WHYRED EMMC: host snapshot stage=%s host=0x%02x host2=0x%04x clock=0x%04x timeout=0x%02x vendor=0x%08x dll_cfg=0x%08x dll_status=0x%08x int_enable=0x%08x\n",
++	    stage, whyred_emmc_read8(base, SDHCI_HOST_CONTROL),
++	    whyred_emmc_read16(base, SDHCI_HOST_CONTROL2),
++	    whyred_emmc_read16(base, SDHCI_CLOCK_CONTROL),
++	    whyred_emmc_read8(base, 0x2e),
++	    whyred_emmc_read32(base, SDHCI_CORE_VENDOR_SPEC),
++	    whyred_emmc_read32(base, SDHCI_CORE_DLL_CONFIG),
++	    whyred_emmc_read32(base, SDHCI_CORE_DLL_STATUS),
++	    whyred_emmc_read32(base, 0x34));
++}
++
++static int
++whyred_emmc_reset_data_path(volatile uint8_t *base)
++{
++	uint64_t timeout = whyred_emmc_timeout_ticks();
++	uint64_t start;
++	uint32_t pending;
++	uint32_t present;
++	if (timeout == 0) {
++		printf("WHYRED EMMC: DATA reset skipped; CNTFRQ is zero\n");
++		return -1;
++	}
++	whyred_emmc_write8(base, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
++	start = whyred_emmc_counter();
++	while ((whyred_emmc_read8(base, SDHCI_SOFTWARE_RESET) &
++	    SDHCI_RESET_DATA) != 0) {
++		if ((whyred_emmc_counter() - start) >= timeout) {
++			printf("WHYRED EMMC: DATA reset timeout reset=0x%02x\n",
++			    whyred_emmc_read8(base, SDHCI_SOFTWARE_RESET));
++			return -1;
++		}
++	}
++	pending = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++	if (pending != 0) {
++		whyred_emmc_write32(base, SDHCI_INT_STATUS, pending);
++	}
++	present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++	pending = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++	if (pending != 0 || (present & (SDHCI_PSTATE_CMD_INHIBIT |
++	    SDHCI_PSTATE_DATA_INHIBIT | SDHCI_PSTATE_DATA_AVAILABLE)) != 0) {
++		printf("WHYRED EMMC: DATA reset left host busy int=0x%08x present=0x%08x\n",
++		    pending, present);
++		return -1;
++	}
++	printf("WHYRED EMMC: DATA reset complete int=0x%08x present=0x%08x\n",
++	    pending, present);
++	return 0;
++}
++
+ static void
+ whyred_emmc_restore_signals(volatile uint8_t *base, uint32_t signal_enable)
+ {
+ 	if (signal_enable == 0) {
+ 		return;
+@@ -601,10 +704,27 @@
+ 	}
+ 
+ 	uint8_t ext_csd[WHYRED_EXT_CSD_BYTES];
+ 	if (whyred_emmc_read_ext_csd(base, ext_csd) != 0) {
+ 		printf("WHYRED EMMC: EXT_CSD read failed; no media write issued\n");
++		uint32_t present_after_failure = whyred_emmc_read32(base,
++		    SDHCI_PRESENT_STATE);
++		if ((present_after_failure & SDHCI_PSTATE_DATA_INHIBIT) != 0 &&
++		    whyred_emmc_reset_data_path(base) == 0) {
++			uint32_t recovered_status = 0;
++			uint16_t recovered_cmd13 = (SDHCI_CMD_SEND_STATUS << 8) |
++			    SDHCI_CMD_RESP_SHORT_CRC_INDEX;
++			if (whyred_emmc_command(base, WHYRED_EMMC_RCA << 16,
++			    recovered_cmd13, &recovered_status) == 0) {
++				uint32_t recovered_state = (recovered_status >> 9) & 0xf;
++				printf("WHYRED EMMC: CMD13 after DATA reset response=0x%08x state=%u ready=%u\n",
++				    recovered_status, recovered_state,
++				    (recovered_status & WHYRED_EMMC_STATUS_READY) != 0);
++			} else {
++				printf("WHYRED EMMC: CMD13 after DATA reset failed\n");
++			}
++		}
+ 		whyred_emmc_restore_signals(base, signal_enable);
+ 		return;
+ 	}
+ 	uint32_t sectors = (uint32_t)ext_csd[212] |
+ 	    ((uint32_t)ext_csd[213] << 8) |
+

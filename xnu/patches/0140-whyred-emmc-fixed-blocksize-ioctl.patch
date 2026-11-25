@@ -1,0 +1,22 @@
+From: Codex <codex@openai.com>
+Subject: [PATCH] whyred: accept fixed 512-byte geometry negotiation
+
+XNU spec_open selects a 512-byte block size and restores the reported size
+even when bdevvp opens the disk with FREAD. Returning ENOTTY for the restore
+causes ENXIO and the bdevvp failed: open panic before APFS is mounted.
+
+Accept only the already active 512-byte size. This ioctl changes no hardware
+registers or media, and FWRITE opens and write strategy requests remain denied.
+
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -1022,6 +1022,9 @@
+ 	case DKIOCGETPHYSICALBLOCKSIZE:
+ 		*v32 = WHYRED_GPT_BLOCK_BYTES;
+ 		return 0;
++	case DKIOCSETBLOCKSIZE:
++		/* spec_open selects and restores 512-byte sectors, even for FREAD. */
++		return *v32 == WHYRED_GPT_BLOCK_BYTES ? 0 : EINVAL;
+ 	case DKIOCGETBLOCKCOUNT:
+ 		if (part == NULL) return ENXIO;
+ 		*v64 = part->last - part->first + 1;

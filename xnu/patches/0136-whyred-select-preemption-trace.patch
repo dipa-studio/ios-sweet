@@ -1,0 +1,113 @@
+--- a/osfmk/arm64/pcb.c
++++ b/osfmk/arm64/pcb.c
+@@ -66,6 +66,10 @@
+ #include <IOKit/IOBSD.h>
+ 
+ extern int debug_task;
++
++#if defined(SWEET)
++extern volatile int whyred_select_probe_active;
++#endif
+ 
+ /* zone for debug_state area */
+ ZONE_DEFINE_TYPE(ads_zone, "arm debug state", arm_debug_state_t, ZC_NONE);
+@@ -550,6 +554,14 @@
+     wait_result_t wresult,
+     boolean_t enable_interrupts)
+ {
++#if defined(SWEET)
++    if (whyred_select_probe_active) {
++        thread_t self = current_thread();
++        kprintf("WHYRED SCHED: continuation thread=%p cont=%p wait=%d preempt=%u irq=%u\n",
++            self, continuation, wresult, self->machine.preemption_count,
++            (unsigned)ml_get_interrupts_enabled());
++    }
++#endif
+ #define call_continuation_kprintf(x...) \
+ 	/* kprintf("call_continuation_kprintf:" x) */
+ 
+--- a/osfmk/arm64/sleh.c
++++ b/osfmk/arm64/sleh.c
+@@ -2088,6 +2088,13 @@
+ 		mach_syscall_trace_exit(error, (-1) * get_saved_state_svc_number(state));
+ 	}
+ 
++#if defined(SWEET)
++	if (whyred_select_probe_active) {
++		kprintf("WHYRED SYSCALL RETURN: thread=%p preempt=%u pc=%llx error=%d\n",
++		    thread, thread->machine.preemption_count,
++		    (unsigned long long)get_saved_state_pc(state), error);
++	}
++#endif
+ 	thread_exception_return();
+ }
+ 
+--- a/osfmk/kern/sched_prim.c
++++ b/osfmk/kern/sched_prim.c
+@@ -815,13 +815,15 @@
+ 
+ 	assert(ml_get_interrupts_enabled() == FALSE);
+ 
+-	thread_lock(thread);
+ #if defined(SWEET)
+ 	if (whyred_select_probe_active) {
+-		kprintf("WHYRED TIMER: callback thread=%p armed=%u\n",
+-		    thread, (unsigned)thread->wait_timer_armed);
++		thread_t current = current_thread();
++		kprintf("WHYRED TIMER: enter target=%p target_preempt=%u current=%p current_preempt=%u armed=%u\n",
++		    thread, thread->machine.preemption_count, current,
++		    current->machine.preemption_count, (unsigned)thread->wait_timer_armed);
+ 	}
+ #endif
++	thread_lock(thread);
+ 
+ 	if (thread->wait_timer_armed) {
+ 		thread->wait_timer_armed = false;
+@@ -832,6 +834,14 @@
+ 	thread->wait_timer_active--;
+ 
+ 	thread_unlock(thread);
++#if defined(SWEET)
++	if (whyred_select_probe_active) {
++		thread_t current = current_thread();
++		kprintf("WHYRED TIMER: exit target=%p target_preempt=%u current=%p current_preempt=%u\n",
++		    thread, thread->machine.preemption_count, current,
++		    current->machine.preemption_count);
++	}
++#endif
+ }
+ 
+ /*
+--- a/bsd/kern/kern_synch.c
++++ b/bsd/kern/kern_synch.c
+@@ -75,8 +75,14 @@
+ 	int sig, catch;
+ 	int error = 0;
+ 	int dropmutex, spinmutex;
++	int syscall_result;
+ 
+ 	ut = get_bsdthread_info(self);
++#if defined(SWEET)
++	if (whyred_select_probe_active && p->p_pid == 1) {
++        printf("WHYRED SLEEP: continuation wait=%d\n", wresult);
++	}
++#endif
+ 	catch     = ut->uu_pri & PCATCH;
+ 	dropmutex = ut->uu_pri & PDROP;
+ 	spinmutex = ut->uu_pri & PSPIN;
+@@ -134,7 +140,13 @@
+ 	ut->uu_wchan = NULL;
+ 	ut->uu_wmesg = NULL;
+ 
+-	unix_syscall_return((*ut->uu_continuation)(error));
++	syscall_result = (*ut->uu_continuation)(error);
++#if defined(SWEET)
++	if (whyred_select_probe_active && p->p_pid == 1) {
++        printf("WHYRED SLEEP: syscall continuation result=%d\n", syscall_result);
++	}
++#endif
++	unix_syscall_return(syscall_result);
+ }
+ 
+ /*
+

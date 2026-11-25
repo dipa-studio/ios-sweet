@@ -1,0 +1,183 @@
+--- a/iokit/Kernel/IOStartIOKit.cpp
++++ b/iokit/Kernel/IOStartIOKit.cpp
+@@ -72,22 +72,36 @@
+ void
+ IOKitInitializeTime( void )
+ {
++#if !defined(SWEET)
+ 	mach_timespec_t         t;
+-
++#endif
++
++#if !defined(SWEET)
+ 	t.tv_sec = 30;
+ 	t.tv_nsec = 0;
+-
++#endif
++
++#if defined(SWEET)
++	kprintf("WHYRED_CLOCK: IOKitInitializeTime entered; skipping absent IORTC wait\n");
++#else
+ // RTC is not present on this target
+ #ifndef BCM2837
+ 	IOService::waitForService(
+ 		IOService::resourceMatching("IORTC"), &t );
+ #endif
++#endif
++#if defined(SWEET)
++	kprintf("WHYRED_CLOCK: before clock_initialize_calendar\n");
++#endif
+ #if defined(__i386__) || defined(__x86_64__)
+ 	IOService::waitForService(
+ 		IOService::resourceMatching("IONVRAM"), &t );
+ #endif
+ 
+ 	clock_initialize_calendar();
++#if defined(SWEET)
++	kprintf("WHYRED_CLOCK: clock_initialize_calendar returned\n");
++#endif
+ }
+ 
+ void
+--- a/osfmk/kern/clock.c
++++ b/osfmk/kern/clock.c
+@@ -85,6 +85,13 @@
+ #include <sys/timex.h>
+ #include <kern/arithmetic_128.h>
+ #include <os/log.h>
++
++#if defined(SWEET)
++extern void kprintf(const char *fmt, ...);
++#define SWEET_CLOCK_STAGE(s) kprintf("WHYRED_CLOCK: " s "\n")
++#else
++#define SWEET_CLOCK_STAGE(s) do { } while (0)
++#endif
+ 
+ #if HIBERNATION && HAS_CONTINUOUS_HWCLOCK
+ // On ARM64, the hwclock keeps ticking across a normal S2R so we use it to reset the
+@@ -1049,8 +1056,11 @@
+ 
+ #endif /* ENABLE_LEGACY_CLOCK_CODE */
+ 	//Get the UTC time and corresponding sys time
++	SWEET_CLOCK_STAGE("C1 before PEGetUTCTimeOfDay");
+ 	PEGetUTCTimeOfDay(&secs, &microsecs);
++	SWEET_CLOCK_STAGE("C2 PEGetUTCTimeOfDay returned");
+ 	clock_get_system_microtime(&sys, &microsys);
++	SWEET_CLOCK_STAGE("C3 clock_get_system_microtime returned");
+ 
+ #if ENABLE_LEGACY_CLOCK_CODE
+ 	/*
+@@ -1070,10 +1080,14 @@
+ 	}
+ #endif /* ENABLE_LEGACY_CLOCK_CODE */
+ 
++	SWEET_CLOCK_STAGE("C4 before splclock");
+ 	s = splclock();
++	SWEET_CLOCK_STAGE("C5 splclock returned; before clock_lock");
+ 	clock_lock();
++	SWEET_CLOCK_STAGE("C6 clock_lock acquired");
+ 
+ 	commpage_disable_timestamp();
++	SWEET_CLOCK_STAGE("C7 commpage timestamp disabled");
+ 
+ 	utc_offset_secs = secs;
+ 	utc_offset_microsecs = microsecs;
+@@ -1107,6 +1121,7 @@
+ 	commpage_update_boottime(clock_boottime * USEC_PER_SEC + clock_boottime_usec);
+ 
+ 	nanoseconds_to_absolutetime((uint64_t)NSEC_PER_SEC, &ticks_per_sec);
++	SWEET_CLOCK_STAGE("C8 timebase conversion complete");
+ 	clock_calend.boottime = bt;
+ 	clock_calend.bintime = bt;
+ 	clock_calend.offset.sec = 0;
+@@ -1134,20 +1149,26 @@
+ 	}
+ #endif /* ENABLE_LEGACY_CLOCK_CODE */
+ 	commpage_update_mach_continuous_time(mach_absolutetime_asleep);
++	SWEET_CLOCK_STAGE("C9 commpage updates complete");
+ 
+ #if DEVELOPMENT || DEBUG
+ 	struct clock_calend clock_calend_cp = clock_calend;
+ #endif
+ 
++	SWEET_CLOCK_STAGE("C10 before clock_unlock");
+ 	clock_unlock();
+ 	splx(s);
++	SWEET_CLOCK_STAGE("C11 clock lock released; interrupts restored");
+ 
+ 	print_all_clock_variables(__func__, &secs, &microsecs, &sys, &microsys, &clock_calend_cp);
++	SWEET_CLOCK_STAGE("C12 print_all_clock_variables returned");
+ 
+ 	/*
+ 	 *	Send host notifications.
+ 	 */
++	SWEET_CLOCK_STAGE("C13 before host_notify_calendar_change");
+ 	host_notify_calendar_change();
++	SWEET_CLOCK_STAGE("C14 host_notify_calendar_change returned");
+ 
+ #if CONFIG_DTRACE
+ 	clock_track_calend_nowait();
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -699,17 +699,24 @@
+ 	/* Initialize the file systems. */
+ 	bsd_init_kprintf("calling vfsinit\n");
+ 	vfsinit();
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD vfsinit returned\n");
++#endif
+ 
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ 	/* AMFI's MAC policy is built in on SWEET (bsd/kern/sweet_amfi.c). */
+ 	extern void sweet_amfi_policy_register(void);
++	kprintf("WHYRED_STAGE: before sweet_amfi_policy_register\n");
+ 	sweet_amfi_policy_register();
++	kprintf("WHYRED_STAGE: sweet_amfi_policy_register returned\n");
+ #endif
+ 
+ #if SWEET_HFS
+ 	/* HFS is built in on SWEET: register it like its kext would, before mounting root. */
+ 	extern void sweet_hfs_register(void);
++	kprintf("WHYRED_STAGE: before sweet_hfs_register\n");
+ 	sweet_hfs_register();
++	kprintf("WHYRED_STAGE: sweet_hfs_register returned\n");
+ #endif
+ 
+ #if CONFIG_PROC_UUID_POLICY
+@@ -888,13 +895,25 @@
+ 		int err;
+ 
+ 		bsd_init_kprintf("calling setconf\n");
++#if defined(SWEET)
++		kprintf("WHYRED_STAGE: BSD before setconf\n");
++#endif
+ 		setconf();
++#if defined(SWEET)
++		kprintf("WHYRED_STAGE: BSD setconf returned\n");
++#endif
+ #if CONFIG_NETBOOT
+ 		netboot = (mountroot == netboot_mountroot);
+ #endif
+ 
+ 		bsd_init_kprintf("vfs_mountroot\n");
++#if defined(SWEET)
++		kprintf("WHYRED_STAGE: BSD before vfs_mountroot\n");
++#endif
+ 		if (0 == (err = vfs_mountroot())) {
++#if defined(SWEET)
++			kprintf("WHYRED_STAGE: BSD vfs_mountroot returned success\n");
++#endif
+ 			break;
+ 		}
+ 		rootdevice[0] = '\0';
+@@ -1059,6 +1078,9 @@
+ 	siginit(kernproc);
+ 
+ 	bsd_init_kprintf("calling bsd_utaskbootstrap\n");
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD before bsd_utaskbootstrap\n");
++#endif
+ 	bsd_utaskbootstrap();
+ 
+ 	pal_kernel_announce();
+

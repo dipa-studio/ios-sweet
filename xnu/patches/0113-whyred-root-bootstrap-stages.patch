@@ -1,0 +1,150 @@
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -933,15 +933,27 @@
+ 		printf("cannot mount root, errno = %d\n", err);
+ 	}
+ 
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD before IOSecureBSDRoot\n");
++#endif
+ 	IOSecureBSDRoot(rootdevice);
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD IOSecureBSDRoot returned\n");
++#endif
+ 
+ 	mountlist.tqh_first->mnt_flag |= MNT_ROOTFS;
+ 
+ 	bsd_init_kprintf("calling VFS_ROOT\n");
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD before VFS_ROOT\n");
++#endif
+ 	/* Get the vnode for '/'.  Set fdp->fd_fd.fd_cdir to reference it. */
+ 	if (VFS_ROOT(mountlist.tqh_first, &init_rootvnode, vfs_context_kernel())) {
+ 		panic("bsd_init: cannot find root vnode: %s", PE_boot_args());
+ 	}
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD VFS_ROOT returned vnode=%p\n", init_rootvnode);
++#endif
+ 	(void)vnode_ref(init_rootvnode);
+ 	(void)vnode_put(init_rootvnode);
+ 
+@@ -949,9 +961,15 @@
+ 	set_rootvnode(init_rootvnode);
+ 	lck_rw_unlock_exclusive(&rootvnode_rw_lock);
+ 	init_rootvnode = NULLVP;  /* use rootvnode after this point */
+-
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD rootvnode published\n");
++	kprintf("WHYRED_STAGE: BSD before bsd_rooted_ramdisk\n");
++#endif
+ 
+ 	if (!bsd_rooted_ramdisk()) {
++#if defined(SWEET)
++		kprintf("WHYRED_STAGE: BSD root is not ramdisk; checking authentication\n");
++#endif
+ 		boolean_t require_rootauth = FALSE;
+ 
+ #if XNU_TARGET_OS_OSX && defined(__arm64__)
+@@ -966,7 +984,13 @@
+ 
+ 		if (require_rootauth) {
+ 			/* enforce sealedness */
++#if defined(SWEET)
++			kprintf("WHYRED_STAGE: BSD before FSIOC_KERNEL_ROOTAUTH\n");
++#endif
+ 			int autherr = VNOP_IOCTL(rootvnode, FSIOC_KERNEL_ROOTAUTH, NULL, 0, vfs_context_kernel());
++#if defined(SWEET)
++			kprintf("WHYRED_STAGE: BSD FSIOC_KERNEL_ROOTAUTH returned %d\n", autherr);
++#endif
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ 			/*
+ 			 * SWEET has no chain of trust to extend: the kernel itself is
+@@ -983,7 +1007,9 @@
+ #endif
+ 		}
+ 	}
+-
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD root authentication phase returned\n");
++#endif
+ 
+ #if CONFIG_NETBOOT
+ 	if (netboot) {
+@@ -1025,14 +1051,26 @@
+ #endif /* CONFIG_IMAGEBOOT */
+ 
+ 	/* set initial time; all other resource data is  already zero'ed */
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD before initial microtime\n");
++#endif
+ 	microtime_with_abstime(&kernproc->p_start, &kernproc->p_stats->ps_start);
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD initial microtime returned\n");
++#endif
+ 
+ #if DEVFS
+ 	{
+ 		char mounthere[] = "/dev"; /* !const because of internal casting */
+ 
+ 		bsd_init_kprintf("calling devfs_kernel_mount\n");
++#if defined(SWEET)
++		kprintf("WHYRED_STAGE: BSD before devfs_kernel_mount\n");
++#endif
+ 		devfs_kernel_mount(mounthere);
++#if defined(SWEET)
++		kprintf("WHYRED_STAGE: BSD devfs_kernel_mount returned\n");
++#endif
+ 	}
+ #endif /* DEVFS */
+ 
+@@ -1075,7 +1113,13 @@
+ 
+ 	/* Initialize signal state for process 0. */
+ 	bsd_init_kprintf("calling siginit\n");
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD before siginit\n");
++#endif
+ 	siginit(kernproc);
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: BSD siginit returned\n");
++#endif
+ 
+ 	bsd_init_kprintf("calling bsd_utaskbootstrap\n");
+ #if defined(SWEET)
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -1029,6 +1029,9 @@
+ void
+ IOSecureBSDRoot(const char * rootName)
+ {
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: IOSecureBSDRoot entered\n");
++#endif
+ #if CONFIG_SECURE_BSD_ROOT
+ 	IOReturn         result;
+ 	IOPlatformExpert *pe;
+@@ -1037,7 +1040,13 @@
+ 
+ 	matching = IOService::serviceMatching("IOPlatformExpert");
+ 	assert(matching);
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: IOSecureBSDRoot before platform expert wait\n");
++#endif
+ 	pe = (IOPlatformExpert *) IOService::waitForMatchingService(matching, 30ULL * kSecondScale);
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: IOSecureBSDRoot platform expert wait returned pe=%p\n", pe);
++#endif
+ 	matching->release();
+ 	assert(pe);
+ 	// Returns kIOReturnNotPrivileged is the root device is not secure.
+@@ -1051,6 +1060,9 @@
+ 	}
+ 
+ #endif  // CONFIG_SECURE_BSD_ROOT
++#if defined(SWEET)
++	kprintf("WHYRED_STAGE: IOSecureBSDRoot returned\n");
++#endif
+ }
+ 
+ void *
+

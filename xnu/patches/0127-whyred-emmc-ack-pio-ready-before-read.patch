@@ -1,0 +1,32 @@
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -348,10 +348,28 @@
+ 	    present, status,
+ 	    (unsigned int)whyred_emmc_read16(base, SDHCI_BLOCK_SIZE),
+ 	    (unsigned int)whyred_emmc_read16(base, SDHCI_BLOCK_COUNT),
+ 	    whyred_emmc_read16(base, SDHCI_TRANSFER_MODE));
+ 
++	/*
++	 * Match SDHCI's IRQ ordering: acknowledge the latched ready interrupt
++	 * before servicing PIO. Linux does this before sdhci_transfer_pio().
++	 */
++	if ((status & SDHCI_INT_DATA_AVAILABLE) != 0) {
++		whyred_emmc_write32(base, SDHCI_INT_STATUS,
++		    SDHCI_INT_DATA_AVAILABLE);
++	}
++	status = whyred_emmc_read32(base, SDHCI_INT_STATUS);
++	present = whyred_emmc_read32(base, SDHCI_PRESENT_STATE);
++	printf("WHYRED EMMC: EXT_CSD DATA_AVAILABLE ack before PIO int=0x%08x present=0x%08x\n",
++	    status, present);
++	if ((status & SDHCI_INT_ERROR_MASK) != 0) {
++		printf("WHYRED EMMC: EXT_CSD error after ready ack int=0x%08x\n",
++		    status);
++		goto out;
++	}
++
+ 	/* SDHCI PIO exposes a complete block when DATA_AVAILABLE is asserted. */
+ 	for (unsigned int words = 0; words < (WHYRED_EXT_CSD_BYTES / 4); words++) {
+ 		uint32_t value = whyred_emmc_read32(base, SDHCI_BUFFER);
+ 		if (words < 4) {
+ 			sample[words] = value;
+

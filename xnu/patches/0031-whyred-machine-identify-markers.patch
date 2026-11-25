@@ -1,0 +1,82 @@
+diff --git a/pexpert/arm/pe_identify_machine.c b/pexpert/arm/pe_identify_machine.c
+--- a/pexpert/arm/pe_identify_machine.c
++++ b/pexpert/arm/pe_identify_machine.c
+@@ -11,6 +11,7 @@
+ 
+ #include <kern/clock.h>
+ #include <machine/machine_routines.h>
++#include <arm64/sweet_early.h>
+ #if DEVELOPMENT || DEBUG
+ #include <kern/simple_lock.h>
+ #include <kern/cpu_number.h>
+@@ -57,9 +58,13 @@
+ 
+ 	(void)bootArgs;
+ 
++	sweet_early_mark(21, "pe_identify_machine entered");
++	sweet_early_mark(22, "PE before SoC base lookup");
+ 	if (pe_arm_get_soc_base_phys() == 0) {
++		sweet_early_mark(23, "PE SoC base is zero");
+ 		return;
+ 	}
++	sweet_early_mark(24, "PE SoC base lookup done");
+ 
+ 	/* Clear the gPEClockFrequencyInfo struct */
+ 	bzero((void *)&gPEClockFrequencyInfo, sizeof(clock_frequency_info_t));
+@@ -69,11 +74,14 @@
+ 	gPEClockFrequencyInfo.bus_clock_rate_hz = 100000000;
+ 	gPEClockFrequencyInfo.cpu_clock_rate_hz = 400000000;
+ 
++	sweet_early_mark(25, "PE before /cpus lookup");
+ 	err = SecureDTLookupEntry(NULL, "/cpus", &cpus);
+ 	assert(err == kSuccess);
++	sweet_early_mark(26, "PE /cpus lookup done");
+ 
+ 	err = SecureDTInitEntryIterator(cpus, &iter);
+ 	assert(err == kSuccess);
++	sweet_early_mark(27, "PE /cpus iterator ready");
+ 
+ 	while (kSuccess == SecureDTIterateEntries(&iter, &cpu)) {
+ 		if ((kSuccess != SecureDTGetProperty(cpu, "state", &value, &size)) ||
+@@ -160,6 +168,7 @@
+ 			gPEClockFrequencyInfo.cpu_clock_rate_hz = 0xFFFFFFFF;
+ 		}
+ 	}
++	sweet_early_mark(28, "PE /cpus frequency scan done");
+ 
+ 	/* Set the num / den pairs form the hz values. */
+ 	gPEClockFrequencyInfo.bus_clock_rate_num = gPEClockFrequencyInfo.bus_clock_rate_hz;
+@@ -182,22 +191,32 @@
+ 	uint32_t        prop_size;
+ 	char const      *tmpStr;
+ 
++	sweet_early_mark(29, "PE before arm-io lookup");
+ 	if (SecureDTFindEntry("name", "arm-io", &entryP) == kSuccess) {
++		sweet_early_mark(30, "PE arm-io lookup done");
+ 		if (gPESoCDeviceType == 0) {
++			sweet_early_mark(31, "PE before arm-io device_type");
+ 			SecureDTGetProperty(entryP, "device_type", (void const **)&tmpStr, &prop_size);
++			sweet_early_mark(32, "PE arm-io device_type read done");
+ 			strlcpy(gPESoCDeviceTypeBuffer, tmpStr, SOC_DEVICE_TYPE_BUFFER_SIZE);
+ 			gPESoCDeviceType = gPESoCDeviceTypeBuffer;
+ 
++			sweet_early_mark(33, "PE before arm-io ranges");
+ 			if (SecureDTGetProperty(entryP, "ranges", (void const **)&ranges_prop, &prop_size) == kSuccess &&
+ 			    prop_size >= 2 * sizeof(*ranges_prop)) {
++				sweet_early_mark(34, "PE arm-io ranges read done");
+ 				gPESoCBasePhys = *(ranges_prop + 1);
+ 			} else {
++				sweet_early_mark(35, "PE arm-io ranges absent; using reg");
+ 				/* whyred synthetic ADT provides arm-io reg, not ranges. */
+ 				uintptr_t const *reg_prop = NULL;
++				sweet_early_mark(36, "PE before arm-io reg");
+ 				if (SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size) != kSuccess ||
+ 				    prop_size < sizeof(*reg_prop)) {
++					sweet_early_mark(37, "PE arm-io reg missing");
+ 					return 0;
+ 				}
++				sweet_early_mark(38, "PE arm-io reg read done");
+ 				gPESoCBasePhys = *reg_prop;
+ 			}
+ 		}
+

@@ -1,0 +1,22 @@
+From: Codex <codex@openai.com>
+Subject: [PATCH] whyred: report block bytes through XNU d_psize
+
+XNU8796 specfs set_blocksize uses d_psize as bytes per device block, not
+partition capacity. Returning sector count makes a32MiB persist partition
+appear to have65536-byte blocks, so spec_read rejects it above PAGE_SIZE.
+Small partitions also get incorrect addressing units. Return the fixed512-byte
+sector size; retain actual capacity in DKIOCGETBLOCKCOUNT. Write opens and
+strategy writes remain denied. No user-space SETBLOCKSIZE policy change.
+
+--- a/bsd/dev/whyred_emmc_pio_probe.c
++++ b/bsd/dev/whyred_emmc_pio_probe.c
+@@ -1064,7 +1064,8 @@
+ whyred_emmc_psize(dev_t dev)
+ {
+ 	const struct whyred_gpt_partition *part = whyred_emmc_partition(dev);
+-	return part == NULL ? -1 : (int)MIN(part->last - part->first + 1, INT_MAX);
++	/* XNU specfs uses d_psize for block bytes; capacity is a separate ioctl. */
++	return part == NULL ? -1 : WHYRED_GPT_BLOCK_BYTES;
+ }
+ 
+ static const struct bdevsw whyred_emmc_bdevsw = {

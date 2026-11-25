@@ -1,0 +1,88 @@
+name: whyred-freestanding-probe
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/whyred-early-fb]
+    paths: [.github/workflows/whyred-raw.yml, tools/whyredraw.c]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test without dynamic libraries
+        run: |
+          mkdir -p out/raw
+          FLAGS="-Os -ffreestanding -fno-builtin -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables -nostdlib -Wl,-static -Wl,-no_pie -Wl,-headerpad,64 -Wl,-e,_start -Wall -Wextra -Werror"
+          clang $FLAGS tools/whyredraw.c -o out/raw/whyredraw-native
+          python3 - <<'CHECK'
+          from pathlib import Path
+          import subprocess,re
+          p=Path('out/raw');data=bytes(range(256))*257;(p/'fixture').write_bytes(data)
+          r=subprocess.run([str(p/'whyredraw-native'),str(p/'fixture'),'3','16384','1'],check=True,capture_output=True,text=True)
+          h=14695981039346656037
+          for c in data[3:16387]:h=((h^c)*1099511628211)&((1<<64)-1)
+          assert r.stdout.count('fnv1a64=%016x'%h)==2
+          assert 'entered without dyld' in r.stdout
+          r2=subprocess.run([str(p/'whyredraw-native'),str(p/'fixture'),'3','512','0','1'],check=True,capture_output=True,text=True)
+          assert 'fcntl_nocache=0' in r2.stdout
+          for args,code in [([str(p/'absent'),'0','16','0'],1),([str(p/'fixture'),'0','65537','0'],2),([str(p/'fixture'),'0','16','2'],2)]:
+              assert subprocess.run([str(p/'whyredraw-native'),*args],capture_output=True).returncode==code
+          pressure=subprocess.run([str(p/'whyredraw-native'),'pressure','4','1'],check=True,capture_output=True,text=True)
+          before=re.search(r'pressure_before_fnv1a64=([0-9a-f]+)',pressure.stdout)
+          after=re.search(r'pressure_after_fnv1a64=([0-9a-f]+)',pressure.stdout)
+          assert before and after and before[1]==after[1] and 'pressure_unmap=0' in pressure.stdout
+          for args in [('97','1'),('4','16'),('0','1'),('4','0')]:
+              assert subprocess.run([str(p/'whyredraw-native'),'pressure',*args],capture_output=True).returncode==2
+          (p/'host-test.txt').write_text(r.stdout+pressure.stdout+'PASS file bytes/mmap agree and invalid bounds rejected\n')
+          (p/'fixture').unlink()
+          CHECK
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -target arm64-apple-ios16.4 -isysroot "$SDK" -mcpu=generic+crypto -mno-outline-atomics $FLAGS tools/whyredraw.c -o out/raw/whyredraw
+          # ld omits platform records for static executables. Declare the same
+          # iOS16.4 target explicitly in reserved header padding before signing.
+          python3 - <<'PLATFORM'
+          from pathlib import Path
+          import struct
+          p=Path('out/raw/whyredraw');b=bytearray(p.read_bytes())
+          magic,cpu,sub,kind,n,size,flags,res=struct.unpack_from('<8I',b)
+          assert (magic,cpu,kind)==(0xfeedfacf,0x100000c,2)
+          at=32;first=len(b)
+          for _ in range(n):
+              cmd,length=struct.unpack_from('<II',b,at)
+              assert cmd not in (0x24,0x25,0x2f,0x30,0x32)
+              if cmd==0x19:
+                  count=struct.unpack_from('<I',b,at+64)[0]
+                  for i in range(count):
+                      offset=struct.unpack_from('<I',b,at+72+i*80+48)[0]
+                      if offset:first=min(first,offset)
+              at+=length
+          assert at==32+size and at+24<=first and b[at:at+24]==bytes(24)
+          struct.pack_into('<6I',b,at,0x32,24,2,0x100400,0x120500,0)
+          struct.pack_into('<II',b,16,n+1,size+24);p.write_bytes(b)
+          PLATFORM
+          codesign --force --sign - --timestamp=none out/raw/whyredraw
+          codesign --verify --strict out/raw/whyredraw
+          otool -l out/raw/whyredraw > out/raw/load-commands.txt
+          otool -L out/raw/whyredraw > out/raw/dependencies.txt
+          xcrun llvm-nm -u out/raw/whyredraw > out/raw/imports.txt
+          xcrun llvm-objdump -d out/raw/whyredraw > out/raw/isa.txt
+          python3 - <<'CHECK'
+          from pathlib import Path
+          import hashlib,json,os,re
+          p=Path('out/raw');load=(p/'load-commands.txt').read_text()
+          assert 'LC_UNIXTHREAD' in load and 'LC_LOAD_DYLINKER' not in load and 'LC_LOAD_DYLIB' not in load
+          assert re.search(r'platform\s+(?:2|IOS)\b',load)
+          assert not (p/'imports.txt').read_text().strip()
+          assert not re.search(r'\b(?:cas[a-z]*|ldadd[a-z]*|swp[a-z]*|stadd[a-z]*)\s+[wx]',(p/'isa.txt').read_text())
+          (p/'report.json').write_text(json.dumps({'source':os.environ['GITHUB_SHA'],'sha256':hashlib.sha256((p/'whyredraw').read_bytes()).hexdigest(),'bytes':(p/'whyredraw').stat().st_size,'imports':0,'uses_dyld':False,'target_writes':False},indent=2)+'\n')
+          CHECK
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whyred-freestanding-probe
+          path: out/raw/
+          retention-days: 7

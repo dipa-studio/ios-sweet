@@ -54,12 +54,17 @@ _start:
 	add	sp, sp, #16
 
 	adr	x1, hello_tail
-	adr	x2, alive
+	adr	x2, hello_tail_end
 	sub	x2, x2, x1
 	bl	write_console
 
-tick:
-	/* select(0, NULL, NULL, NULL, &5s) as a portable sleep */
+one_shot:
+	/* One timeout-only select: isolate return status and avoid log interleaving. */
+	adr	x1, before_select
+	adr	x2, before_select_end
+	sub	x2, x2, x1
+	bl	write_console
+	b.cs	hang
 	mov	x0, #0
 	mov	x1, #0
 	mov	x2, #0
@@ -67,12 +72,51 @@ tick:
 	adr	x4, five_sec
 	mov	x16, #SYS_select
 	svc	#0x80
+	b.cs	select_failed
 
-	adr	x1, alive
-	adr	x2, alive_end
+	adr	x1, select_returned
+	adr	x2, select_returned_end
 	sub	x2, x2, x1
 	bl	write_console
-	b	tick
+	b.cs	hang
+	adr	x1, diagnostic_done
+	adr	x2, diagnostic_done_end
+	sub	x2, x2, x1
+	bl	write_console
+	b	wait_forever
+
+/* Keep PID 1 blocked after the one-shot probe so the CPU can idle. */
+wait_forever:
+	mov	x0, #0
+	mov	x1, #0
+	mov	x2, #0
+	mov	x3, #0
+	mov	x4, #0		/* NULL timeout: wait indefinitely */
+	mov	x16, #SYS_select
+	svc	#0x80
+	b	wait_forever
+
+select_failed:
+	mov	x20, x0			/* Darwin errno from select */
+	adr	x1, select_failed_message
+	adr	x2, select_failed_end
+	sub	x2, x2, x1
+	bl	write_console
+	b.cs	hang
+	and	w21, w20, #0xf0
+	lsr	w21, w21, #4
+	adr	x22, hex_digits
+	ldrb	w21, [x22, w21, uxtw]
+	sub	sp, sp, #16
+	strb	w21, [sp]
+	and	w21, w20, #0x0f
+	ldrb	w21, [x22, w21, uxtw]
+	strb	w21, [sp, #1]
+	mov	x1, sp
+	mov	x2, #2
+	bl	write_console
+	add	sp, sp, #16
+	b	hang
 
 /* write(x19, x1, x2) */
 write_console:
@@ -94,6 +138,19 @@ hello:
 	.ascii	"\n*** SWEET userspace: init running as PID "
 hello_tail:
 	.ascii	" ***\n"
-alive:
-	.ascii	"SWEET init: still alive\n"
-alive_end:
+hello_tail_end:
+before_select:
+	.ascii	"SWEET init: one-shot select(5s) begin\n"
+before_select_end:
+select_returned:
+	.ascii	"SWEET init: one-shot select returned OK\n"
+select_returned_end:
+select_failed_message:
+	.ascii	"SWEET init: one-shot select errno=0x"
+select_failed_end:
+diagnostic_done:
+	.ascii	"SWEET init: one-shot diagnostic complete\n"
+diagnostic_done_end:
+hex_digits:
+	.ascii	"0123456789abcdef"
+
