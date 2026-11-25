@@ -266,11 +266,20 @@
   Verified it preserves the installed candidate's kernel, loader, DT, and
   overlay; exactly 10 bytes in the SWEETXNU command-line field changed,
   adding only `s8touch=0`. This is a diagnostic to test whether S8 touch
-  initialization is involved, not a confirmed fix. It has not been flashed
-  or booted. Source progress commit: `cb5190e`. Obtain explicit approval
-  before writing this image to BOOT `/dev/block/sda7` and running one test;
-  its `rootrw=1` path may update the configured overlay and SWEETLOG files
-  on USERDATA, with no other manual partition writes.
+  initialization is involved, not a confirmed fix. Source progress commit:
+  `cb5190e`.
+- User authorized this exact BOOT write and one test boot. Before writing,
+  verified TWRP `dreamlte`, BOOT `/dev/block/sda7` (40 MiB), and candidate
+  SHA-256. Saved a full 40 MiB BOOT backup at
+  `F:\iOS Galaxy\backup\G950F-BOOT-before-s8touch-off-20261125.img`,
+  SHA-256 `4f8b072f9a3eee7c920efc83f64e9510bc07aef8613976d354b355eae0cdb2dd`.
+  Wrote only the 19,118,096-byte diagnostic candidate to BOOT and verified
+  its readback SHA-256 is
+  `b47ce02749d82fd8f43567243933ea9a96f2400b34769fcb405dea52e6742b2d`.
+  Issued one `adb reboot`; ADB did not reconnect within 180 seconds. This
+  test has not established that disabling touch fixes or moves the stall.
+  The current screen after this diagnostic boot is not yet reported. No
+  further reboot or partition write without fresh approval.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
