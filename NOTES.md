@@ -46,9 +46,11 @@
   different from the preserved baseline. **Do not flash/overwrite it.**
 - Corrected candidate remains offline-only: no boot, partition write, root
   overlay installation, or GPU MMIO has occurred. The overlay installer writes
-  files into the iOS root after `rootrw=1`; ask separately before that persistent
-  change. A temporary `fastboot boot` is preferable to a BOOT write, but only
-  after user approval. The driver checks the G3D power-domain status before
+  these iOS-root paths after `rootrw=1`: `/usr/appleinternal/sbin/launchd.s8`
+  and `/System/Library/Extensions/S8MaliMetal.bundle/` (plugin, plist, and
+  QuartzCore shader cache). Ask separately before those persistent changes.
+  A temporary `fastboot boot` is preferable to a BOOT write, but only after
+  user approval. The driver checks the G3D power-domain status before
   touching Mali registers and falls back to CPU rendering if it is off; this
   does not establish ACPM firmware loading/rights or reliable GPU clocks.
   The generated ADT also lacks the optional D22AP `/product` node (`d22ap.adt`
