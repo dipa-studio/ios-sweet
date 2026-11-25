@@ -43,7 +43,15 @@
   SM-G950F / `dreamlte` in TWRP; BOOT symlink resolves to `/dev/block/sda7`
   (40 MiB). Live BOOT SHA-256 is
   `086da7a053e87b4ddbee6c5be82b4303d8e05948e10295c4947d5e41530db8c1`,
-  different from the preserved baseline. **Do not flash/overwrite it.**
+  different from the preserved baseline. **Do not flash without fresh exact
+  approval.**
+- User approved a temporary boot plus overlay writes, but a read-only transport
+  check found no standard fastboot device. This is a Samsung Download Mode
+  handset; the S8 project assessment says a non-writing `fastboot boot` route
+  is not established. `fastboot.exe` exists on the PC but `fastboot devices`
+  returned empty while TWRP ADB stayed connected. No reboot was initiated.
+  Do not reinterpret the temporary-boot approval as authorization to replace
+  BOOT. To test, ask for exact approval to write the candidate below to BOOT.
 - Corrected candidate remains offline-only: no boot, partition write, root
   overlay installation, or GPU MMIO has occurred. The overlay installer writes
   these iOS-root paths after `rootrw=1`: `/usr/appleinternal/sbin/launchd.s8`
@@ -60,11 +68,12 @@
   remains authorized to enable continued work; remove it by exact-line match
   when the user asks to close Mac access. The one-off Mac link directory and
   transfer archives were removed after retrieving the binaries.
-- **Next:** await explicit approval for temporary `fastboot boot` of the
-  corrected image with its root-overlay writes. If approved, verify GPU-ready
-  logs and fail safely to CPU if the power domain is off; test CoreAnimation
-  draws, display, touch, and stability. Never flash the current BOOT partition
-  based on the earlier broad wording.
+- **Next:** ask whether the user explicitly authorizes writing the corrected
+  candidate (SHA-256 above) to `/dev/block/sda7` and booting it. Do not write
+  before that confirmation. Preserve the current live BOOT readback and the
+  known-good backup; do not touch USERDATA beyond the already-authorized
+  overlay installation. If authorized, verify BOOT readback, boot logs, GPU
+  readiness, CoreAnimation draws, display, touch, and stability.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
