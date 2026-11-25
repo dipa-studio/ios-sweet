@@ -74,26 +74,41 @@
   forced reboot; it provides no reliable loader/kernel diagnosis. The screen
   during the attempt and whether the candidate reached XNU remain unknown.
   Do not reboot or write again until those observations are reconciled.
+- Follow-up TWRP check at 20:16 UTC: the newly read 4,198,400-byte USERDATA
+  ring area has the exact same SHA-256 as the 20:01 capture
+  (`26cd3324cbce7fd243e8f3f8ca0f28ff25e4bb35edcde835b6a45940d56802de`);
+  both decode to total 299,431 bytes, flush #81, and the same log SHA-256
+  (`4e1c6298c15fa5c30ae262a15b852585cb1c250f61cc4bfbd904667eb2b6cf8b`).
+  Thus the stored XNU log did not change at all during the reported
+  five-minute console attempt and cannot be evidence of that boot. The latest
+  951-byte pmsg is garbled and contains no dependable handoff marker.
+- Candidate command-line defect confirmed by source review: it contains
+  `sweetfb_gpu=1` and `s8metal=1` but **omits `s8gpu=1`**. The loader only
+  requests the G3D rail and runs its GPU probe when `s8gpu=1` is present.
+  Even a successful XNU boot with this candidate would not demonstrate an
+  initialized GPU. Do not retry this image; build a corrected candidate with
+  the required boot arg and inspect loader progress before another boot.
 - User observation (2026-11-25 20:01 UTC): during the candidate attempt, the
   handset displayed a console for about three minutes before the user returned
   it to TWRP. This is consistent with the S8 loader's text console, but the
-  user does not recall the last line/stage. Do not infer kernel progress from
-  "console" alone.
+  user later clarified it remained for about five minutes and does not recall
+  the last line/stage. Do not infer kernel progress from "console" alone.
 - The overlay is configured to write `/usr/appleinternal/sbin/launchd.s8` and
   `/System/Library/Extensions/S8MaliMetal.bundle/` (plugin, plist, and shader
   cache) into the iOS root after `rootrw=1`; the user authorized those writes.
   No on-device GPU draw, visual correctness, touch, or stability result has
   been obtained. ACPM firmware/clock availability and the absent optional
   D22AP `/product` node remain caveats.
-- Source branch `claude/zealous-planck-oi3hse` is at `914e40a`, ahead of its
+- Source branch `claude/zealous-planck-oi3hse` is at `a3735de`, ahead of its
   remote by four commits; it has not been pushed. The temporary Mac SSH key
   remains authorized to enable continued work; remove it by exact-line match
   when the user asks to close Mac access. The one-off Mac link directory and
   transfer archives were removed after retrieving the binaries.
-- **Next:** ask what the user saw during the candidate boot (Apple logo,
-  SpringBoard, recovery, or other). Do not repeat the BOOT write. The saved
-  console ring currently cannot confirm the candidate; investigate why its
-  requested args and overlay/GPU markers are absent before another attempt.
+- **Next:** no further phone changes until code/image diagnosis. Correct the
+  missing `s8gpu=1`, validate S-Boot/loader handoff from a trustworthy console
+  source, and review the current candidate's observed behavior. The persistent
+  XNU log was unchanged, and the user cannot recall the final loader console
+  line; do not claim XNU entry or GPU initialization.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
