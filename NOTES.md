@@ -19,21 +19,41 @@
   Parsed all seven entries; it contains the plugin, Info.plist, GPU startup
   diagnostic, and complete 135/135 QuartzCore cache. This is not a BOOT image
   and is not proof of device acceleration.
-- The three 40 MiB stock BOOT backups are preserved. No compatible current
-  DREAMLTE XNU kernel artifact is available locally, so do not assemble or
-  boot a candidate by substituting the stale A5XELTE kernel. No phone GPU
-  MMIO, boot, or partition write occurred. ACPM firmware rights/loading and
-  safe G3D power/clock sequencing remain unverified.
+- **Correction — compatible XNU artifact found:** Actions run #3
+  (`45648104310`, source `c7651528a26c222b1fcb3337f30270db7ddc3c8c`,
+  `DEVELOPMENT` / `A5XELTE`) contains the DREAMLTE board define and S8 GPU
+  sources in its archived build tree. `A5XELTE` is the supported XNU machine
+  config; patch `0124-dreamlte-s8.patch` defines `DREAMLTE` in that board
+  header. The kernel SHA-256 is
+  `a45420f76f44bb10b7137e65ae931931767c5f1a3bbbfd0e6f017e343d976332`;
+  its binary contains `s8gpu_surface_va`. The matching source through
+  `826902b` has no XNU diff from the artifact revision. The earlier conclusion
+  based on the `a5xelte` filename was wrong.
+- Built an **offline-only** candidate at
+  `F:\ios-sweet-temp\stage3-overlay-27.2\s8-stage3-candidate.img`:
+  19,118,096 bytes (below the 40 MiB BOOT partition limit), SHA-256
+  `68bd4508a48628497667ff9f0c77c52663551b3593d789f5d511037c63d3f56b`.
+  The SWEETXNU payload, 11 segments, command line, and embedded 1,980,912-byte
+  S8OVL1 archive were parsed and verified. It uses the preserved
+  `G950F-BOOT-cpus4-fb15-baseline.img` header/DT backup (SHA-256
+  `08a756484b2b728fc0148c5e7e4defd99322edea7de1931e36a02206a2d6f71e`).
+  Candidate args: `cpus=4 rootrw=1 sweetfb_native=1 sweetfb_hz=30 s8metal=1
+  s8autotwrp=90` plus serial/debug and the existing touch/watchdog settings.
+- Candidate has **not** been booted or written. No phone GPU MMIO occurred.
+  ACPM firmware loading/rights and safe G3D power/clock sequencing remain
+  unresolved, so do not boot until those prerequisites are bounded and the
+  user approves this exact temporary boot. The generated ADT also lacks the
+  optional D22AP `/product` node (`d22ap.adt` was absent); preserve that
+  identity caveat in any boot test.
 - Source branch `claude/zealous-planck-oi3hse` is at `11229c8`, ahead of its
   remote by four commits; it has not been pushed. The temporary Mac SSH key
   remains authorized to enable continued work; remove it by exact-line match
   when the user asks to close Mac access. The one-off Mac link directory and
   transfer archives were removed after retrieving the binaries.
-- **Next:** obtain/build a current DREAMLTE XNU kernel that includes the
-  matching `S8MALI_MAP_SURFACE` interface. Then verify ACPM firmware rights,
-  G3D power/clock sequencing, and hardware MMU/job/fault handling before
-  considering any boot. No candidate boot or partition write without fresh
-  explicit user approval.
+- **Next:** verify the candidate's boot prerequisites, especially ACPM firmware
+  loading and G3D power/clock sequencing, then ask for approval before any
+  temporary boot. If booted, test on-device CoreAnimation draw logs, display,
+  touch, and stability; host Pandecode results alone do not prove acceleration.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
