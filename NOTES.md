@@ -140,7 +140,7 @@
   CoreAnimation GPU frame. Confidence remains 25%, below the user's 50%
   minimum before another attempt. No device action was taken; do not retry
   without reaching that evidence threshold and receiving fresh authorization.
-- Source change is pending commit.
+- Source fix commit: `95143f8`; root handoff commit: `db58a0d`.
 
 ### Offline boot-stall review (2026-11-25 21:53 UTC)
 
