@@ -300,8 +300,9 @@
   progress message and did not show `S8 TOUCH: disabled`. Thus this test does
   not isolate touch as the failure cause. No reboot or partition write was
   performed for log capture. Diagnosis remains open; do not claim readiness.
-  Source progress is current through `5a3ee86`; the active workspace handoff
-  is updated below.
+  At 21:48 UTC, repeated the read-only capture after the user returned to
+  TWRP: same SWEETLOG/pmsg hashes, no new boot evidence; diagnostic BOOT hash
+  remains correct. Latest source progress commit: `5e98270`.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
