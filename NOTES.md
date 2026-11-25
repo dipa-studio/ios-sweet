@@ -172,6 +172,16 @@
   signature at offset 1024 is intact. The original USERDATA header source
   remains unavailable locally. Do not claim GPU readiness/acceleration until
   GPU init and a real CoreAnimation draw are observed.
+- At 2026-11-25 20:48 UTC, user reported they then tried booting iOS themselves
+  and the console appears stuck after a line transcribed as
+  `ifnet_attach: All kernel threads created for interface stf0 have been
+  scheduled at least, ???`. This is XNU BSD/network initialization output,
+  later than the loader and earlier touch-worker milestone; it does not prove
+  root mount or GUI startup. The user's last display state is not independently
+  verified; ADB on the workstation currently sees no device. Do not issue
+  another reboot/write. The USERDATA header prefix remains altered; that may
+  affect boot/root discovery, but is not yet demonstrated as this console
+  stall's cause.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
