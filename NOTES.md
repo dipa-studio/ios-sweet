@@ -27,6 +27,8 @@
 - User agreed to reconnect the Mac for the next build. Windows has no SSH
   config alias or default Ed25519 key, so no connection was attempted; no
   remote authorized_keys files were accessed or changed.
+- User is unsure how to establish that connection. Next: guide them to enable
+  a supported remote session, then use the installed Xcode SDK for stage 3.
 - No phone GPU MMIO, boot, partition, or CoreAnimation draw was accessed.
   Real acceleration remains unproven; ACPM firmware rights/loading and safe
   G3D power/clock sequencing remain unresolved. Keep the existing boot and
