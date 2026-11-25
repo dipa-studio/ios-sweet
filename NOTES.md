@@ -231,9 +231,10 @@
   attempt. No filesystem check, reboot, or device write was performed.
   Updated `tools\dreamlte\pull-sweetlog.ps1` to decode the persistent log
   even when pmsg is absent, and to report that absence explicitly; verified
-  it against the connected recovery. Need fresh boot-specific evidence
-  before identifying or claiming a complete fix; preserve the no-reboot
-  constraint and get explicit authorization before another test boot.
+  it against the connected recovery. Source/progress commit: `12df0dd`;
+  this handoff update: `3e5b0a7`. Need fresh boot-specific evidence before
+  identifying or claiming a complete fix; preserve the no-reboot constraint
+  and get explicit authorization before another test boot.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
