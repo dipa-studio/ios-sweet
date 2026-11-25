@@ -235,13 +235,19 @@
   this handoff update: `3e5b0a7`. Need fresh boot-specific evidence before
   identifying or claiming a complete fix; preserve the no-reboot constraint
   and get explicit authorization before another test boot.
-  At 2026-11-25 21:26 UTC, after the user's explicit authorization, issued
-  exactly one `adb reboot` from recovery to test the installed BOOT candidate.
-  ADB did not reconnect during 180 seconds, and `fastboot devices` also
-  listed no device. No second reboot or manual partition write was issued.
-  Whether the kernel reached root, whether the configured USERDATA overlay/log
-  writes ran, and the handset's current screen are unknown. Stop here and get
-  the user's current screen state before any further device action.
+  After the user's explicit authorization, issued exactly one `adb reboot`
+  from recovery to test the installed BOOT candidate. ADB did not reconnect
+  during 180 seconds; by 21:26 UTC, `fastboot devices` also listed no device.
+  No second reboot or manual partition write was issued. Whether the kernel
+  reached root or the configured USERDATA overlay/log writes ran is unknown.
+- After that test boot, user reports the console's last line is
+  `S8 TOUCH: enabled after 0 retries` (transcribed as `S* TOUCH`). This is
+  printed after the S6SY761 touch controller accepts its enable commands and
+  immediately before XNU starts the touch worker. It confirms touchscreen
+  enable, but not worker startup, root mount, GUI, or GPU. The prior
+  persistent log is stale, and ADB/fastboot remain unavailable. Elapsed time
+  on this line is unknown. Do not retry boot or write partitions; get the
+  user's screen duration/state before choosing further diagnostics.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
