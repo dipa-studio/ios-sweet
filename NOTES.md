@@ -11,6 +11,16 @@
 - Current confidence is below that threshold: the latest boot's stop point is
   unknown, the saved logs are stale, and no end-to-end GPU draw has been
   verified. Do not invent a numeric confidence from incomplete evidence.
+- Positive evidence: separate prior S8 runs showed the iOS Home Screen and
+  completed a Mali fragment draw plus 60 full-screen GPU frames before normal
+  launchd startup; the current shader cache compiles 135/135 QuartzCore
+  functions; Actions run #11 passes the synthetic job-chain test
+  (4 submits, 0 failures).
+- Remaining integration blocker: the stage-3 Metal plugin explicitly has no
+  GPU pipeline for foreign/private shader functions and its fallback skips
+  draws (only clear operations are CPU-emulated). The current real-device
+  stage-3 CoreAnimation path has not demonstrated a frame. Thus these component
+  results do not meet the user's 75% end-to-end threshold.
 - Continue offline diagnosis only. Do not reboot or write device partitions
   without fresh authorization. Report the threshold only with the evidence,
   remaining caveats, and the exact scope of the estimate; hardware success
