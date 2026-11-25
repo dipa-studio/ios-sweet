@@ -168,6 +168,10 @@
 - User reports the phone has not booted after about five minutes. This is a
   user observation; the current display/last console line has not been
   independently observed.
+- On follow-up, user reports the visible screen is a console and transcribes
+  the last line only as `All kernel thing`. This may refer to the previously
+  seen `ifnet_attach` kernel-thread scheduling/“Proceeding” message, but the
+  wording is too incomplete to identify it with confidence.
 - Read-only host check at report time: `adb devices -l` listed no devices and
   `fastboot devices -l` was empty. Therefore current mode and boot stage are
   unknown; this does not establish a kernel panic or identify a cause.
