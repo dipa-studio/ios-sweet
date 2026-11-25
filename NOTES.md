@@ -29,31 +29,40 @@
   its binary contains `s8gpu_surface_va`. The matching source through
   `826902b` has no XNU diff from the artifact revision. The earlier conclusion
   based on the `a5xelte` filename was wrong.
-- Built an **offline-only** candidate at
-  `F:\ios-sweet-temp\stage3-overlay-27.2\s8-stage3-candidate.img`:
-  19,118,096 bytes (below the 40 MiB BOOT partition limit), SHA-256
-  `68bd4508a48628497667ff9f0c77c52663551b3593d789f5d511037c63d3f56b`.
-  The SWEETXNU payload, 11 segments, command line, and embedded 1,980,912-byte
-  S8OVL1 archive were parsed and verified. It uses the preserved
-  `G950F-BOOT-cpus4-fb15-baseline.img` header/DT backup (SHA-256
-  `08a756484b2b728fc0148c5e7e4defd99322edea7de1931e36a02206a2d6f71e`).
-  Candidate args: `cpus=4 rootrw=1 sweetfb_native=1 sweetfb_hz=30 s8metal=1
-  s8autotwrp=90` plus serial/debug and the existing touch/watchdog settings.
-- Candidate has **not** been booted or written. No phone GPU MMIO occurred.
-  ACPM firmware loading/rights and safe G3D power/clock sequencing remain
-  unresolved, so do not boot until those prerequisites are bounded and the
-  user approves this exact temporary boot. The generated ADT also lacks the
-  optional D22AP `/product` node (`d22ap.adt` was absent); preserve that
-  identity caveat in any boot test.
-- Source branch `claude/zealous-planck-oi3hse` is at `11229c8`, ahead of its
+- The first offline candidate omitted `sweetfb_gpu=1`, which source inspection
+  showed is required to initialize the Metal plugin path. Rebuilt and verified
+  corrected candidate
+  `F:\ios-sweet-temp\stage3-overlay-27.2\s8-stage3-candidate-gpu.img`:
+  19,118,096 bytes, SHA-256
+  `1ee126acb4db0c5e1091fa26f430c9377e92c4687c021d4ba0f9ff78960d06e5`.
+  The SWEETXNU payload, 11 segments, `sweetfb_gpu=1`/`s8metal=1` args, and
+  embedded 1,980,912-byte S8OVL1 archive were parsed and verified. It uses
+  the preserved `G950F-BOOT-cpus4-fb15-baseline.img` header/DT backup
+  (SHA-256 `08a756484b2b728fc0148c5e7e4defd99322edea7de1931e36a02206a2d6f71e`).
+- Current device check (2026-11-25 19:49 UTC): read-only ADB sees the confirmed
+  SM-G950F / `dreamlte` in TWRP; BOOT symlink resolves to `/dev/block/sda7`
+  (40 MiB). Live BOOT SHA-256 is
+  `086da7a053e87b4ddbee6c5be82b4303d8e05948e10295c4947d5e41530db8c1`,
+  different from the preserved baseline. **Do not flash/overwrite it.**
+- Corrected candidate remains offline-only: no boot, partition write, root
+  overlay installation, or GPU MMIO has occurred. The overlay installer writes
+  files into the iOS root after `rootrw=1`; ask separately before that persistent
+  change. A temporary `fastboot boot` is preferable to a BOOT write, but only
+  after user approval. The driver checks the G3D power-domain status before
+  touching Mali registers and falls back to CPU rendering if it is off; this
+  does not establish ACPM firmware loading/rights or reliable GPU clocks.
+  The generated ADT also lacks the optional D22AP `/product` node (`d22ap.adt`
+  was absent).
+- Source branch `claude/zealous-planck-oi3hse` is at `914e40a`, ahead of its
   remote by four commits; it has not been pushed. The temporary Mac SSH key
   remains authorized to enable continued work; remove it by exact-line match
   when the user asks to close Mac access. The one-off Mac link directory and
   transfer archives were removed after retrieving the binaries.
-- **Next:** verify the candidate's boot prerequisites, especially ACPM firmware
-  loading and G3D power/clock sequencing, then ask for approval before any
-  temporary boot. If booted, test on-device CoreAnimation draw logs, display,
-  touch, and stability; host Pandecode results alone do not prove acceleration.
+- **Next:** await explicit approval for temporary `fastboot boot` of the
+  corrected image with its root-overlay writes. If approved, verify GPU-ready
+  logs and fail safely to CPU if the power domain is off; test CoreAnimation
+  draws, display, touch, and stability. Never flash the current BOOT partition
+  based on the earlier broad wording.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
