@@ -250,6 +250,27 @@
   Treat this as a real stalled console, but do not infer the exact blocked
   function from the last print. No further reboot or write is authorized;
   fresh pstore/SWEETLOG capture requires returning the handset to TWRP first.
+- User then reports the phone is in TWRP. Read-only post-boot capture confirms
+  the SWEETLOG remains flush #81 with the same old ring/text hashes, so it
+  contains no evidence from this test. `pmsg-ramoops-0` is 951 bytes with
+  SHA-256 `31d7fe097c6c6abc9a3d7b138e42fd29a07c74a0f92a6279643830b1437989cf`,
+  different from the earlier capture but still garbled with no reliable XNU
+  stage marker. `/proc/last_kmsg` (24,920 bytes) is Samsung S-Boot 4.0 output
+  for the TWRP boot and ends at `Starting kernel`; it is not the failed iOS
+  kernel log. No recovery reboot or partition write was issued for capture.
+  The reason this boot stops after touch enable remains unresolved.
+- Built an offline touch-disabled diagnostic candidate at
+  `F:\ios-sweet-temp\stage3-overlay-27.2\s8-stage3-candidate-s8touch-off.img`
+  (19,118,096 bytes, SHA-256
+  `b47ce02749d82fd8f43567243933ea9a96f2400b34769fcb405dea52e6742b2d`).
+  Verified it preserves the installed candidate's kernel, loader, DT, and
+  overlay; exactly 10 bytes in the SWEETXNU command-line field changed,
+  adding only `s8touch=0`. This is a diagnostic to test whether S8 touch
+  initialization is involved, not a confirmed fix. It has not been flashed
+  or booted. Source progress commit: `cb5190e`. Obtain explicit approval
+  before writing this image to BOOT `/dev/block/sda7` and running one test;
+  its `rootrw=1` path may update the configured overlay and SWEETLOG files
+  on USERDATA, with no other manual partition writes.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
