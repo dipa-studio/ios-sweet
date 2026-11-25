@@ -246,8 +246,10 @@
   immediately before XNU starts the touch worker. It confirms touchscreen
   enable, but not worker startup, root mount, GUI, or GPU. The prior
   persistent log is stale, and ADB/fastboot remain unavailable. Elapsed time
-  on this line is unknown. Do not retry boot or write partitions; get the
-  user's screen duration/state before choosing further diagnostics.
+  was subsequently confirmed as more than five minutes with no screen change.
+  Treat this as a real stalled console, but do not infer the exact blocked
+  function from the last print. No further reboot or write is authorized;
+  fresh pstore/SWEETLOG capture requires returning the handset to TWRP first.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
