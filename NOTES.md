@@ -44,7 +44,9 @@
   (40 MiB). Live BOOT SHA-256 is
   `086da7a053e87b4ddbee6c5be82b4303d8e05948e10295c4947d5e41530db8c1`,
   different from the preserved baseline. **Do not flash without fresh exact
-  approval.**
+  approval. A read-only ADB dump is now saved at
+  `F:\iOS Galaxy\backup\G950F-BOOT-live-pre-stage3-20261125.img` (40 MiB);
+  its hash matches the live partition exactly.
 - User approved a temporary boot plus overlay writes, but a read-only transport
   check found no standard fastboot device. This is a Samsung Download Mode
   handset; the S8 project assessment says a non-writing `fastboot boot` route
