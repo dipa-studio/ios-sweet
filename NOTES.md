@@ -93,6 +93,12 @@
   it to TWRP. This is consistent with the S8 loader's text console, but the
   user later clarified it remained for about five minutes and does not recall
   the last line/stage. Do not infer kernel progress from "console" alone.
+- The user reported seeing `Failed to write boot-picker-bringup-reason to
+  NVRAM` during the same attempt. An earlier user-transcribed S8 XNU console
+  showed this as a separate expected diagnostic when no NVRAM driver exists;
+  it is not itself a panic, boot failure, or GPU status. The adjacent screen
+  output is unknown. The persistent ring remains unchanged, so this report
+  alone cannot prove how far the current candidate booted.
 - The overlay is configured to write `/usr/appleinternal/sbin/launchd.s8` and
   `/System/Library/Extensions/S8MaliMetal.bundle/` (plugin, plist, and shader
   cache) into the iOS root after `rootrw=1`; the user authorized those writes.
