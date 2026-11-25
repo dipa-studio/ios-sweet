@@ -21,6 +21,15 @@
   draws (only clear operations are CPU-emulated). The current real-device
   stage-3 CoreAnimation path has not demonstrated a frame. Thus these component
   results do not meet the user's 75% end-to-end threshold.
+- User asks for a percentage in every status. Current subjective estimate is
+  25% for the complete goal; this is a judgment, not a statistically measured
+  probability.
+- Read-only check at 22:08 UTC: ADB sees the Galaxy S8 (`dreamlte`) in
+  recovery/TWRP; BOOT resolves to `/dev/block/sda7`. Its first 19,118,096
+  bytes hash to
+  `b47ce02749d82fd8f43567243933ea9a96f2400b34769fcb405dea52e6742b2d`,
+  confirming the touch-disabled diagnostic image is still installed. No
+  reboot, flash, or partition write was issued.
 - Continue offline diagnosis only. Do not reboot or write device partitions
   without fresh authorization. Report the threshold only with the evidence,
   remaining caveats, and the exact scope of the estimate; hardware success
