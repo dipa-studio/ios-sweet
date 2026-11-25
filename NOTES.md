@@ -206,6 +206,17 @@
   or reboot was issued during this diagnostic. Leave the phone in TWRP; do
   not retry boot or modify USERDATA until the header issue is understood and
   the user explicitly authorizes next steps.
+- At 2026-11-25 21:11 UTC, user reports another iOS boot attempt stops with
+  no later console text after a line transcribed as
+  `EXELTE KEYS: GPR2 con=0 dat=0x1 pud=0xd555 (read only)`. This likely
+  corresponds to the kernel's `A5XELTE KEYS: GPA2 con=... dat=... pud=...
+  (read only)` GPIO/key-input diagnostic in
+  `xnu/patches/0118-a5xelte-home-hid-display-probe.patch`; the user's exact
+  spelling is unverified. It is not a GPU/root-mount success marker or proof
+  of a kernel fault. Current host `adb devices -l` shows no devices. The
+  elapsed time on the line was not established. No new reboot or write was
+  issued by the agent; collect fresh read-only diagnostics when the phone
+  is accessible, without inferring the cause from this line alone.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
