@@ -84,6 +84,38 @@
   frame. Do not issue another reboot or partition write without fresh explicit
   authorization.
 
+### Offline prerequisites before any next attempt (2026-11-25 22:26 UTC)
+
+- Fixed nondeterministic varying-slot assignment in
+  `tools/dreamlte/metal/build-shaders.py`: equal-frequency names came from a
+  Python set and had no stable tie-break, so separate cache builds could
+  assign different varying slots. Before the fix, two full builds had the
+  same 135 entries and entry sizes but differed in 36 shader machine-code
+  blobs. The sort now breaks ties lexicographically, and
+  `test/test_build_shaders.py` checks hash-seed independence.
+- Rebuilt the full QuartzCore cache twice with `PYTHONHASHSEED=1` and `2`.
+  Both compiled 135/135 functions, 36 varying names in 5 slots, and produced
+  byte-identical 1,047,844-byte caches (SHA-256
+  `7d858b889193c1ce2e05be1fe2c130af1ffc9c4b0c2e8fd36373c43c73e98977`).
+  The new regression test and Python compilation pass.
+- Rebuilt and ran `test/build-draw-test.sh` against the current source:
+  74 Mesa static archives, both load-action passes generated 3 GPU draws with
+  0 skipped, `4 submits, 0 failures`, and no invalid Pandecode descriptors.
+  These are host simulations, not execution on the phone.
+- Hardened patch 0129's recovery diagnostic: `s8autotwrp` now runs on a
+  dedicated timer thread instead of the CPU profiler thread that performs
+  task and VM statistics; the timeout is bounded and timer/PMU mapping
+  failures are logged. Patch parsing and structural checks pass. This XNU
+  change has not been compiled: the local environment has no Xcode/Clang
+  kernel toolchain (only a Linux AArch64 GCC), so build correctness remains
+  unverified. It improves diagnostics; it is not a demonstrated boot fix.
+- The end-to-end blockers remain: private/foreign Metal functions still
+  receive no Mali pipeline and their draws are skipped; no real
+  CoreAnimation GPU frame was observed on the S8. Confidence remains 25% for
+  the complete goal, below the user's 50% minimum for another attempt. No
+  device action was taken; do not retry until evidence reaches 50% and fresh
+  authorization is given.
+
 ### Offline boot-stall review (2026-11-25 21:53 UTC)
 
 - The old SWEETLOG contains the exact `ifnet_attach` completion line the user
