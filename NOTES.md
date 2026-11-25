@@ -47,35 +47,36 @@
   approval. A read-only ADB dump is now saved at
   `F:\iOS Galaxy\backup\G950F-BOOT-live-pre-stage3-20261125.img` (40 MiB);
   its hash matches the live partition exactly.
-- User approved a temporary boot plus overlay writes, but a read-only transport
-  check found no standard fastboot device. This is a Samsung Download Mode
-  handset; the S8 project assessment says a non-writing `fastboot boot` route
-  is not established. `fastboot.exe` exists on the PC but `fastboot devices`
-  returned empty while TWRP ADB stayed connected. No reboot was initiated.
-  Do not reinterpret the temporary-boot approval as authorization to replace
-  BOOT. To test, ask for exact approval to write the candidate below to BOOT.
-- Corrected candidate remains offline-only: no boot, partition write, root
-  overlay installation, or GPU MMIO has occurred. The overlay installer writes
-  these iOS-root paths after `rootrw=1`: `/usr/appleinternal/sbin/launchd.s8`
-  and `/System/Library/Extensions/S8MaliMetal.bundle/` (plugin, plist, and
-  QuartzCore shader cache). Ask separately before those persistent changes.
-  A temporary `fastboot boot` is preferable to a BOOT write, but only after
-  user approval. The driver checks the G3D power-domain status before
-  touching Mali registers and falls back to CPU rendering if it is off; this
-  does not establish ACPM firmware loading/rights or reliable GPU clocks.
-  The generated ADT also lacks the optional D22AP `/product` node (`d22ap.adt`
-  was absent).
+- The user authorized BOOT replacement after being told no non-writing
+  fastboot path was available. On 2026-11-25, TWRP's `dd` wrote exactly
+  19,118,096 bytes from the corrected candidate to `/dev/block/sda7`;
+  readback of that byte range SHA-256 matched
+  `1ee126acb4db0c5e1091fa26f430c9377e92c4687c021d4ba0f9ff78960d06e5`.
+  No other partition was written. The prior 40 MiB live BOOT is preserved at
+  `F:\iOS Galaxy\backup\G950F-BOOT-live-pre-stage3-20261125.img`, verified
+  SHA-256 `086da7a053e87b4ddbee6c5be82b4303d8e05948e10295c4947d5e41530db8c1`.
+- `adb reboot` was issued after readback verification. At 2026-11-25
+  19:59:18 UTC, neither ADB nor fastboot had re-enumerated after 240 seconds. The screen
+  state, whether the kernel reached iOS, and whether the authorized overlay
+  writes ran are **unknown**. Do not issue another reboot or partition write.
+  Ask the user what the phone currently displays; if needed, have them return
+  it to TWRP before reading the persistent XNU log and re-verifying BOOT.
+- The overlay is configured to write `/usr/appleinternal/sbin/launchd.s8` and
+  `/System/Library/Extensions/S8MaliMetal.bundle/` (plugin, plist, and shader
+  cache) into the iOS root after `rootrw=1`; the user authorized those writes.
+  No on-device GPU draw, visual correctness, touch, or stability result has
+  been obtained. ACPM firmware/clock availability and the absent optional
+  D22AP `/product` node remain caveats.
 - Source branch `claude/zealous-planck-oi3hse` is at `914e40a`, ahead of its
   remote by four commits; it has not been pushed. The temporary Mac SSH key
   remains authorized to enable continued work; remove it by exact-line match
   when the user asks to close Mac access. The one-off Mac link directory and
   transfer archives were removed after retrieving the binaries.
-- **Next:** ask whether the user explicitly authorizes writing the corrected
-  candidate (SHA-256 above) to `/dev/block/sda7` and booting it. Do not write
-  before that confirmation. Preserve the current live BOOT readback and the
-  known-good backup; do not touch USERDATA beyond the already-authorized
-  overlay installation. If authorized, verify BOOT readback, boot logs, GPU
-  readiness, CoreAnimation draws, display, touch, and stability.
+- **Next:** wait for the user to report the display/boot state. If TWRP
+  reconnects, capture the boot log and inspect whether the G3D driver initialized
+  and whether CoreAnimation draws reached Mali. If not, do not repeat the
+  partition write; use the preserved exact live BOOT backup for rollback only
+  with user direction.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
