@@ -217,6 +217,23 @@
   elapsed time on the line was not established. No new reboot or write was
   issued by the agent; collect fresh read-only diagnostics when the phone
   is accessible, without inferring the cause from this line alone.
+- At 2026-11-25 21:20 UTC, ADB is connected to `recovery` on `dreamlte`.
+  Read-only BOOT hash for its first 19,118,096 bytes matches the installed
+  candidate (`56105bb3f5c2b96ef207e5ddbeed9ff1dd0add454773b64e74658443f0e7608c`).
+  USERDATA bytes 0-63 are zero and the `HX` signature remains at offset
+  1024. A new read-only SWEETLOG capture still reports flush #81 and exactly
+  the old ring/text hashes; `/sys/fs/pstore` contains no pmsg file. The old
+  persistent log contains the same `A5XELTE KEYS: GPA2 con=0 dat=0x1
+  pud=0xd555 (read only)` line at line 110, followed by S8 touch startup,
+  UFS discovery, HFS root mount, launchd, and SpringBoard. This establishes
+  that the diagnostic line itself was not terminal in that earlier boot,
+  but the unchanged log does not establish what happened in the latest
+  attempt. No filesystem check, reboot, or device write was performed.
+  Updated `tools\dreamlte\pull-sweetlog.ps1` to decode the persistent log
+  even when pmsg is absent, and to report that absence explicitly; verified
+  it against the connected recovery. Need fresh boot-specific evidence
+  before identifying or claiming a complete fix; preserve the no-reboot
+  constraint and get explicit authorization before another test boot.
 
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
