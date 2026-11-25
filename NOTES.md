@@ -161,8 +161,8 @@
   No on-device GPU draw, visual correctness, touch, or stability result has
   been obtained. ACPM firmware/clock availability and the absent optional
   D22AP `/product` node remain caveats.
-- Source branch `claude/zealous-planck-oi3hse` is at `36e783f`, ahead of its
-  remote by 18 commits; it has not been pushed. The temporary Mac SSH key
+- Source branch `claude/zealous-planck-oi3hse` is at `2e1152f`, ahead of its
+  remote by 19 commits; it has not been pushed. The temporary Mac SSH key
   remains authorized to enable continued work; remove it by exact-line match
   when the user asks to close Mac access. The one-off Mac link directory and
   transfer archives were removed after retrieving the binaries.
