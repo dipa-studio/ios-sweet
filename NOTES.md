@@ -2,6 +2,22 @@
 
 ## New target request: Galaxy S8 SM-G950F (2026-11-23)
 
+### Offline boot-stall review (2026-11-25 21:53 UTC)
+
+- The old SWEETLOG contains the exact `ifnet_attach` completion line the user
+  reported for `stf0`. In that log it is followed by keypad/touch startup,
+  UFS discovery, and the BSD/HFS root mount. XNU emits this “Proceeding” line
+  after the interface threads have run; it is not itself a stall diagnostic.
+- The candidate's XNU source includes patch 0129 and its `s8autotwrp` worker,
+  but `s8_load_start()` is called from `sweet_ufs_rootdev()`. The recovery
+  timer therefore cannot diagnose a stall before UFS root discovery. The
+  unchanged flush-81 SWEETLOG and corrupted pmsg are not evidence of progress
+  during the latest attempt.
+- No source fix is justified by these artifacts: they do not reveal the
+  latest boot's final stage or root cause. No device action was taken; leave
+  the phone in TWRP and do not reboot or write without fresh authorization.
+  Do not call the port fixed or GPU-ready.
+
 ### Stage-3 iOS bundle/overlay milestone (2026-11-25 19:34 UTC)
 
 - Used the verified Mac SSH connection with the user's one-purpose temporary
