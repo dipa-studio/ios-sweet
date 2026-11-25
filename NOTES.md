@@ -2,6 +2,20 @@
 
 ## New target request: Galaxy S8 SM-G950F (2026-11-23)
 
+### User reporting threshold (2026-11-25 21:55 UTC)
+
+- User wants to be notified only once there is at least 75% evidence-based
+  confidence the S8 port will work. Interpret “work” as a complete iOS boot
+  with touch and a real GPU-accelerated CoreAnimation draw, not merely XNU
+  reaching a console milestone.
+- Current confidence is below that threshold: the latest boot's stop point is
+  unknown, the saved logs are stale, and no end-to-end GPU draw has been
+  verified. Do not invent a numeric confidence from incomplete evidence.
+- Continue offline diagnosis only. Do not reboot or write device partitions
+  without fresh authorization. Report the threshold only with the evidence,
+  remaining caveats, and the exact scope of the estimate; hardware success
+  still requires an explicitly authorized test and direct verification.
+
 ### Offline boot-stall review (2026-11-25 21:53 UTC)
 
 - The old SWEETLOG contains the exact `ifnet_attach` completion line the user
