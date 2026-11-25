@@ -2,6 +2,33 @@
 
 ## New target request: Galaxy S8 SM-G950F (2026-11-23)
 
+### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
+
+- Fixed the slot-3 QuartzCore storage-image descriptor test finding: unused
+  lower ATTRIBUTE and ATTRIBUTE_BUFFER slots had zero/invalid encodings. They
+  now reference a valid mapped 1x1 RGBA8 null image. The test rejects any
+  Pandecode `XXX: INVALID` diagnostic and checks both storage-image descriptors.
+- Source commit `11229c8` (`fix: initialize unused storage image descriptors`)
+  includes the driver fix, stricter host test, and `DREAMLTE_PROGRESS.md`.
+  Local WSL build of the current translator + draw harness: 4 submits, 0
+  failures; 3 draws in each pass; no invalid Pandecode descriptors; two
+  64x64/256-byte-row-stride storage-image descriptors. Mesa 25.2.8's 74
+  configured static archives and `air2nir` were built locally.
+- Recompiled QuartzCore `default.metallib` from iOS 16.7.16 / 20H392 with
+  this translator: 135/135 functions, 36 varying names in 5 slots,
+  1,047,796 bytes, SHA-256
+  `81167BF622065FA830DCA19ED9695EDD036E8C983C8A34EB8B9EA7E7E70A6D42`.
+  Cache remains a local diagnostic artifact outside Git.
+- The source branch is still local and ahead of its remote. `git push` could
+  not authenticate in this shell (interactive password prompt unavailable);
+  the last hosted draw-test run, #11 (`45657021116`), tested earlier commit
+  `826902b`, not this fix. The Xcode iPhoneOS SDK is not present in WSL, so no
+  stage-3 bundle or BOOT image was built.
+- No phone GPU MMIO, boot, partition, or CoreAnimation draw was accessed.
+  Real acceleration remains unproven; ACPM firmware rights/loading and safe
+  G3D power/clock sequencing remain unresolved. Keep the existing boot and
+  partition safeguards.
+
 ### Workspace transfer cleanup (2026-11-25 11:58 UTC)
 
 - Removed all nine ignored, untracked `*.img` outputs from `research/ios-galaxy-s8/out`: five 16 GiB iOS root images plus four generated boot/kernel images (about 80 GiB total). These were local build artifacts; the user explicitly requested removing images to speed up `scp -r`.
