@@ -2,6 +2,13 @@
 
 ## New target request: Galaxy S8 SM-G950F (2026-11-23)
 
+### Workspace transfer cleanup (2026-11-25 11:58 UTC)
+
+- Removed all nine ignored, untracked `*.img` outputs from `research/ios-galaxy-s8/out`: five 16 GiB iOS root images plus four generated boot/kernel images (about 80 GiB total). These were local build artifacts; the user explicitly requested removing images to speed up `scp -r`.
+- Removed the duplicate 182 MiB llvm-mingw ZIP after verifying its extracted toolchain directory contains 9,069 files.
+- Preserved all three `backup/G950F-BOOT-*.img` device backups. No tracked files or source changes were removed. Root and S8 Git object packs total under 1 MiB each; the XNU worktree packs are about 33 MiB, not the transfer bottleneck.
+- Remaining user changes are untouched: root `docs/galaxy-s8-g950f.md`, S8 `.gitignore`, `shim/dreamlte/build.sh`, `tools/dreamlte/make-boot.sh`, and three untracked `*.lf.sh` scripts.
+
 ### Current GPU/ACPM handoff (2026-11-24)
 
 - Fresh read-only TWRP inspection reports `firmware_class.path=/vendor/firmware`. The exact `exynos8895_acpm_dvfs.fw` file was not found in the active recovery root filesystem or in the preserved SYSTEM and VENDOR ext4 partitions. SYSTEM and VENDOR were mounted with `ro,noload` and unmounted after inspection. TWRP's earlier dmesg reports a successful firmware load, so its prior source/lifecycle remains unexplained; do not treat that log as proof the blob is available to XNU.
