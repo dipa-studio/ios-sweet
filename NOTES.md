@@ -2,6 +2,34 @@
 
 ## New target request: Galaxy S8 SM-G950F (2026-11-23)
 
+### Stage-3 iOS bundle/overlay milestone (2026-11-25 19:34 UTC)
+
+- Used the verified Mac SSH connection with the user's one-purpose temporary
+  key. Downloaded the Xcode 27.2 iPhoneOS SDK to WSL over the local network;
+  SDK archive SHA-256 matched at both ends:
+  `16F359DED2E625F6AC86680C7E2761C186C5B8EAA03198380787776328470902`.
+- The current source's Mesa iOS archive built locally (42 objects, 1.1 MiB).
+  LLVM 18's Mach-O linker does not understand Xcode 27.2's
+  `arm64e.x1-ios` libSystem stub target, so the final link was performed by
+  Apple's `xcrun ld` on the Mac. This produced a 865,000-byte arm64 bundle
+  containing the draw path and a 66,664-byte arm64 `s8gputest`.
+- Validated local overlay:
+  `F:\ios-sweet-temp\stage3-overlay-27.2\stage3.ovl`, 1,980,912 bytes,
+  SHA-256 `4A408C10D696E8159EDAF451D5AAB50D933DAD42CEB74FB9E0CBFB22C585620C`.
+  Parsed all seven entries; it contains the plugin, Info.plist, GPU startup
+  diagnostic, and complete 135/135 QuartzCore cache. This is not a BOOT image
+  and is not proof of device acceleration.
+- The three 40 MiB stock BOOT backups are preserved. No compatible current
+  DREAMLTE XNU kernel artifact is available locally, so do not assemble or
+  boot a candidate by substituting the stale A5XELTE kernel. No phone GPU
+  MMIO, boot, or partition write occurred. ACPM firmware rights/loading and
+  safe G3D power/clock sequencing remain unverified.
+- Source branch `claude/zealous-planck-oi3hse` is at `11229c8`, ahead of its
+  remote by three commits; it has not been pushed. The temporary Mac SSH key
+  remains authorized to enable continued work; remove it by exact-line match
+  when the user asks to close Mac access. Mac build scratch is under
+  `~/ios-sweet-link-20261125`.
+
 ### GPU sparse-image descriptor follow-up (2026-11-25 19:04 UTC)
 
 - Fixed the slot-3 QuartzCore storage-image descriptor test finding: unused
