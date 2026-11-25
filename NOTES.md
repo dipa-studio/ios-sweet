@@ -172,6 +172,10 @@
   the last line only as `All kernel thing`. This may refer to the previously
   seen `ifnet_attach` kernel-thread scheduling/“Proceeding” message, but the
   wording is too incomplete to identify it with confidence.
+- Asked for the line ending; user replies `Proceeding thing`. This is
+  consistent with the previously documented `ifnet_attach` “Proceeding”
+  progress marker, but remains an approximate transcription. The marker is
+  not a boot-complete message and does not identify a hang cause.
 - Read-only host check at report time: `adb devices -l` listed no devices and
   `fastboot devices -l` was empty. Therefore current mode and boot stage are
   unknown; this does not establish a kernel panic or identify a cause.
