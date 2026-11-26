@@ -22,8 +22,10 @@
   SHA-256 `08a756484b2b728fc0148c5e7e4defd99322edea7de1931e36a02206a2d6f71e`.
   After the user's approval, verified that BOOT hash and issued one reboot.
   The user saw `SWEET: trust caches unavailable (Image4/AMFI not installed)`,
-  then reported the screen changed; the new display text is unknown. This is
-  an expected diagnostic path in patch 0015, not a panic by itself. A read-only
+  then reported the screen changed to the Apple logo. This is progress beyond
+  the diagnostic, but the exact boot stage and eventual UI are not confirmed.
+  The restored image is the CPU-only baseline, with no GPU acceleration
+  arguments; the Apple logo does not demonstrate GPU acceleration. A read-only
   ADB/fastboot check found no connected device. USERDATA and all other
   partitions were untouched; no further write or reboot was issued.
 - Known-good CPU-rendered baseline remains
