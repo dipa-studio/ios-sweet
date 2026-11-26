@@ -71,11 +71,22 @@
   identical to the candidate. USERDATA and all other partitions were untouched.
 - Issued one reboot. For the following three minutes the host saw no ADB or
   fastboot device, and Windows did not enumerate the S8 over USB. Boot outcome
-  and Mongoose/XNU CPU startup are therefore unknown; no new XNU log was
-  retrieved. No further partition write or reboot was performed. Candidate
-  still retains `rootrw=1`, which may confound boot diagnosis. The
-  app-migration source fix remains uninstalled; no complete local root image or
-  HFS-capable TWRP path is available.
+  and Mongoose/XNU CPU startup were initially unknown; no new XNU log was
+  retrieved. The user then confirmed the phone reached the lock screen but
+  reported no speed improvement. The current XNU CPU count and Mongoose
+  preflight result remain unverified. No further partition write or reboot
+  was performed. Candidate still retains `rootrw=1`, which may confound boot
+  diagnosis.
+- Performance review: the current image uses the native 1440×2960 panel mode;
+  the earlier 1125×2436 iPhone X mode hung at its first `SwapBegin`, so do not
+  lower resolution until that path is fixed and tested. `sweetfb_hz` limits
+  CPU framebuffer copies, not the underlying CoreAnimation rendering; changing
+  it may trade CPU load for frame pacing, not reliably speed up the UI. No
+  lower-resolution or refresh-rate change has been built or flashed. Next
+  useful evidence is the post-flash XNU/pstore log, retrieved from TWRP with
+  authorization for the reboot needed to access it.
+- The app-migration source fix remains uninstalled; no complete local root
+  image or HFS-capable TWRP path is available.
 
 ## S8 GPU rebasing handoff (2026-11-26)
 
