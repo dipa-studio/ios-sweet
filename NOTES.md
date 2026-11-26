@@ -82,6 +82,20 @@
   CoreAnimation GPU frame. No device write or reboot was performed. See
   [DREAMLTE_PROGRESS.md](../ios-sweet-temp/s8-gpu-src/DREAMLTE_PROGRESS.md)
   for source/test detail.
+- User preference is OpenGL/GLES first, with Metal as a stretch goal. Review
+  of the video and `frokfrdk/ios-sweet` `sunfish` branch (commit
+  `889149803008aab9166747eaf84ea39e62c57ee6`) found an experimental
+  CoreAnimation EAGL-to-Mesa-freedreno path for Adreno 618; the video reports
+  partial acceleration, not full Metal. Its Adreno/GMU backend is not
+  transferable to the S8 Mali-G71.
+- The S8 source already has a separate, limited Panfrost DRM user client
+  (`0136`) and a cross-compiled Mesa Panfrost archive used by the Metal
+  plugin's descriptor code. This is not a full GLES/Gallium renderer or an
+  EAGL shim. Next offline milestone: assess a Mesa Panfrost GLES path over
+  the existing S8 interface and implement/validate the EAGL boundary before
+  considering any device test. Keep Metal separate; do not enable both Mali
+  interfaces together. Current BOOT remains the CPU-only baseline; no new
+  reboot/write is authorized. End-to-end confidence remains 25%.
 
 ## New target request: Galaxy S8 SM-G950F (2026-11-23)
 
