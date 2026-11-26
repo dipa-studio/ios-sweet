@@ -69,22 +69,37 @@
   [G950F-BOOT-octa-preflight-readback-20261126-1237.img](./backup/G950F-BOOT-octa-preflight-readback-20261126-1237.img),
   SHA-256 `5c482849e54a6109a8cf9d1b135f54ff2ac44735066b981e737d8b7cdea3f9eb`,
   identical to the candidate. USERDATA and all other partitions were untouched.
-- Issued one reboot. For the following three minutes the host saw no ADB or
-  fastboot device, and Windows did not enumerate the S8 over USB. Boot outcome
-  and Mongoose/XNU CPU startup were initially unknown; no new XNU log was
-  retrieved. The user then confirmed the phone reached the lock screen but
-  reported no speed improvement. The current XNU CPU count and Mongoose
-  preflight result remain unverified. No further partition write or reboot
-  was performed. Candidate still retains `rootrw=1`, which may confound boot
-  diagnosis.
-- Performance review: the current image uses the native 1440×2960 panel mode;
-  the earlier 1125×2436 iPhone X mode hung at its first `SwapBegin`, so do not
-  lower resolution until that path is fixed and tested. `sweetfb_hz` limits
-  CPU framebuffer copies, not the underlying CoreAnimation rendering; changing
-  it may trade CPU load for frame pacing, not reliably speed up the UI. No
-  lower-resolution or refresh-rate change has been built or flashed. Next
-  useful evidence is the post-flash XNU/pstore log, retrieved from TWRP with
-  authorization for the reboot needed to access it.
+- The user reported reaching the lock screen but seeing no speed improvement.
+  After the user returned the handset to TWRP, a read-only log pull retrieved
+  [sweetlog-octa-postflash-20261126.txt](./research/ios-galaxy-s8/logs/sweetlog-octa-postflash-20261126.txt)
+  (332,797 bytes; ring 327,563 bytes; flush #103; SHA-256
+  `c1ef07933262758cce1957655d412567a09d00001d07b3b904490bf3ec8125cf`).
+  It records `requested=4 selected=4`, CPUs 0–3 initialized, `4/4 CPUs
+  initialized`, and boot-args `cpus=4`. The Mongoose preflight did not promote
+  XNU to eight CPUs; the reason is not established. The 951-byte pmsg
+  ([pmsg-octa-postflash-20261126.txt](./research/ios-galaxy-s8/logs/pmsg-octa-postflash-20261126.txt),
+  SHA-256 `bd700dd2c16529af82e0013be4d243f562e25216095c47ff19ec1c88c7d36654`)
+  is garbled and contains no recoverable `MNGS` diagnostics. The log confirms
+  1440×2960 IOSurfaces and native presentation.
+- In response to the user's request to lower resolution, built an offline
+  [1125×2436 BOOT candidate](./research/ios-galaxy-s8/out/dreamlte-1125x2436-mongoose-preflight-20261126.img)
+  (40 MiB, SHA-256
+  `0089e589391745427a073e6d36244b0b2d5ba1e9ece8100f302aed07f563dae1`).
+  It removes `sweetfb_native=1` and changes only the payload ADT canvas from
+  1440×2960 to 1125×2436; all kernel segments, the loader, and partition tail
+  remain byte-identical. The earlier 1125×2436 attempt paired that mode with a
+  1440×2960 ADT canvas and stalled at the first `SwapBegin`; this candidate
+  corrects that mismatch. The lower mode has 35.71% fewer pixels and may
+  reduce software-rendering work, but has not been flashed or boot-tested.
+  `sweetfb_hz=15` and `rootrw=1` are unchanged; the Mongoose preflight remains
+  present and its outcome is still unverified.
+- Current device state: TWRP, after the user returned it for log collection.
+  No writes followed the verified octa-preflight BOOT flash; USERDATA and all
+  other partitions remain untouched. Before flashing the lower-resolution
+  candidate, obtain explicit authorization for that exact image and make a
+  fresh BOOT backup. `sweetfb_hz` controls CPU framebuffer copy frequency, not
+  CoreAnimation's rendering cost; changing it may trade CPU load for frame
+  pacing. No refresh-rate change was made.
 - The app-migration source fix remains uninstalled; no complete local root
   image or HFS-capable TWRP path is available.
 
