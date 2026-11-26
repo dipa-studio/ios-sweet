@@ -36,14 +36,30 @@
   Packaging checks confirm the payload differs from the previous candidate
   only in boot args, the DT matches the baseline, and the embedded overlay
   still matches `stage3.ovl`.
+- Refreshed offline candidate:
+  [s8-stage3-metal-final.img](../ios-sweet-temp/stage3-overlay-27.2/s8-stage3-metal-final.img),
+  19,144,720 bytes, SHA-256
+  `070530c1d2cdd6d1db25d094ae436f33849c399cbad0aa030c9938282e281558`.
+  Its 2,007,104-byte `stage3-final.ovl` hashes to
+  `a258a0164b5f4e31409c02a72d509a87099612ace98f8444261ce820a6371d28`;
+  it contains the freshly linked 891,152-byte plugin
+  (`34d866fb7d91fb0145c10c80d264ac0a0f7eca1df35e15b36abebd9bfeb94c26`)
+  and complete QuartzCore cache
+  (`a06b1678c0455380e1d56642d23b6ba1dfdc4b76b08c6a75b17d685a161206a4`).
+  Candidate validation confirms all 10 XNU segments are unchanged from the
+  prior stage-3 payload, its Samsung DT is byte-identical to the preserved
+  baseline, and the embedded overlay and ADT mapping match exactly. It keeps
+  touch enabled and has no `rootrw=1` or `s8gpu=` argument.
 - Source changes are committed locally as `4596fa03ad4c5dbb1a01921f9880617b3bc07556`
   (`Separate S8 loader GPU power flag for Metal path`); not pushed. No XNU
-  kernel rebuild or GitHub Actions run was performed.
-- This is an offline integration correction, not a boot fix. The XNU stage-3
-  kernel was not rebuilt; the stage-3 plugin link and foreign/private Metal
-  shader path remain unresolved, and the candidate has not been booted.
-  Confidence remains 25% for touch-enabled iOS plus a verified
-  CoreAnimation GPU frame. See
+  kernel rebuild or GitHub Actions run was performed. The exact run-3 kernel
+  artifact was re-extracted and matched its recorded SHA-256. The stage-3
+  plugin now links against a temporary SDK stub copy; the official SDK was
+  not modified. The linker success is not runtime validation.
+- This is an offline integration candidate, not a boot fix. It has not been
+  booted; foreign/private Metal functions can still lack a Mali pipeline and
+  skip draws. Confidence remains 25% for touch-enabled iOS plus a verified
+  CoreAnimation GPU frame. No device write or reboot was performed. See
   [DREAMLTE_PROGRESS.md](../ios-sweet-temp/s8-gpu-src/DREAMLTE_PROGRESS.md)
   for source/test detail.
 
