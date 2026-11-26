@@ -6,14 +6,24 @@
   worktree; all six applied with plain `git apply`. Patch `0130` printed
   whitespace warnings but applied. This resolves the earlier stale handoff
   claiming that `0128` failed.
-- Review found `0132` encoded Mali LPAE leaf pages with descriptor type `01`.
-  Patch `0134-dreamlte-mali-page-descriptor.patch` changes it to `11` and adds
-  a host test for descriptor bits, map/unmap, duplicate and invalid mappings,
-  allocation-failure rollback, and destruction. The new patch applies cleanly
-  after `0128`–`0133`.
+- A Mali-specific MMU reference corrected the previous assumption: Mali LPAE
+  uses leaf ATE type `01` and table PTE type `11`; generic ARM CPU LPAE uses a
+  different leaf encoding. The first `0134` draft incorrectly changed the
+  leaf to `11`; that draft was not used on hardware. The corrected
+  `0134-dreamlte-mali-page-descriptor.patch` retains `01`, fixes Mali's
+  execute-never/access-flag and 3-bit memory-attribute handling, and adds host
+  tests for descriptor bits, map/unmap, invalid attributes, allocation
+  rollback, and destruction.
 - WSL validation passed:
   `g++ -std=c++11 -Wall -Wextra -Werror tests/MaliG71MMUTest.cpp -o
   /tmp/mali-g71-mmu-test && /tmp/mali-g71-mmu-test`.
+- Final verification used a fresh worktree at the `0128`–`0133` replay
+  baseline: corrected `0134` passed `git apply --check`, applied cleanly, and
+  its host test passed. The test sets the access flag in the actual page-table
+  entry before unmapping.
+- Descriptor cross-checks used the public [Mali Bifrost LPAE driver](https://github.com/TinkerBoard/debian_kernel/blob/8bb796b3eff3bc0fcc89406f9f83fd9a224b7526/drivers/gpu/arm/bifrost/mali_kbase_mmu_mode_lpae.c)
+  and [ARM Mali io-pgtable format](https://github.com/beagleboard/linux/blob/e771677c937da5808f7b6c1f0e4a97ec1a84f8a8/drivers/iommu/io-pgtable-arm.c);
+  no driver implementation code was copied.
 - This is software-only page-table groundwork, not working GPU acceleration.
   No XNU kernel build, GitHub Actions run, GPU MMIO access, flash, or reboot
   was performed. The Mali hardware MMU is not programmed; power/clock
@@ -23,8 +33,9 @@
 - Current BOOT remains the previously recorded 1125x2436 candidate; its
   display and touch result remain unknown. No device action was taken here.
 - S8 patch/docs commits: `5f0fb4c1bca084de662aef9b6929eaa97fee108c`
-  (patches and test) and `cd8072d76465065593c01d416135d4cae9944987`
-  (validation handoff).
+  (patches and test), `cd8072d76465065593c01d416135d4cae9944987`
+  (validation handoff), and `7e3cd437337a75ec11dd4aa87f562650c651d52e`
+  (corrected Mali descriptors and updated status).
   The isolated XNU source checkout still has uncommitted GPU source/test
   changes; their replayed source matches after line-ending normalization.
   Existing unrelated dirty files in the main and S8 worktrees remain unstaged.
