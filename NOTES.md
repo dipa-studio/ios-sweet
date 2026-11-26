@@ -2,12 +2,19 @@
 
 ## S8 GPU rebasing handoff (2026-11-26)
 
-- Last device action: the touch-disabled stage-3 image
-  (`b47ce02749d82fd8f43567243933ea9a96f2400b34769fcb405dea52e6742b2d`) was
-  written to BOOT `/dev/block/sda7`, read back exactly, and rebooted once.
-  ADB and fastboot remained absent from 10:29:51 through 10:32:21 UTC. The
-  current screen and boot stage are unknown; no further device action was
-  taken. Do not write or reboot without fresh explicit authorization.
+- Latest device action: after the user explicitly authorized a BOOT-only test
+  despite the 25% confidence estimate, the new candidate was written to
+  BOOT `/dev/block/sda7` and synced. TWRP confirmed BOOT maps to that 40 MiB
+  partition. Fresh pre-write backup
+  [G950F-BOOT-pre-metal-final-20261126-1121.img](./backup/G950F-BOOT-pre-metal-final-20261126-1121.img)
+  hashes to `f12a8f410e00bc870cf82719e64923d1b80676eaeac6a8880e58339073320c7e`.
+  Full readback confirms the candidate's first 19,144,720 bytes match exactly
+  (SHA-256 `070530c1d2cdd6d1db25d094ae436f33849c399cbad0aa030c9938282e281558`)
+  and the remaining partition bytes match the pre-write backup; current full
+  BOOT SHA-256 is `b6b13d849c513a0dd047594c6ef265af3b6886c253c7972e552d2d8c86356ad8`.
+  No other partition was written. The phone is still in TWRP; the authorized
+  single reboot is pending. Do not issue further writes or reboot again
+  without fresh authorization.
 - Known-good CPU-rendered baseline remains
   [G950F-BOOT-cpus4-fb15-baseline.img](./backup/G950F-BOOT-cpus4-fb15-baseline.img),
   40 MiB, SHA-256
