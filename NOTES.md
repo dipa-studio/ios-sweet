@@ -215,7 +215,8 @@
   been compiled. No image was rebuilt, flashed, or booted.
 - Confidence remains 25% for the complete goal. Do not retry until the
   earlier 50% evidence threshold is met and the user explicitly authorizes
-  another test; no device action was taken.
+  another test; no device action was taken. Source commit: `cfeae4f`;
+  handoff commit: `3f982b3`.
 
 ### Offline boot-stall review (2026-11-25 21:53 UTC)
 
