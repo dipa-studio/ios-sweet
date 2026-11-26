@@ -106,8 +106,10 @@
   is 40 MiB and exactly matches the candidate SHA-256 above. Issued the one
   authorized reboot. Boot-to-lock-screen result and displayed resolution have
   not yet been observed; do not infer success from the accepted reboot command.
-  USERDATA and all other partitions were untouched. Do not write another
-  partition or reboot again without confirming the exact action with the user.
+  A 120-second ADB/fastboot availability check returned no device, which does
+  not distinguish an iOS boot from a stall. USERDATA and all other partitions
+  were untouched. Do not write another partition or reboot again without
+  confirming the exact action with the user.
 - S8 README/install-guide status update: nested checkout commit `9deeb0b`.
 - `sweetfb_hz` controls CPU framebuffer copy frequency, not CoreAnimation's
   rendering cost; changing it may trade CPU load for frame pacing. No
