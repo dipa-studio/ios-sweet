@@ -1,5 +1,25 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## S8 OpenGL/GLES cross-build follow-up (2026-11-26)
+
+- Mesa 25.2.8 host shader-tool builds succeeded, including `mesa_clc`,
+  `vtn_bindgen2`, and native `panfrost_compile`. A static iOS GLES
+  configuration with EGL disabled was produced in the external build workspace.
+- The first Panfrost/Gallium cross-compile stopped because `xf86drm.h` is
+  unavailable; the current iOS path still lacks a libdrm-compatible S8 winsys.
+  The EAGL/`st_api` bridge and IOSurface import path are also not implemented.
+- `ld64.lld-18` cannot parse the Xcode 27.2 SDK's `arm64e.x1-ios` TAPI target.
+  A temporary `-nostdlib`/`dynamic_lookup` workaround let Meson configure but
+  falsely detected Linux-only `memfd_create`; its build failed in
+  `src/util/anon_file.c`. Do not reuse that configuration as a valid iOS build.
+- No source patch, kernel build, Actions run, GPU MMIO, phone operation,
+  reboot, or partition write occurred. The installed BOOT remains unchanged.
+- Next: use a linker/SDK combination that accurately checks iOS symbols, provide
+  libdrm headers only as appropriate for the build, then implement the S8
+  winsys and EAGL bridge. Do not enable Panfrost and Metal GPU interfaces
+  together; keep device testing offline until the software path and safety
+  prerequisites are validated.
+
 ## S8 GPU software-MMU follow-up (2026-11-26)
 
 - Replayed patches `0128`–`0133` from XNU base `834daf7` in a fresh
