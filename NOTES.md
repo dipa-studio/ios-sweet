@@ -2,6 +2,17 @@
 
 ## S8 OpenGL/GLES cross-build follow-up (2026-11-26)
 
+- Continued implementation work resumed this turn. Tightened the existing
+  `0136-dreamlte-gpu-userclient.patch` Mali leaf descriptor with explicit
+  memory-attribute-index, read/write AP, inner-shareable SH, and access-flag
+  fields. Added an overflow-safe BO size check before 4 KiB rounding and VA
+  allocation. A host C++ test for table/leaf descriptor bits and allocation
+  bounds passed under `g++ -Wall -Wextra -Werror`.
+- The corrected `0136` patch could not be `git apply --check`ed against this
+  S8 worktree because it references XNU `iokit/` files absent from the
+  current checkout. This proves only the host descriptor and bounds logic,
+  not a kernel build or device submission. No GPU MMIO, flash, reboot, or
+  partition write occurred.
 - Mesa 25.2.8 host shader-tool builds succeeded, including `mesa_clc`,
   `vtn_bindgen2`, and native `panfrost_compile`. A static iOS GLES
   configuration with EGL disabled was produced in the external build workspace.
