@@ -1,0 +1,669 @@
+diff --git a/iokit/Kernel/arm/S8GPU.cpp b/iokit/Kernel/arm/S8GPU.cpp
+new file mode 100644
+index 0000000..cfa86dd
+--- /dev/null
++++ b/iokit/Kernel/arm/S8GPU.cpp
+@@ -0,0 +1,625 @@
++/* SPDX-License-Identifier: GPL-2.0-only
++ *
++ * Galaxy S8 (dreamlte) Mali-G71 MP20 for userspace: an IOKit service whose
++ * user client answers Linux panfrost's DRM requests (uapi panfrost_drm.h:
++ * the request number is the external method selector, its structure goes in
++ * and comes back as it is), so that Mesa's panfrost driver can run with a
++ * small libdrm stand-in. After mainline panfrost (panfrost_gpu.c, _mmu.c,
++ * _job.c) and io-pgtable-arm.c (ARM_MALI_LPAE). GPL-2.0 like those.
++ *
++ * First version, kept simple:
++ *  - one GPU address space (AS 1..7) and page tables per client task;
++ *  - buffer objects are wired write-combined memory (no CPU cache maintenance
++ *    needed), mapped whole at creation (HEAP buffers too), at GPU addresses
++ *    from 32 MiB up; a client maps one into its address space with
++ *    IOConnectMapMemory(type = handle);
++ *  - SUBMIT runs the job chain and waits for it (polled): every sync object
++ *    a client holds is therefore always signalled.
++ * The service exists with boot-arg s8gpu=4 or higher.
++ */
++#include <IOKit/IOService.h>
++#include <IOKit/IOUserClient.h>
++#include <IOKit/IOKitKeys.h>
++#include <IOKit/IOBufferMemoryDescriptor.h>
++#include <IOKit/IOLib.h>
++#include <IOKit/IOLocks.h>
++#include <libkern/c++/OSArray.h>
++#include <pexpert/pexpert.h>
++#include <pexpert/arm64/board_config.h>
++
++#if defined(ARM64_BOARD_CONFIG_A5XELTE) && defined(DREAMLTE)
++
++extern "C" {
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++extern void delay(int usec);
++}
++
++#define LOG(fmt, ...)   IOLog("S8GPU: " fmt "\n", ##__VA_ARGS__)
++
++#define GPU_PA                  0x13900000UL
++#define GPU_SIZE                0x5000
++
++/* panfrost_regs.h */
++#define GPU_ID                  0x000
++#define GPU_L2_FEATURES         0x004
++#define GPU_CORE_FEATURES       0x008
++#define GPU_TILER_FEATURES      0x00c
++#define GPU_MEM_FEATURES        0x010
++#define GPU_MMU_FEATURES        0x014
++#define GPU_AS_PRESENT          0x018
++#define GPU_JS_PRESENT          0x01c
++#define GPU_INT_RAWSTAT         0x020
++#define GPU_INT_CLEAR           0x024
++#define GPU_INT_MASK            0x028
++#define GPU_CMD                 0x030
++#define GPU_AFBC_FEATURES       0x04c
++#define GPU_TIMESTAMP_LO        0x098
++#define GPU_TIMESTAMP_HI        0x09c
++#define GPU_THREAD_MAX_THREADS  0x0a0
++#define GPU_THREAD_MAX_WG       0x0a4
++#define GPU_THREAD_MAX_BARRIER  0x0a8
++#define GPU_THREAD_FEATURES     0x0ac
++#define GPU_TEXTURE_FEATURES(n) (0x0b0 + (n) * 4)
++#define GPU_JS_FEATURES(n)      (0x0c0 + (n) * 4)
++#define GPU_SHADER_PRESENT_LO   0x100
++#define GPU_TILER_PRESENT_LO    0x110
++#define GPU_L2_PRESENT_LO       0x120
++#define GPU_SHADER_READY_LO     0x140
++#define GPU_TILER_READY_LO      0x150
++#define GPU_L2_READY_LO         0x160
++#define GPU_SHADER_PWRON_LO     0x180
++#define GPU_TILER_PWRON_LO      0x190
++#define GPU_L2_PWRON_LO         0x1a0
++#define GPU_COHERENCY_FEATURES  0x300
++#define GPU_THREAD_TLS_ALLOC    0x310
++#define GPU_STACK_PRESENT_LO    0xe00
++#define GPU_IRQ_RESET_COMPLETED (1u << 8)
++
++#define JOB_INT_RAWSTAT         0x1000
++#define JOB_INT_CLEAR           0x1004
++#define JS(n, o)                (0x1800 + (n) * 0x80 + (o))
++#define JS_HEAD_LO              0x00
++#define JS_HEAD_HI              0x04
++#define JS_STATUS               0x24
++#define JS_HEAD_NEXT_LO         0x40
++#define JS_HEAD_NEXT_HI         0x44
++#define JS_AFFINITY_NEXT_LO     0x50
++#define JS_AFFINITY_NEXT_HI     0x54
++#define JS_CONFIG_NEXT          0x58
++#define JS_COMMAND_NEXT         0x60
++
++#define MMU_INT_RAWSTAT         0x2000
++#define MMU_INT_CLEAR           0x2004
++#define MMU_AS(as)              (0x2400 + ((as) << 6))
++#define AS_TRANSTAB_LO          0x00
++#define AS_TRANSTAB_HI          0x04
++#define AS_MEMATTR_LO           0x08
++#define AS_MEMATTR_HI           0x0c
++#define AS_COMMAND              0x18
++#define AS_FAULTSTATUS          0x1c
++#define AS_FAULTADDRESS_LO      0x20
++#define AS_FAULTADDRESS_HI      0x24
++#define AS_STATUS               0x28
++#define AS_TRANSCFG_LO          0x30
++#define AS_TRANSCFG_HI          0x34
++#define AS_COMMAND_UPDATE       0x01
++#define AS_COMMAND_FLUSH_MEM    0x05
++
++/* Mali LPAE descriptors (io-pgtable-arm.c): stage-1 attributes, stage-2 permissions */
++#define PTE_TABLE               3ULL
++#define PTE_ATTR_INDEX_SHIFT    2
++#define PTE_AP_RW_SHIFT         6
++#define PTE_SH_SHIFT            8
++#define PTE_AF                  (1ULL << 10)
++#define PTE_LEAF_RW             (1ULL | (2ULL << PTE_ATTR_INDEX_SHIFT) | \
++                                (3ULL << PTE_AP_RW_SHIFT) | (2ULL << PTE_SH_SHIFT) | PTE_AF)
++#define PTE_ADDR_MASK           0x0000fffffffff000ULL
++
++/* uapi panfrost_drm.h */
++enum {
++	PF_SUBMIT = 0x00, PF_WAIT_BO = 0x01, PF_CREATE_BO = 0x02, PF_MMAP_BO = 0x03,
++	PF_GET_PARAM = 0x04, PF_GET_BO_OFFSET = 0x05, PF_MADVISE = 0x08,
++};
++struct pf_submit { uint64_t jc, in_syncs; uint32_t in_sync_count, out_sync; uint64_t bo_handles;
++	           uint32_t bo_handle_count, requirements; };
++struct pf_wait_bo { uint32_t handle, pad; int64_t timeout_ns; };
++struct pf_create_bo { uint32_t size, flags, handle, pad; uint64_t offset; };
++struct pf_mmap_bo { uint32_t handle, flags; uint64_t offset; };
++struct pf_get_param { uint32_t param, pad; uint64_t value; };
++struct pf_get_bo_offset { uint32_t handle, pad; uint64_t offset; };
++struct pf_madvise { uint32_t handle, madv, retained; };
++#define PF_JD_REQ_FS            (1u << 0)
++
++#define S8GPU_MAX_BO            4096
++#define S8GPU_VA_BASE           0x2000000ULL            /* 32 MiB */
++#define S8GPU_VA_END            0x100000000ULL          /* 4 GiB */
++
++static vm_offset_t sGPU;
++static IOLock *sJobLock;                /* one job chain on the GPU at a time */
++static bool sPowered;
++static uint8_t sASUsed;                 /* bit n: AS n taken (AS 0 is the kernel's) */
++
++static inline uint32_t rd(uint32_t o) { return *(volatile uint32_t *)(sGPU + o); }
++static inline void wr(uint32_t o, uint32_t v) { *(volatile uint32_t *)(sGPU + o) = v; __asm__ volatile ("dsb sy" ::: "memory"); }
++
++static bool
++poll_eq(uint32_t o, uint32_t mask, uint32_t want, unsigned ms)
++{
++	for (unsigned i = 0; i < ms * 100; i++) {
++		if ((rd(o) & mask) == want) {
++			return true;
++		}
++		delay(10);
++	}
++	return false;
++}
++
++static bool
++gpu_power(void)
++{
++	if (sPowered) {
++		return true;
++	}
++	wr(GPU_INT_MASK, 0);
++	wr(GPU_INT_CLEAR, GPU_IRQ_RESET_COMPLETED);
++	wr(GPU_CMD, 1);                                 /* SOFT_RESET */
++	if (!poll_eq(GPU_INT_RAWSTAT, GPU_IRQ_RESET_COMPLETED, GPU_IRQ_RESET_COMPLETED, 10)) {
++		wr(GPU_CMD, 2);                         /* HARD_RESET */
++		if (!poll_eq(GPU_INT_RAWSTAT, GPU_IRQ_RESET_COMPLETED, GPU_IRQ_RESET_COMPLETED, 100)) {
++			LOG("reset failed (raw %#x)", rd(GPU_INT_RAWSTAT));
++			return false;
++		}
++	}
++	wr(GPU_INT_CLEAR, 0xffffffffu);
++	uint32_t l2 = rd(GPU_L2_PRESENT_LO), sh = rd(GPU_SHADER_PRESENT_LO), ti = rd(GPU_TILER_PRESENT_LO);
++	wr(GPU_L2_PWRON_LO, l2);
++	bool ok = poll_eq(GPU_L2_READY_LO, 0xffffffffu, l2, 20);
++	wr(GPU_SHADER_PWRON_LO, sh);
++	ok = poll_eq(GPU_SHADER_READY_LO, 0xffffffffu, sh, 20) && ok;
++	wr(GPU_TILER_PWRON_LO, ti);
++	ok = poll_eq(GPU_TILER_READY_LO, 0xffffffffu, ti, 10) && ok;
++	LOG("powered: L2 %#x shaders %#x tiler %#x%s", rd(GPU_L2_READY_LO), rd(GPU_SHADER_READY_LO),
++	    rd(GPU_TILER_READY_LO), ok ? "" : " (TIMEOUT)");
++	sPowered = ok;
++	return ok;
++}
++
++static void
++as_wait(int as)
++{
++	for (int i = 0; i < 1000 && (rd(MMU_AS(as) + AS_STATUS) & 1); i++) {
++		delay(10);
++	}
++}
++
++static void
++dcache_clean(const void *va, size_t len)
++{
++	__asm__ volatile ("dsb sy" ::: "memory");
++	for (uintptr_t a = (uintptr_t)va & ~63UL; a < (uintptr_t)va + len; a += 64) {
++		__asm__ volatile ("dc civac, %0" :: "r"(a) : "memory");
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++
++/* ---------- the service ---------- */
++
++class S8GPU : public IOService {
++	OSDeclareDefaultStructors(S8GPU);
++public:
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(S8GPU, IOService);
++
++bool
++S8GPU::start(IOService *provider)
++{
++	uint32_t on = 0;
++	if (!PE_parse_boot_argn("s8gpu", &on, sizeof(on)) || on < 4) {
++		return false;
++	}
++	if (!IOService::start(provider)) {
++		return false;
++	}
++	sGPU = ml_io_map(GPU_PA, GPU_SIZE);
++	sJobLock = IOLockAlloc();
++	if (!sGPU || !sJobLock) {
++		return false;
++	}
++	setName("S8GPU");
++	setProperty(kIOUserClientClassKey, "S8GPUUserClient");
++	registerService();
++	LOG("service registered, GPU_ID %#x", rd(GPU_ID));
++	return true;
++}
++
++/* ---------- a client: its address space and buffers ---------- */
++
++struct S8BO {
++	IOBufferMemoryDescriptor *md;
++	uint64_t va;
++	uint32_t size;
++};
++
++class S8GPUUserClient : public IOUserClient {
++	OSDeclareDefaultStructors(S8GPUUserClient);
++
++	task_t fTask;
++	int fAS;
++	IOBufferMemoryDescriptor *fTables[512];         /* page table pages; [0] is the root */
++	unsigned fNumTables;
++	S8BO *fBO;                                      /* index = handle - 1 */
++	uint32_t fNumBO;
++	uint64_t fNextVA;
++	IOLock *fLock;
++
++	uint64_t *tablePage(unsigned i) { return (uint64_t *)fTables[i]->getBytesNoCopy(); }
++	uint64_t tablePA(unsigned i) { return fTables[i]->getPhysicalSegment(0, NULL, kIOMemoryMapperNone); }
++	int newTable(void);
++	bool mapPage(uint64_t va, uint64_t pa);
++	void enableAS(void);
++	IOReturn createBO(pf_create_bo *a);
++	IOReturn submit(pf_submit *a);
++	IOReturn getParam(pf_get_param *a);
++
++public:
++	bool initWithTask(task_t owningTask, void *securityID, UInt32 type) APPLE_KEXT_OVERRIDE;
++	IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
++	void free(void) APPLE_KEXT_OVERRIDE;
++	IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++	    IOExternalMethodDispatch *dispatch, OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
++	IOReturn clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(S8GPUUserClient, IOUserClient);
++
++bool
++S8GPUUserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type)
++{
++	if (!IOUserClient::initWithTask(owningTask, securityID, type)) {
++		return false;
++	}
++	fTask = owningTask;
++	fLock = IOLockAlloc();
++	fBO = (S8BO *)IOMallocZero(sizeof(S8BO) * S8GPU_MAX_BO);
++	fNextVA = S8GPU_VA_BASE;
++	fAS = -1;
++	if (!fLock || !fBO) {
++		return false;
++	}
++	IOLockLock(sJobLock);
++	bool powered = gpu_power();
++	for (int as = 1; as < 8; as++) {
++		if (!(sASUsed & (1u << as))) {
++			sASUsed |= (uint8_t)(1u << as);
++			fAS = as;
++			break;
++		}
++	}
++	IOLockUnlock(sJobLock);
++	if (!powered || fAS < 0 || newTable() != 0) {
++		LOG("client refused (powered %d, AS %d)", powered, fAS);
++		return false;
++	}
++	enableAS();
++	LOG("client %p: AS %d", owningTask, fAS);
++	return true;
++}
++
++int
++S8GPUUserClient::newTable(void)
++{
++	if (fNumTables >= 512) {
++		return -1;
++	}
++	IOBufferMemoryDescriptor *md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
++	    kIODirectionInOut | kIOMemoryPhysicallyContiguous, PAGE_SIZE, 0x000000fffffff000ULL);
++	if (md == NULL) {
++		return -1;
++	}
++	bzero(md->getBytesNoCopy(), PAGE_SIZE);
++	dcache_clean(md->getBytesNoCopy(), PAGE_SIZE);
++	fTables[fNumTables] = md;
++	return (int)fNumTables++;
++}
++
++/* Four-level walk from the root; tables are made as needed. */
++bool
++S8GPUUserClient::mapPage(uint64_t va, uint64_t pa)
++{
++	unsigned t = 0;
++	for (int lvl = 0; lvl < 3; lvl++) {
++		uint64_t *tab = tablePage(t);
++		unsigned idx = (unsigned)((va >> (39 - 9 * lvl)) & 511);
++		if ((tab[idx] & 3) != PTE_TABLE) {
++			int n = newTable();
++			if (n < 0) {
++				return false;
++			}
++			tab[idx] = tablePA((unsigned)n) | PTE_TABLE;
++			dcache_clean(&tab[idx], 8);
++			t = (unsigned)n;
++		} else {
++			uint64_t next = tab[idx] & PTE_ADDR_MASK;
++			unsigned k;
++			for (k = 0; k < fNumTables && tablePA(k) != next; k++) {
++			}
++			if (k == fNumTables) {
++				return false;
++			}
++			t = k;
++		}
++	}
++	uint64_t *l3 = tablePage(t);
++	unsigned idx = (unsigned)((va >> 12) & 511);
++	l3[idx] = (pa & PTE_ADDR_MASK) | PTE_LEAF_RW;
++	dcache_clean(&l3[idx], 8);
++	return true;
++}
++
++void
++S8GPUUserClient::enableAS(void)
++{
++	uint64_t transtab = tablePA(0) | (1u << 2) | 3u;      /* READ_INNER | ADRMODE_TABLE */
++	uint64_t memattr = 0x88ULL | (0x8dULL << 8) | (0x88ULL << 16);
++	IOLockLock(sJobLock);
++	as_wait(fAS);
++	wr(MMU_AS(fAS) + AS_COMMAND, AS_COMMAND_FLUSH_MEM);
++	as_wait(fAS);
++	wr(MMU_AS(fAS) + AS_TRANSTAB_LO, (uint32_t)transtab);
++	wr(MMU_AS(fAS) + AS_TRANSTAB_HI, (uint32_t)(transtab >> 32));
++	wr(MMU_AS(fAS) + AS_MEMATTR_LO, (uint32_t)memattr);
++	wr(MMU_AS(fAS) + AS_MEMATTR_HI, (uint32_t)(memattr >> 32));
++	wr(MMU_AS(fAS) + AS_TRANSCFG_LO, 0);          /* legacy (Mali LPAE) */
++	wr(MMU_AS(fAS) + AS_TRANSCFG_HI, 0);
++	wr(MMU_AS(fAS) + AS_COMMAND, AS_COMMAND_UPDATE);
++	as_wait(fAS);
++	IOLockUnlock(sJobLock);
++}
++
++IOReturn
++S8GPUUserClient::createBO(pf_create_bo *a)
++{
++	if (a->size == 0 || (uint64_t)a->size > S8GPU_VA_END - S8GPU_VA_BASE) {
++		return kIOReturnBadArgument;
++	}
++	uint64_t size64 = ((uint64_t)a->size + PAGE_MASK) & ~(uint64_t)PAGE_MASK;
++	uint32_t size = (uint32_t)size64;
++	if (size64 > UINT32_MAX || size == 0 || fNumBO >= S8GPU_MAX_BO ||
++	    fNextVA > S8GPU_VA_END || size64 > S8GPU_VA_END - fNextVA) {
++		return kIOReturnNoResources;
++	}
++	/*
++	 * Wired, not pageable (kIOMapWriteCombineCache is 0x400 = kIOMemoryPageable in
++	 * these options); the client maps it write-combined (clientMemoryForType).
++	 */
++	IOBufferMemoryDescriptor *md = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
++	    kIODirectionInOut | kIOMemoryKernelUserShared, size, PAGE_SIZE);
++	if (md == NULL) {
++		return kIOReturnNoMemory;
++	}
++	bzero(md->getBytesNoCopy(), size);
++	dcache_clean(md->getBytesNoCopy(), size);
++	uint64_t va = fNextVA;
++	for (uint32_t off = 0; off < size; off += PAGE_SIZE) {
++		IOByteCount len = 0;
++		uint64_t pa = md->getPhysicalSegment(off, &len, kIOMemoryMapperNone);
++		if (pa == 0 || !mapPage(va + off, pa)) {
++			md->release();
++			return kIOReturnNoMemory;
++		}
++	}
++	fNextVA += size + PAGE_SIZE;                    /* a guard page between buffers */
++	fBO[fNumBO].md = md;
++	fBO[fNumBO].va = va;
++	fBO[fNumBO].size = size;
++	fNumBO++;
++	a->handle = fNumBO;
++	a->offset = va;
++	/* the GPU's caches and walker see the new entries after a flush */
++	IOLockLock(sJobLock);
++	as_wait(fAS);
++	wr(MMU_AS(fAS) + AS_COMMAND, AS_COMMAND_FLUSH_MEM);
++	as_wait(fAS);
++	IOLockUnlock(sJobLock);
++	return kIOReturnSuccess;
++}
++
++IOReturn
++S8GPUUserClient::submit(pf_submit *a)
++{
++	const int js = (a->requirements & PF_JD_REQ_FS) ? 0 : 1;
++	IOReturn result = kIOReturnSuccess;
++	IOLockLock(sJobLock);
++	wr(JOB_INT_CLEAR, (1u << js) | (1u << (js + 16)));
++	wr(JS(js, JS_HEAD_NEXT_LO), (uint32_t)a->jc);
++	wr(JS(js, JS_HEAD_NEXT_HI), (uint32_t)(a->jc >> 32));
++	wr(JS(js, JS_AFFINITY_NEXT_LO), rd(GPU_SHADER_PRESENT_LO));
++	wr(JS(js, JS_AFFINITY_NEXT_HI), 0);
++	wr(JS(js, JS_CONFIG_NEXT), (uint32_t)fAS | (8u << 16) | (3u << 8) | (3u << 12));
++	wr(JS(js, JS_COMMAND_NEXT), 1);                 /* START */
++	uint32_t raw = 0;
++	for (int i = 0; i < 200000; i++) {              /* 2 s */
++		raw = rd(JOB_INT_RAWSTAT);
++		if (raw & ((1u << js) | (1u << (js + 16)))) {
++			break;
++		}
++		delay(10);
++	}
++	if (!(raw & (1u << js))) {
++		LOG("job on JS%d (AS %d) %s: raw %#x JS status %#x head %#x%08x, mmu raw %#x AS fault %#x at %#x%08x",
++		    js, fAS, (raw & (1u << (js + 16))) ? "failed" : "timed out", raw, rd(JS(js, JS_STATUS)),
++		    rd(JS(js, JS_HEAD_HI)), rd(JS(js, JS_HEAD_LO)), rd(MMU_INT_RAWSTAT),
++		    rd(MMU_AS(fAS) + AS_FAULTSTATUS), rd(MMU_AS(fAS) + AS_FAULTADDRESS_HI),
++		    rd(MMU_AS(fAS) + AS_FAULTADDRESS_LO));
++		wr(MMU_INT_CLEAR, 0xffffffffu);
++		sPowered = false;                       /* reset before the next one */
++		gpu_power();
++		result = kIOReturnIOError;
++	}
++	wr(JOB_INT_CLEAR, (1u << js) | (1u << (js + 16)));
++	IOLockUnlock(sJobLock);
++	return result;
++}
++
++IOReturn
++S8GPUUserClient::getParam(pf_get_param *a)
++{
++	uint32_t id = rd(GPU_ID);
++	switch (a->param) {
++	case 0: a->value = id >> 16; break;                     /* GPU_PROD_ID */
++	case 1: a->value = id & 0xffff; break;                  /* GPU_REVISION */
++	case 2: a->value = rd(GPU_SHADER_PRESENT_LO); break;
++	case 3: a->value = rd(GPU_TILER_PRESENT_LO); break;
++	case 4: a->value = rd(GPU_L2_PRESENT_LO); break;
++	case 5: a->value = rd(GPU_STACK_PRESENT_LO); break;
++	case 6: a->value = rd(GPU_AS_PRESENT); break;
++	case 7: a->value = rd(GPU_JS_PRESENT); break;
++	case 8: a->value = rd(GPU_L2_FEATURES); break;
++	case 9: a->value = rd(GPU_CORE_FEATURES); break;
++	case 10: a->value = rd(GPU_TILER_FEATURES); break;
++	case 11: a->value = rd(GPU_MEM_FEATURES); break;
++	case 12: a->value = rd(GPU_MMU_FEATURES); break;
++	case 13: a->value = rd(GPU_THREAD_FEATURES); break;
++	case 14: a->value = rd(GPU_THREAD_MAX_THREADS); break;
++	case 15: a->value = rd(GPU_THREAD_MAX_WG); break;
++	case 16: a->value = rd(GPU_THREAD_MAX_BARRIER); break;
++	case 17: a->value = rd(GPU_COHERENCY_FEATURES); break;
++	case 18: case 19: case 20: case 21: a->value = rd(GPU_TEXTURE_FEATURES(a->param - 18)); break;
++	case 38: a->value = __builtin_popcount(rd(GPU_L2_PRESENT_LO)); break;  /* NR_CORE_GROUPS */
++	case 39: a->value = rd(GPU_THREAD_TLS_ALLOC); break;
++	case 40: a->value = rd(GPU_AFBC_FEATURES); break;
++	case 41: a->value = rd(GPU_TIMESTAMP_LO) | ((uint64_t)rd(GPU_TIMESTAMP_HI) << 32); break;
++	case 42: a->value = 26000000; break;                    /* SYSTEM_TIMESTAMP_FREQUENCY */
++	default:
++		if (a->param >= 22 && a->param <= 37) {
++			a->value = rd(GPU_JS_FEATURES(a->param - 22));
++			break;
++		}
++		return kIOReturnBadArgument;
++	}
++	return kIOReturnSuccess;
++}
++
++IOReturn
++S8GPUUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++    IOExternalMethodDispatch *, OSObject *, void *)
++{
++	void *in = (void *)args->structureInput;
++	size_t inSize = args->structureInputSize, outSize = args->structureOutputSize;
++	if (selector == 0x70 && in != NULL && inSize > 0) {
++		/* test tools without a log of their own: a line into the kernel log */
++		char line[160];
++		size_t n = inSize < sizeof(line) - 1 ? inSize : sizeof(line) - 1;
++		memcpy(line, in, n);
++		line[n] = 0;
++		IOLog("S8GPU client: %s\n", line);
++		return kIOReturnSuccess;
++	}
++	if (in == NULL || args->structureOutput == NULL || outSize < inSize) {
++		return kIOReturnBadArgument;
++	}
++	/* the request's structure comes back as it is, with its out fields filled */
++	uint8_t buf[64];
++	if (inSize > sizeof(buf)) {
++		return kIOReturnBadArgument;
++	}
++	memcpy(buf, in, inSize);
++	IOReturn r = kIOReturnUnsupported;
++	IOLockLock(fLock);
++	switch (selector) {
++	case PF_SUBMIT:
++		r = inSize >= sizeof(pf_submit) ? submit((pf_submit *)buf) : kIOReturnBadArgument;
++		break;
++	case PF_WAIT_BO:
++		r = kIOReturnSuccess;                   /* jobs are done when SUBMIT returns */
++		break;
++	case PF_CREATE_BO:
++		r = inSize >= sizeof(pf_create_bo) ? createBO((pf_create_bo *)buf) : kIOReturnBadArgument;
++		break;
++	case PF_MMAP_BO: {
++		pf_mmap_bo *a = (pf_mmap_bo *)buf;
++		r = (inSize >= sizeof(*a) && a->handle >= 1 && a->handle <= fNumBO) ? kIOReturnSuccess : kIOReturnBadArgument;
++		if (r == kIOReturnSuccess) {
++			a->offset = a->handle;          /* the memory type for IOConnectMapMemory */
++		}
++		break;
++	}
++	case PF_GET_PARAM:
++		r = inSize >= sizeof(pf_get_param) ? getParam((pf_get_param *)buf) : kIOReturnBadArgument;
++		break;
++	case PF_GET_BO_OFFSET: {
++		pf_get_bo_offset *a = (pf_get_bo_offset *)buf;
++		r = (inSize >= sizeof(*a) && a->handle >= 1 && a->handle <= fNumBO) ? kIOReturnSuccess : kIOReturnBadArgument;
++		if (r == kIOReturnSuccess) {
++			a->offset = fBO[a->handle - 1].va;
++		}
++		break;
++	}
++	case PF_MADVISE: {
++		pf_madvise *a = (pf_madvise *)buf;
++		if (inSize >= sizeof(*a)) {
++			a->retained = 1;
++			r = kIOReturnSuccess;
++		}
++		break;
++	}
++	default:
++		break;
++	}
++	IOLockUnlock(fLock);
++	if (r == kIOReturnSuccess) {
++		memcpy(args->structureOutput, buf, inSize);
++		args->structureOutputSize = (uint32_t)inSize;
++	} else if (selector != PF_GET_PARAM) {
++		LOG("request %#x (%zu bytes) -> %#x", selector, inSize, r);
++	}
++	return r;
++}
++
++IOReturn
++S8GPUUserClient::clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory)
++{
++	IOLockLock(fLock);
++	if (type < 1 || type > fNumBO) {
++		IOLockUnlock(fLock);
++		return kIOReturnBadArgument;
++	}
++	IOBufferMemoryDescriptor *md = fBO[type - 1].md;
++	md->retain();
++	IOLockUnlock(fLock);
++	*options = kIOMapWriteCombineCache;
++	*memory = md;
++	return kIOReturnSuccess;
++}
++
++IOReturn
++S8GPUUserClient::clientClose(void)
++{
++	terminate();
++	return kIOReturnSuccess;
++}
++
++void
++S8GPUUserClient::free(void)
++{
++	if (fAS > 0) {
++		IOLockLock(sJobLock);
++		as_wait(fAS);
++		wr(MMU_AS(fAS) + AS_COMMAND, AS_COMMAND_FLUSH_MEM);
++		as_wait(fAS);
++		wr(MMU_AS(fAS) + AS_TRANSTAB_LO, 0);
++		wr(MMU_AS(fAS) + AS_TRANSTAB_HI, 0);
++		wr(MMU_AS(fAS) + AS_TRANSCFG_LO, 1);  /* unmapped */
++		wr(MMU_AS(fAS) + AS_COMMAND, AS_COMMAND_UPDATE);
++		as_wait(fAS);
++		sASUsed &= (uint8_t)~(1u << fAS);
++		IOLockUnlock(sJobLock);
++	}
++	if (fBO != NULL) {
++		for (uint32_t i = 0; i < fNumBO; i++) {
++			OSSafeReleaseNULL(fBO[i].md);
++		}
++		IOFree(fBO, sizeof(S8BO) * S8GPU_MAX_BO);
++	}
++	for (unsigned i = 0; i < fNumTables; i++) {
++		OSSafeReleaseNULL(fTables[i]);
++	}
++	if (fLock != NULL) {
++		IOLockFree(fLock);
++	}
++	IOUserClient::free();
++}
++
++#endif /* ARM64_BOARD_CONFIG_A5XELTE && DREAMLTE */
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+index eeaa219..68b775c 100644
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -66,6 +66,11 @@ const char * gIOKernelConfigTables =
+     "     'IOMatchCategory' = IOWatchdog;"
+     "   },"
+     "   {"
++    "     'IOClass'         = S8GPU;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = S8GPU;"
++    "   },"
++    "   {"
+     "     'IOClass'         = IOCoreSurfaceRoot;"
+     "     'IOProviderClass' = IOResources;"
+     "     'IOMatchCategory' = IOCoreSurfaceRoot;"
+diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
+index acc9ae0..0421a01 100644
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -15,6 +15,7 @@ iokit/Kernel/arm/SweetKeyStore.cpp                               optional iokitc
+ iokit/Kernel/arm/SweetWatchdog.cpp                               optional iokitcpp
+ iokit/Kernel/arm/SweetSurface.cpp                                optional iokitcpp
+ iokit/Kernel/arm/SweetFramebuffer.cpp                            optional iokitcpp
++iokit/Kernel/arm/S8GPU.cpp                                       optional iokitcpp
+ iokit/Kernel/arm/SweetBattery.cpp                                optional iokitcpp
+ iokit/Kernel/arm/hid/SweetHID.cpp                                optional iokitcpp
+ iokit/Kernel/arm/hid/IOHIDEvent.cpp                              optional iokitcpp
