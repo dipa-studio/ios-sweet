@@ -108,6 +108,7 @@
   not yet been observed; do not infer success from the accepted reboot command.
   USERDATA and all other partitions were untouched. Do not write another
   partition or reboot again without confirming the exact action with the user.
+- S8 README/install-guide status update: nested checkout commit `9deeb0b`.
 - `sweetfb_hz` controls CPU framebuffer copy frequency, not CoreAnimation's
   rendering cost; changing it may trade CPU load for frame pacing. No
   refresh-rate change was made.
