@@ -12,9 +12,10 @@
   (SHA-256 `070530c1d2cdd6d1db25d094ae436f33849c399cbad0aa030c9938282e281558`)
   and the remaining partition bytes match the pre-write backup; current full
   BOOT SHA-256 is `b6b13d849c513a0dd047594c6ef265af3b6886c253c7972e552d2d8c86356ad8`.
-  No other partition was written. The phone is still in TWRP; the authorized
-  single reboot is pending. Do not issue further writes or reboot again
-  without fresh authorization.
+  No other partition was written. The one authorized reboot was issued at
+  11:23 UTC. Read-only ADB/fastboot checks from 11:23:53 through 11:28:40 UTC
+  found no connected device. The screen and boot stage are unknown; this is
+  neither proof of success nor failure. No further write or reboot was issued.
 - Known-good CPU-rendered baseline remains
   [G950F-BOOT-cpus4-fb15-baseline.img](./backup/G950F-BOOT-cpus4-fb15-baseline.img),
   40 MiB, SHA-256
