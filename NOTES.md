@@ -8,13 +8,15 @@
   candidate (`0089e589391745427a073e6d36244b0b2d5ba1e9ece8100f302aed07f563dae1`).
   Its boot/display/touch result remains unobserved; no new flash or reboot was
   performed.
-- Isolated XNU source commit `63621a6` adds
+- Isolated XNU source commits `63621a6` and `21bddf8` add
   `research/ios-galaxy-s8/xnu/patches/0133-dreamlte-display-scaling-touch.patch`:
   framebuffer layers map to the full 1440x2960 panel, larger surfaces are
   nearest-neighbor reduced to the logical canvas before being scaled up, and
   S8 touch coordinates now map through the 1080x2400 input grid to the
-  1125x2436 iPhone X canvas. The existing `0127` change already forwards all
-  ten contact IDs and reduces idle polling to 2 ms.
+  1125x2436 iPhone X canvas. The host test also asserts that distinct source
+  samples do not exceed logical-canvas dimensions, verifying actual detail
+  reduction. The existing `0127` change already forwards all ten contact IDs
+  and reduces idle polling to 2 ms.
 - WSL host test passed:
   `g++ -std=c++11 -Wall -Wextra -Werror
   tests/SweetFramebufferScaleTest.cpp -o /tmp/sweet-fb-scale-test &&
@@ -28,7 +30,10 @@
 - No kernel build, GitHub Actions run, flash, or reboot was performed for
   `0133`; no device validation is claimed. `README.md` and
   `research/ios-galaxy-s8/DREAMLTE_PROGRESS.md` record the current limitation.
-  Other pending GPU edits and pre-existing S8 script edits were left unstaged.
+  XNU source commits are `63621a6` and `21bddf8`; the S8 patch/docs commits
+  are `e150a5a` and refreshed patch `9bae4d0`. This handoff was first
+  committed as `d22de2b`. Other pending GPU edits and pre-existing S8 script
+  edits were left unstaged.
 - Next: resolve the `0128` replay mismatch, verify the ordered patch series
   through `0133`, obtain a supported kernel build, then request confirmation
   for the exact BOOT test action.
