@@ -28,9 +28,16 @@
   The isolated XNU source checkout still has uncommitted GPU source/test
   changes; their replayed source matches after line-ending normalization.
   Existing unrelated dirty files in the main and S8 worktrees remain unstaged.
+- Build availability recheck: WSL has `make` and `g++`, but lacks `clang++`,
+  `xcrun`, and `sw_vers`; `gh` is unavailable. The [XNU workflow](./research/ios-galaxy-s8/.github/workflows/xnu.yml)
+  requires macOS 14/Xcode 15. The read-only Actions listing shows its latest
+  run as #94 on 2026-10-18; no build exists for the current GPU commits and no
+  write-capable dispatch tool is available. No kernel artifact was produced.
 - Next: obtain a supported XNU build before considering any device test. Keep
-  GPU MMIO access disabled until the safety and licensing blockers are
-  resolved.
+  GPU MMIO access disabled until a supported build, verified G3D
+  power/clock/MMU sequence, and firmware provenance are resolved. Job
+  submission and the GLES/EAGL/CoreAnimation path are still required for
+  actual acceleration.
 
 ## S8 full-panel display and touch follow-up (2026-11-26)
 
