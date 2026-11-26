@@ -18,9 +18,9 @@
   `GXELTE KEYS: GPR2 con=0 dat=0x1 pud=0xd555 (read only)`. This resembles the
   legacy `A5XELTE KEYS: GPA2 ...` diagnostic in patch 0118. An older persistent
   log has that line followed by S8 touch, UFS/root mount, launchd, and
-  SpringBoard; that does not establish progress in this boot. The current
-  line's duration and later boot stage are unknown. No further write or
-  reboot was issued.
+  SpringBoard; that does not establish progress in this boot. The user
+  reports the line was unchanged for about two minutes; the later boot stage
+  is unknown. No further write or reboot was issued.
 - Known-good CPU-rendered baseline remains
   [G950F-BOOT-cpus4-fb15-baseline.img](./backup/G950F-BOOT-cpus4-fb15-baseline.img),
   40 MiB, SHA-256
