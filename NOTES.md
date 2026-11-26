@@ -1,5 +1,52 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## S8 GPU rebasing handoff (2026-11-26)
+
+- Last device action: the touch-disabled stage-3 image
+  (`b47ce02749d82fd8f43567243933ea9a96f2400b34769fcb405dea52e6742b2d`) was
+  written to BOOT `/dev/block/sda7`, read back exactly, and rebooted once.
+  ADB and fastboot remained absent from 10:29:51 through 10:32:21 UTC. The
+  current screen and boot stage are unknown; no further device action was
+  taken. Do not write or reboot without fresh explicit authorization.
+- Known-good CPU-rendered baseline remains
+  [G950F-BOOT-cpus4-fb15-baseline.img](./backup/G950F-BOOT-cpus4-fb15-baseline.img),
+  40 MiB, SHA-256
+  `08a756484b2b728fc0148c5e7e4defd99322edea7de1931e36a02206a2d6f71e`.
+  Its working image prefix is 17,031,184 bytes, SHA-256
+  `bf6e4717514c821398168e58f8b796c9e8e810b71d40962a17b91558a696ed93`.
+- Source review found the loader had reused `s8gpu=1`, which is also the
+  separate XNU S8GPU interface's boot argument. Its higher modes can reset
+  and power the GPU, so do not enable that interface with the Metal path.
+  Split the loader-only power/probe switch to `s8gpupower=1`; the Metal
+  candidate leaves `s8gpu` absent and uses `sweetfb_gpu=1 s8metal=1`.
+- The prior candidate also had `rootrw=1`. Boot 45 stopped at the kernel
+  banner when root was mounted read-write from the start (cause was not
+  proven); Boot 46's known-working path kept root read-only until launchd
+  remounted it writable, then installed the overlay. The new stage-3 builder
+  rejects `rootrw=1` and any `s8gpu=` token.
+- Offline candidate:
+  [s8-stage3-metal-baseline.img](../ios-sweet-temp/stage3-overlay-27.2/s8-stage3-metal-baseline.img),
+  19,118,096 bytes, SHA-256
+  `b5836efab051c9fe588d1137d2ff4dd47677f14da7ea612ff1933bdbbe0b7c78`.
+  It uses the preserved baseline's header/DT, retains the stage-3 XNU payload
+  and overlay, enables touch, and has `s8gpupower=1 sweetfb_gpu=1 s8metal=1`
+  with neither `rootrw=1` nor `s8gpu=1`. Loader cross-compile produced a
+  68,352-byte image, SHA-256
+  `48351a5f854e9fd7e652f11538af4e4d4ff54bd2ba9922b9d84515b9c0917436`.
+  Packaging checks confirm the payload differs from the previous candidate
+  only in boot args, the DT matches the baseline, and the embedded overlay
+  still matches `stage3.ovl`.
+- Source changes are committed locally as `4596fa03ad4c5dbb1a01921f9880617b3bc07556`
+  (`Separate S8 loader GPU power flag for Metal path`); not pushed. No XNU
+  kernel rebuild or GitHub Actions run was performed.
+- This is an offline integration correction, not a boot fix. The XNU stage-3
+  kernel was not rebuilt; the stage-3 plugin link and foreign/private Metal
+  shader path remain unresolved, and the candidate has not been booted.
+  Confidence remains 25% for touch-enabled iOS plus a verified
+  CoreAnimation GPU frame. See
+  [DREAMLTE_PROGRESS.md](../ios-sweet-temp/s8-gpu-src/DREAMLTE_PROGRESS.md)
+  for source/test detail.
+
 ## New target request: Galaxy S8 SM-G950F (2026-11-23)
 
 ### User reporting threshold (2026-11-25 21:55 UTC)
@@ -312,11 +359,11 @@
   Thus the stored XNU log did not change at all during the reported
   five-minute console attempt and cannot be evidence of that boot. The latest
   951-byte pmsg is garbled and contains no dependable handoff marker.
-- Candidate command-line defect confirmed by source review: it contains
-  `sweetfb_gpu=1` and `s8metal=1` but **omits `s8gpu=1`**. The loader only
-  requests the G3D rail and runs its GPU probe when `s8gpu=1` is present.
-  Even a successful XNU boot with this candidate would not demonstrate an
-  initialized GPU. Do not retry this old image.
+- Historical candidate review (2026-11-25): it contained `sweetfb_gpu=1` and
+  `s8metal=1` but omitted `s8gpu=1`; at that time the loader reused that token
+  for its G3D power/probe. Later source review found that XNU also consumes
+  `s8gpu` for a separate GPU interface. This historical candidate and its
+  boot-argument conclusion are superseded by the 2026-11-26 handoff above.
 - User observation (2026-11-25 20:01 UTC): during the candidate attempt, the
   handset displayed a console for about three minutes before the user returned
   it to TWRP. This is consistent with the S8 loader's text console, but the
@@ -328,11 +375,10 @@
   it is not itself a panic, boot failure, or GPU status. The adjacent screen
   output is unknown. The persistent ring remains unchanged, so this report
   alone cannot prove how far the current candidate booted.
-- Corrected candidate built from the previously validated loader/payload by
-  changing only the SWEETXNU command line to add `s8gpu=1`; it retains
-  `sweetfb_gpu=1`, `s8metal=1`, and `s8autotwrp=90`. The loader and DT compare
-  byte-for-byte with the prior candidate; all payload bytes outside the
-  608-byte command-line field are unchanged. Image:
+- Historical candidate (2026-11-25) built from the previously validated
+  loader/payload by changing only the SWEETXNU command line to add `s8gpu=1`;
+  it retained `sweetfb_gpu=1`, `s8metal=1`, and `s8autotwrp=90`. This image is
+  superseded by the offline candidate in the 2026-11-26 handoff above. Image:
   `F:\ios-sweet-temp\stage3-overlay-27.2\s8-stage3-candidate-gpu-enabled.img`,
   19,118,096 bytes, SHA-256
   `56105bb3f5c2b96ef207e5ddbeed9ff1dd0add454773b64e74658443f0e7608c`.
