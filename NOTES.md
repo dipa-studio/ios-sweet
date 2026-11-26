@@ -1,5 +1,41 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## S8 app migration and wallpaper follow-up (2026-11-26)
+
+- The user-provided screenshot describes missing “Waiting...” built-in apps as
+  an incomplete one-time DataMigration step. It proposes changing the 20H392
+  `LastSystemVersion` marker from `20H392` to `20H391`; the screenshot is
+  evidence of the hypothesis, not proof that the S8 migration will complete.
+- S8 source commit `5404833363d034c4df6864947f0da0129890eb7f` changes
+  `tools/sweet-root-tweaks.py` to seed `LastSystemVersion=20H391` only for
+  build 20H392. The nested `DMUserDataDisposition.buildVersion` remains
+  `20H392`; other OS builds keep their previous current-build marker.
+  Documentation and focused tests were added. Validation:
+  `python -m unittest tools.dreamlte.test_sweet_root_tweaks
+  tools.dreamlte.test_wallpaper_heic` — 5 tests pass;
+  `python -m py_compile tools/sweet-root-tweaks.py
+  tools/dreamlte/test_sweet_root_tweaks.py` passes; selected-file
+  `git diff --check` passes. No root image was built, and this migration
+  change has not been boot-tested.
+- Read-only TWRP check: `adb get-state` = `recovery`; properties identify
+  `dreamlte` / Galaxy S8; `/dev/block/platform/11120000.ufs/by-name/USERDATA`
+  resolves to `/dev/block/sda26`. TWRP lists ext3/ext4/f2fs but no HFS
+  filesystem driver. The current USERDATA plist was not read or modified;
+  no partition was written and no reboot was issued.
+- No complete iOS root image is currently present in the local S8 `out/`
+  directory. The one-byte in-place change therefore remains unverified against
+  the installed file. Do not write USERDATA without validating its exact
+  contents/offset and obtaining fresh authorization.
+- Wallpaper remains separate and unresolved. The previously flashed
+  HEIC-to-PNG candidate did not produce visible wallpaper per the user's
+  report. The repository has no `LastUpdated` key; the screenshot's Metal
+  explanation is not independently verified. Do not claim a wallpaper fix or
+  change GPU work as part of this app-migration patch.
+- No GitHub Actions run or kernel build was needed. Existing user edits in the
+  S8 checkout (`.gitignore`, shim build scripts and LF copies) and main
+  checkout (`docs/galaxy-s8-g950f.md`, `xnu/README.md`) were left untouched.
+  The stray root `=1.4.0` pip-output file was verified and removed.
+
 ## S8 GPU rebasing handoff (2026-11-26)
 
 - Metal candidate test: after explicit user authorization, wrote the
