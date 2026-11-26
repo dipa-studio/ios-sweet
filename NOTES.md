@@ -188,6 +188,35 @@
   screen/last line or wait until recovery reconnects, then capture logs
   read-only before proposing a cause.
 
+### Touch-driver stall hypothesis (2026-11-25 23:36 UTC)
+
+- The hypothesis is plausible: `a5xelte_touch_probe()` calls the S8 touch
+  setup synchronously from `IOKitBSDInit`; that setup performs I2C MMIO
+  discovery and retries before it starts the polling thread. A stuck I2C
+  transfer can wait in 20,000-iteration timeout loops, and the enable
+  sequence can retry 20 times. That could delay BSD/IOKit initialization.
+- Evidence is inconclusive and partly against touch being the cause: the
+  prior `s8touch=0` diagnostic was reported at the same `ifnet_attach`
+  “Proceeding” console marker, and `S8 TOUCH: disabled` was not seen. This
+  suggests the touch hook might not have run yet, but the user's line was
+  approximate and no fresh log exists. The old persistent log shows touch
+  startup completing in a different successful boot; it does not identify
+  this attempt's stop point.
+- Made touch initialization asynchronous offline: the IOKit hook now starts
+  a separate initialization thread, which logs its start, handles disabled
+  mode, performs the existing I2C sequence, starts the existing polling
+  worker on success, and terminates on completion/failure. This prevents a
+  blocked touch-controller transaction from blocking the IOKit initialization
+  caller, but it does not prove that touch caused the observed stall.
+- Validation: `0124-dreamlte-s8.patch` parses with `git apply --numstat`;
+  its embedded touch source matches `tools/dreamlte/dreamlte_touch.c`
+  byte-for-byte, and the modified hunk counts and `git diff --check` pass.
+  No full XNU worktree/toolchain is available here, so the kernel has not
+  been compiled. No image was rebuilt, flashed, or booted.
+- Confidence remains 25% for the complete goal. Do not retry until the
+  earlier 50% evidence threshold is met and the user explicitly authorizes
+  another test; no device action was taken.
+
 ### Offline boot-stall review (2026-11-25 21:53 UTC)
 
 - The old SWEETLOG contains the exact `ifnet_attach` completion line the user
