@@ -1,5 +1,37 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## S8 GPU software-MMU follow-up (2026-11-26)
+
+- Replayed patches `0128`–`0133` from XNU base `834daf7` in a fresh
+  worktree; all six applied with plain `git apply`. Patch `0130` printed
+  whitespace warnings but applied. This resolves the earlier stale handoff
+  claiming that `0128` failed.
+- Review found `0132` encoded Mali LPAE leaf pages with descriptor type `01`.
+  Patch `0134-dreamlte-mali-page-descriptor.patch` changes it to `11` and adds
+  a host test for descriptor bits, map/unmap, duplicate and invalid mappings,
+  allocation-failure rollback, and destruction. The new patch applies cleanly
+  after `0128`–`0133`.
+- WSL validation passed:
+  `g++ -std=c++11 -Wall -Wextra -Werror tests/MaliG71MMUTest.cpp -o
+  /tmp/mali-g71-mmu-test && /tmp/mali-g71-mmu-test`.
+- This is software-only page-table groundwork, not working GPU acceleration.
+  No XNU kernel build, GitHub Actions run, GPU MMIO access, flash, or reboot
+  was performed. The Mali hardware MMU is not programmed; power/clock
+  sequencing, job submission, and the GLES/EAGL/CoreAnimation path remain
+  unfinished. Do not access GPU registers or bundle the unlicensed/unclear
+  ACPM firmware.
+- Current BOOT remains the previously recorded 1125x2436 candidate; its
+  display and touch result remain unknown. No device action was taken here.
+- S8 patch/docs commits: `5f0fb4c1bca084de662aef9b6929eaa97fee108c`
+  (patches and test) and `cd8072d76465065593c01d416135d4cae9944987`
+  (validation handoff).
+  The isolated XNU source checkout still has uncommitted GPU source/test
+  changes; their replayed source matches after line-ending normalization.
+  Existing unrelated dirty files in the main and S8 worktrees remain unstaged.
+- Next: obtain a supported XNU build before considering any device test. Keep
+  GPU MMIO access disabled until the safety and licensing blockers are
+  resolved.
+
 ## S8 full-panel display and touch follow-up (2026-11-26)
 
 - The user clarified that lower quality should preserve the S8's full
@@ -22,11 +54,10 @@
   tests/SweetFramebufferScaleTest.cpp -o /tmp/sweet-fb-scale-test &&
   /tmp/sweet-fb-scale-test`. Patch `0133` separately passes
   `git apply --check --whitespace=error` against source commit `834daf7`.
-- Full patch replay is blocked before `0133`: plain `git apply` rejects
-  existing patch `0128` on `pe_fiq.c`, `sleh.c`,
-  `SweetPlatformExpert.cpp`, `KernelConfigTables.cpp`, and `files.arm64`.
-  This conflicts with an earlier note that the GPU patch sequence applied
-  cleanly. Investigate the base/patch mismatch before attempting CI.
+- The refreshed patch sequence `0128`–`0133` now replays successfully from
+  base `834daf7`; see the GPU follow-up at the top of this file. Patch `0130`
+  emits whitespace warnings, but all patches apply. The software-only MMU
+  descriptor fix is in `0134`.
 - No kernel build, GitHub Actions run, flash, or reboot was performed for
   `0133`; no device validation is claimed. `README.md` and
   `research/ios-galaxy-s8/DREAMLTE_PROGRESS.md` record the current limitation.
@@ -34,9 +65,8 @@
   are `e150a5a` and refreshed patch `9bae4d0`. This handoff was first
   committed as `d22de2b`. Other pending GPU edits and pre-existing S8 script
   edits were left unstaged.
-- Next: resolve the `0128` replay mismatch, verify the ordered patch series
-  through `0133`, obtain a supported kernel build, then request confirmation
-  for the exact BOOT test action.
+- Next: obtain a supported kernel build for the ordered series through `0134`,
+  then validate display/touch with the user before any device action.
 
 ## S8 app migration and wallpaper follow-up (2026-11-26)
 
