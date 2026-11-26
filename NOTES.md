@@ -90,16 +90,27 @@
   remain byte-identical. The earlier 1125×2436 attempt paired that mode with a
   1440×2960 ADT canvas and stalled at the first `SwapBegin`; this candidate
   corrects that mismatch. The lower mode has 35.71% fewer pixels and may
-  reduce software-rendering work, but has not been flashed or boot-tested.
+  reduce software-rendering work.
   `sweetfb_hz=15` and `rootrw=1` are unchanged; the Mongoose preflight remains
   present and its outcome is still unverified.
-- Current device state: TWRP, after the user returned it for log collection.
-  No writes followed the verified octa-preflight BOOT flash; USERDATA and all
-  other partitions remain untouched. Before flashing the lower-resolution
-  candidate, obtain explicit authorization for that exact image and make a
-  fresh BOOT backup. `sweetfb_hz` controls CPU framebuffer copy frequency, not
-  CoreAnimation's rendering cost; changing it may trade CPU load for frame
-  pacing. No refresh-rate change was made.
+- After explicit authorization, staged the candidate in TWRP and verified
+  41,943,040 bytes and SHA-256
+  `0089e589391745427a073e6d36244b0b2d5ba1e9ece8100f302aed07f563dae1`.
+  Reconfirmed `dreamlte` / Galaxy S8 and BOOT `/dev/block/sda7` (40 MiB).
+  Fresh pre-write backup
+  [G950F-BOOT-before-lowres-1125-20261126.img](./backup/G950F-BOOT-before-lowres-1125-20261126.img)
+  matched the previously flashed BOOT hash
+  `5c482849e54a6109a8cf9d1b135f54ff2ac44735066b981e737d8b7cdea3f9eb`.
+  Wrote exactly 40 MiB to BOOT only; full readback
+  [G950F-BOOT-1125x2436-readback-20261126.img](./backup/G950F-BOOT-1125x2436-readback-20261126.img)
+  is 40 MiB and exactly matches the candidate SHA-256 above. Issued the one
+  authorized reboot. Boot-to-lock-screen result and displayed resolution have
+  not yet been observed; do not infer success from the accepted reboot command.
+  USERDATA and all other partitions were untouched. Do not write another
+  partition or reboot again without confirming the exact action with the user.
+- `sweetfb_hz` controls CPU framebuffer copy frequency, not CoreAnimation's
+  rendering cost; changing it may trade CPU load for frame pacing. No
+  refresh-rate change was made.
 - The app-migration source fix remains uninstalled; no complete local root
   image or HFS-capable TWRP path is available.
 
