@@ -1,5 +1,38 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## S8 full-panel display and touch follow-up (2026-11-26)
+
+- The user clarified that lower quality should preserve the S8's full
+  1440x2960 panel size and reported that touch does not work. The currently
+  installed BOOT image is still the previously verified 1125x2436 ADT
+  candidate (`0089e589391745427a073e6d36244b0b2d5ba1e9ece8100f302aed07f563dae1`).
+  Its boot/display/touch result remains unobserved; no new flash or reboot was
+  performed.
+- Isolated XNU source commit `63621a6` adds
+  `research/ios-galaxy-s8/xnu/patches/0133-dreamlte-display-scaling-touch.patch`:
+  framebuffer layers map to the full 1440x2960 panel, larger surfaces are
+  nearest-neighbor reduced to the logical canvas before being scaled up, and
+  S8 touch coordinates now map through the 1080x2400 input grid to the
+  1125x2436 iPhone X canvas. The existing `0127` change already forwards all
+  ten contact IDs and reduces idle polling to 2 ms.
+- WSL host test passed:
+  `g++ -std=c++11 -Wall -Wextra -Werror
+  tests/SweetFramebufferScaleTest.cpp -o /tmp/sweet-fb-scale-test &&
+  /tmp/sweet-fb-scale-test`. Patch `0133` separately passes
+  `git apply --check --whitespace=error` against source commit `834daf7`.
+- Full patch replay is blocked before `0133`: plain `git apply` rejects
+  existing patch `0128` on `pe_fiq.c`, `sleh.c`,
+  `SweetPlatformExpert.cpp`, `KernelConfigTables.cpp`, and `files.arm64`.
+  This conflicts with an earlier note that the GPU patch sequence applied
+  cleanly. Investigate the base/patch mismatch before attempting CI.
+- No kernel build, GitHub Actions run, flash, or reboot was performed for
+  `0133`; no device validation is claimed. `README.md` and
+  `research/ios-galaxy-s8/DREAMLTE_PROGRESS.md` record the current limitation.
+  Other pending GPU edits and pre-existing S8 script edits were left unstaged.
+- Next: resolve the `0128` replay mismatch, verify the ordered patch series
+  through `0133`, obtain a supported kernel build, then request confirmation
+  for the exact BOOT test action.
+
 ## S8 app migration and wallpaper follow-up (2026-11-26)
 
 - The user-provided screenshot describes missing “Waiting...” built-in apps as
