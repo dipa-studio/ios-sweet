@@ -5,20 +5,29 @@
 - Mesa 25.2.8 host shader-tool builds succeeded, including `mesa_clc`,
   `vtn_bindgen2`, and native `panfrost_compile`. A static iOS GLES
   configuration with EGL disabled was produced in the external build workspace.
-- The first Panfrost/Gallium cross-compile stopped because `xf86drm.h` is
-  unavailable; the current iOS path still lacks a libdrm-compatible S8 winsys.
-  The EAGL/`st_api` bridge and IOSurface import path are also not implemented.
+- The corrected SDK copy and `ld64.lld-18` now configure Mesa with accurate iOS
+  symbol checks (`memfd_create`, `getrandom`, and `dl_iterate_phdr` unavailable).
+  Clang 19 is required for the copied iOS 27.2 libc++ headers. With Mesa's
+  optional ELF build-ID shader cache disabled, the full static GLES/Panfrost
+  compile passed: `libmesa_util.a`, `libmesa.a`, Gallium `libgallium.a`, GLAPI,
+  Panfrost generation libraries, and the Panfrost DRM winsys archive were built.
+- The DRM winsys was compiled using isolated libdrm headers only; it is still
+  Linux/DRM-specific and is not an iOS backend or an S8 winsys. The EAGL/`st_api`
+  bridge, IOSurface import path, S8 IOKit winsys, and runtime integration remain
+  unimplemented. This is cross-compilation evidence only, not GPU acceleration.
+- Mesa's generated `src/util/shader_stats.h` was missing from Ninja's initial
+  dependency order; explicitly building that declared target allowed
+  compilation to continue.
 - `ld64.lld-18` cannot parse the Xcode 27.2 SDK's `arm64e.x1-ios` TAPI target.
   A temporary `-nostdlib`/`dynamic_lookup` workaround let Meson configure but
   falsely detected Linux-only `memfd_create`; its build failed in
   `src/util/anon_file.c`. Do not reuse that configuration as a valid iOS build.
 - No source patch, kernel build, Actions run, GPU MMIO, phone operation,
   reboot, or partition write occurred. The installed BOOT remains unchanged.
-- Next: use a linker/SDK combination that accurately checks iOS symbols, provide
-  libdrm headers only as appropriate for the build, then implement the S8
-  winsys and EAGL bridge. Do not enable Panfrost and Metal GPU interfaces
-  together; keep device testing offline until the software path and safety
-  prerequisites are validated.
+- Next: design and implement an iOS-native S8 IOKit Panfrost winsys, then the
+  EAGL/`st_api` and IOSurface bridge. Do not enable Panfrost and Metal GPU
+  interfaces together; keep device testing offline until the software path and
+  safety prerequisites are validated.
 
 ## S8 GPU software-MMU follow-up (2026-11-26)
 
