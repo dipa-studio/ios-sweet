@@ -36,6 +36,36 @@
   checkout (`docs/galaxy-s8-g950f.md`, `xnu/README.md`) were left untouched.
   The stray root `=1.4.0` pip-output file was verified and removed.
 
+## S8 Mongoose CPU preflight (2026-11-26)
+
+- S8 checkout commit
+  `d5907f31a535e097f4de8bec1698fec1530cc870` adds a loader preflight for
+  Mongoose cores 0–3. It tests each core's startup and shutdown and promotes `cpus=4`
+  to `cpus=8` only when all four pass; an explicit `cpus=8` falls back to
+  four on any failure. This does not establish that XNU can start or schedule
+  Mongoose CPUs.
+- The latest XNU log,
+  [sweetlog-octa-20261126.txt](./research/ios-galaxy-s8/logs/sweetlog-octa-20261126.txt),
+  is 178,294 bytes (flush #51) and records `requested=4 selected=4`, CPUs 0–3
+  initialized, and no Mongoose startup attempts. Read-only TWRP checks show
+  `dreamlte`, CPUs 0–7 present/online, with implementer/part IDs `0x41/0xd03`
+  (A53) and `0x53/0x001` (Mongoose).
+- WSL cross-compile and offline packaging succeeded; the linker emitted an
+  RWX-segment warning. No XNU kernel build or CI run was performed. Candidate
+  [dreamlte-cpus8-mongoose-preflight-20261126.img](./research/ios-galaxy-s8/out/dreamlte-cpus8-mongoose-preflight-20261126.img)
+  is 40 MiB, SHA-256
+  `5c482849e54a6109a8cf9d1b135f54ff2ac44735066b981e737d8b7cdea3f9eb`;
+  its 17,033,232-byte prefix hashes to
+  `5529c9946e46f36752a3ac26a8c3b477c20e818e5c3991380b01e638ec45a413`.
+  Payload and DT match the baseline; the partition tail is unchanged. The
+  candidate retains `rootrw=1`, which may confound boot diagnosis.
+- Candidate is offline only and has not been flashed or boot-tested. The phone
+  remains in TWRP; no partition write or reboot occurred during this milestone,
+  and BOOT was not freshly re-read. USERDATA was untouched. Do not write BOOT
+  or reboot without fresh authorization for this exact candidate and a fresh
+  BOOT backup. The app-migration source fix remains uninstalled; no complete
+  local root image or HFS-capable TWRP path is available.
+
 ## S8 GPU rebasing handoff (2026-11-26)
 
 - Metal candidate test: after explicit user authorization, wrote the
