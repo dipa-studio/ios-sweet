@@ -59,12 +59,23 @@
   `5529c9946e46f36752a3ac26a8c3b477c20e818e5c3991380b01e638ec45a413`.
   Payload and DT match the baseline; the partition tail is unchanged. The
   candidate retains `rootrw=1`, which may confound boot diagnosis.
-- Candidate is offline only and has not been flashed or boot-tested. The phone
-  remains in TWRP; no partition write or reboot occurred during this milestone,
-  and BOOT was not freshly re-read. USERDATA was untouched. Do not write BOOT
-  or reboot without fresh authorization for this exact candidate and a fresh
-  BOOT backup. The app-migration source fix remains uninstalled; no complete
-  local root image or HFS-capable TWRP path is available.
+- The user authorized flashing this candidate. Re-confirmed recovery as
+  `dreamlte` / Galaxy S8; BOOT resolved to `/dev/block/sda7` (40 MiB). Saved
+  fresh pre-write backup
+  [G950F-BOOT-before-cpus8-mongoose-preflight-20261126-1237.img](./backup/G950F-BOOT-before-cpus8-mongoose-preflight-20261126-1237.img),
+  SHA-256 `08a756484b2b728fc0148c5e7e4defd99322edea7de1931e36a02206a2d6f71e`,
+  matching the known CPU-only baseline. Wrote only BOOT (40 MiB) and verified
+  full readback
+  [G950F-BOOT-octa-preflight-readback-20261126-1237.img](./backup/G950F-BOOT-octa-preflight-readback-20261126-1237.img),
+  SHA-256 `5c482849e54a6109a8cf9d1b135f54ff2ac44735066b981e737d8b7cdea3f9eb`,
+  identical to the candidate. USERDATA and all other partitions were untouched.
+- Issued one reboot. For the following three minutes the host saw no ADB or
+  fastboot device, and Windows did not enumerate the S8 over USB. Boot outcome
+  and Mongoose/XNU CPU startup are therefore unknown; no new XNU log was
+  retrieved. No further partition write or reboot was performed. Candidate
+  still retains `rootrw=1`, which may confound boot diagnosis. The
+  app-migration source fix remains uninstalled; no complete local root image or
+  HFS-capable TWRP path is available.
 
 ## S8 GPU rebasing handoff (2026-11-26)
 
