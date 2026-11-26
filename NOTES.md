@@ -36,6 +36,8 @@
   (patches and test), `cd8072d76465065593c01d416135d4cae9944987`
   (validation handoff), and `7e3cd437337a75ec11dd4aa87f562650c651d52e`
   (corrected Mali descriptors and updated status).
+- Removed the temporary GPU replay/verification worktrees and the exact
+  `/tmp/mali-g71-mmu-test` binary after final validation.
   The isolated XNU source checkout still has uncommitted GPU source/test
   changes; their replayed source matches after line-ending normalization.
   Existing unrelated dirty files in the main and S8 worktrees remain unstaged.
